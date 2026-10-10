@@ -10,11 +10,14 @@ import D6Face from './D6Face.vue';
 import { blockDieFaceUrl } from '../game/blockDieFaceArt';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
 import PostGameRoster from './PostGameRoster.vue';
+import RosterBadge from './RosterBadge.vue';
+import { formatPlayerValue } from '../game/playerValue';
+import { settings } from '../game/settings';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
   PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
-  postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type RosterRowExtra, type Side,
+  postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
@@ -94,19 +97,15 @@ const pgMvpCardList = computed<Record<Side, PgMvpCard[]>>(() => {
   }
   return out;
 });
-// Owner 10-09: each team's MVP panel is the roster component (PostGameRoster) pinned to that team and narrowed to the
-// players the SERVER awarded; while the roulette spins nothing is listed yet. `awards` marks the row (x2 on a double).
-const pgMvpRows = computed<Record<Side, { ids: string[]; extras: Record<string, RosterRowExtra> }>>(() => {
-  const out: Record<Side, { ids: string[]; extras: Record<string, RosterRowExtra> }> = { home: { ids: [], extras: {} }, away: { ids: [], extras: {} } };
-  for (const side of ['home', 'away'] as const) {
-    if (roll.value[side].phase === 'cycling') continue;
-    for (const m of pg.value[side].mvps) {
-      out[side].ids.push(m.playerId);
-      out[side].extras[m.playerId] = { awards: m.awards };
-    }
-  }
-  return out;
-});
+// Owner 10-10 ("I'm seeing players twice on this pane"): the MVP tab lists each awarded player ONCE, as the portrait
+// card. PostGameRoster still draws each team's header (and hosts the one "Hide innate skills" box), but with no rows:
+// the row's injury / LVL badge and the player's value moved onto the card.
+const PG_MVP_NO_ROWS: readonly string[] = [];
+/** The card's skill chips follow the roster panes' shared "Hide innate skills" box (settings.rosterHideInnateSkills):
+ *  on = the position's own skills are left out (the per-chip `innate` flag, skillDisplay playerRosterSkills). */
+function mvpCardSkills(card: PgMvpCard): PgMvpCard['skills'] {
+  return settings.rosterHideInnateSkills ? card.skills.filter((skill) => !skill.innate) : card.skills;
+}
 const pgDice = computed(() => ({
   home: pgDiceSide(props.snapshot.tallies.home, pg.value.home, game.value.teamHome.teamName),
   away: pgDiceSide(props.snapshot.tallies.away, pg.value.away, game.value.teamAway.teamName),
@@ -256,42 +255,52 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 
       <!-- Phase: MVP (server-decided award, see postGameSide's `mvps`) -->
       <section v-if="postGamePhase === 'mvp'" class="pg-mvp">
-        <!-- Owner 10-09: each team's MVP panel IS the roster pane (PostGameRoster, the Helmet / H pop-out's content) pinned
-             to that team - same header, same row, no team switch - listing the awarded player(s), marked as MVP. The
-             roulette / awaiting / no-MVP line and the winner's portrait card ride in its slots. -->
+        <!-- Owner 10-10: each team column is the roster pane's team header (PostGameRoster pinned to the team, no rows,
+             no team switch) over the awarded player's portrait card(s). A player is listed ONCE: the 10-09 roster row is
+             gone from this tab and the card carries its injury / LVL badge and the player's value. -->
         <div v-for="side in [pg.home, pg.away]" :key="side.which" class="pg-mvp-team" :data-side="side.which">
-          <PostGameRoster class="pg-mvp-roster" :side="side.which" :switcher="false" two-line :teams="pg" :portrait="portrait" :local-side="localSide"
-            :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="pgMvpRows[side.which].ids" :extras="pgMvpRows[side.which].extras" :innate-toggle="side.which === 'away'">
+          <PostGameRoster class="pg-mvp-roster" :side="side.which" :switcher="false" :teams="pg" :portrait="portrait" :local-side="localSide"
+            :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="PG_MVP_NO_ROWS" :innate-toggle="side.which === 'away'">
             <template #status>
+              <template v-if="roll[side.which].phase === 'cycling' || side.mvps.length" />
+              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
+              <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
+            </template>
+            <template v-if="roll[side.which].phase === 'cycling' || pgMvpCardList[side.which].length" #footer>
+            <!-- While the roulette spins the awarded card(s) are laid out but not shown (data-pending): the column already
+                 has its final height, so nothing moves when the roulette lands. -->
+            <div class="pg-mvp-cards" :data-pending="roll[side.which].phase === 'cycling' ? 'true' : null">
               <!-- #25-v2 (owner 2026-07-14): active reveal. ⚖ the roulette lands on side.mvps (the SERVER award). -->
               <div v-if="roll[side.which].phase === 'cycling'" class="pg-mvp-roulette" aria-live="polite">
                 <span class="pg-star">★</span>
                 <span class="pg-mvp-name pg-mvp-spin">{{ roll[side.which].display }}</span>
               </div>
-              <template v-else-if="side.mvps.length" />
-              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
-              <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
-            </template>
-            <template v-if="roll[side.which].phase !== 'cycling'" #footer>
-            <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
-                 hands the winner two MVPs and BOTH cards show. -->
-            <template v-for="card in pgMvpCardList[side.which]" :key="card.playerId">
-              <div class="pg-mvp-card pg-bevel">
+              <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
+                   hands the winner two MVPs and BOTH cards show. -->
+              <div v-for="card in pgMvpCardList[side.which]" :key="card.playerId" class="pg-mvp-card pg-bevel" :data-player="card.playerId"
+                :aria-hidden="roll[side.which].phase === 'cycling' ? 'true' : undefined">
                 <div class="pg-mvp-portrait card-portrait">
                   <img v-if="card.portrait" :src="card.portrait" alt="" />
                   <span v-else class="portrait-missing">no portrait</span>
                 </div>
                 <div class="pg-mvp-card-info">
-                  <div class="pg-mvp-card-name" :data-side="side.which">#{{ card.nr }} {{ card.name }}</div>
-                  <div class="pg-mvp-card-pos">{{ card.position }}</div>
+                  <!-- Owner 10-10: the roster row's badge, right of the name: the injury (gold box when suffered this game),
+                       else the LVL badge; nothing for an uninjured rookie. -->
+                  <div class="pg-mvp-card-head">
+                    <div class="pg-mvp-card-name" :data-side="side.which">#{{ card.nr }} {{ card.name }}</div>
+                    <RosterBadge class="pg-mvp-card-badge" :injury="card.injury" :injury-new="card.injuryNew" :advancements="card.advancements" />
+                  </div>
+                  <div class="pg-mvp-card-pos">{{ card.position }}<span v-if="card.awards > 1" class="pg-mvp-card-awards" data-testid="mvp-card-awards"><i aria-hidden="true">★</i> MVP ×{{ card.awards }}</span></div>
                   <!-- Owner 09-14: SPP on its own line under the position (the one-liner wrapped mid-tag). -->
-                  <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span></div>
+                  <!-- Owner 10-10: the player's value at the line's right end, in the roster's value style. -->
+                  <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span><span
+                    v-if="formatPlayerValue(card.value)" class="pg-mvp-card-value" title="Player value">{{ formatPlayerValue(card.value) }}</span></div>
                   <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
-                  <PlayerDetailSkillList v-if="card.skills.length" :skills="card.skills" :mode="skillMode" :icon-style="iconStyle"
+                  <PlayerDetailSkillList v-if="mvpCardSkills(card).length" :skills="mvpCardSkills(card)" :mode="skillMode" :icon-style="iconStyle"
                     :position-id="card.positionId" :side="side.which" mark-added />
                 </div>
               </div>
-            </template>
+            </div>
             </template>
           </PostGameRoster>
         </div>
@@ -748,8 +757,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 .pg-mvp-head img { width: 30px; height: 30px; object-fit: contain; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6)); }
-/* Owner 10-09: the roster component is the MVP panel; the grid above already pads it, and each team column may narrow. */
-.pg-mvp .pg-mvp-roster { padding: 0; min-width: 0; }
+/* Owner 10-09: the roster component heads the MVP panel; the grid above already pads it, and each team column may narrow. */
+/* Owner 10-10: the column is a full-height stack (the grid stretches both teams to the taller one), so the one
+   "Hide innate skills" box sits in the pane's bottom-right corner whichever column is the taller. */
+.pg-mvp .pg-mvp-roster { padding: 0; min-width: 0; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
+.pg-mvp .pg-mvp-roster :deep(.pg-roster-innate) { margin-top: auto; padding-top: 6px; }
 .pg-mvp-team { min-width: 0; }
 .pg-star { color: var(--ui-accent); }
 .pg-mvp-name { font-weight: 700; }
@@ -761,6 +773,21 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-mvp-card .card-portrait { flex: 0 0 auto; width: 6.8em; height: 8em; min-height: 0; } /* (0,2,0) beats the later .card-portrait { flex: 1 } */
 .pg-mvp-card .card-portrait img { height: 100%; max-height: 100%; width: auto; transform: none; } /* (0,2,1) beats the later .card-portrait img rule */
 .pg-mvp-card-name { line-height: 1.15; }
+/* Owner 10-10: the awarded cards of one team. While the roulette spins they hold their place unseen and the roulette
+   line lies over them; with no award known yet the box still reserves one card's height. */
+.pg-mvp-cards { position: relative; min-width: 0; }
+.pg-mvp-cards[data-pending='true'] { min-height: calc(8em + 24px); }
+.pg-mvp-cards[data-pending='true'] .pg-mvp-card { visibility: hidden; }
+.pg-mvp-cards[data-pending='true'] .pg-mvp-roulette { position: absolute; top: 6px; left: 0; right: 0; }
+/* name (wraps, never pushes the card wider) + the roster badge at the line's right end */
+.pg-mvp-card-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.pg-mvp-card-head .pg-mvp-card-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.pg-mvp-card-badge { margin: 1px 1px 0 0; } /* clear of the card edge, so the gold "this game" outline is not clipped */
+.pg-mvp-card-awards { margin-left: 0.6em; white-space: nowrap; color: var(--ui-accent); font-weight: 800; }
+.pg-mvp-card-awards i { font-style: normal; }
+.pg-mvp-card-spp { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 0.3em; }
+/* the roster's value cell (PostGameRoster .pg-roster-value): text colour, tabular, 600 */
+.pg-mvp-card-value { margin-left: auto; padding-left: 0.6em; color: var(--ui-text); font-variant-numeric: tabular-nums; font-weight: 600; }
 .pg-mvp-card-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
 .pg-mvp-card-name { font-weight: 800; font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem); }
 .pg-mvp-card-name[data-side='home'] { color: #6d9bff; }
@@ -778,7 +805,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
   animation: pg-mvp-flicker var(--p-90) steps(1) infinite;
 }
 @keyframes pg-mvp-flicker { 0% { opacity: 0.55; } 100% { opacity: 1; } }
-.pg-mvp-awaiting { color: var(--ui-text); }
+.pg-mvp-awaiting { color: var(--ui-text); margin: 6px 0 0; min-height: calc(8em + 18px); } /* owner 10-10: holds a card's height, so the column does not grow when the award lands */
 .pg-mvp-awaiting::after {
   content: '';
   animation: pg-mvp-dots var(--p-1200) steps(4, end) infinite;

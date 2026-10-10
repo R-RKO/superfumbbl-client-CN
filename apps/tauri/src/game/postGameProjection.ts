@@ -7,11 +7,11 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
 import { TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
-import { addedSkillsLast, playerDetailSkills, playerRosterSkills, type PlayerDetailSkill } from './skillDisplay';
+import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
 import type { EndGameStatsProjection } from './endGameHudProjection';
-import { playerProgress, type ValuePosition } from './playerValue';
+import { isStarOrMercenary, playerProgress, type ValuePosition } from './playerValue';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import type { RosterInjuryBadge } from './rosterLevelArt';
 
@@ -298,7 +298,16 @@ export function positionNameFor(game: GameJson, side: Side, positionId: string):
 // PlayerDetailComponent:390-395) and, only here, whether the banked SPP already buys the next advancement.
 export interface PgMvpCard {
   playerId: string; nr: number; name: string; position: string; positionId: string; portrait: string | null;
-  spp: number; sppGain: number; advancement: AdvancementReadiness; skills: PlayerDetailSkill[];
+  spp: number; sppGain: number; advancement: AdvancementReadiness;
+  /** Owner 10-10: the card is the MVP tab's only listing of the player, so each chip carries the roster's `innate` flag
+   *  (skillDisplay playerRosterSkills) and the tab's "Hide innate skills" box filters the card by it. */
+  skills: RosterSkill[];
+  /** Owner 10-10 (the roster row left the MVP tab): what only the row showed - the roster's own projections, so the
+   *  card and the Roster tab can never disagree. Value in gold (null = position not on the roster); the injury badge and
+   *  whether it was suffered this game; advancements taken (the LVL badge, shown when there is no injury). */
+  value: number | null; injury: RosterInjuryBadge | null; injuryNew: boolean; advancements: number;
+  /** MVP awards this game (a concession can award one player twice: the card's "x2"). */
+  awards: number;
 }
 export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrait: string | null): PgMvpCard | null {
   const team = side === 'home' ? game.teamHome : game.teamAway;
@@ -314,11 +323,16 @@ export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrai
   // improvement rides it as "+MA"/"+ST"/...), counted the BB2025 way (advancementsTaken mirrors bb2025
   // SkillMechanic.countAdvancements). Temporary grants live in temporarySkillsMap, so they never count.
   const taken = advancementsTaken((player.skillArray ?? []).filter((n) => !baseline.has(n)));
+  const progress = playerProgress(player, pos);
+  const injury = rosterInjuryBadge(game, playerId, r as unknown as Record<string, unknown> | undefined);
   return {
     playerId, nr: player.playerNr, name: player.playerName, position: positionNameFor(game, side, player.positionId), positionId: player.positionId,
     portrait, spp, sppGain,
-    advancement: advancementReadiness(spp + sppGain, taken),
-    skills: playerDetailSkills(player, baseline), // every skill the player has (owner 09-14), base + acquired
+    // Astra 10-10: a star, a mercenary or a dead player never advances, so the card offers no advancement advice.
+    advancement: isStarOrMercenary(player, pos) || injury === 'rip' ? null : advancementReadiness(spp + sppGain, taken),
+    skills: playerRosterSkills(player, pos), // every skill the player has (owner 09-14), base + acquired, each flagged innate or not
+    value: progress.value, advancements: progress.advancements, injury, injuryNew: rosterInjuryIsNew(game, playerId, injury),
+    awards: Number((r as { playerAwards?: number } | undefined)?.playerAwards ?? 0),
   };
 }
 
