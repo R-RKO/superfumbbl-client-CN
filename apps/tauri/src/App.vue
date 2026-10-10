@@ -2065,6 +2065,7 @@ function captureKey(event: KeyboardEvent) {
                 <tr><td>Camera pan</td><td><span class="keybind static">W A S D / Arrows</span></td></tr>
                 <tr><td>Open chat</td><td><span class="keybind static">Enter</span></td></tr>
                 <tr><td>Toggle fullscreen</td><td><span class="keybind static">F11 / Alt + Enter</span></td></tr>
+                <tr><td>Player portraits on / off (on the pitch)</td><td><span class="keybind static">Middle mouse</span></td></tr>
                 <tr><td>Mark square / player</td><td><span class="keybind static">Shift + click</span></td></tr>
                 <tr><td>Mark row · column</td><td><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></td></tr>
               </tbody>

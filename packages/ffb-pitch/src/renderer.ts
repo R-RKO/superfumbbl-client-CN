@@ -4218,6 +4218,10 @@ export class PitchRenderer {
    *  pass/bomb free-select is armed (null off-pitch / on leave). The host drives the throw+catch
    *  tooltip and intercept feed off this; additive — the internal cursor/tip paths are unchanged. */
   onSquareHover: ((coord: [number, number] | null) => void) | null = null;
+  /** Owner 10-10: a middle-button CLICK on the pitch (pressed and released without a drag). True = the host has the
+   *  button bound and took the click, so it is not also treated as a tap. Null / false = unchanged (the click is the
+   *  tap it always was). A middle-button DRAG pans the camera either way. */
+  onMiddleClick: (() => boolean) | null = null;
   private squareHoverLast: string | null = null;
   /** Informational pass ruler state. A non-null from with null to is armed but has no current hover target. */
   private passRulerFrom: Square | null = null;
@@ -5373,6 +5377,7 @@ export class PitchRenderer {
     this.onCue = null;
     this.onActionHover = null;
     this.onSquareHover = null;
+    this.onMiddleClick = null;
     this.onActionTarget = null;
     this.onActionConfirm = null;
     this.onKickPick = null;
@@ -19586,7 +19591,10 @@ export class PitchRenderer {
       // Owner 2026-07-14 (setup overhaul cond-b): during setup, a pointerdown on a DUGOUT reserve token starts a
       // drag-to-pitch instead of a camera pan. Hit-test dugoutHits by world proximity BEFORE registering a pan
       // pointer; the host (SpectateView) begins the setup-drag ghost and enforces reserve-only / KO-CAS-inert.
-      if (this.setupActive && this.onDugoutSetupDragStart && this.pointers.size === 0) {
+      // Owner 10-10 (Astra P2): with a host on the middle button, a middle press on a setup token is NOT a setup
+      // drag / swap - it registers as an ordinary pointer (tap = onMiddleClick, drag = camera pan).
+      const middleForHost = event.button === 1 && !!this.onMiddleClick;
+      if (this.setupActive && this.onDugoutSetupDragStart && this.pointers.size === 0 && !middleForHost) {
         const wx = (event.offsetX - this.world.position.x) / this.world.scale.x;
         const wy = (event.offsetY - this.world.position.y) / this.world.scale.y;
         const [sx, sy] = worldToSquare(wx, wy);
@@ -19726,6 +19734,8 @@ export class PitchRenderer {
     // pointer (worldToSquare inverts the projection) and report the player.
     this.listenCanvas(canvas, 'pointerup', (event) => {
       if (event.button === 2) return; // B2-5: right-clicks never tap-select
+      // Owner 10-10: a middle click the host has bound (Player portraits on / off) is the host's, not a tap.
+      if (event.button === 1 && this.pointers.size === 1 && this.dragDistance < 5 && this.onMiddleClick?.()) return;
       // Shift-click annotations take priority over every gameplay surface and never select, plan, or send.
       // Plain Shift on a rendered player toggles its persistent overhead arrow; an empty square keeps the
       // original single-square mark. Ctrl/Alt variants remain row/column marks even over a token.
@@ -19930,6 +19940,8 @@ export class PitchRenderer {
       }
     };
     this.listenCanvas(canvas, 'pointerup', release);
+    // Owner 10-10: no browser autoscroll from a middle press on the pitch.
+    this.listenCanvas(canvas, 'mousedown', (event) => { if (event.button === 1 && this.onMiddleClick) event.preventDefault(); }); // only with a host on the hook (Astra 10-10)
     const clearPointerHover = () => {
       this.clearHoverSquareMarker();
       if (this.squareHoverLast !== null) {

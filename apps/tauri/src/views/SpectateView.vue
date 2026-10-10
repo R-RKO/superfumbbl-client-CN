@@ -395,6 +395,7 @@ import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
+import { MIDDLE_CLICK_ACTIONS, decisionCardOpen, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
 // Owner 2026-07-06: supporter names for the crowd "I ♥ name" signs. The CSV is the
@@ -4514,14 +4515,14 @@ function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number
   // Owner 10-08: "surface portrait view for opposing players during the setup phase". A press on a token I cannot
   // place (an opposing player, or one of mine that is out) used to be dropped here with no feedback: the renderer
   // hands every setup press to this drag start, and an ineligible player never reached the tap that shows the card.
-  if (!setupDragMode.eligible(playerId)) { showPopup(playerId); return; }
+  if (!setupDragMode.eligible(playerId)) { autoShowPopup(playerId); return; }
   startPlayerDrag(setupDragMode, playerId, clientX, clientY);
 }
 // Owner 2026-07-14 (setup overhaul #5/#3): a TAP on a PLACED player selects it; a 2nd tap on another placed
 // player swaps. Shared by onSetupClick and a stationary setup-drag release (on-pitch pointerdowns are intercepted
 // for the drag, so their taps route here). A reserve tap is a no-op (its action is the drag).
 function handleSetupPlayerTap(playerId: string) {
-  showPopup(playerId); // owner 09-14: a setup tap surfaces the player card (portrait + details) exactly as in live play
+  autoShowPopup(playerId); // owner 09-14: a setup tap surfaces the player card (portrait + details) exactly as in live play
   const players = setupPhase.value?.players ?? [];
   const tapped = players.find((p) => p.playerId === playerId);
   if (!tapped || tapped.inert) return; // not fieldable → inert (the card still shows)
@@ -7456,6 +7457,51 @@ function showPopup(playerId: string) {
   popup.visible = true;
   portrait.value = renderer?.playerPortrait(playerId) ?? null;
 }
+/** Owner 10-10: a player click on the pitch loads the card only in 'auto' (the existing behaviour); 'called'
+ *  ("Player portraits off") leaves it to the explicit opens - a roster row - which call showPopup directly. */
+function autoShowPopup(playerId: string) {
+  if (settings.playerCardMode === 'called') return;
+  showPopup(playerId);
+}
+/** Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits" - flips
+ *  the persisted playerCardMode and says so on the chat-toast stack (the existing "tell me, don't stop me" corner
+ *  surface). Off closes a card that is open; explicit opens keep working. */
+function togglePlayerCards(): boolean {
+  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: showPlayerCardsNotice });
+  return true;
+}
+/** The notice: one line, 1.5 s, a second press replaces the first. Its own slot in the .chat-toast look (like the
+ *  interceptor-wait line) and not on the chat stack, which is hidden in the replayer and cleared by chat rules. */
+const playerCardsNotice = ref('');
+let playerCardsNoticeTimer = 0;
+function showPlayerCardsNotice(text: string) {
+  window.clearTimeout(playerCardsNoticeTimer);
+  playerCardsNotice.value = text;
+  playerCardsNoticeTimer = window.setTimeout(() => { playerCardsNotice.value = ''; }, 1500);
+}
+onBeforeUnmount(() => window.clearTimeout(playerCardsNoticeTimer));
+/** A middle-button CLICK on the pitch (the renderer reports it; a middle-button drag still pans). Always true: the
+ *  click is this toggle's, so the renderer never also treats it as a left click. The toggle runs only when nothing
+ *  else owns input: no Settings / wizard, no Game Menu or context menu, no modal, card or confirmation, no text field
+ *  in focus. */
+function onPitchMiddleClick(): boolean {
+  const blocked = playerCardsToggleBlocked({
+    shellModalOpen: appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
+    gameMenuOpen: ui.gameMenuOpen,
+    // Astra 10-10: the global pointerdown closes a context menu before this runs (at release), so the press that
+    // dismissed one is remembered: that tap closes the menu and nothing else.
+    contextMenuOpen: ctxMenu.visible || performance.now() - ctxMenuDismissedByPressAt < 600,
+    modalOpen: reportOpen.value || (!!gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden),
+    // Astra 10-10: Keep Blitz?, Confirm Setup and the concede offer are confirmations too.
+    confirmationOpen: pitchHeldByConfirmation() || !!wideRailActivationPrompt.value
+      || !!blitzMoveModalTile.value || !!setupConfirm.value || !!concedeOffer.value,
+    decisionCardOpen: decisionCardOpen(gameStore.state as unknown as DecisionCardStoreState),
+    textFieldFocused: textFieldOwnsInput(typeof document !== 'undefined' ? document.activeElement : null),
+  });
+  const decision = middleClickDecision({ bound: MIDDLE_CLICK_ACTIONS, blocked });
+  if (decision.run.includes('playerCardsToggle')) togglePlayerCards();
+  return decision.consume;
+}
 
 // Owner ruling 08-17: the ROSTER tab's Home/Away buttons carry the actual team names — truncate
 // long names so the two buttons stay unambiguous side-by-side; full name is the button's title.
@@ -7947,7 +7993,7 @@ function showFriendlyLeftClickMenu(playerId: string, x: number, y: number): bool
   const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(actions), playerId, () => {});
   if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
   placeCtxMenu(items, x, y, playerId);
-  showPopup(playerId);
+  autoShowPopup(playerId);
   return true;
 }
 watch(() => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''), (actingId) => {
@@ -8003,7 +8049,7 @@ function armDeferredFriendlySwitch(playerId: string, fromId: string) {
   if (deferredSwitchActorBusy(fromId) || gameStore.game.value?.dialogParameter) return;
   ctxMenu.visible = false;
   deferredFriendlySwitch.value = { playerId, fromId, sentAtArm: gameStore.emittedCommandCount() };
-  showPopup(playerId);
+  autoShowPopup(playerId);
 }
 /** Second click: send the previous player's end now (synchronously, through the store's own switch seam, which
  *  re-checks the server-derived disposition), then run the new player's declaration on that actor's clear. */
@@ -8637,8 +8683,9 @@ function runMenuItem(item: MenuItem) {
   ctxMenu.visible = false;
 }
 
+let ctxMenuDismissedByPressAt = -Infinity;
 function onGlobalPointerDown(event: PointerEvent) {
-  if (ctxMenu.visible && !(event.target as HTMLElement).closest?.('.context-menu')) ctxMenu.visible = false;
+  if (ctxMenu.visible && !(event.target as HTMLElement).closest?.('.context-menu')) { ctxMenu.visible = false; ctxMenuDismissedByPressAt = performance.now(); }
 }
 
 /** Q4 Option B: rejected actions show a transient tooltip at the click point. */
@@ -9953,7 +10000,7 @@ onMounted(async () => {
         }
         if (ix.kind === 'inspect') {
           o66InspectedOpponent.value = ix.playerId;
-          showPopup(ix.playerId);
+          autoShowPopup(ix.playerId);
           return;
         }
         // High Kick uses the player-pick route; otherwise left-click auto-declares Move for a fresh/switchable standing player, while other actions use the menu.
@@ -9977,7 +10024,7 @@ onMounted(async () => {
             // Owner ruling 08-17: the stat card is additive display only during the coach's own turn — it must
             // not touch routing, so it's shown AFTER the menu is placed (menu z-index 30 > card z-index 10 wins
             // any overlap unchanged, same precedence as the off-turn card vs. other overlays).
-            showPopup(ix.playerId);
+            autoShowPopup(ix.playerId);
             return;
           }
           // Clicking an owned prone player opens the legal action menu without sending; the selected action folds stand-up.
@@ -9993,7 +10040,7 @@ onMounted(async () => {
             const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, refresh);
             if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
             placeCtxMenu(items, clickX, clickY, ix.playerId);
-            showPopup(ix.playerId);
+            autoShowPopup(ix.playerId);
             return;
           }
           // Owner 08-20: activation-menu property carriers must choose an explicit parent action before the
@@ -10003,7 +10050,7 @@ onMounted(async () => {
             const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, () => {});
             if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
             placeCtxMenu(items, clickX, clickY, ix.playerId);
-            showPopup(ix.playerId);
+            autoShowPopup(ix.playerId);
             return;
           }
           // Owner 2026-07-14 (#5): a single LEFT-click on an own STANDING player declares Move directly (the
@@ -10011,7 +10058,7 @@ onMounted(async () => {
           if (ix.actions.some((a) => a.kind === 'declare' && a.action === 'move')) {
             if (endActConfirm.value) return;
             gameStore.declareAction(ix.playerId, 'move');
-            showPopup(ix.playerId);
+            autoShowPopup(ix.playerId);
             return;
           }
         }
@@ -10025,7 +10072,7 @@ onMounted(async () => {
       const clickedIsHome = !!g?.teamHome.playerArray.some((p) => p.playerId === playerId);
       if (g && clickedIsHome !== gameStore.myTeamIsHome.value) renderer.selectPlayer(playerId);
     }
-    showPopup(playerId);
+    autoShowPopup(playerId);
   };
   // Owner 2026-07-03: the coach clicks a candidate push square (gold arrow) to
   // choose the push direction — sends the real clientPushback.
@@ -10044,7 +10091,7 @@ onMounted(async () => {
     // giving the ball away. The pick is confirm-mode: the tap only toggles the nominee, Confirm sends it.
     const touchbackPick = gameStore.state.playerPick?.key === 'touchback';
     gameStore.resolvePlayerPick(playerId);
-    if (touchbackPick) showPopup(playerId);
+    if (touchbackPick) autoShowPopup(playerId);
   };
   // Owner 2026-07-14 (#5): the double-click stand gesture is RETIRED in o66 — a single left-click already
   // declares Move (incl. stand-up-into-move for a prone player), so the first click of any double-click has
@@ -10052,7 +10099,7 @@ onMounted(async () => {
   // behaviour (empty-square reset camera) handled by the renderer when this hook takes no action.
   // Owner 10-08: a presentation-only pre-setup formation token (the other team while a coach sets up) is inert for
   // play but still shows its card.
-  renderer.onInspectPlayer = (playerId) => { showPopup(playerId); };
+  renderer.onInspectPlayer = (playerId) => { autoShowPopup(playerId); };
   renderer.onPlayerDoubleClick = () => {
     /* o66: intentionally inert — single-click declares Move (#5). */
   };
@@ -10391,6 +10438,7 @@ onMounted(async () => {
     ctxMenu.visible = false;
   };
   renderer.onContextMenu = openContextMenu;
+  renderer.onMiddleClick = onPitchMiddleClick;
   renderer.onActionRejected = showToast;
   // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off.
   renderer.onKickPick = (coord) => gameStore.resolveKickPlacement(coord as [number, number]);
@@ -12852,6 +12900,14 @@ function sendChat() {
         <div v-if="interceptWaitText" class="chat-toast-stack" :style="{ top: ((centerPanelBox?.bottom ?? 0) + 8) + 'px', left: '50%', transform: 'translateX(-50%)' }">
           <div class="chat-toast">
             <span class="chat-toast-text">{{ interceptWaitText }}</span>
+          </div>
+        </div>
+        <!-- Owner 10-10: "Player portraits off" / "Player portraits on" (middle mouse button on the pitch). Same slot and
+             look as the interceptor-wait line (one row lower when both are up); never takes a click. -->
+        <div v-if="playerCardsNotice" class="chat-toast-stack" data-testid="player-cards-notice" role="status"
+          :style="{ top: ((centerPanelBox?.bottom ?? 0) + (interceptWaitText ? 56 : 8)) + 'px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }">
+          <div class="chat-toast">
+            <span class="chat-toast-text">{{ playerCardsNotice }}</span>
           </div>
         </div>
 

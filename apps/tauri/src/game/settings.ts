@@ -74,6 +74,10 @@ export interface AppSettings extends ConfirmationSettings {
   logExpandKey: string;
   /** Owner 09-05: WASD camera glide speed, screen px per frame (2-30, 9 = original). */
   cameraPanSpeed: number;
+  /** Owner 10-10 (same key and values as the controller branch): the player card loads on a player click ('auto',
+   *  the existing behaviour) or not from the pitch at all ('called' = "Player portraits off"; the middle mouse button
+   *  on the pitch flips it, game/playerCards.ts). */
+  playerCardMode: PlayerCardMode;
   // markings
   tackleZoneMode: 'off' | 'opposition' | 'friendly' | 'both';
   showDefaultSkills: boolean;
@@ -524,11 +528,14 @@ export interface SkillConfigEntry {
   markerImported?: boolean;
 }
 
+export type PlayerCardMode = 'auto' | 'called';
+
 const DEFAULTS: AppSettings = {
   confirmKey: 'Space', // owner 2026-07-02: Space confirms queued moves
   rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
   logExpandKey: 'KeyL', // owner 10-02: L doubles the Log window, L again restores it
   cameraPanSpeed: 16, // owner 10-07: 9 -> 16 px per frame
+  playerCardMode: 'auto',
   tackleZoneMode: 'opposition',
   showDefaultSkills: false,
   showPositionRings: true,
@@ -1023,6 +1030,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       ? raw.rosterKey : (['KeyH', 'KeyR', 'KeyJ'].find((k) => !hotkeyConflict('rosterKey', k, merged)) ?? 'KeyH');
     merged.logExpandKey = typeof raw.logExpandKey === 'string' && !hotkeyConflict('logExpandKey', raw.logExpandKey, merged)
       ? raw.logExpandKey : (['KeyL', 'KeyK', 'KeyO'].find((k) => !hotkeyConflict('logExpandKey', k, merged)) ?? 'KeyL');
+    merged.playerCardMode = raw.playerCardMode === 'called' ? 'called' : 'auto';
     const installedIdentity = (value: unknown) => typeof value === 'string'
       && (/^[a-f0-9]{32}$/.test(value) || value === '')
       ? value : '';

@@ -4953,6 +4953,17 @@ function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?:
   appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
 }
+/** Owner 10-10: my own follow-up answer as a match log line ("<Player> does not follow the block"), the name tagged
+ *  with its team so it takes the seat colour and is clickable like any other name. The server sends no report for it. */
+function logFollowUpChoice(playerId: string | null | undefined, follow: boolean): void {
+  const g = game.value;
+  const id = String(playerId ?? '');
+  const name = (g && id ? playerName(g, id) : '') || 'The blocker';
+  const home = !!g && ((g.teamHome as { playerArray?: { playerId?: string }[] } | undefined)?.playerArray ?? []).some((p) => p.playerId === id);
+  const away = !!g && ((g.teamAway as { playerArray?: { playerId?: string }[] } | undefined)?.playerArray ?? []).some((p) => p.playerId === id);
+  const names: LogNameToken[] | undefined = home || away ? [{ index: 0, length: name.length, team: home ? 'home' : 'away', playerId: id }] : undefined;
+  log('report', `${name} ${follow ? 'follows the block' : 'does not follow the block'}`, undefined, undefined, undefined, names);
+}
 function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[]): void {
   log(kind, text, side, d6, blockDice, names, tags, 'match');
 }
@@ -19821,7 +19832,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           // Latch only a send that left: a refused send leaves the question to be asked again on the next frame.
           if (!sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: follow }, instanceKey, instanceRef)) return;
           followupHandled.add('followup');
-          log('system', `play: follow up ${follow ? 'TAKEN' : 'declined'} (${playerName(game.value, followupAttacker)})`);
+          logFollowUpChoice(followupAttacker, follow);
         },
       });
       return;
@@ -23650,7 +23661,7 @@ export const gameStore = {
     followupHandled.add('followup');
     if (state.yesNo?.key.startsWith('followupAsk:')) clearYesNo(); // S100
     sendCommand({ netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: follow });
-    log('system', `play: follow up ${follow ? 'TAKEN' : 'declined'} (${playerName(game.value, fc.playerId)})`);
+    logFollowUpChoice(fc.playerId, follow);
     state.followupChoice = null; // pendingFollowup still resolves the arrival flash
   },
 
