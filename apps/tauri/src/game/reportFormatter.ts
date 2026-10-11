@@ -6,6 +6,7 @@ import type { LogNameToken } from './logNames';
 import type { LogTagToken } from './logTags';
 import { quickSnapAllowanceText, quickSnapCountText, quickSnapExhaustedText } from './quickSnapController';
 import { prayerForRoll } from './prayerCatalog';
+import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 
 /**
  * First-pass port of the FFB report texts (upstream: ffb-client-logic
@@ -772,6 +773,17 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   projectileVomit: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
     return `${pn(g, r.playerId)}'s Projectile Vomit${r.defenderId ? ` on ${pn(g, r.defenderId)}` : ''}: ${hiddenTag('rolls ')}${d6(r.roll)}${min} | ${r.successful ? 'hits' : 'misses'}`;
+  },
+  // Owner 10-10: ReportBreatheFire had no line of its own (generic dump, "successful false" on a 4). Its `successful`
+  // is true only for the knock-down; the outcome is the server's `status` (see breatheFireOutcome).
+  breatheFire: (r, g) => {
+    const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
+    const target = r.defenderId ? ` on ${pn(g, r.defenderId)}` : '';
+    const rerolled = r.reRolled ? ' | rerolled' : '';
+    const outcome = breatheFireOutcome(r);
+    const result = outcome === 'failure' ? FAILS : outcome === 'noEffect' ? 'no effect' : outcome === 'prone' ? 'placed prone'
+      : outcome === 'knockDown' ? 'knocked down' : breatheFirePassed(r) === false ? FAILS : '';
+    return `${pn(g, r.playerId)}'s Breathe Fire${target}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${rerolled}${result ? ` | ${result}` : ''}`;
   },
   lookIntoMyEyesRoll: skillRoll('uses Look Into My Eyes'),
   weepingDaggerRoll: skillRoll('uses Weeping Dagger'),

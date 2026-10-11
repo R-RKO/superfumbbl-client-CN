@@ -10,6 +10,7 @@ import { reactive } from 'vue';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveArmour, effectiveStat, playerSkillValue } from '@fumbbl40k/ffb-protocol';
 import { dodgeSkillCancelledAt, hasSkill as hasSkillWithGrants } from './logic/availableActions';
+import { breatheFirePassed } from './breatheFireOutcome';
 import {
   actionTrial, addCount, addTrial, armourBreakThreshold, binaryKey, blockFaceScores, blockRollKey, blockRollScore, emptyLuck, injuryKey,
   injuryScore6, injuryTrial, koWeight6, likelihoodOf, parseDist, twoD6AtLeast, type DiceLuck, type Likelihood, type LuckBucket, type LuckRow,
@@ -761,8 +762,11 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         else pushD6(tallies, v);
       }
       if (fields.includes('roll')) {
-        pushTest(tallies, r);
-        pushActionLuck(tallies, r, passingRuleUnknown(game, id, playerId ?? actingId));
+        // Breathe Fire's `successful` means "knocked down"; the trial against its minimum is the server's result.
+        const bf = id === 'breatheFire' ? breatheFirePassed(r) : null;
+        const tested = bf === null ? r : { ...r, successful: bf };
+        pushTest(tallies, tested);
+        pushActionLuck(tallies, tested, passingRuleUnknown(game, id, playerId ?? actingId));
       }
     }
   }

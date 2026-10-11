@@ -18,6 +18,10 @@ export interface ActionDieRoll {
   opponentRerollPending?: boolean;
   /** Owner 10-05: the ROLLING coach's own failed roll while their reroll offer is open (same hold, own seat). */
   rerollOfferPending?: boolean;
+  /** Astra 10-10: not failed, yet the server may hold a reroll offer open for it (Breathe Fire no effect / prone). */
+  rerollOfferNotFailed?: boolean;
+  /** Astra 10-10 (round 2): the rerolled result of a Breathe Fire roll (may re-roll that unfailed die in place). */
+  breatheFireReroll?: boolean;
   /** Owner 10-09: a movement roll's die (Dodge / Rush / Leap, first roll) belongs to the square the mover is entering:
    *  it is shown when the mover's token has arrived there (actionDiceQueueDrain), not while it is still walking in. */
   awaitsArrival?: boolean;
@@ -29,7 +33,8 @@ export interface TurnoverSplash { seq: number }
 /** The renderer surface the lifecycle drives (a subset of PitchRenderer). */
 export interface ActionDiceRenderer {
   showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number,
-    rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean): void;
+    rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean,
+    rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void;
   releaseDiceAtTurnover(): void;
   clearActionDice(): void;
   setTurnoverSplashShowing(showing: boolean): void;
@@ -79,7 +84,10 @@ export function createActionDiceLifecycle(deps: ActionDiceLifecycleDeps): Action
       const opponentRerollPending = opponentRerollHoldAtShow(roll.opponentRerollPending, dialogId);
       // the same re-validation for the rolling coach's own offer: a deferred show after the offer closed takes no hold
       const rerollOfferPending = opponentRerollHoldAtShow(roll.rerollOfferPending, dialogId);
-      renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
+      // (the extra arguments are passed only for the Breathe Fire rolls that carry them: every other call is unchanged)
+      if (roll.rerollOfferNotFailed || roll.breatheFireReroll) renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
+        roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending, !!roll.rerollOfferNotFailed, !!roll.breatheFireReroll);
+      else renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
         roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending);
     }
   };

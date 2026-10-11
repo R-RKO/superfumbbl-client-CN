@@ -500,7 +500,7 @@ function noteChatGame(url: string, coach: string, gameId: unknown): void {
 
 const spectatorPublication = new SpectatorPublication();
 /** One published action-dice batch (`state.actionDice` / an `state.actionDiceQueue` element). */
-type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[]; seq: number };
+type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean }[]; seq: number };
 /** Owner 10-06 (spec-dice-queue): the queue only bridges one tick to the view's drain; cap it so an unmounted view
  *  (lobby, headless tests) cannot grow it without bound. */
 const ACTION_DICE_QUEUE_CAP = 16;
@@ -8004,7 +8004,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // The deciding coach owns the interactive Shadowing card and must never see this passive duplicate.
       // Only the opposing player seat and a live spectator receive the compact status pill.
       const team = [gg.teamHome, gg.teamAway].find((candidate) => candidate.teamId === dp.teamId);
-      pending = `${team?.coach || team?.teamName || 'Opponent'} is deciding to shadow`;
+      pending = `${team?.coach || team?.teamName || 'Opponent'} is deciding whether to use Shadowing`;
       // Owner 09-08: anchor the pill on the player who may shadow (the dialog's eligible list; playerId when given).
       const eligible = (dp as { playerIds?: unknown }).playerIds;
       pendingPlayerId = dp.playerId ?? (Array.isArray(eligible) && typeof eligible[0] === 'string' ? eligible[0] : null);
@@ -8848,7 +8848,7 @@ function applyFrameContents(frame: QueuedFrame) {
   {
     const onPitch = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
     // Owner 2026-07-08: split this frame's action dice into the FIRST rolls and the RE-ROLLED results so a fail→reroll→result burst can be staged sequentially.
-    const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[] = [];
+    const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean }[] = [];
     const reRolledRolls: typeof firstRolls = [];
     for (const report of reports) {
       const pid = report.playerId;

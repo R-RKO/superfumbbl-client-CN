@@ -284,7 +284,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     prayerChoiceWait: prayer ? { coach: prayer.coach, instanceKey: prayer.instanceKey } : null,
     skillChoice: skill,
     opponentReviewingDice: !!(g as Record<string, unknown>).waitingForOpponent && !!p.blockCard && !!dialog?.choosingTeamId,
-    opponentChoicePending: shadowTeam ? (shadowTeam.coach || shadowTeam.teamName || 'Opponent') + ' is deciding to shadow' : followupWaiting ?? blastinWaiting,
+    opponentChoicePending: shadowTeam ? (shadowTeam.coach || shadowTeam.teamName || 'Opponent') + ' is deciding whether to use Shadowing' : followupWaiting ?? blastinWaiting,
     // Owner 09-14: the pending pill parks at this player's token (the blocker for a follow-up decision, the named
     // shadower for Shadowing); without it the review-to-live HUD fell back to the top-centre band.
     opponentChoicePendingPlayerId: shadowTeam ? shadowingPlayerId(dialog)

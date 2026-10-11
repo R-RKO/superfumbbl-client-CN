@@ -1,5 +1,6 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { offeredReRollOptions, playerById } from './reRollDecisionProjection';
+import { breatheFirePassed, breatheFireRerollMayBeOfferedUnfailed } from './breatheFireOutcome';
 const DIE_CAUSE_BY_REPORT: Record<string, string> = {
   dodgeRoll: 'dodge',
   pickUpRoll: 'pickup',
@@ -62,7 +63,14 @@ export function dodgeUsedBreakTackle(report: Readonly<Record<string, unknown>>):
     && dieCauseFromRollModifiers(report.rollModifiers) === 'breakTackle';
 }
 
-export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; awaitsArrival?: boolean }
+export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; awaitsArrival?: boolean;
+  /** Astra 10-10: this roll is NOT failed (no FAILED stamp), yet the server may hold a reroll offer open for it - a
+   *  Breathe Fire "no effect" / "placed prone". The die then takes the reroll-offer lifecycle a failed die has (held
+   *  while the offer is open, recognised by the prompt, rerolled in place). Only ever set for `breatheFire`. */
+  rerollOfferNotFailed?: boolean;
+  /** Astra 10-10 (round 2): this is the REROLLED result of a Breathe Fire roll. Only such a result may re-roll in
+   *  place the unfailed Breathe Fire die above; any other roll's rerolled result looks for failed dice only. */
+  breatheFireReroll?: boolean }
 export interface ActionRollCue {
   reRolled: boolean;
   die: ActionDieCue | null;
@@ -75,7 +83,10 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   reroll: { raw: string; isTeam: boolean } | null): ActionRollCue | null {
   if (typeof report.playerId !== 'string' || typeof report.roll !== 'number' || !Number.isInteger(report.roll) || report.roll < 1 || report.roll > 6) return null;
   const playerId = report.playerId, roll = report.roll, id = String(report.reportId);
-  const failed = report.successful === false, reRolled = report.reRolled === true;
+  // Breathe Fire's `successful` means "knocked down", not "passed" - its failed stamp follows the server's result.
+  const failed = id === 'breatheFire' ? breatheFirePassed(report) === false : report.successful === false;
+  const reRolled = report.reRolled === true;
+  const rerollOfferNotFailed = id === 'breatheFire' && !failed && breatheFireRerollMayBeOfferedUnfailed(report);
   const neededRaw = Number(report.minimumRoll);
   const needed = Number.isFinite(neededRaw) && neededRaw >= 2 && neededRaw <= 6 ? neededRaw : undefined;
   const modifierCause = id === 'dodgeRoll' ? dieCauseFromRollModifiers(report.rollModifiers)
@@ -117,7 +128,9 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   // was held through the reroll offer only on the WATCHING client; the rolling coach's own die faded after its
   // normal ~1.6 s while their reroll prompt was still open, and an accepted reroll then drew a fresh die without
   // the cause. Both seats now hold it for as long as the server's reroll offer for that player is open.
-  if (failed && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
+  if (rerollOfferNotFailed) result.die.rerollOfferNotFailed = true;
+  if (id === 'breatheFire' && reRolled) result.die.breatheFireReroll = true;
+  if ((failed || rerollOfferNotFailed) && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
     && offeredReRollOptions(dialog ?? {}, playerById(game, playerId)?.skillDisplayValuesMap).length > 0) {
     if (passiveViewer) result.die.opponentRerollPending = true;
     else result.die.rerollOfferPending = true;

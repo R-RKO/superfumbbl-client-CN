@@ -162,6 +162,7 @@ import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner'
 import { createMoveClickGate } from '../game/logic/moveClickGate';
 import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
+import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
 import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } from '../game/logic/availableActions';
@@ -3834,6 +3835,12 @@ watchDecisionSurface(
       // Round 6: only THIS roll's own die on the pitch (failed, that value, held for the offer) suppresses the prompt
       // die. When the roll's die arrives later instead (a deferred show, live review's ordering) the renderer
       // replaces this unlabelled one with it (showActionDie), so the two never stand side by side.
+      // Astra 10-10 (round 2): a Breathe Fire offer can be for a roll that is NOT failed. Only that prompt recognises
+      // the unfailed Breathe Fire die, and the die it puts up itself is marked as its copy so that only the Breathe
+      // Fire report replaces it. Every other prompt takes the line below, unchanged.
+      if (p.roll && isBreatheFireReRollAction(p.reRolledAction)) {
+        if (!renderer.hasOfferHeldFailedDieAt(sq, p.roll, true)) renderer.showBreatheFirePromptDie(sq, p.roll, !p.thresholdless, p.needed);
+      } else
       if (p.roll && !renderer.hasOfferHeldFailedDieAt(sq, p.roll)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
     }
     const follow = () => {

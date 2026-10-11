@@ -919,6 +919,12 @@ interface ActionDieRecord {
   value?: number;
   cause?: string;
   failed?: boolean;
+  /** Astra 10-10: not failed (no FAILED plate), yet the subject of a possible server reroll offer (Breathe Fire
+   *  no effect / prone): wherever the reroll lifecycle looks for "the failed die", this die qualifies too. */
+  rerollOfferNotFailed?: boolean;
+  /** Astra 10-10 (round 2): put up by the Breathe Fire reroll PROMPT itself (showBreatheFirePromptDie), before the
+   *  roll's own die arrived. Only the Breathe Fire report's die replaces a die carrying this. */
+  breatheFirePromptCopy?: boolean;
   face?: Sprite | null;
   causeTag?: Container | null;
   /** The cause badge's own (2D) offset; nudged outward while the cube draws over the Pixi canvas. */
@@ -14059,7 +14065,7 @@ export class PitchRenderer {
   /** On-pitch action d6 (owner 2026-07-03 r3): pop a die showing `value` (1–6)
    *  NEXT TO the given square (upper-right corner), animated in/hold/out. Driven
    *  from the report stream on skill/agility rolls (pickup, dodge, GFI, catch…). */
-  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean): void {
+  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void {
     // Owner 10-05: a reroll OFFER is open for this failed roll - the die and its cause marker stay until the offer
     // is answered (accepted: the die re-rolls in place and keeps its marker; declined / cleared: both fade together).
     // `opponentRerollPending` (the watching seat) additionally hides the needed roll on the FAILED plate, as before.
@@ -14075,8 +14081,11 @@ export class PitchRenderer {
     // the re-roll also fails. No teardown, no second pop-in. (Owner 09-06 had it replaced at the same square.)
     // Astra 09-14: only a FAILED die is ever re-rolled, and the newest one at the square is the one the re-roll
     // answers — a successful Rush die sharing the square is never hijacked.
+    // Astra 10-10: the one exception is a Breathe Fire roll, which the server offers a reroll for without it having
+    // failed. Round 2: ONLY the rerolled Breathe Fire result (`breatheFireReroll`) may take that unfailed die; every
+    // other roll's rerolled result looks for failed dice exactly as before.
     const persisted = rerollSkill
-      ? [...this.actionDice].reverse().find((d) => d.id !== undefined && d.failed && d.square && d.square[0] === x && d.square[1] === y)
+      ? [...this.actionDice].reverse().find((d) => d.id !== undefined && (d.failed || (!!breatheFireReroll && !!d.rerollOfferNotFailed)) && d.square && d.square[0] === x && d.square[1] === y)
       : undefined;
     if (persisted) {
       // Rebuild the die body for the new value (textured face OR the vector fallback body) and re-caption it.
@@ -14090,6 +14099,7 @@ export class PitchRenderer {
       persisted.start = now - presentationMs(ACTION_DIE_IN_MS); // already popped in: hold restarts, no re-pop
       persisted.value = value;
       persisted.failed = !!failed;
+      persisted.rerollOfferNotFailed = !!rerollOfferNotFailed;
       persisted.holdForOpponentReroll = holdForRerollOffer;
       persisted.holdUntilTurnover = !!failed;
       persisted.splashSuspendMs = 0;
@@ -14128,6 +14138,17 @@ export class PitchRenderer {
         return !promptCopy;
       });
     }
+    // Astra 10-10 (rounds 1-3): the Breathe Fire prompt is thresholdless, so the copy it puts up carries no FAILED
+    // plate whatever the roll was (failure, no effect, prone) and round 6 above does not see it. The Breathe Fire
+    // report's own die replaces that copy, identified by its provenance (`breatheFirePromptCopy`, set only by
+    // showBreatheFirePromptDie) - never by its looks: an unrelated bare die on the square is not touched.
+    if (cause === 'breatheFire' && !rerollSkill) {
+      this.actionDice = this.actionDice.filter((d) => {
+        const promptCopy = !!d.breatheFirePromptCopy && d.cause === undefined && d.value === value && d.square && d.square[0] === x && d.square[1] === y;
+        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
+        return !promptCopy;
+      });
+    }
     // Round 7: a roll with NO cause marker (any roll actionRollPresentation maps no cause for) arriving after the prompt's identical
     // unlabelled copy is the same die - adopt the copy (it takes this roll's hold) instead of adding a second one.
     if (failed && !cause && !rerollSkill) {
@@ -14156,6 +14177,7 @@ export class PitchRenderer {
       value,
       cause,
       failed: !!failed,
+      ...(rerollOfferNotFailed ? { rerollOfferNotFailed: true } : {}),
       face: built.face,
       causeTag: built.causeTag,
       causeTagHome: built.causeTag ? { x: built.causeTag.position.x, y: built.causeTag.position.y } : undefined,
@@ -14315,12 +14337,23 @@ export class PitchRenderer {
   /** Astra rounds 4-7: is THIS roll's own failed die already on that square? A failed die showing that value that
    *  is held for a reroll offer, or was shown within the last few seconds (a Pass / Catch die takes no offer hold but
    *  is on the pitch when its prompt opens). An old failed die from an earlier roll - e.g. one held for the turnover -
-   *  is neither, so it does not hide a new prompt's die. */
-  hasOfferHeldFailedDieAt(square: readonly [number, number], value: number): boolean {
+   *  is neither, so it does not hide a new prompt's die. Astra 10-10: a die the server offers a reroll for without it
+   *  having failed (Breathe Fire no effect / prone) is this roll's own die in the same way - but only for the Breathe
+   *  Fire prompt (`breatheFirePrompt`); any other prompt asks about failed dice only, as before. */
+  hasOfferHeldFailedDieAt(square: readonly [number, number], value: number, breatheFirePrompt?: boolean): boolean {
     const now = performance.now();
-    return this.actionDice.some((d) => d.failed && d.value === value && !d.node.destroyed
+    return this.actionDice.some((d) => (d.failed || (!!breatheFirePrompt && !!d.rerollOfferNotFailed)) && d.value === value && !d.node.destroyed
       && (d.holdForOpponentReroll || now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS))
       && d.square && d.square[0] === square[0] && d.square[1] === square[1]);
+  }
+  /** Astra 10-10 (round 2): the Breathe Fire reroll prompt's own die (no cause marker; the roll's die has not
+   *  arrived). The same die showActionDie would draw, marked as this prompt's copy so the Breathe Fire report's die -
+   *  and nothing else - replaces it. */
+  showBreatheFirePromptDie(square: [number, number], value: number, failed?: boolean, needed?: number): void {
+    const before = this.actionDice[this.actionDice.length - 1];
+    this.showActionDie(square, value, undefined, failed, needed);
+    const added = this.actionDice[this.actionDice.length - 1];
+    if (added && added !== before && added.cause === undefined) added.breatheFirePromptCopy = true;
   }
   /** Astra round 4 / 5: fail-open release of the reroll-offer hold for the die on ONE square (the coach's own
    *  answered offer), for when the server's dialog-clearing frame never arrives. Dice held for any other offer -
