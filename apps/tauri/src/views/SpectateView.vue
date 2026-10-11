@@ -404,7 +404,6 @@ import PadGlyph from '../components/PadGlyph.vue';
 import { createPadSetupHost } from '../game/padSetup';
 import { createPadBlockDeclareWatch } from '../game/padBlockDeclare';
 import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCardRules';
-import { showCornerNotice } from '../game/cornerNotice';
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
@@ -7496,12 +7495,23 @@ function autoShowPopup(playerId: string) {
   showPopup(playerId);
 }
 /** Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits" - the
- *  "Player portraits on / off" action flips Settings > UI "Player portraits" (persisted) and says so in the corner chip. Off
+ *  "Player portraits on / off" action flips Settings > UI "Player portraits" (persisted) and says so below the centre panel. Off
  *  closes a card that is open; explicit opens keep working. */
 function togglePlayerCards(): boolean {
-  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: (text) => showCornerNotice('player-cards', text) });
+  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: showPlayerCardsNotice });
   return true;
 }
+/** Owner 10-11: the notice sits just BELOW the centre panel again (the 1.0.169 place), not in the top-right corner chip
+ *  the controller work moved it to. One line, 1.5 s, a second press replaces the first; its own slot in the .chat-toast
+ *  look (like the interceptor-wait line), not on the chat stack, which is hidden in the replayer. */
+const playerCardsNotice = ref('');
+let playerCardsNoticeTimer = 0;
+function showPlayerCardsNotice(text: string) {
+  window.clearTimeout(playerCardsNoticeTimer);
+  playerCardsNotice.value = text;
+  playerCardsNoticeTimer = window.setTimeout(() => { playerCardsNotice.value = ''; }, 1500);
+}
+onBeforeUnmount(() => window.clearTimeout(playerCardsNoticeTimer));
 /** A middle-button CLICK on the pitch (the renderer reports it; a middle-button drag still pans). True = the button is
  *  bound (Settings > Controls), so the renderer must not also treat the click as a left click. The bound action runs
  *  only when nothing else owns input: no Settings / wizard, no Game Menu or context menu, no modal, card or
@@ -13398,6 +13408,14 @@ function sendChat() {
         <div v-if="interceptWaitText" class="chat-toast-stack" :style="{ top: ((centerPanelBox?.bottom ?? 0) + 8) + 'px', left: '50%', transform: 'translateX(-50%)' }">
           <div class="chat-toast">
             <span class="chat-toast-text">{{ interceptWaitText }}</span>
+          </div>
+        </div>
+        <!-- Owner 10-10 / 10-11: "Player portraits off" / "Player portraits on". Same slot and look as the
+             interceptor-wait line (one row lower when both are up); never takes a click. -->
+        <div v-if="playerCardsNotice" class="chat-toast-stack" data-testid="player-cards-notice" role="status"
+          :style="{ top: ((centerPanelBox?.bottom ?? 0) + (interceptWaitText ? 56 : 8)) + 'px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }">
+          <div class="chat-toast">
+            <span class="chat-toast-text">{{ playerCardsNotice }}</span>
           </div>
         </div>
 

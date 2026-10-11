@@ -1464,6 +1464,7 @@ const DIE_TAG_STYLE_DARK = new TextStyle({ fontFamily: 'Arial, sans-serif', font
 const DIE_CAUSE_SKILL: Record<string, string> = {
   breatheFire: 'BreatheFire', // owner 08-18: Breathe Fire roll die, tagged with the skill's own icon
   breakTackle: 'BreakTackle', // owner 09-14: the skill's icon, not the old BREAK TACKLE pill (pill = icon-missing fallback)
+  timmber: 'Timmm-ber!', // owner 10-11: same for the Timmm-ber! stand-up assist (the TIMM-BER! pill = icon-missing fallback)
   dauntless: 'Dauntless',
   pickup: 'PickUp',
   gfi: 'GFI',
