@@ -11970,6 +11970,19 @@ interface PlannerPlan {
     | { idx: number; cause: 'bloodlust'; offerFloor: number }
     | { idx: number; cause: 'animalSavagery'; offerFloor: number; currentMove: number; readyRevision: number | null; readyAt: number }
     | null;
+  /** Owner 10-10 (FUMBBL g1952139 cmd 219-222): an opponent's Shadowing / Diving Tackle choice opened while this plan's
+   *  sent square was still unechoed. The plan sends square N+1 on the dodge report of square N; the server is by then
+   *  normally already waiting on that choice in the SAME step burst (bb2025 generator Move.java:51-61: MOVE_DODGE,
+   *  DIVING_TACKLE, SHADOWING back to back, bb2020 Move.java:55-65 alike) and a move that reaches it there is dropped,
+   *  not queued: GameState.handleCommand:199-229 hands every command to the current step, StepShadowing.handleCommand
+   *  (bb2025 :77-103, bb2020 :72-98) and StepDivingTackle.handleCommand (:98-114) act on CLIENT_PLAYER_CHOICE of their
+   *  own mode only, AbstractStep.handleCommand:104-120 knows no move. The plan sat for the 8 s watchdog.
+   *  Nothing is sent again (Astra 10-10: a merely delayed original plus a resend can be carried out twice, e.g. after
+   *  a successful Tentacles puts the mover back on the origin square, StepInitMoving:150). The plan simply ENDS, with
+   *  no notice, on the first applied frame that leaves no dialog standing: the coach sees the squares the server
+   *  offers again and clicks. A late echo of the original then finds no plan. Tentacles is not marked: StepTentacles
+   *  asks before the dodge is rolled (Move.java:46), while the plan still waits for that roll and has sent nothing. */
+  opponentPromptOverSend: boolean;
   /** Owner 09-15 (g1942731 cmd 770): the last FAILED flagged roll for the current square, pending a re-roll or the
    *  fall/turnover. When the server then drops the activation, the plan ended on that roll — an expected outcome,
    *  not a cancelled plan — so it retires quietly instead of the "lost the activation" warning. A later successful
@@ -12273,6 +12286,26 @@ function plannerMoveSelectionReoffer(cmd: Record<string, unknown> | undefined, t
   }
   return offered;
 }
+const PLANNER_OPPONENT_REACTION_MODES = new Set(['shadowing', 'divingTackle']);
+/** `cmd` SETS a dialog, and the applied model now stands on a Shadowing / Diving Tackle player choice addressed to the
+ *  other team and waits on that opponent (DialogPlayerChoiceParameter: teamId + playerChoiceMode;
+ *  UtilServerDialog.showDialog:14-20). */
+function plannerOpponentReactionOpened(g: GameJson, cmd: Record<string, unknown> | undefined): boolean {
+  if ((g as Record<string, unknown>).waitingForOpponent !== true) return false;
+  const myTeamId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
+  const live = g.dialogParameter as { dialogId?: unknown; teamId?: unknown; playerChoiceMode?: unknown } | null | undefined;
+  if (!myTeamId || live?.dialogId !== 'playerChoice' || !PLANNER_OPPONENT_REACTION_MODES.has(String(live.playerChoiceMode ?? ''))
+      || typeof live.teamId !== 'string' || !live.teamId || live.teamId === myTeamId) return false;
+  const changes = (cmd?.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [];
+  return changes.some((change) => String(change.modelChangeId ?? '') === 'gameSetDialogParameter' && change.modelChangeValue != null);
+}
+/** Owner 10-10: the prompt that took this plan's sent square has been answered (no dialog stands in the applied
+ *  model): the plan is over. Quiet: nothing was lost that the coach cannot see, and nothing is sent. */
+function plannerEndAfterOpponentPrompt(p: PlannerPlan, g: GameJson): boolean {
+  if (!p.opponentPromptOverSend || g.dialogParameter != null) return false;
+  plannerRetireQuietly("the opponent's reaction took the sent step");
+  return true;
+}
 /** Server-sent team membership only: true when both ids are rostered and on different teams. */
 function plannerOpposingPlayers(g: GameJson, a: string, b: string): boolean {
   const side = (id: string) => g.teamHome.playerArray.some((pl) => pl.playerId === id) ? 'home'
@@ -12342,7 +12375,7 @@ function plannerFlush(reason: string) {
   if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
   state.blitzBlockChoice = null; // #111 fail-safe: a held block-choice dies with its plan (turn-end/knockdown/etc.) — never a stale hold
   state.foulChoiceHold = null; foulChoice = null; // S42: same for a held Foul / Chainsaw choice and its remembered pick
-  const text = `Plan cancelled — ${reason}.`;
+  const text = `Plan cancelled. ${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
   log('system', `⚠ ${text}`);
   state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
 }
@@ -12543,7 +12576,7 @@ function plannerStart(input: {
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
-    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, failedRoll: null, failedGate: null, sentOfferRevisions: [],
+    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, opponentPromptOverSend: false, failedRoll: null, failedGate: null, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
@@ -12710,6 +12743,7 @@ function plannerAdvance() {
       return;
     }
     case 'moving': {
+      if (plannerEndAfterOpponentPrompt(p, g)) return; // owner 10-10 (every wake, not only a frame's own apply)
       if (actingId !== p.playerId) {
         if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`); // the fall/turnover tells the story
         else if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
@@ -16753,6 +16787,12 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     const g = game.value;
     const sentCoord = plannerCoord(p.playerId);
     const atSent = !!sentCoord && !!target && sentCoord[0] === target[0] && sentCoord[1] === target[1];
+    // Owner 10-10: an opponent's Shadowing / Diving Tackle choice opened over an unechoed sent square (see
+    // PlannerPlan.opponentPromptOverSend). Marked once, never over a Bloodlust / lash-out mark (their own resend
+    // rules stay in charge); the plan ends on the first frame that leaves no dialog, BEFORE this frame's reports can
+    // settle a roll and release any send (a Diving Tackle that forces a reroll of the previous square included).
+    if (g && target && !atSent && !p.spentMove && !p.opponentPromptOverSend && plannerOpponentReactionOpened(g, cmd)) p.opponentPromptOverSend = true;
+    if (g && plannerEndAfterOpponentPrompt(p, g)) return;
     for (const r of reps) {
       if (String(r.reportId ?? '') === 'bloodLustRoll' && String(r.playerId ?? '') === p.playerId) {
         if (r.successful === false) p.spentMove = { idx: p.sentIdx, cause: 'bloodlust', offerFloor: moveOfferRevision };
