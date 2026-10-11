@@ -20,7 +20,7 @@ import {
 } from './skillIcons';
 import { AURA_RADIUS, auraEmitters, bombCells, catchTarget, foulTarget, interceptors, passTargetRoll } from './actions';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
-import { effectiveMovement, playerHasSkill, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
+import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
 import {
   PITCH_COLS,
   PITCH_ROWS,
@@ -17018,7 +17018,7 @@ export class PitchRenderer {
     // which skills to draw (MY TEAM / OPPOSITION behaviour + baseline already applied);
     // else fall back to the legacy showDefaultSkills baseline filter.
     const configured = this.playerIconSkills?.get(player.playerId);
-    const base = configured ?? playerSkillNames(player).filter(
+    const base = configured ?? playerSkillDisplayNames(player).filter(
       (skill) => this.showDefaultSkills || !baselineSkills?.has(skill),
     );
     // Owner 09-07: TEMPORARY stat decrements (Greasy Cleats -MA, Dodgy Snack -MA/-AV, any TemporaryStatDecrementer in

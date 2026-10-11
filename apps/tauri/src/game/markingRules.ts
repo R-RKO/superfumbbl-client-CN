@@ -1,6 +1,6 @@
 import type { AutoMarkingRecord } from './markings';
 import { settings, type SkillBehaviour, type SkillConfigEntry } from './settings';
-import { INJURY_CONFIG_KEYS, isInjuryConfigKey, markerTableDecides, perSkillMarkingRecords, singleSkillRecord } from './skillDisplay';
+import { INJURY_CONFIG_KEYS, isInjuryConfigKey, markerTableDecides, perSkillMarkingRecords, singleSkillRecord, withImportedRepeat } from './skillDisplay';
 
 /**
  * Owner 10-09 (JLeav: "Can't undo automatic skill markings now (text), it won't import a blank set of skill
@@ -119,7 +119,7 @@ function writeJson(json: JsonConfig | null, records: StoredMarkingRecord[]): str
 
 function stripMarkerFields(entry: SkillConfigEntry): SkillConfigEntry | null {
   const kept: SkillConfigEntry = { ...entry };
-  delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
+  delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp; delete kept.markerRepeat;
   return Object.keys(kept).length ? kept : null; // icon settings survive
 }
 
@@ -319,7 +319,7 @@ export function addMarkingRule(stores: MarkingStores, rule: NewMarkingRule, repl
       markerMine: rule.applyTo === 'OPPONENT' ? 'never' : behaviour,
       markerOpp: rule.applyTo === 'OWN' ? 'never' : behaviour,
     };
-    delete entry.markerImported; // hand-made: a later import must not retire it
+    delete entry.markerImported; delete entry.markerRepeat; // hand-made: a later import must not retire it; the default repeat
     return { markingsConfig: dropJsonSingles(current.markingsConfig, single), skillConfig: { ...current.skillConfig, [single]: entry } };
   }
   // A second rule for a skill the table holds: the table has one glyph per skill, so the skill moves to the JSON.
@@ -372,13 +372,13 @@ export function upsertImportedRule(stores: MarkingStores, site: StoredMarkingRec
   if (single !== null && marking && !siblings.length) {
     // the first rule for this skill: the per-skill table, flagged as the import's (as a full import stores it)
     const behaviour: SkillBehaviour = site.gainedOnly ? 'added' : 'always';
-    const entry: SkillConfigEntry = {
+    const entry: SkillConfigEntry = withImportedRepeat({
       ...(stores.skillConfig[single] ?? {}),
       markerText: site.marking!,
       markerMine: applyTo === 'OPPONENT' ? 'never' : behaviour,
       markerOpp: applyTo === 'OWN' ? 'never' : behaviour,
       markerImported: true,
-    };
+    }, single, site.applyRepeatedly);
     return { markingsConfig: dropJsonSingles(stores.markingsConfig, single), skillConfig: { ...stores.skillConfig, [single]: entry } };
   }
   // The subject already has rules (or this is a combination / blank rule): work on JSON records, one per rule.

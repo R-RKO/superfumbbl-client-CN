@@ -1,4 +1,5 @@
-import type { GameJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
+import type { GameJson, PlayerJson, StatsMechanic, TeamJson } from '@fumbbl40k/ffb-protocol';
+import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 
 /**
  * FUMBBL automatic player markings (UI-6, owner 2026-07-02): a TS mirror of
@@ -40,6 +41,7 @@ interface PositionLike {
 }
 
 const STAT_INCREASE: Record<string, string> = { MA: '+MA', ST: '+ST', AG: '+AG', PA: '+PA', AV: '+AV' };
+const STAT_INCREASE_NAMES: ReadonlySet<string> = new Set(Object.values(STAT_INCREASE));
 const STAT_DECREASE: Record<string, string> = { MA: '-MA', ST: '-ST', AG: '-AG', PA: '-PA', AV: '-AV' };
 
 function positionFor(team: TeamJson, positionId: string): PositionLike | undefined {
@@ -48,14 +50,16 @@ function positionFor(team: TeamJson, positionId: string): PositionLike | undefin
 }
 
 /** Mirrors MarkerGenerator.statDiff — positive = increase, negative = injury. */
-function statDiffs(player: PlayerJson, position: PositionLike): Map<string, number> {
+function statDiffs(player: PlayerJson, position: PositionLike, mechanic: StatsMechanic): Map<string, number> {
   const diffs = new Map<string, number>();
   const value = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
   diffs.set('MA', player.movement - value(position.movement, player.movement));
   diffs.set('ST', player.strength - value(position.strength, player.strength));
-  // AG/PA: BB2025 target numbers — improvement DECREASES the value
-  diffs.set('AG', value(position.agility, player.agility) - player.agility);
-  diffs.set('PA', value(position.passing, player.passing) - player.passing);
+  // MarkerGenerator.java:138-148: AG/PA are target numbers from BB2020 on (improvement DECREASES the value); in BB2016
+  // a higher AG is the improvement and there is no PA.
+  const agility = value(position.agility, player.agility) - player.agility;
+  diffs.set('AG', mechanic.improvementIncreasesValue ? -agility : agility);
+  diffs.set('PA', mechanic.drawPassing ? value(position.passing, player.passing) - player.passing : 0);
   diffs.set('AV', player.armour - value(position.armour, player.armour));
   return diffs;
 }
@@ -112,14 +116,16 @@ export function generateMarking(
 ): string {
   const position = positionFor(team, player.positionId);
   const baseSkills = [...(position?.skillArray ?? [])];
+  // MarkerGenerator.java:30-31: the stat-increase skills are left out here; the stat diff below adds one per step.
+  // Without this a "+MA" in skillArray was counted twice (once here, once from the diff).
   const gainedSkills = (player.skillArray ?? []).filter((s) => {
     const idx = baseSkills.indexOf(s);
-    return idx === -1;
+    return idx === -1 && !STAT_INCREASE_NAMES.has(s);
   });
   const injuryAttributes: string[] = [];
 
   if (position) {
-    for (const [key, diff] of statDiffs(player, position)) {
+    for (const [key, diff] of statDiffs(player, position, statsMechanicFor(game))) {
       if (diff > 0) for (let i = 0; i < diff; i++) gainedSkills.push(STAT_INCREASE[key]!);
       else if (diff < 0) for (let i = 0; i < -diff; i++) injuryAttributes.push(STAT_DECREASE[key]!);
     }

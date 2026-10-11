@@ -34,7 +34,8 @@ import {
   PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { effectiveArmour, effectiveMovement, playerSkillNames } from '@fumbbl40k/ffb-protocol';
+import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
+import { cardStatLine, positionStatLine } from '../game/statDisplay';
 import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing, movementStepsPending } from '../game/store';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
@@ -1683,7 +1684,7 @@ function acquiredSkills(player: PlayerJson, team: { roster: unknown }): string {
   const positions = (team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] })
     .positionArray ?? [];
   const baseline = new Set(positions.find((p) => p.positionId === player.positionId)?.skillArray ?? []);
-  return playerSkillNames(player).filter((s) => !baseline.has(s)).join(', '); // base + temporary grants
+  return playerSkillDisplayNames(player).filter((s) => !baseline.has(s)).join(', '); // base + temporary grants; "+MA, +MA" for two improvements
 }
 
 // owner 2026-07-02 (UI-5): HD-2D removed from the picker (set stays parked);
@@ -5258,13 +5259,7 @@ function inducePosition(key: string, team: InducementCardTeam | null = induceMyT
 }
 function induceStats(pos: ReturnType<typeof inducePosition>) {
   if (!pos) return [];
-  return [
-    { k: 'MA', v: String(pos.movement ?? '–') },
-    { k: 'ST', v: String(pos.strength ?? '–') },
-    { k: 'AG', v: pos.agility != null ? `${pos.agility}+` : '–' },
-    { k: 'PA', v: pos.passing ? `${pos.passing}+` : '–' },
-    { k: 'AV', v: pos.armour != null ? `${pos.armour}+` : '–' },
-  ];
+  return positionStatLine(pos, statsMechanicFor(gameStore.game.value)); // written by the game's ruleset (BB2016: plain AG / AV, no PA)
 }
 function inducePortrait(key: string, team: InducementCardTeam | null = induceMyTeam.value): Portrait {
   const blade = bladeOf(key);
@@ -7347,7 +7342,6 @@ const popupInfo = computed(() => {
   // Stat reductions (owner 2026-07-02): the wire stats already carry the
   // reduced values (the server applies lasting injuries before serializing),
   // so a stat named in lastingInjuries renders RED at its current value.
-  const reduced = (tag: string) => player.lastingInjuries.some((i) => i.includes(`(-${tag})`));
   // Owner 2026-07-04: an IMPROVED characteristic (advancement) shows GREEN — the
   // reverse of the red reduction. Compare the current stat to the position's base;
   // AG/PA improve when the target DROPS, MA/ST/AV when the value RISES.
@@ -7355,10 +7349,6 @@ const popupInfo = computed(() => {
     .positionArray?.find((p) => p.positionId === player.positionId);
   const effMa = effectiveMovement(player);
   const effAv = effectiveArmour(player);
-  const better = (cur: number | undefined, base: number | undefined, lowerBetter: boolean): boolean => {
-    if (cur == null || base == null || !Number.isFinite(base) || !Number.isFinite(cur)) return false;
-    return lowerBetter ? cur < base : cur > base;
-  };
   // Owner 2026-07-08: is the player ACTIVELY on the field right now? (drives injury-text
   // clearing — an apothecary-reversed casualty leaves a stale string on an on-pitch player.)
   const pdata = game.fieldModel.playerDataArray.find((d) => d.playerId === player.playerId);
@@ -7377,13 +7367,13 @@ const popupInfo = computed(() => {
     // EFFECTIVE stats (Player.get*WithModifiers, Player.java:225-243): the base roster stat plus the temporary
     // modifiers a prayer/card granted — Iron Man's +1 AV and Greasy Cleats' -1 MA must READ on the card, and a
     // temporary change colours the same way an advancement/injury does. Base roster stats stay untouched.
-    stats: [
-      { label: 'MA', value: String(effMa), reduced: reduced('MA') || effMa < player.movement, increased: better(effMa, pos?.movement, false) },
-      { label: 'ST', value: String(player.strength), reduced: reduced('ST'), increased: better(player.strength, pos?.strength, false) },
-      { label: 'AG', value: `${player.agility}+`, reduced: reduced('AG'), increased: better(player.agility, pos?.agility, true) },
-      { label: 'PA', value: player.passing ? `${player.passing}+` : '–', reduced: reduced('PA'), increased: better(player.passing, pos?.passing, true) },
-      { label: 'AV', value: `${effAv}+`, reduced: reduced('AV') || effAv < player.armour, increased: better(effAv, pos?.armour, false) },
-    ],
+    // Owner 10-10: written and coloured by the game's RULESET (statDisplay): a BB2016 replay shows plain AG / AV, no
+    // PA, and a higher AG as the improvement. Red / green is the NET against the position's stat, never both.
+    // Astra 10-10: a zapped player (frog) carries the ORIGINAL positionId with the frog's own stats, so a comparison
+    // with the old position would paint them red. Upstream compares a frog with its own ZappedPosition: neutral.
+    stats: (player as { playerKind?: string }).playerKind === 'zappedPlayer'
+      ? cardStatLine({ ...player, lastingInjuries: [], skillArray: [] }, player, statsMechanicFor(game))
+      : cardStatLine(player, pos, statsMechanicFor(game), { MA: effMa, AV: effAv }),
     // Preserve the raw key for icons/rules text while the shared Modern/Classic
     // projection labels valued temporary Hatred as e.g. `Hatred (Orc)`. S87: `added` is judged against the position.
     skills: playerCardSkills(team, player),

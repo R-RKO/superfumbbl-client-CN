@@ -5,6 +5,7 @@
  * Moved out of SpectateView.vue (B9-12 G7 / #25-v2 / owner 09-14…09-23 rulings preserved verbatim).
  */
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
 import { TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
 import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
@@ -190,7 +191,7 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
       const addedSkillList = detail.filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
       const skillList = addedSkillsLast(detail).map((sk) => ({ name: sk.name, label: sk.label, added: sk.added, innate: sk.innate }));
       const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
-      const progress = p ? playerProgress(p, position) : { value: null, advancements: 0 };
+      const progress = p ? playerProgress(p, position, statsMechanicFor(game)) : { value: null, advancements: 0 };
       return {
         playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)',
         position: rosterPositionLabel(posName(p?.positionId as string | undefined), (team as { race?: string }).race),

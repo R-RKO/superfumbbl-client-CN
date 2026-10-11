@@ -100,6 +100,51 @@ export function playerSkillNames(player: PlayerLike): string[] {
   return [...new Set(decodePlayerSkills(player).map((skill) => skill.name))];
 }
 
+/**
+ * A characteristic improvement: one of the five upstream `SkillCategory.STAT_INCREASE` skills, whose names are fixed
+ * in ffb-common (MovementIncrease "+MA", StrengthIncrease "+ST", AgilityIncrease "+AG", PassingIncrease "+PA",
+ * ArmourIncrease "+AV"). The wire carries a skill as its NAME only (no category), so the name is the category here.
+ * They are the one kind of skill a player can hold SEVERAL of: RosterPlayer.addSkill (RosterPlayer.java:194-198)
+ * skips its "already has it" check for STAT_INCREASE, so a player who took +MA twice has "+MA" twice in `skillArray`.
+ */
+const STAT_INCREASE_SKILLS: ReadonlySet<string> = new Set(['+MA', '+ST', '+AG', '+PA', '+AV']);
+export function isStatIncreaseSkill(skill: string): boolean {
+  return STAT_INCREASE_SKILLS.has(String(skill).trim().toUpperCase());
+}
+
+/**
+ * Upstream StatsMechanic, the two answers the display needs. BB2016 (mechanics/bb2016/StatsMechanic.java:13-15,33-35):
+ * a HIGHER agility is the better one and there is no passing characteristic. BB2020 and BB2025 share
+ * mechanics/mixed/StatsMechanic.java:14-16,34-36: AG / PA are target numbers (lower is better) and PA is drawn.
+ * statSuffix (:18-20 / mixed :19-21) is how the Java client writes AG / PA / AV: "3+" from BB2020 on, "3" in BB2016.
+ * The ruleset is the game's own `rulesVersion` option; a game without one reads as the current rules.
+ */
+export interface StatsMechanic {
+  readonly improvementIncreasesValue: boolean;
+  readonly drawPassing: boolean;
+  /** statSuffix(): what follows a roll-target stat (AG / PA / AV) - "+" from BB2020 on, nothing in BB2016. */
+  readonly statSuffix: '+' | '';
+}
+export function statsMechanicFor(
+  game: { gameOptions?: { gameOptionArray?: readonly { gameOptionId?: unknown; gameOptionValue?: unknown }[] } | null } | null | undefined,
+): StatsMechanic {
+  const version = game?.gameOptions?.gameOptionArray?.find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  const legacy = /^BB2016$/i.test(String(version ?? '').trim());
+  return { improvementIncreasesValue: legacy, drawPassing: !legacy, statSuffix: legacy ? '' : '+' };
+}
+
+/**
+ * The skill names a DISPLAY surface lists: `playerSkillNames` (one per name, same order), except that a
+ * characteristic improvement appears once per time the server lists it ("+MA", "+MA" for two improvements), the
+ * copies side by side at the first one's place. Rules checks keep `playerSkillNames` / `playerHasSkill`.
+ */
+export function playerSkillDisplayNames(player: PlayerLike): string[] {
+  const decoded = decodePlayerSkills(player);
+  return playerSkillNames(player).flatMap((name) => (isStatIncreaseSkill(name)
+    ? decoded.filter((skill) => skill.name === name).map(() => name)
+    : [name]));
+}
+
 function compareKeyword(a: string, b: string): number {
   const lowerA = a.toLowerCase();
   const lowerB = b.toLowerCase();
@@ -110,7 +155,8 @@ function compareKeyword(a: string, b: string): number {
 
 /**
  * Detail-card projection over the canonical decoder. Ordinary skills retain
- * the existing de-duplicated name list. Hatred is value-bearing: each distinct
+ * the existing de-duplicated name list; a characteristic improvement taken N
+ * times is N entries (playerSkillDisplayNames). Hatred is value-bearing: each distinct
  * authoritative keyword is shown as `Hatred (Keyword)`, sorted independently
  * of temporarySkillsMap insertion order; a missing/blank value fails soft to
  * the bare `Hatred` label.
@@ -118,7 +164,7 @@ function compareKeyword(a: string, b: string): number {
 export function playerSkillDisplayEntries(player: PlayerLike): PlayerSkillDisplayEntry[] {
   const decoded = decodePlayerSkills(player);
   const out: PlayerSkillDisplayEntry[] = [];
-  for (const name of playerSkillNames(player)) {
+  for (const name of playerSkillDisplayNames(player)) {
     if (normalizeSkillName(name) !== 'hatred') {
       out.push({ name, label: name });
       continue;

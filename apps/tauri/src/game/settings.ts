@@ -526,6 +526,9 @@ export interface SkillConfigEntry {
   /** Owner 09-25: the marker fields came from "Import markings from fumbbl.com" — a re-import replaces them and
    *  retires entries whose rule no longer exists; hand-set entries are never touched by the retire pass. */
   markerImported?: boolean;
+  /** Owner 10-10: an IMPORTED single-skill rule's own "repeat for each time it matches", stored only when it differs
+   *  from the table's default (a characteristic improvement repeats, any other skill does not). Absent = the default. */
+  markerRepeat?: boolean;
 }
 
 export type PlayerCardMode = 'auto' | 'called';

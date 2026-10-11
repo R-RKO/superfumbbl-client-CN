@@ -87,7 +87,7 @@ function hideTip(): void { tip.skill = null; }
 
 <template>
   <div class="card-skills" :class="listClass" role="list" aria-label="Player skills">
-    <span v-for="skill in shownSkills" :key="`${skill.name}:${skill.label}`"
+    <span v-for="(skill, index) in shownSkills" :key="`${skill.name}:${skill.label}:${index}`"
       class="skill-chip" :class="mode === 'markings' ? playerSkillCategoryClass(skill.name) : undefined"
       :data-display="mode" :data-added="markAdded && skill.added ? 'true' : undefined"
       :data-subtext="mode === 'icons' && chipSubtext(skill) ? 'true' : undefined"

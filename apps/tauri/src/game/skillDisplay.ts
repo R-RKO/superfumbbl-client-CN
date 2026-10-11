@@ -1,5 +1,5 @@
-import type { GameJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
-import { decodePlayerSkills, normalizeSkillName, playerSkillDisplayEntries, playerSkillNames } from '@fumbbl40k/ffb-protocol';
+import type { GameJson, PlayerJson, StatsMechanic, TeamJson } from '@fumbbl40k/ffb-protocol';
+import { decodePlayerSkills, isStatIncreaseSkill, normalizeSkillName, playerSkillDisplayEntries, playerSkillDisplayNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import type { AutoMarkingConfig, AutoMarkingRecord } from './markings';
 import {
   settings,
@@ -67,7 +67,8 @@ function markerBehaviour(skill: string, mine: boolean): SkillBehaviour {
  * FIELD_MODEL_REMOVE_PRAYER / REMOVE_SKILL_ENHANCEMENTS.
  */
 function displayedSkills(player: PlayerJson): string[] {
-  return playerSkillNames(player);
+  // Owner 10-10: one entry per name, except a characteristic improvement taken twice, which is listed twice.
+  return playerSkillDisplayNames(player);
 }
 
 /** Owner 10-02 (S94): the INJURY rows of the per-skill table - a niggling injury and every stat bust. Their keys are
@@ -86,7 +87,7 @@ export function isInjuryConfigKey(key: string): boolean { return INJURY_KEYS.has
 /** Permanent characteristic changes and niggling injuries are status icons, not
  * configurable skills. Keep them at the front of the four-icon rail so a lasting
  * injury cannot be hidden behind ordinary skill badges. */
-function characteristicStatusIcons(team: TeamJson, player: PlayerJson): string[] {
+function characteristicStatusIcons(team: TeamJson, player: PlayerJson, mechanic: StatsMechanic): string[] {
   const roster = team.roster as { positionArray?: PositionLike[] };
   const position = roster.positionArray?.find((candidate) => candidate.positionId === player.positionId);
   const icons: string[] = [];
@@ -103,8 +104,9 @@ function characteristicStatusIcons(team: TeamJson, player: PlayerJson): string[]
   if (position) {
     compare('MA', player.movement, position.movement, false);
     compare('ST', player.strength, position.strength, false);
-    compare('AG', player.agility, position.agility, true);
-    compare('PA', player.passing, position.passing, true);
+    // BB2016 (replays): a higher AG is the improvement and there is no PA (upstream StatsMechanic).
+    compare('AG', player.agility, position.agility, !mechanic.improvementIncreasesValue);
+    if (mechanic.drawPassing) compare('PA', player.passing, position.passing, true);
     compare('AV', player.armour, position.armour, false);
   }
   if ((player.lastingInjuries ?? []).some((injury) => /niggl|\bNI\b/i.test(String(injury)))) icons.push('NI');
@@ -248,6 +250,7 @@ export function markerGlyph(skill: string): string {
  *  MY TEAM / OPPOSITION behaviour + the baseline (only-if-added) rule. */
 export function computeIconSkills(game: GameJson): Map<string, string[]> {
   const out = new Map<string, string[]>();
+  const mechanic = statsMechanicFor(game);
   for (const [team, mine] of [
     [game.teamHome, true],
     [game.teamAway, false],
@@ -259,8 +262,13 @@ export function computeIconSkills(game: GameJson): Map<string, string[]> {
       // diff vs the roster position — one icon, not two (Set keeps first-seen order: characteristic icons lead).
       // S94: an injury icon (NI / a stat bust) follows its row in the table - shown unless set to Never (an injury is
       // never part of the position, so All the time and Gained both show it). Stat INCREASES are unaffected.
-      const status = characteristicStatusIcons(team, player).filter((icon) => !INJURY_KEYS.has(icon) || iconBehaviour(icon, mine) !== 'never');
-      out.set(player.playerId, [...new Set([...status, ...skills])]);
+      // Owner 10-10: an improvement taken N times is N icons ("MA MA"). The count is the server's own list (N "+MA"
+      // entries in skillArray), never the size of the stat difference; the characteristic icon keeps its leading place
+      // and stands for all N. An improvement the stats do not show (capped) still draws, with the skills.
+      const status = characteristicStatusIcons(team, player, mechanic).filter((icon) => !INJURY_KEYS.has(icon) || iconBehaviour(icon, mine) !== 'never');
+      const listed = displayedSkills(player);
+      const lead = status.flatMap((icon) => Array<string>(Math.max(1, listed.filter((s) => s === icon).length)).fill(icon));
+      out.set(player.playerId, [...lead, ...skills.filter((s) => !lead.includes(s))]);
     }
   }
   return out;
@@ -344,9 +352,11 @@ export function perSkillMarkingRecords(config: Record<string, SkillConfigEntry> 
     const marking = markerGlyphFor(skill, config);
     // S94: an injury row matches the player's injury attributes (one marking per bust, like FUMBBL's own rules)
     const injury = INJURY_KEYS.has(skill);
+    // Owner 10-10: a characteristic improvement repeats the same way - "+MA" taken twice is two markings ("MAMA") -
+    // unless the rule came from fumbbl.com with its own answer (markerRepeat, set by the import only).
     const rec = (applyTo: AutoMarkingRecord['applyTo'], behaviour: SkillBehaviour): AutoMarkingRecord => injury
       ? { skillArray: [], injuryAttributes: [skill], marking, gainedOnly: false, applyTo, applyRepeatedly: true }
-      : { skillArray: [skill], injuryAttributes: [], marking, gainedOnly: behaviour === 'added', applyTo, applyRepeatedly: false };
+      : { skillArray: [skill], injuryAttributes: [], marking, gainedOnly: behaviour === 'added', applyTo, applyRepeatedly: entry.markerRepeat ?? isStatIncreaseSkill(skill) };
     if (mine === opp) out.push(rec('BOTH', mine));
     else {
       if (mine !== 'never') out.push(rec('OWN', mine));
@@ -377,12 +387,19 @@ export function effectiveMarkingConfig(rawJson: string, config: Record<string, S
  *  wrote; rules removed on fumbbl.com retire their imported entry. Hand-set entries for other skills are kept; a
  *  hand-set entry for an imported skill is overwritten (the coach asked for FUMBBL's version). Multi-skill and
  *  injury rules stay in the JSON and draw through effectiveMarkingConfig. */
+/** An imported single-skill rule's "repeat" answer, kept on the table entry ONLY when it differs from what the table
+ *  does by itself (a characteristic improvement repeats, any other skill does not); otherwise the field is absent. */
+export function withImportedRepeat(entry: SkillConfigEntry, skill: string, applyRepeatedly: unknown): SkillConfigEntry {
+  const next: SkillConfigEntry = { ...entry };
+  if (!!applyRepeatedly === isStatIncreaseSkill(skill)) delete next.markerRepeat; else next.markerRepeat = !!applyRepeatedly;
+  return next;
+}
 export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecord>[], prev: Record<string, SkillConfigEntry>, keptLocal: readonly Partial<AutoMarkingRecord>[] = []): { next: Record<string, SkillConfigEntry>; imported: number; combos: number } {
   const next: Record<string, SkillConfigEntry> = {};
   for (const [skill, entry] of Object.entries(prev)) {
     if (!entry.markerImported) { next[skill] = { ...entry }; continue; }
     const kept: SkillConfigEntry = { ...entry };
-    delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
+    delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp; delete kept.markerRepeat;
     if (Object.keys(kept).length) next[skill] = kept; // icon settings survive a retired import
   }
   // Owner 10-09: a skill with SEVERAL single-skill rules ("B" on my team, "b" on the opposition) does not fit the
@@ -402,20 +419,20 @@ export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecor
     if (!record.marking) continue;
     if ((singles.get(single) ?? 0) > 1) {
       const kept: SkillConfigEntry = { ...(next[single] ?? {}) };
-      delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
+      delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp; delete kept.markerRepeat;
       if (Object.keys(kept).length) next[single] = kept; else delete next[single];
       imported++;
       continue;
     }
     const applyTo = record.applyTo ?? 'BOTH';
     const behaviour: SkillBehaviour = record.gainedOnly ? 'added' : 'always';
-    next[single] = {
+    next[single] = withImportedRepeat({
       ...(next[single] ?? {}),
       markerText: record.marking,
       markerMine: applyTo === 'OPPONENT' ? 'never' : behaviour,
       markerOpp: applyTo === 'OWN' ? 'never' : behaviour,
       markerImported: true,
-    };
+    }, single, record.applyRepeatedly);
     imported++;
   }
   return { next, imported, combos };

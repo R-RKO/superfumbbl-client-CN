@@ -8,10 +8,12 @@
  *         + per characteristic improvement: AV 10k, MA 20k, PA 20k, AG 30k, ST 60k
  *   advancements = added non-trait skills + characteristic improvements.
  * A characteristic improvement = the player's stat beyond the position's base (MA/ST/AV higher is better, AG/PA
- * LOWER is better), or the number of "+MA"-style tokens on the skill list, whichever is larger (an injury can hide
+ * LOWER is better; a BB2016 game - replays - reads AG upward and has no PA: the optional `mechanic`), or the number of "+MA"-style tokens on the skill list, whichever is larger (an injury can hide
  * the stat gain; the token still records it). Temporary in-game grants live in temporarySkillsMap, never skillArray,
  * so they never count. Star players and mercenaries are worth their position cost and have no advancements.
  */
+import { statsMechanicFor, type StatsMechanic } from '@fumbbl40k/ffb-protocol';
+import { statNet } from './statDisplay';
 import { skillAdvanceCategory } from './skillCategory';
 
 export type Characteristic = 'MA' | 'ST' | 'AG' | 'PA' | 'AV';
@@ -55,6 +57,8 @@ const STAT_FIELD: Readonly<Record<Characteristic, keyof ValuePlayer & keyof Valu
   MA: 'movement', ST: 'strength', AG: 'agility', PA: 'passing', AV: 'armour',
 };
 const STAT_TOKEN = /^\+(MA|ST|AG|PA|AV)$/i;
+/** BB2020 / BB2025 (statsMechanicFor of a game with no BB2016 rulesVersion): the default when no game is given. */
+const CURRENT_RULES: StatsMechanic = statsMechanicFor(null);
 
 function key(skill: string): string {
   return skill.replace(/\s*\(.*\)\s*$/, '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -84,7 +88,7 @@ export function addedSkills(player: ValuePlayer, position: ValuePosition | undef
   return out;
 }
 
-export function statImprovements(player: ValuePlayer, position: ValuePosition | undefined): Record<Characteristic, number> {
+export function statImprovements(player: ValuePlayer, position: ValuePosition | undefined, mechanic: StatsMechanic = CURRENT_RULES): Record<Characteristic, number> {
   const out: Record<Characteristic, number> = { MA: 0, ST: 0, AG: 0, PA: 0, AV: 0 };
   if (!position) return out;
   const tokens = (player.skillArray ?? []).map((s) => s.trim().match(STAT_TOKEN)?.[1]?.toUpperCase()).filter(Boolean) as Characteristic[];
@@ -92,11 +96,9 @@ export function statImprovements(player: ValuePlayer, position: ValuePosition | 
     const field = STAT_FIELD[stat];
     const base = position[field];
     const current = finite(player[field]) ? player[field] : base;
-    let diff = 0;
     // A base PA of 0 = no PA ("-"): only the token can say it improved.
-    if (finite(base) && finite(current) && !(stat === 'PA' && (base === 0 || current === 0))) {
-      diff = stat === 'AG' || stat === 'PA' ? Math.max(0, base - current) : Math.max(0, current - base);
-    }
+    // The direction is the ruleset's (statDisplay.statNet): BB2016 improves AG upward and has no PA.
+    const diff = finite(base) && finite(current) ? Math.max(0, statNet(stat, current, base, mechanic) ?? 0) : 0;
     out[stat] = Math.max(diff, tokens.filter((t) => t === stat).length);
   }
   return out;
@@ -120,13 +122,13 @@ function advancedSkills(player: ValuePlayer, position: ValuePosition | undefined
   });
 }
 
-export function advancementCount(player: ValuePlayer, position: ValuePosition | undefined): number {
+export function advancementCount(player: ValuePlayer, position: ValuePosition | undefined, mechanic: StatsMechanic = CURRENT_RULES): number {
   if (isStarOrMercenary(player, position)) return 0;
-  const stats = statImprovements(player, position);
+  const stats = statImprovements(player, position, mechanic);
   return advancedSkills(player, position).length + Object.values(stats).reduce((a, n) => a + n, 0);
 }
 
-export function playerProgress(player: ValuePlayer, position: ValuePosition | undefined): PlayerProgress {
+export function playerProgress(player: ValuePlayer, position: ValuePosition | undefined, mechanic: StatsMechanic = CURRENT_RULES): PlayerProgress {
   if (!position) return { value: null, advancements: 0 };
   const cost = finite(position.cost) ? position.cost : 0;
   if (isStar(player, position)) return { value: cost, advancements: 0 };
@@ -135,10 +137,10 @@ export function playerProgress(player: ValuePlayer, position: ValuePosition | un
     const category = skillAdvanceCategory(s)!;
     return sum + (secondary.has(category) ? SECONDARY_SKILL_VALUE : PRIMARY_SKILL_VALUE) + (ELITE_SKILLS.has(key(s)) ? ELITE_SKILL_SURCHARGE : 0);
   }, 0);
-  const stats = statImprovements(player, position);
+  const stats = statImprovements(player, position, mechanic);
   const statValue = (Object.keys(stats) as Characteristic[]).reduce((sum, s) => sum + CHARACTERISTIC_VALUE[s] * stats[s], 0);
   // Stars / mercenaries never level (advancementCount = 0) but keep the value of skills bought for them (config-web parity).
-  return { value: cost + skillValue + statValue, advancements: advancementCount(player, position) };
+  return { value: cost + skillValue + statValue, advancements: advancementCount(player, position, mechanic) };
 }
 
 /** "170k" / "112.5k"; empty for an unknown value. */
