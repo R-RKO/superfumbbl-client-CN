@@ -56,7 +56,13 @@ function teamPresentation(game: GameJson, side: 'home' | 'away'): TurnTeamPresen
   };
 }
 
-/** Same active-side roll heuristic used by the live frame presenter. */
+/**
+ * The turnover heuristic's per-report step - the ONE implementation (the live frame presenter, the review transport
+ * and the spectator dice ledger all fold through turnoverArmStep below). FFB has no turnover flag on the wire
+ * (ReportTurnEnd carries only playerIdTouchdown): a failing roll by the side whose turn it is ARMS, and the next
+ * non-touchdown turnEnd in regular play fires. Only a roll owned by the playing side counts (owner 08-19) - opponent
+ * reactions publish the same report ids; a successful opponent interception is the explicit exception.
+ */
 export function turnoverArmAfterReport(
   armed: boolean,
   report: Readonly<Record<string, unknown>>,
@@ -64,13 +70,77 @@ export function turnoverArmAfterReport(
 ): boolean {
   const id = String(report.reportId ?? '');
   if (id === 'interceptionRoll') return report.successful === true ? true : armed;
+  // Owner 09-06 (game 945): Swift as the Breeze turns a failed dodgeRoll into a success via the SAME-frame
+  // `modifiedDodgeResultSuccessful` report (skill only, no playerId): the modification is the disarm.
   if (id === 'modifiedDodgeResultSuccessful') return false;
+  // Owner 09-14 (g1942502): a SUCCESSFUL Steady Footing keeps the player on their feet (upstream bb2025
+  // StepSteadyFooting publishes END_TURN=false, no armour / injury follows): it DISARMS the failed roll before it.
+  // A failed one changes nothing here - the knockdown's injury report arms on its own.
+  if (id === 'steadyFootingRoll') {
+    const pid = String(report.playerId ?? '');
+    return pid && playingPlayerIds.has(pid) && report.successful === true ? false : armed;
+  }
+  // Owner 09-19 (g1944287 seq 3552-3618): a catchRoll failed on a SCATTER is no turnover. A fresh activation by the
+  // playing side (ReportPlayerAction) proves the turn did not end - a real turnover closes the turn first.
+  if (id === 'playerAction') {
+    const pid = String(report.actingPlayerId ?? report.playerId ?? '');
+    return pid && playingPlayerIds.has(pid) ? false : armed;
+  }
   if (!TURNOVER_FAIL_IDS.has(id)) return armed;
   const playerId = String(report.playerId ?? '');
   if (!playerId || !playingPlayerIds.has(playerId)) return armed;
   if (report.successful === false) return true;
   if (report.successful === true) return false;
   return armed;
+}
+
+/**
+ * One command's reports through the heuristic, then the drive-boundary disarm. `playingPlayerIds` = the roster of the
+ * side whose turn it was BEFORE the command. `knockedDown` names the playing-side player whose knockdown armed it in
+ * this command (the live presenter logs it).
+ *
+ * Injury arming: a Knocked Down player always rolls Armour (an `injury` report); Wrestle places prone with none. A
+ * crowd removal turns over through its own clause, a vampire's bite / a failed Right Stuff landing do not end the
+ * turn, and a SAME-TEAM attacker knocking a team-mate down is no turnover (g868, bb2025 StepPushback:179-200).
+ * `betweenTurns` is NOT a drive boundary - it is the transit mode of the server's own turn flip, which precedes the
+ * turnEnd report (g868 nr144-148): only a real drive boundary (setup / kickoff / endGame ...) disarms.
+ */
+export function turnoverArmStep(
+  previous: Readonly<TurnPresentationContext>,
+  playingPlayerIds: ReadonlySet<string>,
+  reports: readonly Readonly<Record<string, unknown>>[],
+  turnModeAfter: unknown,
+): { context: TurnPresentationContext; knockedDown: string | null } {
+  const context: TurnPresentationContext = { ...previous };
+  let knockedDown: string | null = null;
+  for (const report of reports) {
+    const id = String(report.reportId);
+    if (id === 'injury') {
+      const fallen = String(report.defenderId ?? report.playerId ?? '');
+      const injuryType = injuryTypeName(report.injuryType).toLowerCase();
+      const nonKnockdown = /crowd|bitten|quickbite|ttmlanding/.test(injuryType);
+      const attacker = String(report.attackerId ?? '');
+      const sameTeamBlock = !!attacker && playingPlayerIds.has(attacker);
+      if (fallen && !nonKnockdown && !sameTeamBlock && playingPlayerIds.has(fallen)) {
+        if (!context.turnoverArmed) knockedDown = fallen;
+        context.turnoverArmed = true;
+        context.turnoverAfterInjury = true;
+      }
+      continue;
+    }
+    context.turnoverArmed = turnoverArmAfterReport(context.turnoverArmed, report, playingPlayerIds);
+    if (!context.turnoverArmed) context.turnoverAfterInjury = false;
+  }
+  const mode = String(turnModeAfter ?? '');
+  if (mode !== 'regular' && mode !== 'betweenTurns') {
+    context.turnoverArmed = false;
+    context.turnoverAfterInjury = false;
+  }
+  return { context, knockedDown };
+}
+/** Does this command's turnEnd close the turn as a TURNOVER? (`context` = after turnoverArmStep for the command.) */
+export function turnEndIsTurnover(context: Readonly<TurnPresentationContext>, turnEnd: Readonly<Record<string, unknown>>, turnModeAfter: unknown): boolean {
+  return !turnEnd.playerIdTouchdown && context.turnoverArmed && String(turnModeAfter ?? '') === 'regular';
 }
 
 /**
@@ -83,34 +153,10 @@ export function turnPresentation(
   after: GameJson,
   reports: readonly Record<string, unknown>[],
 ): TurnPresentation {
-  const context: TurnPresentationContext = { ...previous };
   const endingSide: 'home' | 'away' = before.homePlaying ? 'home' : 'away';
   const incomingSide: 'home' | 'away' = endingSide === 'home' ? 'away' : 'home';
-  const playingIds = new Set(before.playingPlayerIds);
-
-  for (const report of reports) {
-    const id = String(report.reportId);
-    if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || TURNOVER_FAIL_IDS.has(id)) {
-      context.turnoverArmed = turnoverArmAfterReport(context.turnoverArmed, report, playingIds);
-      if (!context.turnoverArmed) context.turnoverAfterInjury = false;
-    } else if (id === 'injury') {
-      const fallen = String(report.defenderId ?? report.playerId ?? '');
-      const injuryType = injuryTypeName(report.injuryType).toLowerCase();
-      const nonKnockdown = /crowd|bitten|quickbite|ttmlanding/.test(injuryType);
-      const attacker = String(report.attackerId ?? '');
-      const sameTeamBlock = !!attacker && playingIds.has(attacker);
-      if (fallen && !nonKnockdown && !sameTeamBlock && playingIds.has(fallen)) {
-        context.turnoverArmed = true;
-        context.turnoverAfterInjury = true;
-      }
-    }
-  }
-
   const mode = String(after.turnMode ?? '');
-  if (mode !== 'regular' && mode !== 'betweenTurns') {
-    context.turnoverArmed = false;
-    context.turnoverAfterInjury = false;
-  }
+  const { context } = turnoverArmStep(previous, new Set(before.playingPlayerIds), reports, mode);
   const turnEnd = reports.find((report) => String(report.reportId) === 'turnEnd');
   let splash: TurnPresentation['splash'] = null;
   let toast: TurnPresentation['toast'] = null;

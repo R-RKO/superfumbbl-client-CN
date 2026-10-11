@@ -64,7 +64,19 @@ export interface SpectatorSegment {
   /** Turn boundaries in cursor order; entries before `start` are stale after front eviction (callers filter). */
   turnMarkers: readonly SpectatorTurnBoundary[];
 }
-interface Segment extends SpectatorSegment { events: StoredEvent[]; anchors: Anchor[]; turnMarkers: SpectatorTurnBoundary[]; /** live segmentId this pre-join segment was built for */ backfillFor?: number }
+interface Segment extends SpectatorSegment { events: StoredEvent[]; anchors: Anchor[]; turnMarkers: SpectatorTurnBoundary[]; /** live segmentId this pre-join segment was built for */ backfillFor?: number;
+  /** `start` as first recorded: a segment whose `start` has moved has lost its first events to the history budget. */
+  origin: number }
+/** Owner 10-10: a consumer that folds the match in order (the spectator dice ledger). `event` receives every admitted
+ *  match command with the checkpoints around it; `snapshot` every admitted match snapshot; `stale` a feed the history
+ *  stopped following. Called at ingress, never from a reader - so what is on screen does not matter to it. */
+export interface SpectatorMatchObserver {
+  snapshot?(checkpoint: SpectatorCheckpoint): void;
+  event(before: SpectatorCheckpoint, after: SpectatorCheckpoint, command: Readonly<Record<string, unknown>>): void;
+  stale?(): void;
+}
+/** A backfill attempt's own fold: the pre-join commands, then the joined live segment's commands from its first. */
+interface BackfillObservation { observer: Pick<SpectatorMatchObserver, 'event'>; checkpoint: SpectatorCheckpoint; liveEvents: number; failed: boolean }
 
 /** The turn a checkpoint sits in (null before kick-off / between halves). */
 export function spectatorTurnPosition(checkpoint: SpectatorCheckpoint | null): ReplayTurnPosition | null {
@@ -84,7 +96,7 @@ function recordTurnBoundary(segment: Segment, before: SpectatorCheckpoint, after
   if (started && !sameReplayTurnPosition(finished, started)) segment.turnMarkers.push({ ...started, cursor, boundary: 'start' });
 }
 /** A reduced pre-join segment awaiting an atomic commit (see prepareBackfill / commitBackfill). */
-export interface PreparedBackfill { segment: Segment; gameId: string; liveIdentity: SpectatorIdentity; bytes: number; snapshotBytes: number }
+export interface PreparedBackfill { segment: Segment; gameId: string; liveIdentity: SpectatorIdentity; bytes: number; snapshotBytes: number; observation?: BackfillObservation }
 export type BackfillPrepareResult =
   | { kind: 'ok'; prepared: PreparedBackfill }
   | { kind: 'superseded' }
@@ -93,7 +105,8 @@ export type BackfillPrepareResult =
   | { kind: 'needle-short'; liveEvents: number }
   | { kind: 'reducer-failed'; at: number; commandNr: number | undefined; reason: string }
   | { kind: 'over-budget' };
-export type BackfillCommitResult = { kind: 'ok'; events: number; anchors: number } | { kind: 'superseded' } | { kind: 'over-budget' };
+/** `observed`: the attempt's observer was fed the whole game up to the live head (see prepareBackfill). */
+export type BackfillCommitResult = { kind: 'ok'; events: number; anchors: number; observed?: boolean } | { kind: 'superseded' } | { kind: 'over-budget'; observed?: boolean };
 /** How many captured live commands are matched (consecutively) inside the replay stream to place the join boundary. */
 export const BACKFILL_NEEDLE_LENGTH = 3;
 /** A command's content identity independent of its number: the replay stream is renumbered by the server. */
@@ -145,6 +158,12 @@ export class LiveSpectateHistory {
   /** Matches already given a pre-join segment (survives its eviction: one replay fetch per match). */
   private readonly backfilledGames = new Set<string>();
   readonly limits: Readonly<HistoryLimits>;
+  /** Owner 10-10: folds the live match in order (see SpectatorMatchObserver). A throwing observer never harms the history. */
+  observer: SpectatorMatchObserver | null = null;
+  private notify(call: (observer: SpectatorMatchObserver) => void): void {
+    if (!this.observer) return;
+    try { call(this.observer); } catch (error) { console.warn(`[spectate] match observer failed: ${String(error)}`); }
+  }
 
   constructor(readonly sessionId: string, limits: Partial<HistoryLimits> = {}) {
     this.limits = Object.freeze({ ...LIVE_HISTORY_LIMITS, ...limits });
@@ -155,6 +174,8 @@ export class LiveSpectateHistory {
   get recording(): boolean { return this.enabled; }
   get notice(): string | null { return this.noticeValue; }
   get generation(): number { return this.currentGeneration; }
+  /** Is this history's connection open? (False after disconnect, until the next beginConnection.) */
+  get connected(): boolean { return this.connectionActive; }
   /** Async snapshot enrichment may replace only the exact requested head. A new
    * clock, delta, snapshot, connection, or interruption invalidates the request. */
   repairStandingRerolls(expected: SpectatorCheckpoint, replayed: ReplayedStandingRerolls): SpectatorCheckpoint | null {
@@ -206,7 +227,8 @@ export class LiveSpectateHistory {
     const live = this.backfillTarget();
     return live && live.events.length > 0 ? { ...live.identity } : null;
   }
-  async prepareBackfill(seedModel: GameJson, commands: readonly ReplayCommand[], liveIdentity: SpectatorIdentity, sliceMs = 12): Promise<BackfillPrepareResult> {
+  async prepareBackfill(seedModel: GameJson, commands: readonly ReplayCommand[], liveIdentity: SpectatorIdentity, sliceMs = 12,
+    observer?: Pick<SpectatorMatchObserver, 'event'>): Promise<BackfillPrepareResult> {
     const live = this.backfillTarget();
     if (!live || !sameSpectatorIdentity(live.identity, liveIdentity) || live.events.length === 0) return { kind: 'superseded' };
     const gameId = String(this.headValue!.model.gameId);
@@ -234,7 +256,12 @@ export class LiveSpectateHistory {
     }
     const liveFirstWall = live.events[0]!.event.receivedWallAt;
     const segment: Segment = { identity, start: 0, end: 0, sealed: true, incomplete: false, interruption: 'Before you joined',
-      events: [], anchors: [{ checkpoint, bytes: spectatorCheckpointBytes(checkpoint) }], turnMarkers: [], backfillFor: live.identity.segmentId };
+      events: [], anchors: [{ checkpoint, bytes: spectatorCheckpointBytes(checkpoint) }], turnMarkers: [], backfillFor: live.identity.segmentId, origin: 0 };
+    let observing = !!observer;
+    const observe = (before: SpectatorCheckpoint, after: SpectatorCheckpoint, command: Readonly<Record<string, unknown>>) => {
+      if (!observing) return;
+      try { observer!.event(before, after, command); } catch (error) { observing = false; console.warn(`[spectate] backfill observer failed: ${String(error)}`); }
+    };
     // Budget is enforced while preparing: the candidate never grows past what commit could accept.
     const used = this.accounting();
     let bytes = 0;
@@ -252,6 +279,7 @@ export class LiveSpectateHistory {
       try { checkpoint = reduceSpectatorCheckpoint(checkpoint, event); }
       catch (error) { return { kind: 'reducer-failed', at: sequence + 1, commandNr: captured.commandNr, reason: String(error) }; }
       sequence++;
+      observe(previous, checkpoint, captured);
       if (replayCommandIsTurnEnd(captured)) recordTurnBoundary(segment, previous, checkpoint);
       const entryBytes = storedEventBytes(event, signature);
       segment.events.push({ event, bytes: entryBytes, signature });
@@ -266,28 +294,63 @@ export class LiveSpectateHistory {
       if (overBudget()) { this.noticeValue = 'Earlier history limit reached'; return { kind: 'over-budget' }; }
       if (performance.now() - sliceStart >= sliceMs) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); sliceStart = performance.now(); }
     }
-    return { kind: 'ok', prepared: { segment, gameId, liveIdentity: { ...live.identity }, bytes, snapshotBytes } };
+    // Owner 10-10: the observer's fold continues through the joined live segment, re-reduced from its join snapshot
+    // (the history keeps the events, not a model per event), in the same time slices. Whatever arrives between here
+    // and the commit is fed at the commit, so the fold ends exactly at the live head.
+    let observation: BackfillObservation | undefined;
+    if (observer) {
+      observation = { observer, checkpoint: live.anchors[0]!.checkpoint, liveEvents: 0, failed: !observing || live.start !== live.origin };
+      while (!observation.failed && observation.liveEvents < live.events.length) {
+        if (this.backfillTarget() !== live || live.start !== live.origin) { observation.failed = true; break; }
+        this.advanceObservation(observation, live);
+        if (performance.now() - sliceStart >= sliceMs) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); sliceStart = performance.now(); }
+      }
+    }
+    return { kind: 'ok', prepared: { segment, gameId, liveIdentity: { ...live.identity }, bytes, snapshotBytes, ...(observation ? { observation } : {}) } };
+  }
+  /** Feed the observation the next live event of `live` (re-reduced from the observation's own checkpoint). */
+  private advanceObservation(observation: BackfillObservation, live: Segment): void {
+    const entry = live.events[observation.liveEvents];
+    if (!entry) { observation.failed = true; return; }
+    try {
+      const next = reduceSpectatorCheckpoint(observation.checkpoint, entry.event);
+      observation.observer.event(observation.checkpoint, next, entry.event.command);
+      observation.checkpoint = next;
+      observation.liveEvents++;
+    } catch (error) { observation.failed = true; console.warn(`[spectate] backfill observer failed: ${String(error)}`); }
   }
   commitBackfill(prepared: PreparedBackfill): BackfillCommitResult {
     const live = this.backfillTarget();
     if (!live || !sameSpectatorIdentity(live.identity, prepared.liveIdentity) || String(this.headValue!.model.gameId) !== prepared.gameId) return { kind: 'superseded' };
     const { segment } = prepared;
+    // Owner 10-10: bring the observer's fold to the live head first. It does not depend on the history budget below -
+    // a backfill too large to keep for scrubbing has still been folded whole.
+    const observation = prepared.observation;
+    if (observation) {
+      if (live.start !== live.origin) observation.failed = true;
+      while (!observation.failed && observation.liveEvents < live.events.length) this.advanceObservation(observation, live);
+    }
+    const observed = observation ? { observed: !observation.failed } : {};
     // Atomic against the budget as it stands NOW (ingress kept recording while we prepared): fits whole or is dropped.
     const now = this.accounting();
     if (now.commands + segment.events.length > this.limits.commands || now.commandBytes + prepared.bytes > this.limits.commandBytes
       || now.checkpoints + segment.anchors.length > this.limits.checkpoints || now.snapshotBytes + prepared.snapshotBytes > this.limits.snapshotBytes) {
       this.noticeValue = 'Earlier history limit reached';
-      return { kind: 'over-budget' };
+      return { kind: 'over-budget', ...observed };
     }
     this.segments.splice(this.segments.length - 1, 0, segment);
     this.commandCount += segment.events.length;
     this.commandBytes += prepared.bytes;
     this.backfilledGames.add(prepared.gameId);
-    return { kind: 'ok', events: segment.events.length, anchors: segment.anchors.length };
+    return { kind: 'ok', events: segment.events.length, anchors: segment.anchors.length, ...observed };
   }
   /** The live segment a backfill would sit in front of, or null when a backfill is not possible / already done. */
   private backfillTarget(): Segment | null {
-    if (!this.enabled || !this.connectionActive || !this.headValue || this.staleReasonValue) return null;
+    if (!this.enabled || !this.headValue || this.staleReasonValue) return null;
+    // Owner 10-10: the server closes the socket once the game is over. A backfill bound to that FINAL segment is
+    // still valid - nothing can be added to the segment any more - so the expected close does not refuse it (the
+    // segment / generation / game checks below and in commitBackfill still do). Any other disconnect refuses.
+    if (!this.connectionActive && !this.headValue.durableProjection.endGame.finalPresentationReady) return null;
     const live = this.segments.at(-1);
     if (!live || live.identity.connectionGeneration !== this.currentGeneration || live.backfillFor !== undefined) return null;
     if (this.backfilledGames.has(String(this.headValue.model.gameId))) return null;
@@ -320,6 +383,7 @@ export class LiveSpectateHistory {
     this.staleReasonValue = reason;
     const last = this.segments.at(-1);
     if (last) { last.incomplete = true; last.sealed = true; last.interruption = reason; }
+    this.notify((observer) => observer.stale?.());
     return { kind: 'stale', reason };
   }
   admit(command: Readonly<Record<string, unknown>>, generation: number, receivedWallAt: number, receivedMonotonicAt: number, ingressOrder = this.sequence + 1): IngressResult {
@@ -348,9 +412,10 @@ export class LiveSpectateHistory {
         this.lastNumbered = null;
         if (this.enabled) {
           this.segments.push({ identity: cursor, start: cursor.sequence, end: cursor.sequence, sealed: false, incomplete: false, interruption: null,
-            events: [], anchors: [{ checkpoint, bytes: this.headBytes }], turnMarkers: [] });
+            events: [], anchors: [{ checkpoint, bytes: this.headBytes }], turnMarkers: [], origin: cursor.sequence });
           this.enforceLimits();
         }
+        this.notify((observer) => observer.snapshot?.(checkpoint));
         return { kind: 'committed', checkpoint, event: null };
       } catch (error) { return this.stale(`Invalid spectator snapshot: ${String(error)}`); }
     }
@@ -418,6 +483,7 @@ export class LiveSpectateHistory {
         if (replayCommandIsTurnEnd(captured)) recordTurnBoundary(segment, previous, checkpoint);
         this.enforceLimits();
       }
+      this.notify((observer) => observer.event(previous, checkpoint, captured));
       return { kind: 'committed', checkpoint, event };
     } catch (error) { return this.stale(`Spectator reducer failed: ${String(error)}`); }
   }

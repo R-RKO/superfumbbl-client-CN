@@ -89,7 +89,7 @@ import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducem
 import { activeInducementSprite } from '../game/inducementPortrait';
 import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
-import { teamDiceTally, teamLogo } from '../game/gameStatRows';
+import { gameDiceCoverage, teamDiceTally, teamLogo } from '../game/gameStatRows';
 import PostGamePanel from '../components/PostGamePanel.vue';
 import EndGamePickPane from '../components/EndGamePickPane.vue';
 import RosterPopout from '../components/RosterPopout.vue';
@@ -11835,6 +11835,7 @@ const liveSnapshot = computed<PostGameSnapshot | null>(() => {
   return {
     version: 1, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
     game, tallies: { home: teamDiceTally(game, 'home'), away: teamDiceTally(game, 'away') },
+    diceCoverage: props.mode === 'spectate' ? gameDiceCoverage(game) : null, // owner 10-10: whole game, or what is missing
     endGameStats: gameStore.state.endGameStats, defectors: gameStore.state.defectors?.names ?? null, portraits: {},
   };
 });

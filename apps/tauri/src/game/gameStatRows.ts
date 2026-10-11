@@ -2,7 +2,7 @@
 // same rows, the same numbers, the same three-column crest layout. Pure over the game JSON + the dice tallies.
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { assetMods } from './assetMods';
-import { diceStats, emptyTally, type DiceTally } from './diceStats';
+import { diceStats, displayedDiceRows, emptyTally, type DiceCoverage, type DiceRowTotals, type DiceTally } from './diceStats';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { selectedLocalFumbblAssetUrl } from './fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from './teamCrests';
@@ -54,15 +54,39 @@ export function teamDiceTally(game: GameJson, side: Side): DiceTally {
   return (teamId && diceStats.teams[teamId]) || emptyTally();
 }
 
+/** Owner 10-10: what the live tallies cover, for a SPECTATED game (null otherwise, or when they are another game's). */
+export function gameDiceCoverage(game: GameJson): DiceCoverage | null {
+  const coverage = diceStats.coverage;
+  return coverage && String(diceStats.gameId ?? '') === String(game.gameId ?? '') ? { ...coverage } : null;
+}
+
 /** The Statistics rows: Touchdowns, Casualties, Completions, Passing/Rushing yards, Interceptions, Blocks / Dodges /
  *  Pickups as "attempts / failed", Fouls, Sent off, SPP earned. */
-export function gameStatRows(game: GameJson | null | undefined, tallies?: { home: DiceTally; away: DiceTally }): PgStatRow[] {
+/** Owner 10-10: bumped when this game's live tallies were REPLACED (a pre-join import landing after the end screen
+ *  opened): whatever was saved from them is out of date. */
+export function gameDiceRevision(game: GameJson): number {
+  return String(diceStats.gameId ?? '') === String(game.gameId ?? '') ? diceStats.revision ?? 0 : 0;
+}
+
+/** Owner 10-10: the row counters for a pane opened DURING a game. A spectated game reads the totals at the DISPLAYED
+ *  position (never the ingress-time tallies, which run ahead of the picture); any other game reads its own tallies. */
+export function teamDiceRowTotals(game: GameJson, side: Side): DiceRowTotals {
+  if (displayedDiceRows.gameId != null && displayedDiceRows.gameId === String(game.gameId ?? '')) {
+    const teamId = side === 'home' ? game.teamHome?.teamId : game.teamAway?.teamId;
+    return (teamId && displayedDiceRows.teams[teamId]) || emptyTally();
+  }
+  return teamDiceTally(game, side);
+}
+
+export function gameStatRows(game: GameJson | null | undefined, tallies?: { home: DiceRowTotals; away: DiceRowTotals }): PgStatRow[] {
   if (!game) return [];
   const home = teamStatTotals(game, 'home');
   const away = teamStatTotals(game, 'away');
   // Owner 09-25: a cached end-game snapshot carries its own tallies (the live accumulator belongs to the current game).
-  const th = tallies?.home ?? teamDiceTally(game, 'home');
-  const ta = tallies?.away ?? teamDiceTally(game, 'away');
+  // Owner 10-10: without them this is a pane opened mid-game - both halves of every row are AT THE DISPLAYED POSITION
+  // (the model is the one on screen; so are the counters).
+  const th = tallies?.home ?? teamDiceRowTotals(game, 'home');
+  const ta = tallies?.away ?? teamDiceRowTotals(game, 'away');
   const rows: PgStatRow[] = [];
   const plain = (key: string, label: string) => {
     const h = home[key] ?? 0; const a = away[key] ?? 0;

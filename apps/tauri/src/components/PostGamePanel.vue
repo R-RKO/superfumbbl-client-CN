@@ -16,7 +16,7 @@ import { settings } from '../game/settings';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 
@@ -110,6 +110,7 @@ const pgDice = computed(() => ({
   home: pgDiceSide(props.snapshot.tallies.home, pg.value.home, game.value.teamHome.teamName),
   away: pgDiceSide(props.snapshot.tallies.away, pg.value.away, game.value.teamAway.teamName),
 }));
+const pgDiceNote = computed(() => pgDiceCoverage(props.snapshot));
 const pgDiceSelected = computed(() => (diceSide.value === 'home' ? pgDice.value.home : pgDice.value.away));
 const dedFansMod = (mod: number) => (mod > 0 ? '+' + mod : String(mod));
 
@@ -342,7 +343,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
       <div v-if="diceModalOpen && showStats" class="pg-dice-modal" role="dialog" aria-modal="true" aria-label="Dice statistics" @click.self="diceModalOpen = false">
         <div class="pg-dice-card pg-bevel">
           <header class="pg-dice-head">
-            <span class="pg-title pg-title-sub">Dice</span>
+            <span class="pg-dice-heading">
+              <span class="pg-title pg-title-sub">Dice</span>
+              <!-- Owner 10-10: a spectated game says what its dice cover - the whole game (replay data imported), or what is missing. -->
+              <span v-if="pgDiceNote" class="pg-dice-coverage" :data-coverage="pgDiceNote.kind" role="note">{{ pgDiceNote.text }}</span>
+            </span>
             <!-- Owner 09-17 (r3): a coach selector in the header picks whose distributions fill the left column. -->
             <div class="pg-dice-switch" role="tablist" aria-label="Dice distribution coach">
               <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'">
@@ -848,6 +853,12 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--ui-border); }
 .pg-dice-close { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); border-radius: 6px; width: 1.8em; height: 1.8em; font-size: 1em; cursor: pointer; }
 .pg-dice-head .pg-title { font-size: 1.5em; } /* the header scales with the card too */
+/* Owner 10-10: the coverage note shares the title's side of the header; the coach tabs stay centred whatever it says. */
+.pg-dice-head:has(.pg-dice-coverage) { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); column-gap: 12px; }
+.pg-dice-head:has(.pg-dice-coverage) .pg-dice-close { justify-self: end; }
+.pg-dice-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pg-dice-coverage { font-size: 0.85em; line-height: 1.2; color: var(--ui-muted); min-width: 0; }
+.pg-dice-coverage:not([data-coverage='whole']) { color: var(--ui-text); padding: 2px 8px; border: 1px solid var(--ui-border); border-left: 3px solid #d9a441; border-radius: 4px; background: var(--ui-surface); }
 .pg-dice-close:hover { background: var(--ui-accent); color: var(--ui-text-on-primary); border-color: var(--ui-accent); }
 .pg-dice-switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
 .pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }

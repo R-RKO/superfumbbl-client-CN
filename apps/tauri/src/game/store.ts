@@ -3,7 +3,7 @@ import { blockOutcomePresentation } from './blockOutcomePresentation';
 import { ballProjectilePresentation, createBallOutContext, createBallProjectileContext, type BallOutContext, KNOWN_PROJECTILE_ANIMATION_TYPES, throwPresentationKind, type BallProjectileContext, type ThrowPresentationKind } from './ballProjectilePresentation';
 export { throwPresentationKind } from './ballProjectilePresentation';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
-import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
+import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
 import { apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
 import { injuryPresentation, armourPresentation, type InjuryEvent } from './injuryPresentation';
@@ -19,7 +19,10 @@ import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngre
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
 import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
-import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
+import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
+import { refreshPostGameDice } from './postGameCache';
+import { postGameKey } from './postGameProjection';
+import { SpectatorDiceLedger } from './spectatorDiceLedger';
 import { inducementChoiceLabel } from './inducementChoiceLabel';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
@@ -1583,51 +1586,9 @@ function showCoinToss(result: 'heads' | 'tails', coach: string, won: boolean, ca
 
 
 // Owner 07-03: turnover = INVOLUNTARY turn loss. FFB has NO explicit turnover flag (ReportTurnEnd carries only playerIdTouchdown) ⇒ ARM on a failing action report, fire on the next non-TD turnEnd in regular turnMode; a succeeding roll disarms. ⚠ the failing-report set may still need widening (Both-Down, foul send-offs, negatrait fumbles) as observed live.
-const TURNOVER_FAIL_IDS = new Set([
-  'dodgeRoll', 'goForItRoll', 'pickUpRoll', 'passRoll', 'catchRoll',
-  'leapRoll',
-]);
-
-/** Owner 08-19 follow-up: advance the heuristic only from a roll owned by the side whose turn is ending.
- *  Opponent reactions can publish the same report ids during that side's activation; they must neither arm a
- *  turnover on failure nor disarm a previously observed active-side failure on success. Interceptions remain the
- *  explicit exception: a successful opponent interception turns the active side over. */
-export function turnoverArmAfterReport(
-  armed: boolean,
-  report: Readonly<Record<string, unknown>>,
-  playingPlayerIds: ReadonlySet<string>,
-): boolean {
-  const id = String(report.reportId ?? '');
-  if (id === 'interceptionRoll') return report.successful === true ? true : armed;
-  // Owner 09-06 (game 945): Jordell's Swift as the Breeze turned a failed dodgeRoll into a success via the SAME-frame
-  // `modifiedDodgeResultSuccessful` report (ffb-common ReportModifiedDodgeResultSuccessful: skill only, no playerId);
-  // the server never ended the turn, and the still-armed heuristic painted the opponent's later voluntary End Turn
-  // as a turnover. The modification is the disarm.
-  if (id === 'modifiedDodgeResultSuccessful') return false;
-  // Owner 09-14 (Akindsir report, g1942502: "dodges: rolls 2 (3+) | fails" → "Steady Footing: rolls 6 (6+)" → the
-  // coach's own End Turn painted as a turnover): a SUCCESSFUL Steady Footing keeps the player on their feet —
-  // upstream bb2025 StepSteadyFooting publishes END_TURN=false and no armour/injury follows — so it DISARMS the
-  // failed roll before it. A failed one changes nothing here: the knockdown's injury report arms on its own.
-  // (No explicit turnover flag exists on the wire — ReportTurnEnd carries only playerIdTouchdown/KO/heat/unzap.)
-  if (id === 'steadyFootingRoll') {
-    const pid = String(report.playerId ?? '');
-    return pid && playingPlayerIds.has(pid) && report.successful === true ? false : armed;
-  }
-  // Owner 09-19 (g1944287 seq 3552-3618): a catchRoll failed on a SCATTER ("Inaccurate Pass or Scatter" — the ball
-  // bounced onto a player), which is no turnover; the coach activated three more players and their own End Turn was
-  // painted as a turnover. A fresh activation by the playing side (ReportPlayerAction) proves the turn did not end —
-  // a real turnover closes the turn before any further activation can start — so it is the disarm.
-  if (id === 'playerAction') {
-    const pid = String(report.actingPlayerId ?? report.playerId ?? '');
-    return pid && playingPlayerIds.has(pid) ? false : armed;
-  }
-  if (!TURNOVER_FAIL_IDS.has(id)) return armed;
-  const playerId = String(report.playerId ?? '');
-  if (!playerId || !playingPlayerIds.has(playerId)) return armed;
-  if (report.successful === false) return true;
-  if (report.successful === true) return false;
-  return armed;
-}
+// The heuristic itself lives in turnPresentation.ts (turnoverArmStep): ONE implementation for this live presenter, the
+// review transport and the spectator dice ledger.
+export { turnoverArmAfterReport };
 
 // Owner 07-04: on-pitch die CAUSE by FFB report id → renderer DIE_CAUSE_TAG glyph; report.reRolled overrides to 'reroll' (team vs skill indistinguishable on the roll report).
 let turnoverArmed = false;
@@ -4238,6 +4199,9 @@ async function backfillSpectatorHistoryFromReplay(
   // Eligibility BEFORE any download (a same-match reconnect or an evicted backfill never re-fetches), and the attempt
   // is bound to the live segment identity it was triggered for: a replacement snapshot or a reconnect gets its own attempt
   // and this one refuses at prepare/commit.
+  // Owner 10-10: after the socket has closed (the expected post-game close included) only a download that is ALREADY
+  // under way may finish - no attempt and no retry starts on a closed connection.
+  if (!history.connected) return;
   const liveIdentity = history.canBackfill();
   if (!liveIdentity) return;
   const inFlightKey = `${liveIdentity.sessionId}:${liveIdentity.connectionGeneration}:${liveIdentity.segmentId}`;
@@ -4257,18 +4221,29 @@ async function backfillSpectatorHistoryFromReplay(
   backfillRetryRequested.delete(inFlightKey);
   backfillInFlight.add(inFlightKey);
   try { await backfillSpectatorHistoryFromReplayOnce(request, history, joinedHead, generation, gameId, liveIdentity, inFlightKey, attempt); }
-  finally { backfillInFlight.delete(inFlightKey); }
+  finally {
+    backfillInFlight.delete(inFlightKey);
+    // The left game's ledger is kept for the imports under way on its history: it goes when the LAST of them ends,
+    // whatever the outcome (no retry follows a close). An older, superseded import ending first must not take it from
+    // a newer one that is still pending.
+    if (detachedSpectatorDice?.history === history && !backfillUnderWayFor(history)) detachedSpectatorDice = null;
+  }
   // Live events that arrived mid-flight already extended the needle/tail: when this attempt could not place the join,
   // the next fresh download is scheduled NOW rather than waiting for a live event that may never come.
   // Astra 09-14 round 5: a stale attempt (the connection or snapshot moved on underneath it) never re-enters —
   // that would spend the REPLACEMENT segment's first attempt on a one-event needle. Only the same live segment retries.
   const outcome = backfillOutcomes.get(inFlightKey);
   const stillLive = history.generation === generation && history.canBackfill()?.segmentId === liveIdentity.segmentId;
-  if (backfillRetryRequested.delete(inFlightKey) && stillLive && (outcome === 'boundary-unverified' || outcome === 'needle-short')) {
+  if (backfillRetryRequested.delete(inFlightKey) && stillLive && history.connected && (outcome === 'boundary-unverified' || outcome === 'needle-short')) {
     void backfillSpectatorHistoryFromReplay(request, history, joinedHead);
   }
 }
 const backfillInFlight = new Set<string>();
+/** Is any backfill attempt of this history (whatever its connection / segment) still in flight? */
+function backfillUnderWayFor(history: LiveSpectateHistory): boolean {
+  for (const key of backfillInFlight) if (key.startsWith(`${history.sessionId}:`)) return true;
+  return false;
+}
 const backfillOutcomes = new Map<string, string>();
 const backfillAttempts = new Map<string, number>();
 const backfillRetryRequested = new Set<string>();
@@ -4286,10 +4261,19 @@ async function backfillSpectatorHistoryFromReplayOnce(
   if (history.generation !== generation || history.head?.model.gameId !== joinedHead.model.gameId) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
   let seed: GameJson;
   try { seed = createReplaySeed(bundle.finalState); } catch (error) { backfillOutcomes.set(inFlightKey, 'seed-failed'); log('system', `earlier history unavailable: ${String(error)}`); return; }
-  const prepared = await history.prepareBackfill(seed, bundle.commands, liveIdentity);
+  // Owner 10-10: the same pass rebuilds the dice tallies - the pre-join commands, then the joined segment's live ones.
+  const diceOf = () => (spectatorDice?.history === history ? spectatorDice : detachedSpectatorDice?.history === history ? detachedSpectatorDice : null);
+  const dice = diceOf();
+  const diceImport = dice?.ledger.beginImport();
+  const prepared = await history.prepareBackfill(seed, bundle.commands, liveIdentity, undefined, diceImport);
   if (history.generation !== generation) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
   const outcome = prepared.kind === 'ok' ? history.commitBackfill(prepared.prepared) : prepared;
   backfillOutcomes.set(inFlightKey, outcome.kind);
+  if (dice && diceOf() === dice) {
+    const changed = diceImport && (outcome.kind === 'ok' || outcome.kind === 'over-budget') && 'observed' in outcome && outcome.observed ? dice.ledger.adopt(diceImport)
+      : outcome.kind === 'nothing-before-join' ? dice.ledger.nothingBeforeJoin() : false;
+    if (changed) spectatorDiceDetailsRefreshForTest = refreshSavedSpectatorDice(dice);
+  }
   switch (outcome.kind) {
     case 'ok': log('system', `earlier history loaded: ${outcome.events} commands before you joined`); break;
     case 'nothing-before-join': break; // joined at the very start: nothing to add
@@ -4363,6 +4347,43 @@ export async function reconstructJoinRerollsFromReplay(
   }
 }
 let spectatorIngress: SpectatorIngress | null = null;
+/** Owner 10-10: a spectated game's dice tallies are folded at INGRESS by this ledger (pre-join replay data + live
+ *  commands, see spectatorDiceLedger.ts), one per live history. While it is set, applyFrameContents leaves `diceStats`
+ *  alone: the displayed frames are a paced, pausable VIEW of the same commands and must not be counted again. */
+interface SpectatorDiceSession { history: LiveSpectateHistory; ledger: SpectatorDiceLedger; /** Details cache server key at the join */ server: string }
+let spectatorDice: SpectatorDiceSession | null = null;
+/** The ledger of the spectated game just left (disconnect), kept ONLY while a pre-join import for it is still under
+ *  way: it can adopt that import (the ledger itself refuses once another feeder has claimed the tallies). Cleared when
+ *  the import ends, whatever its outcome, and when another feeder takes the tallies. */
+let detachedSpectatorDice: SpectatorDiceSession | null = null;
+/** Owner 10-10: the import changed this game's tallies / coverage. Its Details may already be saved (the end screen
+ *  opened first, and the view may be gone by now): refresh the saved entry from the store side. No saved entry = no
+ *  write. */
+function refreshSavedSpectatorDice(session: SpectatorDiceSession): Promise<boolean> {
+  const gameId = diceStats.gameId;
+  if (!session.ledger.owning || gameId == null) return Promise.resolve(false);
+  const teams = JSON.parse(JSON.stringify(diceStats.teams)) as typeof diceStats.teams;
+  const coverage = diceStats.coverage ? { ...diceStats.coverage } : null;
+  return refreshPostGameDice(postGameKey(session.server, gameId), (saved) => (String(saved.gameId) !== gameId ? null : {
+    tallies: { home: teams[String(saved.game.teamHome.teamId)] ?? emptyTally(), away: teams[String(saved.game.teamAway.teamId)] ?? emptyTally() },
+    diceCoverage: coverage,
+  }));
+}
+/** @internal the last Details refresh started by an import (tests await it). */
+export let spectatorDiceDetailsRefreshForTest: Promise<boolean> | null = null;
+/** @internal */
+export function detachedSpectatorDiceForTest(): boolean { return !!detachedSpectatorDice; }
+function spectatorDiceOwnsTallies(): boolean { return !!spectatorDice && !play.active && !replay.active && !state.demoMode; }
+/** Who feeds `diceStats` from applied frames (claimDiceStats): a seat / mode change in the same game starts afresh;
+ *  a reconnect to the same seat, or seeks inside one replay session, keep what was counted. */
+/** Make the applied frames the feeder of `diceStats` for this game. When that is a change of feeder (or of game), the
+ *  tallies start afresh and no spectated picture is left to gate: its displayed rows go, and so does a late import. */
+function claimFrameDice(gameId: string): void {
+  if (claimDiceStats(diceStats, frameDiceOwner(), gameId)) { clearDisplayedDiceRows(displayedDiceRows); detachedSpectatorDice = null; }
+}
+function frameDiceOwner(): string {
+  return play.active ? 'play' : replay.active ? `replay:${replay.sessionKey}` : state.demoMode ? 'demo' : 'frames';
+}
 // One independently owned displayed graph; queued frames retain only receipt/cursor metadata.
 let spectatorDisplayedCheckpoint: SpectatorCheckpoint | null = null;
 let spectatorTransport: LiveSpectateTransport | null = null;
@@ -4527,6 +4548,7 @@ async function pauseSpectatorView(): Promise<void> {
       transitionPendingPushes = new Map(!snap && previous ? previous.durableProjection.pendingPushes.map((pending) =>
         [pending.playerId, { from: [...pending.from] as [number, number], age: pending.age }]) : []);
       spectatorDisplayedCheckpoint = position;
+      spectatorDice?.ledger.publishDisplayed(position.cursor); // owner 10-10: a reviewed position shows ITS totals
     },
     present: async (event, signal) => {
       if (signal.aborted) return;
@@ -5099,6 +5121,10 @@ export function spectatorReaderDiagnosticsForTest(): { hasTransport: boolean; ph
 function commitSpectatorDisplayedFrame(frame: QueuedFrame): void {
   const cursor = frame.receipt?.cursor;
   if (!cursor) return;
+  // Owner 10-10: the Statistics rows follow the picture - by the displayed frame's own cursor, so also when the
+  // history has stopped RECORDING (a checkpoint over its budget): it still admits commands and the ledger still folds
+  // them, and rows that waited for a recorded position would freeze while the head grew.
+  spectatorDice?.ledger.publishDisplayed(cursor);
   const history = spectatorIngress?.history;
   if (!history || !history.recording) { spectatorDisplayedCheckpoint = null; spectatorReviewRevision.value++; return; }
   const previous = spectatorDisplayedCheckpoint;
@@ -7733,7 +7759,15 @@ function applyFrameContents(frame: QueuedFrame) {
   const reports = dedupeReports(rawReports, (cmd as { commandNr?: number }).commandNr);
   // Owner 09-17: the per-game dice tally (end screen Dice tab + failed blocks / dodges) reads the same
   // de-duplicated reports; commandNr keys out frames a replay seek re-applies.
-  ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
+  // Owner 10-10: a spectated frame the history ADMITTED was folded by the ledger at ingress (its receipt carries the
+  // history cursor) and is never counted here. One the history did not admit (a stale history that waits for a fresh
+  // snapshot) but that is displayed all the same is counted from this displayed model, by the ledger, in its own
+  // key space - per frame, so neither path can count the other's commands. (A frame with no receipt while the history
+  // IS following - the snapshot's own presentation tick - carries nothing to count.)
+  const diceByLedger = spectatorDiceOwnsTallies();
+  if (diceByLedger) { if (!frame.receipt?.cursor && spectatorDice!.history.staleReason) spectatorDice!.ledger.displayedFrame(wasHomePlaying, game.value, cmd); }
+  else claimFrameDice(currentGameId());
+  if (!diceByLedger) ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
   // owner 10-05: the turn's left-out Pick-Me-Up record ends with the turn (a new turn's offer always surfaces)
   if (pickMeUpUnselected && reports.some((r) => String(r.reportId ?? '') === 'turnEnd')) pickMeUpUnselected = null;
   // Owner 09-27: a Pick Me Up roll retires that player's held selection ring; a turn end retires the rest.
@@ -7748,7 +7782,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 09-25 (fun facts): every server activation of a player counts toward its team's turn (applied frame, so
   // half/turn read current); the turnEnd branch below closes the turn with its turnover verdict.
   for (const ch of ((cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [])) {
-    if (ch.modelChangeId === 'actingPlayerSetPlayerId' && typeof ch.modelChangeValue === 'string') noteActivation(diceStats, game.value, ch.modelChangeValue);
+    if (!diceByLedger && ch.modelChangeId === 'actingPlayerSetPlayerId' && typeof ch.modelChangeValue === 'string') noteActivation(diceStats, game.value, ch.modelChangeValue);
   }
   if (game.value) skillDecisionCardData(game.value, String(game.value.dialogParameter?.playerId ?? ''), String(game.value.dialogParameter?.skill ?? ''), reports);
   syncHmpScatterMarks();
@@ -9426,50 +9460,12 @@ function applyFrameContents(frame: QueuedFrame) {
     // team, so a normal block never false-arms.
     const playingRoster = (wasHomePlaying ? game.value.teamHome : game.value.teamAway).playerArray;
     const playingPlayerIds = new Set(playingRoster.map((player) => player.playerId));
-    for (const report of reports) {
-      const id = String(report.reportId);
-      if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || id === 'steadyFootingRoll' || id === 'playerAction' || TURNOVER_FAIL_IDS.has(id)) {
-        turnoverArmed = turnoverArmAfterReport(turnoverArmed, report, playingPlayerIds);
-        if (!turnoverArmed) turnoverArmedAfterInjury = false;
-      } else if (id === 'injury') {
-        const fallen = String((report as { defenderId?: unknown }).defenderId ?? (report as { playerId?: unknown }).playerId ?? '');
-        // Exclude non-knockdown injury classes that still fire an armour/injury report but are NOT a turnover (Meero
-        // at-diff): CROWD removal (Crowd/CrowdPush/CrowdPushForSpp/KTMCrowd — separate "ended-in-crowd" clause) and
-        // same-team VAMPIRE FEED — `Bitten` (Bloodlust, StepInitFeeding InjuryTypeBitten) / `QuickBite`: the vampire
-        // CONSUMES a thrall and continues, no knockdown. A failed Right Stuff landing also publishes armour under
-        // `ttmLanding` but does not itself end the team turn (observed upstream cmd 212/214 followed by a fresh
-        // activation at cmd 218). `EatPlayer` (Always Hungry TTM) IS a genuine turnover ⇒ kept.
-        const injType = injuryTypeName((report as { injuryType?: unknown }).injuryType).toLowerCase();
-        const nonKnockdown = /crowd|bitten|quickbite|ttmlanding/.test(injType);
-        // g868 (owner 08-18, B&C Fanatic blocks its OWN Goblin Lineman, armour held [1,6]): a SAME-TEAM attacker
-        // knocking a team-mate down is NOT a turnover upstream. [SOURCE] bb2025 StepPushback:179-200 computes
-        // `sameTeam` and publishes END_TURN *only* inside the crowd-push branch (defender removed from the field);
-        // an on-pitch same-team knockdown publishes nothing, and StepMoveBallAndChain:232-238 hands the B&C
-        // team-mate hit straight to the block sequence with no END_TURN of its own. The g868 wire proves it: the
-        // server left the Fanatic activated for 46s and the turn ended only on the coach's own clientEndTurn.
-        // Arming here would either strand an arm (what the owner saw) or, once the flip no longer disarms, paint a
-        // FALSE turnover splash on that voluntary End Turn. A crowd-pushed team-mate keeps its own turnover via the
-        // "ended up in the crowd" clause — already excluded above by injType, and re-armed there, not here.
-        const attacker = String((report as { attackerId?: unknown }).attackerId ?? '');
-        const sameTeamBlock = !!attacker && playingRoster.some((p) => p.playerId === attacker);
-        if (fallen && !nonKnockdown && !sameTeamBlock && playingRoster.some((p) => p.playerId === fallen)) {
-          if (!turnoverArmed) logMatch('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, fallen)})`); // #11 diag
-          turnoverArmed = true;
-          turnoverArmedAfterInjury = true;
-        }
-      }
-    }
-    // Drive boundary disarm. ⚠ `betweenTurns` is NOT a drive boundary — it is the transit mode of the server's own
-    // TURN FLIP, which ALWAYS precedes the turnEnd report: regular→betweenTurns→regular→betweenTurns→regular, four
-    // separate serverModelSync commands (= four applied frames), and only the FIFTH carries `turnEnd` (g868 nr144-148;
-    // identical in every real turnover in the wire logs: g1919939 nr752-756, g1919943, g1919953, g1919968). Including
-    // it here disarmed EVERY armed turnover two frames before it could fire, so the turnEnd fell through to the
-    // voluntary-End-Turn branch — owner #11's original symptom ("the TURN SCREEN showed instead of the turnover
-    // splash") regressing through the back door. Real drive boundaries (setup/kickoff/endGame/…) still disarm.
-    const turnModeNow = String(game.value.turnMode ?? '');
-    if (turnModeNow !== 'regular' && turnModeNow !== 'betweenTurns') {
-      turnoverArmed = false;
-      turnoverArmedAfterInjury = false;
+    {
+      // The per-report rules, the knockdown arming and the drive-boundary disarm: turnPresentation.ts turnoverArmStep.
+      const step = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury }, playingPlayerIds, reports, game.value.turnMode);
+      if (step.knockedDown) logMatch('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, step.knockedDown)})`); // #11 diag
+      turnoverArmed = step.context.turnoverArmed;
+      turnoverArmedAfterInjury = step.context.turnoverAfterInjury;
     }
     // Owner 2026-07-06: the Dodgy Snack debuff lasts ONE drive. It was only cleared on the NEXT `kickoffResult`, so the 🤮 markers stayed stuck on players after the drive ended. Clear them the moment a new drive is SET UP (turnMode 'setup'), so the status disappears when it's removed.
     if (String(game.value.turnMode ?? '') === 'setup' && state.dodgySnackPlayers.length) state.dodgySnackPlayers = [];
@@ -9524,7 +9520,7 @@ function applyFrameContents(frame: QueuedFrame) {
       }
       // Owner 09-25 (fun facts): close the ending side's turn in the activation ledger with the turnover verdict
       // the branches below reach (a score or a voluntary end is not a turnover).
-      noteTurnEnd(diceStats, game.value, wasHomePlaying ? 'home' : 'away', !turnEnd.playerIdTouchdown && turnoverArmed && String(game.value.turnMode ?? '') === 'regular');
+      if (!spectatorDiceOwnsTallies()) noteTurnEnd(diceStats, game.value, wasHomePlaying ? 'home' : 'away', !turnEnd.playerIdTouchdown && turnoverArmed && String(game.value.turnMode ?? '') === 'regular');
       if (turnEnd.playerIdTouchdown) {
         turnoverArmed = false; // a score consumed the drive — not a turnover
         turnoverArmedAfterInjury = false;
@@ -22502,6 +22498,10 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
   replay.sessionKey = `${bundle.finalState.gameId}:${Date.now()}`;
   play.active = false;
   state.demoMode = false;
+  // Owner 10-10: the replay owns the dice tallies from the moment its seed goes on screen - not from its first applied
+  // frame. Opened after SPECTATING the same game, the paused replay at cursor zero otherwise showed the spectated
+  // game's counters in Esc > Game statistics.
+  claimFrameDice(String((seed as { gameId?: string | number }).gameId ?? ''));
   state.sessionState = 'joined';
 
   let controller!: ReplayController<GameJson>;
@@ -24122,6 +24122,12 @@ export const gameStore = {
     });
     const history = retainedHistory ?? new LiveSpectateHistory('spectator-' + (++spectatorSessionSerial));
     const connectionGeneration = history.generation + 1;
+    // Owner 10-10: one dice ledger per live history - a retained history (reconnect) keeps its tallies.
+    if (spectatorDice?.history !== history) {
+      const ledger = new SpectatorDiceLedger(diceStats, displayedDiceRows);
+      history.observer = ledger;
+      spectatorDice = { history, ledger, server: settings.activeServerTarget };
+    }
     history.beginConnection(connectionGeneration);
     spectatorReviewRevision.value++;
     spectatorIngress = new SpectatorIngress(thisSession, history, connectionGeneration, {
@@ -24147,6 +24153,8 @@ export const gameStore = {
               if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
               state.connectionClosed = null; reconnectAttempts = 0; reconnecting = false;
             }
+            // Owner 10-10: in review a match command the history refused is not displayed either - its rolls are missing.
+            if (packetClass === 'match' && result.kind !== 'committed') spectatorDice?.ledger.dropped();
             spectatorTransport.received();
             if (packetClass === 'snapshot') {
               const repairHead = history.head;
@@ -24179,6 +24187,7 @@ export const gameStore = {
             }
             spectatorDisplayedCheckpoint = result.kind === 'committed'
               && estimatedSpectatorBytes(result.checkpoint) <= history.limits.activeGraphBytes ? result.checkpoint : null;
+            if (result.kind === 'committed') spectatorDice?.ledger.publishDisplayed(result.checkpoint.cursor); // also when the checkpoint is too large to keep
             spectatorReviewRevision.value++;
             resetPlayback(); // fresh game: no stale queued frames
             clearPendingRailCommands();
@@ -27097,6 +27106,16 @@ export const gameStore = {
     clearSpectatorTransientState();
     spectatorIngress?.dispose();
     spectatorIngress = null;
+    // Owner 10-10: the head tallies stay for the end screen, and the DISPLAYED rows stay published: the game's picture
+    // is still on screen after a disconnect, frozen wherever the viewer was, and Esc > Game statistics must keep
+    // showing that position's totals (never the head's). They are cleared when another feeder takes the tallies.
+    // The ledger is kept reachable only while a pre-join import for it is still under way (it may adopt it).
+    if (spectatorDice) {
+      spectatorDice.history.observer = null;
+      const history = spectatorDice.history;
+      detachedSpectatorDice = backfillUnderWayFor(history) ? spectatorDice : null;
+      spectatorDice = null;
+    }
     spectatorDisplayedCheckpoint = null;
     // Owner 2026-07-07: an explicit Disconnect is the user's choice — cancel any pending auto-reconnect and drop the "Connection closed" prompt.
     if (reconnectTimer) { cancelGameTimeout(reconnectTimer); reconnectTimer = null; }

@@ -14,6 +14,9 @@ export interface PostGameBackend {
   delete(key: string): Promise<void>;
   /** every stored key with its savedAt */
   index(): Promise<{ key: string; savedAt: number }[]>;
+  /** ONE read-modify-write: `change` sees the row as it is stored NOW and returns its replacement (null = leave it).
+   *  Nothing else can write that row between the read and the write. Resolves whether a row was written. */
+  update(key: string, change: (current: PostGameSnapshot) => PostGameSnapshot | null): Promise<boolean>;
 }
 
 export function memoryPostGameBackend(): PostGameBackend {
@@ -23,6 +26,12 @@ export function memoryPostGameBackend(): PostGameBackend {
     async put(s) { rows.set(s.key, s); },
     async delete(key) { rows.delete(key); },
     async index() { return [...rows.values()].map((s) => ({ key: s.key, savedAt: s.savedAt })); },
+    async update(key, change) {
+      const current = rows.get(key); // read and write in one synchronous step: nothing can land in between
+      const next = current ? change(current) : null;
+      if (next) rows.set(key, next);
+      return !!next;
+    },
   };
 }
 
@@ -65,6 +74,24 @@ function idbPostGameBackend(): PostGameBackend {
       }
       return out;
     },
+    update: async (key, change) => {
+      const db = await open();
+      return new Promise<boolean>((resolve, reject) => {
+        // one readwrite transaction: the put is issued from the get's own success callback, so the transaction is
+        // still active and no other write to this store can run between them
+        const tx = db.transaction(STORE, 'readwrite');
+        const rows = tx.objectStore(STORE);
+        let written = false;
+        const read = rows.get(key) as IDBRequest<PostGameSnapshot | undefined>;
+        read.onsuccess = () => {
+          const next = read.result ? change(read.result) : null;
+          if (next) { rows.put(next); written = true; }
+        };
+        tx.oncomplete = () => resolve(written);
+        tx.onerror = () => reject(tx.error ?? new Error('indexedDB update failed'));
+        tx.onabort = () => reject(tx.error ?? new Error('indexedDB update aborted'));
+      });
+    },
   };
 }
 
@@ -104,4 +131,20 @@ export async function postGameSnapshotKeys(): Promise<Set<string>> {
     await prunePostGameSnapshots();
     return new Set((await store().index()).map((r) => r.key));
   } catch { return new Set(); }
+}
+
+/**
+ * Owner 10-10: a spectated game's pre-join dice can be imported AFTER its Details were saved (the replay download
+ * outlived the end screen - or the view). Replace the saved entry's tallies and coverage; everything else it holds
+ * stays as it was captured. No entry for that game = nothing is written. Returns whether an entry was updated.
+ */
+export async function refreshPostGameDice(key: string, dice: (snapshot: PostGameSnapshot) => Pick<PostGameSnapshot, 'tallies' | 'diceCoverage'> | null): Promise<boolean> {
+  try {
+    // one read-modify-write on the row as it is stored NOW: a capture that lands just before is kept whole, and only
+    // its tallies and coverage are replaced
+    return await store().update(key, (current) => {
+      const next = dice(current);
+      return next ? { ...current, tallies: next.tallies, diceCoverage: next.diceCoverage } : null;
+    });
+  } catch (error) { console.warn('[postGame] cache refresh failed', error); return false; }
 }

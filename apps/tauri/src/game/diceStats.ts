@@ -109,7 +109,56 @@ export interface DiceStats {
   /** `commandNr|defender|dice` of the last armour / injury roll taken as a trial (one roll is one trial). */
   lastArmourTrial?: string | null;
   lastInjuryTrial?: string | null;
+  /** Owner 10-10: how much of the game a SPECTATED game's tallies cover (spectatorDiceLedger.ts). Absent = not a
+   *  spectated game (play / replay / demo): the pane says nothing. */
+  coverage?: DiceCoverage;
+  /** Who feeds these tallies (claimDiceStats): a seat / mode change in the SAME game starts them afresh, because each
+   *  feeder numbers its commands in its own key space (`seen`). */
+  owner?: string;
+  /** Bumped whenever the tallies are REPLACED by a rebuild (a pre-join import landing): what was saved from them
+   *  before is out of date. */
+  revision?: number;
+  /** The spectator ledger's turnover context (turnPresentation.ts turnoverArmStep): it rides the tallies so that it
+   *  crosses the join boundary with them. */
+  turnover?: { turnoverArmed: boolean; turnoverAfterInjury: boolean };
 }
+
+/** The tally counters the Statistics rows read ("attempts / failed"), per team. */
+export const DICE_ROW_KEYS = ['failedBlocks', 'dodges', 'failedDodges', 'pickups', 'failedPickups', 'rushes', 'failedRushes'] as const;
+export type DiceRowTotals = Pick<DiceTally, typeof DICE_ROW_KEYS[number]>;
+/**
+ * Owner 10-10: the Statistics rows of a SPECTATED game AT THE DISPLAYED POSITION. The tallies themselves are folded
+ * at ingress and run ahead of the picture (by the playback backlog; without bound while paused or reviewing), so a
+ * pane a viewer can open DURING the game reads these instead: the ledger publishes the totals as they stood at the
+ * command on screen. `gameId` null = no spectated game is on screen (play / replay / demo read their own tallies).
+ */
+export interface DisplayedDiceRows {
+  gameId: string | null; teams: Record<string, DiceRowTotals>;
+  /** The position on screen has no entry of its own (it was never folded, or its entry was dropped): `teams` are the
+   *  LAST KNOWN rows and do not advance. Never the head totals. */
+  held?: boolean;
+}
+/** No spectated game's picture is on screen any more (another feeder owns the tallies): the rows guard nothing. */
+export function clearDisplayedDiceRows(rows: DisplayedDiceRows): void { rows.gameId = null; rows.teams = {}; rows.held = false; }
+export const displayedDiceRows = reactive<DisplayedDiceRows>({ gameId: null, teams: {} }) as DisplayedDiceRows;
+
+/** Owner 10-10: what a spectated game's dice tallies cover. `before` = the rolls from before the join: `none` (joined
+ *  before any were made), `imported` (taken from the game's replay data), `missing` (no replay data). `gap` = the
+ *  live feed dropped and came back with commands missing in between. */
+export interface DiceCoverage { before: 'none' | 'imported' | 'missing'; gap: boolean }
+export type DiceCoverageNote = 'whole' | 'before-join-missing' | 'gap';
+/** The one line the Dice pane shows for a coverage (null = say nothing: not a spectated game). */
+export function diceCoverageNote(coverage: DiceCoverage | null | undefined): DiceCoverageNote | null {
+  if (!coverage) return null;
+  if (coverage.before === 'missing') return 'before-join-missing';
+  return coverage.gap ? 'gap' : 'whole';
+}
+/** The pane's wording (owner to rule). */
+export const DICE_COVERAGE_TEXT: Readonly<Record<DiceCoverageNote, string>> = {
+  whole: 'Whole game',
+  'before-join-missing': 'Dice from before you joined are not included.',
+  gap: 'Dice rolled while the live feed was down are not included.',
+};
 
 export function emptyTally(): DiceTally {
   return { d6: [0, 0, 0, 0, 0, 0, 0], block: [0, 0, 0, 0, 0, 0, 0], armour: [], injury: [],
@@ -120,6 +169,27 @@ export function emptyTally(): DiceTally {
 
 export function emptyDiceStats(gameId: string | null = null): DiceStats {
   return { gameId, seen: new Set(), teams: {}, players: {}, lastBlockAttacker: null, lastFailedDodge: null, lastFailedPickup: null, lastFailedRush: null, activeTurn: {} };
+}
+
+/** Replace everything `target` holds with `source`'s tallies and report-stream context, in place (the end screen
+ *  holds on to the one reactive `diceStats` object). */
+export function adoptDiceStats(target: DiceStats, source: DiceStats): void {
+  const fresh = emptyDiceStats(source.gameId);
+  const keys = new Set([...Object.keys(target), ...Object.keys(fresh), ...Object.keys(source)]) as Set<keyof DiceStats>;
+  const from = { ...fresh, openDodges: {}, pendingBlockRolls: [], multiBlockCounted: {}, ...source } as Record<string, unknown>;
+  for (const key of keys) {
+    if (key in from) (target as unknown as Record<string, unknown>)[key] = from[key];
+    else delete (target as unknown as Record<string, unknown>)[key];
+  }
+}
+
+/** Make `owner` the feeder of `stats` for `gameId`: a different owner or game starts the tallies afresh. Returns true
+ *  when it did. (Before 10-10 only a game change did - a spectated game then PLAYED kept `seen` keys from the other
+ *  feeder's numbering and silently skipped rolls.) */
+export function claimDiceStats(stats: DiceStats, owner: string, gameId: string | null): boolean {
+  if (stats.owner === owner && stats.gameId === gameId) return false;
+  adoptDiceStats(stats, { ...emptyDiceStats(gameId), owner });
+  return true;
 }
 
 /** The live tally the end screen reads. Reset whenever a different game's frames start arriving. */
@@ -513,6 +583,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     stats.lastBlockDefender = null; stats.blockRollArmed = false; stats.blockRollPartial = false; stats.pendingBlockRolls = []; stats.multiBlockCounted = {};
     stats.lastBlockActing = null; stats.rerollGateFailed = false;
     stats.lastArmourTrial = null; stats.lastInjuryTrial = null;
+    delete stats.coverage; delete stats.turnover; delete stats.revision;
   }
   if (commandNr != null) {
     if (stats.seen.has(commandNr)) return;

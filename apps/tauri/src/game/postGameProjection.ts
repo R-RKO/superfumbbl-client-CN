@@ -7,7 +7,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
-import { TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
+import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
 import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
@@ -29,6 +29,8 @@ export interface PostGameSnapshot {
   savedAt: number;
   game: GameJson;
   tallies: { home: DiceTally; away: DiceTally };
+  /** Owner 10-10: what a SPECTATED game's tallies cover (absent on play / replay panes and on panes cached earlier). */
+  diceCoverage?: DiceCoverage | null;
   endGameStats: EndGameStatsProjection | null;
   defectors: string[] | null;
   /** playerId → renderer portrait data URL, captured at settle time (the renderer is gone by Details time) */
@@ -36,6 +38,12 @@ export interface PostGameSnapshot {
 }
 
 export function postGameKey(server: string, gameId: string | number): string { return `${server}|${gameId}`; }
+
+/** Owner 10-10: the Dice pane's coverage line for a spectated game - "Whole game", or what is not included. */
+export function pgDiceCoverage(snapshot: Pick<PostGameSnapshot, 'diceCoverage'>): { kind: DiceCoverageNote; text: string } | null {
+  const kind = diceCoverageNote(snapshot.diceCoverage);
+  return kind ? { kind, text: DICE_COVERAGE_TEXT[kind] } : null;
+}
 
 // B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
 export type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
