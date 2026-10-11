@@ -111,6 +111,8 @@ export interface RejoinSnapshot {
   sessionState: SessionState;
   joinError: string | null;
   waitingForMatch: boolean;
+  /** owner 10-10: PLAYER seats in the server's latest serverJoin while waiting (1 = the other coach is not connected) */
+  playersJoined?: number | null;
   /** state.connectionClosed when set (no-game case = drop straight into auto-reconnect) */
   connectionClosed: { code: number; reconnecting: boolean } | null;
 }
@@ -220,7 +222,14 @@ export function deriveRejoinModal(launch: RejoinLaunch | null, snap: RejoinSnaps
       steps: markProgress(steps, 2),
       // owner 10-06: no "Joined — waiting ... to reconnect" subtext (the opponent has usually not joined at all yet)
       message: '',
-      notes: notesFor(launch, false),
+      // Owner 10-10 (g1952048): the server's own seat count. Alone in the game = the other coach is not connected,
+      // which is why nothing happens; the coach is in and need not launch again.
+      notes: [
+        ...notesFor(launch, false),
+        ...(snap.playersJoined === 1
+          ? [`You are in the game. ${launch.opponent || 'The other coach'} has not connected yet; the game goes ahead when both coaches are connected.`]
+          : []),
+      ],
     };
   }
   return { kind: 'progress', title: titleFor(launch, 'progress'), steps: markProgress(steps, Math.max(reachedIndex(snap.sessionState), launch.reachedStep ?? 0)), notes: notesFor(launch, false) };
@@ -234,6 +243,7 @@ export function storeRejoinSnapshot(): RejoinSnapshot {
     sessionState: gameStore.state.sessionState,
     joinError: gameStore.state.joinError,
     waitingForMatch: !!gameStore.state.waitingForMatch,
+    playersJoined: gameStore.state.waitingForMatch?.playersJoined ?? null,
     connectionClosed: closed ? { code: closed.code, reconnecting: !!closed.reconnecting } : null,
   };
 }

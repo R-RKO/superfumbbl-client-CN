@@ -524,7 +524,7 @@ const legacyState = reactive({
   /** Owner 07-07: UNEXPECTED mid-game socket close — "Connection closed" prompt + reconnect action (PLAY auto-retries, `reconnecting`). Cleared on fresh gameState or user Disconnect. */
   connectionClosed: null as { mode: 'spectator' | 'player'; label: string; code: number; reconnecting: boolean; /** S44: the server's own close reason, when it sent one */ reason?: string; /** S44: an official FUMBBL game — Reconnect is a password rejoin, never automatic */ official?: boolean } | null,
   /** Owner 07-09: FUMBBL matchmaking wait (connected, pre-gameState) — drives the "Waiting for the other coach…" modal; cleared on gameState/close/error/timeout/Disconnect. */
-  waitingForMatch: null as { gameName?: string; teamName?: string; coach?: string; opponentCoach?: string; /** owner 10-06 VS banner: ids the join knew + whether it is an official FUMBBL join */ gameId?: number; teamId?: string; opponentTeamId?: string; official?: boolean } | null,
+  waitingForMatch: null as { gameName?: string; teamName?: string; coach?: string; opponentCoach?: string; /** owner 10-06 VS banner: ids the join knew + whether it is an official FUMBBL join */ gameId?: number; teamId?: string; opponentTeamId?: string; official?: boolean; /** owner 10-10: how many PLAYER seats the server's latest serverJoin listed (1 = only this coach is connected) */ playersJoined?: number } | null,
   /** Owner 07-08: live spectator count (serverJoin broadcast) for the LIVE badge; `livePulse` bumps per new join → on-air flash. */
   spectatorCount: 0,
   /** Owner 09-09: the spectating coaches (upstream `spectatorNames` on serverJoin / serverLeave) — the LIVE badge lists them. */
@@ -24527,7 +24527,10 @@ export const gameStore = {
     const thisSession = session;
     let officialStatusTerminal = false;
     session.on('status', (cmd) => {
-      if (thisSession !== session || !officialFumbbl) return;
+      if (thisSession !== session) return;
+      // Astra 10-11: a non-official join can be refused by a status AFTER serverJoin (ERROR_NOT_YOUR_TEAM from the
+      // start-up ownership check); the close that follows is a refusal, not a closed wait.
+      if (!officialFumbbl) { statusSeenThisConnect = true; return; }
       const message = cmd.message?.trim() || cmd.serverStatus?.trim() || 'FUMBBL rejected the join.';
       if (isRecoverableFumbblLobbyStatus(cmd.serverStatus)) {
         state.joinError = null;
@@ -24621,7 +24624,19 @@ export const gameStore = {
     });
     // P1 10-06: the trail records how many player seats the accepted join lists, and a server request for a team
     session.on('teamList', (cmd) => { if (thisSession === session) wireConnection('team-list', { teams: (cmd.teamList?.teamListEntries ?? []).length }); });
-    session.on('join', (cmd) => { if (thisSession !== session) return; wireConnection('join-accepted', { players: Array.isArray(cmd.playerNames) ? cmd.playerNames.length : null }); joinAckedThisConnect = true; if (officialFumbbl) prepared?.onJoinAccepted?.(); handleServerJoin(cmd as { spectators?: number }); });
+    // Owner 10-10 (g1952048): the server's own seat count goes to the waiting window, so "waiting for opponent" can say
+    // that the other coach is not connected (a scheduled game starts only when both are: upstream joinGameAsPlayerAndCheckIfReadyToStart).
+    let playersJoined: number | null = null;
+    let statusSeenThisConnect = false;
+    session.on('join', (cmd) => {
+      if (thisSession !== session) return;
+      playersJoined = Array.isArray(cmd.playerNames) ? cmd.playerNames.length : null;
+      wireConnection('join-accepted', { players: playersJoined });
+      joinAckedThisConnect = true;
+      if (state.waitingForMatch && playersJoined != null) state.waitingForMatch.playersJoined = playersJoined;
+      if (officialFumbbl) prepared?.onJoinAccepted?.();
+      handleServerJoin(cmd as { spectators?: number });
+    });
     session.on('command', (cmd) => { if (thisSession === session) handleServerPush(cmd as Record<string, unknown>); });
     session.on('error', (error) =>
       log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`),
@@ -24669,7 +24684,14 @@ export const gameStore = {
         if (!officialFumbbl) this.scheduleAutoReconnect();
       } else if (expectingGame && !game.value) {
         // fresh-join failure (never connected, not a reconnect)
-        state.joinError = `Couldn't join ${joinLabel} as ${params.coach} (closed ${code}).${reason ? ` The server said: ${reason}` : ''}`;
+        // Owner 10-10 (g1952048): a seat the server had ACCEPTED (serverJoin) and then closed while the game had not
+        // started is not "couldn't join" - the coach was in and waiting. Say that, and that the join can be repeated.
+        // Astra 10-11: only a seat the server listed ALONE (playerNames of one) was waiting for the other coach; a
+        // close after both were listed, or after a refusal status, keeps the plain message. The game may be one that
+        // is resuming (both coaches dropped), so the text does not say it had not started.
+        state.joinError = joinAckedThisConnect && playersJoined === 1 && !statusSeenThisConnect
+          ? `The server closed the connection while you were waiting for the other coach in ${joinLabel} (closed ${code}). You were connected as ${params.coach}. Join again to keep waiting.${reason ? ` The server said: ${reason}` : ''}`
+          : `Couldn't join ${joinLabel} as ${params.coach} (closed ${code}).${reason ? ` The server said: ${reason}` : ''}`;
         expectingGame = false;
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
       }
@@ -24687,7 +24709,7 @@ export const gameStore = {
         // clears this modal the moment the opponent returns. Only a truly silent join (no serverJoin) or the
         // FUMBBL matchmaking window still surfaces the unreachable/no-match error.
         if (joinAckedThisConnect) {
-          state.waitingForMatch = waitingFromParams(params, officialFumbbl);
+          state.waitingForMatch = { ...waitingFromParams(params, officialFumbbl), ...(playersJoined != null ? { playersJoined } : {}) };
           log('system', 'joined — waiting for the other coach to (re)connect');
           return;
         }

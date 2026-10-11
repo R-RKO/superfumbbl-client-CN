@@ -209,6 +209,11 @@
     "size": 4868232,
     "sha256": "fa0d304324d3017b6e2923e814a58088dffd6f33ac1a08437dee54f81c87ae2e"
   },
+  "app@376b4924e3a2b14d": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-376b4924.zip",
+    "size": 5289382,
+    "sha256": "c4c0d7c5f7499e6c35412cfd4c4ddd1662ab116e77d07dee831e3e67e4c9cdc9"
+  },
   "app@37a04d5a063cb396": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-37a04d5a.zip",
     "size": 5041248,
