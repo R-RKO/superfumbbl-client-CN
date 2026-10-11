@@ -1,4 +1,5 @@
 import { textureParserFor } from './artPack';
+import { fitInSquare, holdInstalledUrls, loadInstalledTexture } from './installedTexture';
 import { Application, Assets, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
@@ -117,6 +118,7 @@ import { presentationMs, setPresentationMode as configurePresentationMode, type 
 import { SQUARE_MARK_LABEL_MAX_CHARS, playerMarkLabelScale, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
+import { CROSSHAIR_GLIDE_MS, RAIL_COLOR, crosshairTargetKey, easeOutCubic, railLanes, type PitchCrosshairTarget } from './crosshairRail';
 import { rushTargetForPlayer } from './rushTarget';
 import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
@@ -1770,7 +1772,14 @@ export class PitchRenderer {
   /** All five face-art urls in tumble order (skull→bothdown→push→powpush→pow). */
   static blockFaceUrls(): string[] {
     const bundled = PitchRenderer.bundledBlockFaceUrls();
-    return PitchRenderer.BLOCK_FACE_IDS.map((face, index) => PitchRenderer.blockFaceSources[face] ?? bundled[index]!);
+    return PitchRenderer.BLOCK_FACE_IDS.map((_face, index) => PitchRenderer.packBlockFaceUrl(index) ?? bundled[index]!);
+  }
+  /** The PACK-bound face art for a tumble index (0 skull .. 4 pow), null when no pack binds that face. The one read
+   *  of the pack layer for every surface that draws a face by url: `blockFaceUrls` (choice card, 3D die) and the
+   *  app's on-pitch result stamp / applied face (report Fesz g1951899: the stamp ignored the pack and drew bundled). */
+  static packBlockFaceUrl(faceIndex: number): string | null {
+    const face = PitchRenderer.BLOCK_FACE_IDS[faceIndex];
+    return (face && PitchRenderer.blockFaceSources[face]) || null;
   }
   /** Owner 10-06: the BUNDLED face art of a family (default: the active one) on a surface (default: the active one),
    *  tumble order, no pack bindings. The family's native surface (default on black) is the original art; any other
@@ -1853,6 +1862,8 @@ export class PitchRenderer {
     if (PitchRenderer.BLOCK_FACE_IDS.every((face) =>
       PitchRenderer.blockFaceSources[face] === next[face])) return;
     PitchRenderer.blockFaceSources = next;
+    // the installed urls the dice (and the on-pitch block result) draw: no other consumer may unload them
+    holdInstalledUrls('block-faces', Object.values(next).filter((url): url is string => !!url));
     if (typeof document === 'undefined') return;
     for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
   }
@@ -1939,13 +1950,34 @@ export class PitchRenderer {
     }, PitchRenderer.BLOCK_FACE_RETRY_MS);
   }
 
+  /** The square footprint (edge, in the sprite's parent units) each block-face sprite was laid out in. */
+  private blockFaceBoxes = new WeakMap<Sprite, number>();
+  /** Astra round 2: draw a block face inside a square footprint with its aspect kept. A pack face may be any size,
+   *  and the faces of one set may differ in size (a 256 px pack Pow beside the 512 px built-in Push): a sprite keeps
+   *  its SCALE across a texture swap, so every swap (the tumble, a reload) re-fits through here. */
+  private fitBlockFaceSprite(sprite: Sprite, box: number): void {
+    this.blockFaceBoxes.set(sprite, box);
+    const { width, height } = fitInSquare(sprite.texture, box);
+    sprite.width = width;
+    sprite.height = height;
+  }
+  private setBlockFaceTexture(sprite: Sprite, texture: Texture): void {
+    if (sprite.texture === texture) return;
+    sprite.texture = texture;
+    const box = this.blockFaceBoxes.get(sprite);
+    if (box !== undefined) this.fitBlockFaceSprite(sprite, box);
+  }
+
   private async loadBlockFaceTexturesWork(generation: number, app: Application, loadGeneration: number): Promise<void> {
     const live = () => this.initActive(generation, app) && loadGeneration === this.blockFaceLoadGeneration;
-    const tryLoad = async (url: string): Promise<Texture | null> => {
+    // Astra (report Fesz g1951899): an installed pack face is an EXTENSIONLESS url (.../asset/{install}/{token}); a bare
+    // Assets.load finds no parser for it and resolves null, so every pack face silently fell back to the built-in
+    // one here. Pack faces load through the pinned texture parser (loadInstalledTexture, shared with skill icons).
+    const tryLoad = async (url: string, installed = false): Promise<Texture | null> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
-          Assets.load<Texture>(url),
+          installed ? loadInstalledTexture(url) : Assets.load<Texture>(url),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => reject(new Error('block die face load timed out')), PitchRenderer.BLOCK_FACE_LOAD_TIMEOUT_MS);
           }),
@@ -1965,7 +1997,7 @@ export class PitchRenderer {
     const textures: (Texture | null)[] = await Promise.all(ids.map(async (face, index) => {
       const pack = PitchRenderer.blockFaceSources[face];
       if (pack) {
-        const texture = await tryLoad(pack);
+        const texture = await tryLoad(pack, true);
         if (texture) return texture;
         console.warn(`ffb-pitch: pack block die face "${face}" failed to load (${pack.slice(0, 120)}); using the built-in face`);
       }
@@ -2000,10 +2032,10 @@ export class PitchRenderer {
     const wasEmpty = this.blockFaceTextures.length === 0;
     const loadedTextures = textures as Texture[];
     this.blockFaceTextures = loadedTextures;
-    for (const sprite of this.blockDiceSprites) sprite.texture = loadedTextures[0]!;
+    for (const sprite of this.blockDiceSprites) this.setBlockFaceTexture(sprite, loadedTextures[0]!);
     for (const sprite of this.blockFaceStaticSprites) {
       if (sprite.destroyed) this.blockFaceStaticSprites.delete(sprite);
-      else sprite.texture = loadedTextures[0]!;
+      else this.setBlockFaceTexture(sprite, loadedTextures[0]!);
     }
     // Astra P3: previews drawn while no faces were loaded are vector stand-ins (buildBlockDie) that hold no texture —
     // redraw the overlays so they become the real faces now (a late apply after the init deadline included).
@@ -2233,6 +2265,20 @@ export class PitchRenderer {
   private blitzBadgeLayer = new RenderLayer({ sortableChildren: true });
   /** Queued path: line, step numbers, rush dice, dodge chips — over the tokens. */
   private pathLayer = new Container();
+  /** Controller support P2a (owner 10-07): the pad crosshair + its rails. Its own layer so redrawOverlays never
+   *  destroys it: over the turf and the ground overlays, UNDER the tokens (spec "Rail crosshair"; pathLayer itself
+   *  sits over the tokens). */
+  private crosshairLayer = new Container();
+  private crosshairTarget: PitchCrosshairTarget | null = null;
+  /** The glide in progress: the square the rail slides FROM (owner o66mg: the rays travel with the square). */
+  private crosshairGlide: { from: [number, number]; start: number } | null = null;
+  private crosshairTickerFn: (() => void) | null = null;
+  /** The projection the crosshair was last drawn in (Astra P2-4). */
+  private crosshairGeometryKey = '';
+  /** The pad crosshair owns hover: synthetic pointer moves / leaves do not clear it until the host ends it (mouse use). */
+  private virtualPointerActive = false;
+  /** The last hovered on-pitch square (mouse or crosshair); null off the pitch / after leave. */
+  private lastHoverSquare: [number, number] | null = null;
   private movementPathCostLayer = new Container();
   private movementOverlayNodes = new Map<string, MovementOverlayEntry>();
   private movementOverlayFades = new Map<string, { entry: MovementOverlayEntry; from: number; start: number }>();
@@ -3215,7 +3261,9 @@ export class PitchRenderer {
       this.adIdleSince = now;
       return;
     }
-    if (now < this.adManualUntil || this.dragging || this.pointers.size > 1
+    // Controller P2a (Astra P2-1): while the pad crosshair is shown it owns the camera — the director holds (even with
+    // the crosshair parked past the manual hold) and resumes when mouse mode returns or the crosshair hides.
+    if (now < this.adManualUntil || this.dragging || this.pointers.size > 1 || this.crosshairTarget !== null
       || this.panDir.x !== 0 || this.panDir.y !== 0 || this.panVel.x !== 0 || this.panVel.y !== 0) {
       this.adIdleSince = now;
       return;
@@ -4033,12 +4081,15 @@ export class PitchRenderer {
   private appliedBlockFaceKey = '';
   /** The acting player when the result was applied: only that attacker's over-head fist is hidden. */
   private appliedBlockAttackerId: string | null = null;
-  setAppliedBlockResult(textureUrl: string | null, playerIds: readonly string[] = []): void {
+  setAppliedBlockResult(textureUrl: string | null, playerIds: readonly string[] = [], fallbackUrl: string | null = null): void {
     const attackerId = String((this.game?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || null;
-    const key = textureUrl && playerIds.length > 0 ? `${textureUrl}|${playerIds.join(',')}|${attackerId ?? ''}` : '';
+    // Astra round 2: the fallback is part of the identity - a pack face that failed draws the BUNDLED art, and that
+    // follows the dice family (default <-> KrisB) while the pack url stays the same.
+    const key = textureUrl && playerIds.length > 0 ? `${textureUrl}|${fallbackUrl ?? ''}|${playerIds.join(',')}|${attackerId ?? ''}` : '';
     if (key === this.appliedBlockFaceKey) return;
     this.appliedBlockFaceKey = key;
     if (!key || !textureUrl) {
+      this.blockStampGeneration++; // the result is retired: a stamp still loading for it must not land
       this.appliedBlockAttackerId = null;
       if (this.appliedBlockFaces.size === 0) return;
       this.appliedBlockFaces = new Map();
@@ -4047,11 +4098,46 @@ export class PitchRenderer {
     }
     this.appliedBlockAttackerId = attackerId;
     const ids = [...playerIds];
-    void Assets.load<Texture>(textureUrl).then((texture) => {
+    void PitchRenderer.loadBlockStampTexture(textureUrl, fallbackUrl).then((face) => {
       if (this.destroyed || this.appliedBlockFaceKey !== key) return; // retired or replaced while loading
-      this.appliedBlockFaces = new Map(ids.map((id) => [id, texture]));
+      this.appliedBlockFaces = new Map(ids.map((id) => [id, face.texture]));
+      this.appliedBlockFaceContain = face.installed;
       this.refresh();
-    }).catch(() => { /* the fist simply stays */ });
+    }).catch(() => {
+      // No usable face at all: retire the result so the fists (target AND attacker) stay, as before it was applied.
+      if (this.destroyed || this.appliedBlockFaceKey !== key) return;
+      this.appliedBlockAttackerId = null;
+      if (this.appliedBlockFaces.size === 0) return;
+      this.appliedBlockFaces = new Map();
+      this.refresh();
+    });
+  }
+  /** Bumped by every stamp and by the retirement of the applied result: a stamp whose texture arrives late is dropped. */
+  private blockStampGeneration = 0;
+  /** The applied face is an installed pack face: fit it inside the square footprint (a pack face may be any size). */
+  private appliedBlockFaceContain = false;
+  /** A texture the pitch can draw: decoded, with a source and a real size. Pixi's Assets.load RESOLVES null (it does
+   *  not reject) when no parser takes the url - never hand that to a Sprite or store it. */
+  private static usableBlockFaceTexture(texture: unknown): texture is Texture {
+    const t = texture as Texture | null | undefined;
+    return !!t && !!t.source && t.width > 0 && t.height > 0;
+  }
+  /** The on-pitch block result art (stamp + applied face). `fallbackUrl` non-null = `textureUrl` is an INSTALLED pack
+   *  face: an extensionless native url, so it loads through the pinned texture parser (loadInstalledTexture, shared
+   *  with skill icons; a bare Assets.load resolves null for it). On null, a throw or a rejection the bundled art is
+   *  used instead, like the dice do. Rejects only when nothing usable could be loaded. */
+  private static async loadBlockStampTexture(textureUrl: string, fallbackUrl: string | null): Promise<{ texture: Texture; installed: boolean }> {
+    const installed = fallbackUrl !== null && fallbackUrl !== textureUrl;
+    if (installed) {
+      try {
+        const texture = await loadInstalledTexture(textureUrl);
+        if (PitchRenderer.usableBlockFaceTexture(texture)) return { texture, installed: true };
+      } catch { /* fall through to the bundled art */ }
+      console.warn(`ffb-pitch: pack block result face failed to load (${textureUrl.slice(0, 120)}); using the built-in face`);
+    }
+    const texture = await Assets.load<Texture>(installed ? fallbackUrl : textureUrl);
+    if (!PitchRenderer.usableBlockFaceTexture(texture)) throw new Error('block result face could not be loaded');
+    return { texture, installed: false };
   }
   /** Owner 10-04: the OTHER coach is choosing among the server's open pushback squares (their Side Step). The
    *  candidate arrows are drawn for the watching coach too - display only: no crosshairs, no click targets. */
@@ -4242,6 +4328,9 @@ export class PitchRenderer {
    *  pass/bomb free-select is armed (null off-pitch / on leave). The host drives the throw+catch
    *  tooltip and intercept feed off this; additive — the internal cursor/tip paths are unchanged. */
   onSquareHover: ((coord: [number, number] | null) => void) | null = null;
+  /** Controller support P2a: the pad's A on a setup token (dugout reserve or placed player). A mouse press there starts
+   *  a drag whose stationary release the host routes to its tap handler; the pad has no drag, so it reports the tap. */
+  onSetupTokenTap: ((playerId: string) => void) | null = null;
   /** Owner 10-10: a middle-button CLICK on the pitch (pressed and released without a drag). True = the host has the
    *  button bound and took the click, so it is not also treated as a tap. Null / false = unchanged (the click is the
    *  tap it always was). A middle-button DRAG pans the camera either way. */
@@ -5058,9 +5147,7 @@ export class PitchRenderer {
       if (this.blockDiceSprites.length === 0 || this.blockFaceTextures.length === 0) return;
       const face =
         this.blockFaceTextures[Math.floor(performance.now() / presentationMs(PitchRenderer.DICE_FACE_MS)) % this.blockFaceTextures.length]!;
-      for (const sprite of this.blockDiceSprites) {
-        if (sprite.texture !== face) sprite.texture = face;
-      }
+      for (const sprite of this.blockDiceSprites) this.setBlockFaceTexture(sprite, face);
     });
     try {
       // Turf themes: grass1 = Acasas 64px leafy tile (uniform);
@@ -5271,6 +5358,7 @@ export class PitchRenderer {
     this.tokenLayer.sortableChildren = true;
     this.movementReachLayer.eventMode = 'none';
     this.movementPathCostLayer.eventMode = 'none';
+    this.crosshairLayer.eventMode = 'none';
     // item1 scope-add: needed for TRAIL_ECHO_Z / TRAIL_NUMBER_Z to order the trail pair. Pixi's sort is
     // stable, and every other effectsLayer node keeps the default zIndex 0, so insertion order is preserved
     // among them — only the (negative) trail marks are re-seated, and only relative to each other.
@@ -5286,6 +5374,7 @@ export class PitchRenderer {
       this.bloodLayer, // owner 10-03: casualty blood, lowest on the tile
       this.setupZoneLayer, // owner 2026-07-04: setup zone shading, under players
       this.overlayLayer,
+      this.crosshairLayer, // controller P2a: pad crosshair rails, over turf + ground overlays, under tokens
       this.marksLayer, // owner 2026-07-04f: persistent square marks (under tokens)
       this.dugoutGroundLayer, // owner 10-05: dugout floor + band text, under the tokens (and the kick-off ball)
       this.tokenLayer,
@@ -5401,7 +5490,10 @@ export class PitchRenderer {
     this.onCue = null;
     this.onActionHover = null;
     this.onSquareHover = null;
+    this.onSetupTokenTap = null;
     this.onMiddleClick = null;
+    this.stopCrosshairGlide();
+    this.stopCrosshairFollow();
     this.onActionTarget = null;
     this.onActionConfirm = null;
     this.onKickPick = null;
@@ -6997,11 +7089,13 @@ export class PitchRenderer {
   /** Owner 09-05: stamp a block-result symbol (the app supplies the texture URL — its plain block symbols, no die
    *  art) over each affected token: pops in at the chest, holds, then rises + fades. ~1.1 s total (viewer rule:
    *  ≥450 ms visible). Lives on the effects layer so a token rebuild cannot wipe it. */
-  playBlockResultStamp(playerIds: readonly string[], textureUrl: string): void {
+  playBlockResultStamp(playerIds: readonly string[], textureUrl: string, fallbackUrl: string | null = null): void {
     if (!this.app || !this.game) return;
     const app = this.app;
-    void Assets.load<Texture>(textureUrl).then((texture) => {
+    const stampGeneration = ++this.blockStampGeneration;
+    void PitchRenderer.loadBlockStampTexture(textureUrl, fallbackUrl).then(({ texture, installed }) => {
       if (this.app !== app || !this.game) return;
+      if (this.destroyed || stampGeneration !== this.blockStampGeneration) return; // retired or superseded while loading
       const nodes: Container[] = [];
       for (const playerId of playerIds) {
         const data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
@@ -7012,8 +7106,10 @@ export class PitchRenderer {
         const sprite = new Sprite(texture);
         sprite.anchor.set(0.5, 0.5);
         const size = TILE_W * 0.5 * s; // owner 09-06: 0.62 -> 0.5 (20% smaller)
-        sprite.width = size;
-        sprite.height = size;
+        // The bundled symbols keep their square footprint; an installed pack face (any size) keeps its aspect inside it.
+        const fitted = installed ? fitInSquare(texture, size) : { width: size, height: size };
+        sprite.width = fitted.width;
+        sprite.height = fitted.height;
         sprite.position.set(tp.x, squareAnchor(x, y).y - 6 * s); // over the body, not the head
         sprite.zIndex = this.depthZ(x, y) + 3;
         sprite.label = 'blockResultStamp';
@@ -7024,7 +7120,7 @@ export class PitchRenderer {
       const start = performance.now();
       const popMs = presentationMs(140), holdMs = presentationMs(700), fadeMs = presentationMs(260);
       const doneAt = start + popMs + holdMs + fadeMs;
-      const bases = nodes.map((n) => ({ y: n.position.y, w: (n as Sprite).width }));
+      const bases = nodes.map((n) => ({ y: n.position.y, w: (n as Sprite).width, h: (n as Sprite).height }));
       let cleanup: () => void = () => {};
       const tick = () => {
         const now = performance.now();
@@ -7032,8 +7128,8 @@ export class PitchRenderer {
         const t = now - start;
         nodes.forEach((n, i) => {
           const sp = n as Sprite;
-          if (t < popMs) { const k = t / popMs; const w = bases[i]!.w * (0.6 + 0.4 * Math.sin(Math.PI * k * 0.5)) * (1 + 0.25 * Math.sin(Math.PI * k)); sp.width = w; sp.height = w; sp.alpha = 1; }
-          else if (t < popMs + holdMs) { sp.width = bases[i]!.w; sp.height = bases[i]!.w; sp.alpha = 1; }
+          if (t < popMs) { const k = t / popMs; const pop = (0.6 + 0.4 * Math.sin(Math.PI * k * 0.5)) * (1 + 0.25 * Math.sin(Math.PI * k)); sp.width = bases[i]!.w * pop; sp.height = bases[i]!.h * pop; sp.alpha = 1; }
+          else if (t < popMs + holdMs) { sp.width = bases[i]!.w; sp.height = bases[i]!.h; sp.alpha = 1; }
           else { const k = (t - popMs - holdMs) / fadeMs; sp.alpha = 1 - k; sp.position.y = bases[i]!.y - 10 * k; }
         });
       };
@@ -9622,8 +9718,7 @@ export class PitchRenderer {
       for (let i = 0; i < dice; i++) {
         const sprite = new Sprite(this.blockFaceTextures[0]);
         sprite.anchor.set(0.5, 0.5);
-        sprite.width = 27 * scale;
-        sprite.height = 27 * scale;
+        this.fitBlockFaceSprite(sprite, 27 * scale);
         sprite.position.set(anchor.x + (i - (dice - 1) / 2) * spacing, y);
         if (opponentChoice) sprite.tint = 0xff7070; // O2.4/O2.5: uphill dice shade red
         this.pathLayer.addChild(sprite);
@@ -10429,6 +10524,23 @@ export class PitchRenderer {
     return this.fantasyCursorEnabled ? SPIKE_CURSOR_PRIMED : 'pointer';
   }
 
+  /** Controller support P2a (owner o66mg): in controller mode the pitch shows NO pointer — neither the CSS cursor
+   *  (Spike gauntlet / crosshair / action cursors) nor pointer-following cursor art. Restored on the mouse takeover. */
+  private pointerHidden = false;
+  setPointerHidden(hidden: boolean): void {
+    if (this.pointerHidden === hidden) return;
+    this.pointerHidden = hidden;
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
+    if (hidden && this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+    if (hidden) this.kickHoverMarker = null;
+    if (canvas) canvas.style.cursor = hidden ? 'none' : this.restingCursor();
+  }
+  isPointerHidden(): boolean { return this.pointerHidden; }
+  /** Every hover cursor write goes through here so controller mode keeps the canvas cursor at 'none'. */
+  private canvasCursor(canvas: HTMLCanvasElement, cursor: string): void {
+    canvas.style.cursor = this.pointerHidden ? 'none' : cursor;
+  }
+
   /** Toggle generic cursor art while retaining semantic action cursors. */
   setFantasyCursorEnabled(enabled: boolean): void {
     if (this.fantasyCursorEnabled === enabled) return;
@@ -10896,10 +11008,21 @@ export class PitchRenderer {
   /** Owner 09-05: WASD glide speed in screen px per frame (Settings > Controls; 9 = the original). */
   private panSpeedPx = 9;
   setPanSpeed(pxPerFrame: number): void { this.panSpeedPx = Math.min(30, Math.max(2, pxPerFrame || 9)); }
+  /** Owner 10-10 (Astra P3): the 10-08 "the camera works through the turnover splash" release came in with controller
+   *  support, and it also changed the keyboard and the mouse: WASD / arrows and a wheel over the turn-boundary banner
+   *  released a running cinematic. Both stay behind the controller box (the host sets this), so with the box off a pan
+   *  and an overlay wheel behave exactly as public: the pan is overwritten by the cinematic's tween, the overlay wheel
+   *  is ignored during a cinematic. */
+  private padCameraRelease = false;
+  setPadCameraRelease(on: boolean): void { this.padCameraRelease = !!on; }
   setPanDirection(dx: number, dy: number): void {
-    if (dx !== 0 || dy !== 0) this.noteManualCameraInput();
-    this.panDir.x = Math.sign(dx);
-    this.panDir.y = Math.sign(dy);
+    // Owner 10-08: a pan is a user camera gesture — it RELEASES a running cinematic (the injury / knock-down cine that
+    // overlaps the turnover splash) exactly as the wheel and a press do, instead of being overwritten by its tween.
+    // The pad's camera stick and the WASD keys both land here. Controller support on only (see padCameraRelease).
+    if (dx !== 0 || dy !== 0) { if (this.app && this.padCameraRelease) this.releaseCinematicForUser(); this.noteManualCameraInput(); }
+    // Controller support P1 (owner 10-07): an analog stick passes a magnitude (keys still pass -1 / 0 / +1).
+    this.panDir.x = Math.max(-1, Math.min(1, Number.isFinite(dx) ? dx : 0));
+    this.panDir.y = Math.max(-1, Math.min(1, Number.isFinite(dy) ? dy : 0));
   }
 
   /** Accessibility (owner 2026-07-03 r4): toggle the on-field row markers, the
@@ -12073,7 +12196,7 @@ export class PitchRenderer {
       if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
       this.kickScatterMarker = null;
       this.kickHoverLast = null;
-      if (this.app) this.app.canvas.style.cursor = this.restingCursor();
+      if (this.app) this.canvasCursor(this.app.canvas as HTMLCanvasElement, this.restingCursor());
     }
   }
 
@@ -12933,6 +13056,8 @@ export class PitchRenderer {
       if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
       // The pointer has not moved, so its old world position means nothing under the new projection: the
       // crosshair sits on the hovered square's anchor until the next pointer move free-follows again.
+      // Controller (owner o66mg): no pointer-following cursor art while the pad crosshair hides the pointer.
+      if (this.pointerHidden) { this.kickHoverMarker = null; return; }
       this.kickHoverMarker = this.buildKickBallCrosshair([hover[0], hover[1]]);
       this.kickHoverMarker.alpha = legal ? 1 : 0.4;
       this.overlayLayer.addChild(this.kickHoverMarker);
@@ -14961,7 +15086,7 @@ export class PitchRenderer {
     if (skull) {
       const s = new Sprite(skull);
       s.anchor.set(0.5);
-      s.width = s.height = 30;
+      this.fitBlockFaceSprite(s, 30);
       this.blockFaceStaticSprites.add(s);
       inner = s;
     }
@@ -15381,6 +15506,7 @@ export class PitchRenderer {
     this.drawPitch();
     this.redrawSetupZones();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
+    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
     // sweet-spot logos + crosshairs are positioned via squareAnchor, so they go
     // stale on a toggle — re-place them at the new orientation (B8-8)
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
@@ -15399,6 +15525,7 @@ export class PitchRenderer {
     this.drawPitch();
     this.redrawSetupZones();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
+    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
     this.rebaseKickFollowCamera();
@@ -15413,6 +15540,7 @@ export class PitchRenderer {
     this.drawPitch();
     this.redrawSetupZones();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
+    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
     this.rebaseKickFollowCamera();
@@ -15432,6 +15560,7 @@ export class PitchRenderer {
     this.drawPitch();
     this.redrawSetupZones();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
+    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
     this.rebaseKickFollowCamera();
@@ -17175,7 +17304,8 @@ export class PitchRenderer {
   private buildAppliedBlockFaceNode(tex: Texture): { node: Sprite; scale: number } | null {
     const node = new Sprite(tex);
     node.anchor.set(0.5, 0.5);
-    return { node, scale: TARGET_H / Math.max(1, tex.height) };
+    // an installed pack face (any size) is fitted inside the square footprint; the bundled symbols keep their height rule
+    return { node, scale: this.appliedBlockFaceContain ? fitInSquare(tex, TARGET_H).height / Math.max(1, tex.height) : TARGET_H / Math.max(1, tex.height) };
   }
 
   private buildBlockDecorationNode(art: 'target' | 'attacker' | 'blitzer' | 'blitzTarget'): { node: Sprite; scale: number } | null { // 'attacker' kept for the action marker's texture; the chest fist is gone (09-07)
@@ -19734,91 +19864,14 @@ export class PitchRenderer {
       canvas.setPointerCapture(event.pointerId);
     });
     this.listenCanvas(canvas, 'pointermove', (event) => {
-      if (this.pointers.size === 0) {
-        // hover feedback: pointer cursor over occupied squares
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        // Pass/bomb targeting surface (Fives contract 08-12): emit the hovered square so the host can
-        // drive the throw/catch tooltip + intercept feed. Fires ahead of the mode-specific handlers
-        // below (which early-return) and is purely additive — dedup by key, null off-pitch / on mode-exit.
-        if (this.passRulerFrom || (this.plannerEnabled && (this.actionMode === 'pass' || this.actionMode === 'bomb'))) {
-          const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
-          const key = onPitch ? `${sx},${sy}` : null;
-          if (key !== this.squareHoverLast) {
-            this.squareHoverLast = key;
-            this.onSquareHover?.(onPitch ? [sx, sy] : null);
-          }
-        } else if (this.squareHoverLast !== null) {
-          this.squareHoverLast = null;
-          this.onSquareHover?.(null);
-        }
-        // Owner 2026-07-14 (#2, REWORK of o66an): KICK PLACEMENT — the ball crosshair FREE-FOLLOWS the pointer's
-        // world position (NO snap-to-square) and the OS cursor STAYS VISIBLE (a 'crosshair' aim cursor, never
-        // hidden). The ball lands on whichever square the crosshair sits over at click time (validated against
-        // kickPickSquares in the tap handler). Over an ineligible square the crosshair dims for feedback without
-        // moving. Keeping the cursor visible also structurally kills #16 (the old `cursor:'none'` could stick on
-        // when the placement cleared without a fresh pointermove).
-        if (this.kickPickSquares) {
-          this.clearHoverSquareMarker();
-          if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
-          // Owner o66 #13: the SCATTER-DEVIATION grid rides the cursor, anchored on the SNAPPED aimed square (the
-          // ball's landing square if clicked here) even though the crosshair itself free-follows the raw pointer.
-          if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
-          this.kickScatterMarker = this.buildKickScatterGrid(sx, sy);
-          this.kickHoverLast = [sx, sy];
-          this.kickScatterMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.45;
-          this.overlayLayer.addChild(this.kickScatterMarker);
-          this.kickHoverMarker = this.buildKickBallCrosshair([sx, sy]);
-          this.kickHoverMarker.position.set(worldX, worldY); // free-follow: override the square anchor
-          this.kickHoverMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.4;
-          this.overlayLayer.addChild(this.kickHoverMarker);
-          canvas.style.cursor = 'crosshair';
-          return;
-        }
-        const overPush = this.pushOptionCoords.some((c) => c[0] === sx && c[1] === sy);
-        // Upstream HIT_AND_RUN exposes its valid cursor on exactly the server moveSquareArray membership test.
-        const overHitAndRun = this.tilePickSkill === 'order66-hit-and-run' && this.tilePickEligible?.has(`${sx},${sy}`);
-        // Owner 2026-07-04d: in bomb mode, hovering previews the 3×3 blast.
-        if (this.actionMode === 'bomb' && this.plannerEnabled) {
-          this.clearHoverSquareMarker();
-          if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS &&
-            (this.bombTarget?.[0] !== sx || this.bombTarget?.[1] !== sy)) {
-            this.setBombTarget([sx, sy]);
-          }
-          canvas.style.cursor = 'crosshair';
-          return;
-        }
-        // Owner 2026-07-04c: foul/handoff/pass — hovering an ELIGIBLE target
-        // swaps the cursor (skull / hand) and raises the roll tip beside it.
-        const mode = this.actionMode;
-        const hoverId = this.playersBySquare.get(`${sx},${sy}`);
-        let actionTip: string | null = null;
-        if (this.plannerEnabled && hoverId && (mode === 'foul' || mode === 'handoff' || mode === 'pass')) {
-          actionTip = this.actionRollText(mode, hoverId);
-        }
-        if (actionTip) {
-          this.clearHoverSquareMarker();
-          canvas.style.cursor = this.actionCursorFor(mode as 'foul' | 'handoff' | 'pass');
-          this.actionHoverActive = true;
-          this.onActionHover?.({ mode: mode as 'foul' | 'handoff' | 'pass', text: actionTip, canvasX: event.offsetX, canvasY: event.offsetY });
-        } else {
-          if (this.actionHoverActive) {
-            this.actionHoverActive = false;
-            this.onActionHover?.(null);
-          }
-          canvas.style.cursor = overHitAndRun
-            ? 'crosshair'
-            : overPush || this.playersBySquare.has(`${sx},${sy}`)
-              ? this.primedCursor()
-              : this.restingCursor();
-          if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
-            this.showHoverSquareMarker([sx, sy]);
-          } else {
-            this.clearHoverSquareMarker();
-          }
-        }
-      }
+      // Controller P2a: while the pad crosshair owns hover, a SYNTHETIC move (no travel — a cursor restyle / layout
+      // change under a resting mouse) never steals it; a real mouse move still hovers (the mouse keeps working, even
+      // with the controller pinned).
+      const syntheticMove = event.movementX === 0 && event.movementY === 0;
+      // Astra P3-5: a real move takes hover back BEFORE hovering, so the activeInput flip that follows
+      // (endVirtualPointer) finds nothing to wipe.
+      if (this.virtualPointerActive && !syntheticMove) this.virtualPointerActive = false;
+      if (this.pointers.size === 0 && !(this.virtualPointerActive && syntheticMove)) this.hoverAt(canvas, event.offsetX, event.offsetY);
       if (!this.pointers.has(event.pointerId)) return;
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
@@ -19844,199 +19897,9 @@ export class PitchRenderer {
     // pointer (worldToSquare inverts the projection) and report the player.
     this.listenCanvas(canvas, 'pointerup', (event) => {
       if (event.button === 2) return; // B2-5: right-clicks never tap-select
-      // Owner 10-10: a middle click the host has bound (Player portraits on / off) is the host's, not a tap.
+      // Owner 10-10: a middle click the host has bound (Player cards on / off) is the host's, not a tap.
       if (event.button === 1 && this.pointers.size === 1 && this.dragDistance < 5 && this.onMiddleClick?.()) return;
-      // Shift-click annotations take priority over every gameplay surface and never select, plan, or send.
-      // Plain Shift on a rendered player toggles its persistent overhead arrow; an empty square keeps the
-      // original single-square mark. Ctrl/Alt variants remain row/column marks even over a token.
-      if (event.shiftKey && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
-          if (event.ctrlKey) this.markRow([sx, sy]); // Ctrl+Shift = row
-          else if (event.altKey) this.markColumn([sx, sy]); // Alt+Shift = column
-          else {
-            const playerId = this.playerTokenAtWorld(worldX, worldY);
-            if (playerId) {
-              if (this.togglePersistentPlayerArrow(playerId)) this.requestPlayerMarkLabel(playerId); // owner 10-01: label field
-            } else if (this.toggleMarkNear(worldX, worldY, [sx, sy])) { // empty Shift = single square (column-aware clear)
-              this.requestSquareMarkLabel([sx, sy]); // owner 10-01: a NEW mark opens its label field
-            }
-          }
-          return;
-        }
-      }
-      // PUNT UX v2: cone-side re-aim owns its pixels before pitch-square interaction.
-      if (this.puntReaimHits.length > 0 && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const dir = this.puntReaimDirectionAt(worldX, worldY);
-        if (dir) {
-          this.onPuntReaim?.(dir);
-          return;
-        }
-      }
-      // Owner 2026-07-04: an interactive push-direction choice takes priority and
-      // works even during a block cinematic (which owns the camera). A tap on a
-      // candidate square sends the pushback; anything else falls through.
-      if (this.pushOptionCoords.length > 0 && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        const hit = this.pushOptionCoords.find((c) => c[0] === sx && c[1] === sy);
-        if (hit) {
-          this.onPushChoice?.([hit[0], hit[1]]);
-          return;
-        }
-      }
-      // Owner 2026-07-13: BALL & CHAIN aim — a tap on an orthogonal aim square (arrow tip) fires onBncAim (the
-      // host sends the aim CLIENT_MOVE; the server scatters). Same one-pointer/no-drag gate as the push options.
-      if (this.bncAimCoords.length > 0 && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        const hit = this.bncAimCoords.find((c) => c[0] === sx && c[1] === sy);
-        if (hit) {
-          this.onBncAim?.([hit[0], hit[1]]);
-          return;
-        }
-      }
-      // Owner 2026-07-04e: an armed raw TILE pick owns taps (unknown-call
-      // coordinate response) — a click on any (eligible) square reports it.
-      if (this.tilePickActive && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
-        const eligible = this.tilePickAllows(sx, sy);
-        if (eligible) { this.onTilePick?.([sx, sy]); return; }
-        // o66-dispatch (owner o66d: blitz block uninitiable + switch-player mid-move): the MOVE/BLITZ move
-        // overlay is armed, but a click on a PLAYER-occupied square that is NOT a move target — the blitz block
-        // target, or another own player to switch to — must reach onPlayerClick (the o66 router → sendBlock /
-        // menu). Let it fall through instead of swallowing. Off-flag: unchanged (always swallowed when armed).
-        if (!(this.order66 && onPitch && this.playersBySquare.get(`${sx},${sy}`))) {
-          if (!(onPitch && this.playersBySquare.get(`${sx},${sy}`))) this.onInertTileClick?.(onPitch ? [sx, sy] : null);
-          return;
-        }
-        // else fall through to the player-click dispatch below
-      }
-      // Owner 2026-07-04d: bomb/Throw-Keg targeting owns taps — a click on any
-      // square (the 3×3 blast centre) confirms the target via onBombTarget.
-      if (this.actionMode === 'bomb' && this.plannerEnabled && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) this.onBombTarget?.([sx, sy]);
-        return;
-      }
-      // Owner o66an: KICK PLACEMENT owns taps — a tap on an eligible aim square fires onKickPick (→ CLIENT_KICKOFF).
-      if (this.kickPickSquares && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        if (this.kickPickSquares.has(`${sx},${sy}`)) this.onKickPick?.([sx, sy]);
-        return;
-      }
-      // Owner 2026-07-04 (interaction catalog 0.1): an armed player-pick owns taps —
-      // a tap on an eligible player reports it; everything else is swallowed so the
-      // pick can't accidentally select/move a player (decline is a host-UI button).
-      // Owner 2026-08-17 (P1 audit — "Iron Man/Knuckle Dusters cannot reach every offered
-      // reserve"): this used to resolve ONLY via playersBySquare (the pitch), so a candidate
-      // displaced by Stars or beyond preSetupFormation's eleven synthetic placements — which
-      // gets no pitch square, only a dugout token (drawDugouts' offPitch catch-all) — could
-      // never be tapped. Fall through to a dugout hit-test alongside the pitch lookup before
-      // giving up; both routes still gate on playerPickIds (the server's exact eligible set).
-      if (this.playerPickIds && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const pid = this.resolveArmedPlayerPick(worldX, worldY);
-        if (pid) this.onPlayerPick?.(pid);
-        return;
-      }
-      // Presentation-only formation tokens are inert outside the player-pick branch above.
-      if (this.preSetupCoords.size > 0 && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        const pid = this.playersBySquare.get(`${sx},${sy}`);
-        if (pid && this.preSetupCoords.has(pid)) { this.onInspectPlayer?.(pid); return; } // inert for play; the card may show
-      }
-      // Owner 2026-07-04: interactive team setup owns taps while active — report
-      // the tapped square + any player on it (place / move / remove / select).
-      if (this.setupActive && this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        this.onSetupClick?.([sx, sy], this.playersBySquare.get(`${sx},${sy}`) ?? null);
-        return;
-      }
-      // o66-dispatch (P1): in o66 play the state machine owns interaction — a holding cine must NOT swallow
-      // the click (that froze the block-confirm click in g469). Off-flag: byte-identical B5-5 freeze.
-      if (this.clickFrozenByCinematic()) return; // B5-5 (o66-dispatch: off-flag identical, on-flag never freezes)
-      if (this.pointers.size === 1 && this.dragDistance < 5) {
-        const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-        const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-        // Owner 2026-07-08: DUGOUT players sit outside the pitch's worldToSquare bands, so a
-        // click there can't resolve to a square (and used to fall through to a deselect). Hit-
-        // test the dugout tokens directly by world proximity → select them so their card
-        // (portrait + injury) surfaces, exactly like an on-pitch player.
-        const dh = this.dugoutHits.find((h) => Math.hypot(h.x - worldX, h.y - worldY) <= h.r);
-        if (dh) {
-          this.selectPlayer(dh.playerId);
-          this.onPlayerClick?.(dh.playerId, event.offsetX, event.offsetY);
-          return;
-        }
-        const [sx, sy] = worldToSquare(worldX, worldY);
-        const playerId = this.playersBySquare.get(`${sx},${sy}`);
-        if (!playerId) this.onInertTileClick?.(sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null);
-        if (playerId) {
-          // Owner 2026-07-04c: a SECOND click on the armed action target confirms
-          // it (foul/handoff/pass) — "on a further click, commit the path".
-          if (this.armedAction && this.armedAction.targetId === playerId) {
-            this.confirmArmedAction();
-            return;
-          }
-          const clickedIsHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
-          // Owner 2026-07-04d: only route to the block/approach handler when the
-          // SELECTED player is a legal actor (the acting team). If an opposition
-          // player is selected (view-only), clicking another player just RE-selects
-          // it — so clicking opp→own never arms a reverse block preview.
-          if (
-            // o66-dispatch (P1): in o66 play, an enemy click must NOT enter the legacy block-PREVIEW routing
-            // (handleOpponentClick → pendingBlock/onBlockConfirm) — it falls through to onPlayerClick below,
-            // where the o66 router turns it into sendBlock. Off-flag: unchanged legacy routing.
-            !this.order66 &&
-            this.selectedPlayerId &&
-            playerId !== this.selectedPlayerId &&
-            clickedIsHome !== this.selectedIsHome() &&
-            this.selectedIsActor()
-          ) {
-            this.handleOpponentClick(playerId, [sx, sy], event.offsetX, event.offsetY);
-          } else if (
-            // Owner 2026-07-04c: in handoff/pass mode a TEAMMATE click targets the
-            // action instead of switching the selection.
-            this.selectedPlayerId &&
-            playerId !== this.selectedPlayerId &&
-            (this.actionMode === 'handoff' || this.actionMode === 'pass') &&
-            this.armActionTarget(playerId, [sx, sy])
-          ) {
-            return;
-          } else {
-            this.selectPlayer(playerId);
-            this.onPlayerClick?.(playerId, event.offsetX, event.offsetY);
-          }
-        } else if (this.selectedPlayerId && this.inspectionOnly()) {
-          this.clearSelection(); // owner 09-08: spectator/replay inspect — any empty-square click dismisses, acting side included
-        } else if (this.selectedPlayerId && this.actionMode !== 'pass' && this.selectedIsActor()) {
-          this.handleSquareClick([sx, sy]);
-        } else if (this.selectedPlayerId && !this.selectedIsActor()) {
-          // Owner 2026-07-06 (B): spectator/view-only inspect — tapping an empty square
-          // DESELECTS, shutting down the reach + tackle-zone read (an actor keeps their
-          // pathing via handleSquareClick above).
-          this.clearSelection(); // the host re-selects the actor itself when its inspection latch is set (o66 play)
-        }
-      }
+      this.tapAt(event.offsetX, event.offsetY, { shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey }, this.pointers.size === 1 && this.dragDistance < 5);
     });
     const release = (event: PointerEvent) => {
       try {
@@ -20053,6 +19916,8 @@ export class PitchRenderer {
     // Owner 10-10: no browser autoscroll from a middle press on the pitch.
     this.listenCanvas(canvas, 'mousedown', (event) => { if (event.button === 1 && this.onMiddleClick) event.preventDefault(); }); // only with a host on the hook (Astra 10-10)
     const clearPointerHover = () => {
+      if (this.virtualPointerActive) return; // the pad crosshair owns hover (a resting mouse leaving the canvas)
+      this.lastHoverSquare = null;
       this.clearHoverSquareMarker();
       if (this.squareHoverLast !== null) {
         this.squareHoverLast = null;
@@ -20068,87 +19933,679 @@ export class PitchRenderer {
     // resetting the camera on them yanked the view mid-confirm and made the
     // double-click confirm feel unavailable. Camera reset = empty squares only.
     this.listenCanvas(canvas, 'dblclick', (event) => {
-      const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-      const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-      const [sx, sy] = worldToSquare(worldX, worldY);
-      // Owner o66j #14: a double-click ON a player token → onPlayerDoubleClick (host stands up a prone own
-      // player). Owner 2026-07-13: the legacy empty-square reset-camera behaviour is REMOVED — a stray
-      // double-click on the pitch was yanking the zoom mid-play (one of the #6 zoom-reset offenders).
-      const dblPid = this.playersBySquare.get(`${sx},${sy}`);
-      if (dblPid && this.preSetupCoords.has(dblPid)) return;
-      if (dblPid) { this.onPlayerDoubleClick?.(dblPid); return; }
+      this.doubleClickAt(event.offsetX, event.offsetY);
     });
 
     // Right-click shortcuts (owner 2026-07-02, revised 08-25): any open waypoint plan owns the entire gesture.
     // One right-click anywhere clears the full plan and is swallowed; context menus exist only without waypoints.
     this.listenCanvas(canvas, 'contextmenu', (event) => {
       event.preventDefault();
-      // Match the primary click rail: Order 66 cinematics are presentation-only and cannot swallow
-      // an activation-cancel gesture. Legacy/spectator camera cinematics retain the B5-5 freeze.
-      if (this.cinematic && !this.order66) return;
-      const worldX = (event.offsetX - this.world.position.x) / this.world.scale.x;
-      const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
-      const [sx, sy] = worldToSquare(worldX, worldY);
-      const playerId = this.playersBySquare.get(`${sx},${sy}`);
-      // The selected token is the authoritative activation-cancel gesture. Do not let a plotted
-      // waypoint swallow that right-click before the host can send CLIENT_ACTING_PLAYER(null)
-      // (or surface the required Blitz/Punt confirmation). Other right-clicks retain the one-shot
-      // waypoint cancel contract.
-      if (playerId !== this.selectedPlayerId && this.dismissWaypointPlanForContextMenu()) return;
-      if (playerId && this.preSetupCoords.has(playerId)) return;
-      // Owner 09-08: on an inspection-only surface a right-click clears the inspect read first; an empty square then
-      // needs no menu, a player still gets its context menu (card) below.
-      if (this.selectedPlayerId && this.inspectionOnly()) {
-        this.setPath([]);
-        this.clearSelection();
-        if (!playerId) return;
+      this.contextAt(event.offsetX, event.offsetY);
+    });
+  }
+
+  /** Controller support P2a (owner 10-07): the pointer's HOVER body, shared by the canvas pointermove and the pad
+  *  crosshair (virtualHover) so both drive the SAME hover state (marker, action tips, pass / bomb square feed). */
+  private hoverAt(canvas: HTMLCanvasElement, offsetX: number, offsetY: number): void {
+    // hover feedback: pointer cursor over occupied squares
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    this.lastHoverSquare = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null;
+    // Pass/bomb targeting surface (Fives contract 08-12): emit the hovered square so the host can
+    // drive the throw/catch tooltip + intercept feed. Fires ahead of the mode-specific handlers
+    // below (which early-return) and is purely additive — dedup by key, null off-pitch / on mode-exit.
+    if (this.passRulerFrom || (this.plannerEnabled && (this.actionMode === 'pass' || this.actionMode === 'bomb'))) {
+      const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
+      const key = onPitch ? `${sx},${sy}` : null;
+      if (key !== this.squareHoverLast) {
+        this.squareHoverLast = key;
+        this.onSquareHover?.(onPitch ? [sx, sy] : null);
       }
-      if (!playerId) {
-        const now = performance.now();
-        const quickSecond = now - this.lastRightClickAt < PitchRenderer.DOUBLE_RCLICK_MS;
-        this.lastRightClickAt = now;
-        if (quickSecond) {
-          this.setPath([]);
-          this.clearSelection(); // full reset
-          this.onRightClickReset?.();
-          return;
-        }
-        // Owner 2026-07-04f: an empty square with no plotted path → the Mark… menu.
-        if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
-          this.onContextMenu?.(
-            {
-              playerId: '', square: [sx, sy], emptySquare: true,
-              isOpposition: false, isHomeTeam: false, isDown: false,
-              activationSpent: false, isConfused: false, isHypnotized: false,
-            },
-            event.offsetX, event.offsetY,
-          );
+    } else if (this.squareHoverLast !== null) {
+      this.squareHoverLast = null;
+      this.onSquareHover?.(null);
+    }
+    // Owner 2026-07-14 (#2, REWORK of o66an): KICK PLACEMENT — the ball crosshair FREE-FOLLOWS the pointer's
+    // world position (NO snap-to-square) and the OS cursor STAYS VISIBLE (a 'crosshair' aim cursor, never
+    // hidden). The ball lands on whichever square the crosshair sits over at click time (validated against
+    // kickPickSquares in the tap handler). Over an ineligible square the crosshair dims for feedback without
+    // moving. Keeping the cursor visible also structurally kills #16 (the old `cursor:'none'` could stick on
+    // when the placement cleared without a fresh pointermove).
+    if (this.kickPickSquares) {
+      this.clearHoverSquareMarker();
+      if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+      // Owner o66 #13: the SCATTER-DEVIATION grid rides the cursor, anchored on the SNAPPED aimed square (the
+      // ball's landing square if clicked here) even though the crosshair itself free-follows the raw pointer.
+      if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
+      this.kickScatterMarker = this.buildKickScatterGrid(sx, sy);
+      this.kickHoverLast = [sx, sy];
+      this.kickScatterMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.45;
+      this.overlayLayer.addChild(this.kickScatterMarker);
+      // Owner o66mg: no pointer-following cursor art in controller mode (the rail marks the square).
+      if (!this.pointerHidden) {
+        this.kickHoverMarker = this.buildKickBallCrosshair([sx, sy]);
+        this.kickHoverMarker.position.set(worldX, worldY); // free-follow: override the square anchor
+        this.kickHoverMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.4;
+        this.overlayLayer.addChild(this.kickHoverMarker);
+      } else this.kickHoverMarker = null;
+      this.canvasCursor(canvas, 'crosshair');
+      return;
+    }
+    const overPush = this.pushOptionCoords.some((c) => c[0] === sx && c[1] === sy);
+    // Upstream HIT_AND_RUN exposes its valid cursor on exactly the server moveSquareArray membership test.
+    const overHitAndRun = this.tilePickSkill === 'order66-hit-and-run' && this.tilePickEligible?.has(`${sx},${sy}`);
+    // Owner 2026-07-04d: in bomb mode, hovering previews the 3×3 blast.
+    if (this.actionMode === 'bomb' && this.plannerEnabled) {
+      this.clearHoverSquareMarker();
+      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS &&
+        (this.bombTarget?.[0] !== sx || this.bombTarget?.[1] !== sy)) {
+        this.setBombTarget([sx, sy]);
+      }
+      this.canvasCursor(canvas, 'crosshair');
+      return;
+    }
+    // Owner 2026-07-04c: foul/handoff/pass — hovering an ELIGIBLE target
+    // swaps the cursor (skull / hand) and raises the roll tip beside it.
+    const mode = this.actionMode;
+    const hoverId = this.playersBySquare.get(`${sx},${sy}`);
+    let actionTip: string | null = null;
+    if (this.plannerEnabled && hoverId && (mode === 'foul' || mode === 'handoff' || mode === 'pass')) {
+      actionTip = this.actionRollText(mode, hoverId);
+    }
+    if (actionTip) {
+      this.clearHoverSquareMarker();
+      this.canvasCursor(canvas, this.actionCursorFor(mode as 'foul' | 'handoff' | 'pass'));
+      this.actionHoverActive = true;
+      this.onActionHover?.({ mode: mode as 'foul' | 'handoff' | 'pass', text: actionTip, canvasX: offsetX, canvasY: offsetY });
+    } else {
+      if (this.actionHoverActive) {
+        this.actionHoverActive = false;
+        this.onActionHover?.(null);
+      }
+      this.canvasCursor(canvas, overHitAndRun
+        ? 'crosshair'
+        : overPush || this.playersBySquare.has(`${sx},${sy}`)
+          ? this.primedCursor()
+          : this.restingCursor());
+      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
+        this.showHoverSquareMarker([sx, sy]);
+      } else {
+        this.clearHoverSquareMarker();
+      }
+    }
+  }
+
+  /** The primary TAP body (a press that barely moved), shared by the canvas pointerup and the pad crosshair's A. */
+  private tapAt(offsetX: number, offsetY: number, mods: { shift: boolean; ctrl: boolean; alt: boolean }, isTap: boolean): void {
+    // Shift-click annotations take priority over every gameplay surface and never select, plan, or send.
+    // Plain Shift on a rendered player toggles its persistent overhead arrow; an empty square keeps the
+    // original single-square mark. Ctrl/Alt variants remain row/column marks even over a token.
+    if (mods.shift && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
+        if (mods.ctrl) this.markRow([sx, sy]); // Ctrl+Shift = row
+        else if (mods.alt) this.markColumn([sx, sy]); // Alt+Shift = column
+        else {
+          const playerId = this.playerTokenAtWorld(worldX, worldY);
+          if (playerId) {
+            if (this.togglePersistentPlayerArrow(playerId)) this.requestPlayerMarkLabel(playerId); // owner 10-01: label field
+          } else if (this.toggleMarkNear(worldX, worldY, [sx, sy])) { // empty Shift = single square (column-aware clear)
+            this.requestSquareMarkLabel([sx, sy]); // owner 10-01: a NEW mark opens its label field
+          }
         }
         return;
       }
-      const data = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
-      if (!data) return;
-      const isHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
-      // perspective: the selected player's team, or home = "own" without one
-      const ownSide = this.selectedPlayerId ? this.selectedIsHome() : true;
-      const base = baseState(data.playerState);
-      const shadeable =
-        base === PlayerStateBase.STANDING || base === PlayerStateBase.MOVING || base === PlayerStateBase.PRONE;
-      this.onContextMenu?.(
-        {
-          playerId,
-          square: [sx, sy],
-          isOpposition: isHome !== ownSide,
-          isHomeTeam: isHome,
-          isDown: isDown(data.playerState),
-          activationSpent: shadeable && !hasFlag(data.playerState, PlayerStateFlag.ACTIVE),
-          isConfused: hasFlag(data.playerState, PlayerStateFlag.CONFUSED),
-          isHypnotized: hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED),
-        },
-        event.offsetX,
-        event.offsetY,
-      );
-    });
+    }
+    // PUNT UX v2: cone-side re-aim owns its pixels before pitch-square interaction.
+    if (this.puntReaimHits.length > 0 && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const dir = this.puntReaimDirectionAt(worldX, worldY);
+      if (dir) {
+        this.onPuntReaim?.(dir);
+        return;
+      }
+    }
+    // Owner 2026-07-04: an interactive push-direction choice takes priority and
+    // works even during a block cinematic (which owns the camera). A tap on a
+    // candidate square sends the pushback; anything else falls through.
+    if (this.pushOptionCoords.length > 0 && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      const hit = this.pushOptionCoords.find((c) => c[0] === sx && c[1] === sy);
+      if (hit) {
+        this.onPushChoice?.([hit[0], hit[1]]);
+        return;
+      }
+    }
+    // Owner 2026-07-13: BALL & CHAIN aim — a tap on an orthogonal aim square (arrow tip) fires onBncAim (the
+    // host sends the aim CLIENT_MOVE; the server scatters). Same one-pointer/no-drag gate as the push options.
+    if (this.bncAimCoords.length > 0 && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      const hit = this.bncAimCoords.find((c) => c[0] === sx && c[1] === sy);
+      if (hit) {
+        this.onBncAim?.([hit[0], hit[1]]);
+        return;
+      }
+    }
+    // Owner 2026-07-04e: an armed raw TILE pick owns taps (unknown-call
+    // coordinate response) — a click on any (eligible) square reports it.
+    if (this.tilePickActive && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
+      const eligible = this.tilePickAllows(sx, sy);
+      if (eligible) { this.onTilePick?.([sx, sy]); return; }
+      // o66-dispatch (owner o66d: blitz block uninitiable + switch-player mid-move): the MOVE/BLITZ move
+      // overlay is armed, but a click on a PLAYER-occupied square that is NOT a move target — the blitz block
+      // target, or another own player to switch to — must reach onPlayerClick (the o66 router → sendBlock /
+      // menu). Let it fall through instead of swallowing. Off-flag: unchanged (always swallowed when armed).
+      if (!(this.order66 && onPitch && this.playersBySquare.get(`${sx},${sy}`))) {
+        if (!(onPitch && this.playersBySquare.get(`${sx},${sy}`))) this.onInertTileClick?.(onPitch ? [sx, sy] : null);
+        return;
+      }
+      // else fall through to the player-click dispatch below
+    }
+    // Owner 2026-07-04d: bomb/Throw-Keg targeting owns taps — a click on any
+    // square (the 3×3 blast centre) confirms the target via onBombTarget.
+    if (this.actionMode === 'bomb' && this.plannerEnabled && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) this.onBombTarget?.([sx, sy]);
+      return;
+    }
+    // Owner o66an: KICK PLACEMENT owns taps — a tap on an eligible aim square fires onKickPick (→ CLIENT_KICKOFF).
+    if (this.kickPickSquares && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      if (this.kickPickSquares.has(`${sx},${sy}`)) this.onKickPick?.([sx, sy]);
+      return;
+    }
+    // Owner 2026-07-04 (interaction catalog 0.1): an armed player-pick owns taps —
+    // a tap on an eligible player reports it; everything else is swallowed so the
+    // pick can't accidentally select/move a player (decline is a host-UI button).
+    // Owner 2026-08-17 (P1 audit — "Iron Man/Knuckle Dusters cannot reach every offered
+    // reserve"): this used to resolve ONLY via playersBySquare (the pitch), so a candidate
+    // displaced by Stars or beyond preSetupFormation's eleven synthetic placements — which
+    // gets no pitch square, only a dugout token (drawDugouts' offPitch catch-all) — could
+    // never be tapped. Fall through to a dugout hit-test alongside the pitch lookup before
+    // giving up; both routes still gate on playerPickIds (the server's exact eligible set).
+    if (this.playerPickIds && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const pid = this.resolveArmedPlayerPick(worldX, worldY);
+      if (pid) this.onPlayerPick?.(pid);
+      return;
+    }
+    // Presentation-only formation tokens are inert outside the player-pick branch above.
+    if (this.preSetupCoords.size > 0 && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      const pid = this.playersBySquare.get(`${sx},${sy}`);
+      if (pid && this.preSetupCoords.has(pid)) { this.onInspectPlayer?.(pid); return; } // inert for play; the card may show
+    }
+    // Owner 2026-07-04: interactive team setup owns taps while active — report
+    // the tapped square + any player on it (place / move / remove / select).
+    if (this.setupActive && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      this.onSetupClick?.([sx, sy], this.playersBySquare.get(`${sx},${sy}`) ?? null);
+      return;
+    }
+    // o66-dispatch (P1): in o66 play the state machine owns interaction — a holding cine must NOT swallow
+    // the click (that froze the block-confirm click in g469). Off-flag: byte-identical B5-5 freeze.
+    if (this.clickFrozenByCinematic()) return; // B5-5 (o66-dispatch: off-flag identical, on-flag never freezes)
+    if (isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      // Owner 2026-07-08: DUGOUT players sit outside the pitch's worldToSquare bands, so a
+      // click there can't resolve to a square (and used to fall through to a deselect). Hit-
+      // test the dugout tokens directly by world proximity → select them so their card
+      // (portrait + injury) surfaces, exactly like an on-pitch player.
+      const dh = this.dugoutHits.find((h) => Math.hypot(h.x - worldX, h.y - worldY) <= h.r);
+      if (dh) {
+        this.selectPlayer(dh.playerId);
+        this.onPlayerClick?.(dh.playerId, offsetX, offsetY);
+        return;
+      }
+      const [sx, sy] = worldToSquare(worldX, worldY);
+      const playerId = this.playersBySquare.get(`${sx},${sy}`);
+      if (!playerId) this.onInertTileClick?.(sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null);
+      if (playerId) {
+        // Owner 2026-07-04c: a SECOND click on the armed action target confirms
+        // it (foul/handoff/pass) — "on a further click, commit the path".
+        if (this.armedAction && this.armedAction.targetId === playerId) {
+          this.confirmArmedAction();
+          return;
+        }
+        const clickedIsHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
+        // Owner 2026-07-04d: only route to the block/approach handler when the
+        // SELECTED player is a legal actor (the acting team). If an opposition
+        // player is selected (view-only), clicking another player just RE-selects
+        // it — so clicking opp→own never arms a reverse block preview.
+        if (
+          // o66-dispatch (P1): in o66 play, an enemy click must NOT enter the legacy block-PREVIEW routing
+          // (handleOpponentClick → pendingBlock/onBlockConfirm) — it falls through to onPlayerClick below,
+          // where the o66 router turns it into sendBlock. Off-flag: unchanged legacy routing.
+          !this.order66 &&
+          this.selectedPlayerId &&
+          playerId !== this.selectedPlayerId &&
+          clickedIsHome !== this.selectedIsHome() &&
+          this.selectedIsActor()
+        ) {
+          this.handleOpponentClick(playerId, [sx, sy], offsetX, offsetY);
+        } else if (
+          // Owner 2026-07-04c: in handoff/pass mode a TEAMMATE click targets the
+          // action instead of switching the selection.
+          this.selectedPlayerId &&
+          playerId !== this.selectedPlayerId &&
+          (this.actionMode === 'handoff' || this.actionMode === 'pass') &&
+          this.armActionTarget(playerId, [sx, sy])
+        ) {
+          return;
+        } else {
+          this.selectPlayer(playerId);
+          this.onPlayerClick?.(playerId, offsetX, offsetY);
+        }
+      } else if (this.selectedPlayerId && this.inspectionOnly()) {
+        this.clearSelection(); // owner 09-08: spectator/replay inspect — any empty-square click dismisses, acting side included
+      } else if (this.selectedPlayerId && this.actionMode !== 'pass' && this.selectedIsActor()) {
+        this.handleSquareClick([sx, sy]);
+      } else if (this.selectedPlayerId && !this.selectedIsActor()) {
+        // Owner 2026-07-06 (B): spectator/view-only inspect — tapping an empty square
+        // DESELECTS, shutting down the reach + tackle-zone read (an actor keeps their
+        // pathing via handleSquareClick above).
+        this.clearSelection(); // the host re-selects the actor itself when its inspection latch is set (o66 play)
+      }
+    }
+  }
+
+  /** The double-click body, shared by the canvas dblclick and the host's virtual double-click. */
+  private doubleClickAt(offsetX: number, offsetY: number): void {
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    // Owner o66j #14: a double-click ON a player token → onPlayerDoubleClick (host stands up a prone own
+    // player). Owner 2026-07-13: the legacy empty-square reset-camera behaviour is REMOVED — a stray
+    // double-click on the pitch was yanking the zoom mid-play (one of the #6 zoom-reset offenders).
+    const dblPid = this.playersBySquare.get(`${sx},${sy}`);
+    if (dblPid && this.preSetupCoords.has(dblPid)) return;
+    if (dblPid) { this.onPlayerDoubleClick?.(dblPid); return; }
+  }
+
+  /** The right-click body, shared by the canvas contextmenu and the pad crosshair's X. */
+  private contextAt(offsetX: number, offsetY: number): void {
+    // Match the primary click rail: Order 66 cinematics are presentation-only and cannot swallow
+    // an activation-cancel gesture. Legacy/spectator camera cinematics retain the B5-5 freeze.
+    if (this.cinematic && !this.order66) return;
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    const playerId = this.playersBySquare.get(`${sx},${sy}`);
+    // The selected token is the authoritative activation-cancel gesture. Do not let a plotted
+    // waypoint swallow that right-click before the host can send CLIENT_ACTING_PLAYER(null)
+    // (or surface the required Blitz/Punt confirmation). Other right-clicks retain the one-shot
+    // waypoint cancel contract.
+    if (playerId !== this.selectedPlayerId && this.dismissWaypointPlanForContextMenu()) return;
+    if (playerId && this.preSetupCoords.has(playerId)) return;
+    // Owner 09-08: on an inspection-only surface a right-click clears the inspect read first; an empty square then
+    // needs no menu, a player still gets its context menu (card) below.
+    if (this.selectedPlayerId && this.inspectionOnly()) {
+      this.setPath([]);
+      this.clearSelection();
+      if (!playerId) return;
+    }
+    if (!playerId) {
+      const now = performance.now();
+      const quickSecond = now - this.lastRightClickAt < PitchRenderer.DOUBLE_RCLICK_MS;
+      this.lastRightClickAt = now;
+      if (quickSecond) {
+        this.setPath([]);
+        this.clearSelection(); // full reset
+        this.onRightClickReset?.();
+        return;
+      }
+      // Owner 2026-07-04f: an empty square with no plotted path → the Mark… menu.
+      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
+        this.onContextMenu?.(
+          {
+            playerId: '', square: [sx, sy], emptySquare: true,
+            isOpposition: false, isHomeTeam: false, isDown: false,
+            activationSpent: false, isConfused: false, isHypnotized: false,
+          },
+          offsetX, offsetY,
+        );
+      }
+      return;
+    }
+    const data = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+    if (!data) return;
+    const isHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
+    // perspective: the selected player's team, or home = "own" without one
+    const ownSide = this.selectedPlayerId ? this.selectedIsHome() : true;
+    const base = baseState(data.playerState);
+    const shadeable =
+      base === PlayerStateBase.STANDING || base === PlayerStateBase.MOVING || base === PlayerStateBase.PRONE;
+    this.onContextMenu?.(
+      {
+        playerId,
+        square: [sx, sy],
+        isOpposition: isHome !== ownSide,
+        isHomeTeam: isHome,
+        isDown: isDown(data.playerState),
+        activationSpent: shadeable && !hasFlag(data.playerState, PlayerStateFlag.ACTIVE),
+        isConfused: hasFlag(data.playerState, PlayerStateFlag.CONFUSED),
+        isHypnotized: hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED),
+      },
+      offsetX,
+      offsetY,
+    );
+  }
+
+  // --- controller support P2a: the pad crosshair (owner 10-07, spec-controller-support.md) ---
+
+  /** World point of a crosshair target: a square's centre anchor, or a dugout token's position. */
+  private crosshairWorldPoint(target: PitchCrosshairTarget): { x: number; y: number } | null {
+    if ('square' in target) return squareAnchor(target.square[0], target.square[1]);
+    const hit = this.dugoutHits.find((h) => h.playerId === target.dugoutPlayerId);
+    return hit ? { x: hit.x, y: hit.y } : null;
+  }
+
+  /** Canvas-local pixel (the offsetX / offsetY the pointer handlers read) of a crosshair target. */
+  crosshairCanvasPoint(target: PitchCrosshairTarget): { x: number; y: number } | null {
+    const w = this.crosshairWorldPoint(target);
+    if (!w) return null;
+    return { x: this.world.position.x + w.x * this.world.scale.x, y: this.world.position.y + w.y * this.world.scale.y };
+  }
+
+  /** Canvas-local pixel of a square's centre (the host maps stick directions through the live projection). */
+  squareCanvasPoint(square: readonly [number, number]): { x: number; y: number } {
+    const a = squareAnchor(square[0], square[1]);
+    return { x: this.world.position.x + a.x * this.world.scale.x, y: this.world.position.y + a.y * this.world.scale.y };
+  }
+
+  /** The last hovered on-pitch square (mouse or crosshair), for the "hovered player" card call. */
+  getHoveredSquare(): [number, number] | null {
+    return this.lastHoverSquare ? [this.lastHoverSquare[0], this.lastHoverSquare[1]] : null;
+  }
+
+  /** The pitch square nearest a crosshair target (a dugout token maps to the closest pitch square). */
+  nearestPitchSquare(target: PitchCrosshairTarget): [number, number] | null {
+    const w = this.crosshairWorldPoint(target);
+    if (!w) return null;
+    const [sx, sy] = worldToSquare(w.x, w.y);
+    return [Math.min(PITCH_COLS - 1, Math.max(0, sx)), Math.min(PITCH_ROWS - 1, Math.max(0, sy))];
+  }
+
+  /** A dugout token is drawn for this player (setup reserves). */
+  hasDugoutToken(playerId: string): boolean {
+    return this.dugoutHits.some((h) => h.playerId === playerId);
+  }
+
+  /**
+   * Drive the SAME pointer bodies the mouse runs, at a crosshair target (no second code path):
+   *  - 'hover'   = pointermove (hover marker, action tips, pass / bomb square feed, kick aim);
+   *  - 'tap'     = a stationary left press + release (pointerdown's guards, then the pointerup tap body);
+   *  - 'context' = a right-click (contextmenu body);
+   *  - 'doubleclick' = the dblclick body.
+   * A 'hover' marks the pad as the hover owner until endVirtualPointer(). False when the target cannot be located.
+   */
+  virtualPointer(kind: 'hover' | 'tap' | 'context' | 'doubleclick', target: PitchCrosshairTarget): boolean {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
+    if (!canvas) return false;
+    const at = this.crosshairCanvasPoint(target);
+    if (!at) return false;
+    if (kind === 'hover') {
+      this.virtualPointerActive = true;
+      if (this.pointers.size === 0) this.hoverAt(canvas, at.x, at.y);
+      return true;
+    }
+    if (kind === 'context') {
+      this.contextAt(at.x, at.y);
+      return true;
+    }
+    if (kind === 'doubleclick') {
+      this.doubleClickAt(at.x, at.y);
+      return true;
+    }
+    // 'tap' — the pointerdown half first (same guards), then the tap body with a zero-distance single pointer.
+    if (this.pointers.size > 0) return false; // a real press is in progress
+    this.releaseCinematicForUser();
+    if (this.clickFrozenByCinematic()) return true; // pointerdown bails → the release is no tap
+    this.clearHoverSquareMarker();
+    if (this.setupActive && this.onDugoutSetupDragStart) {
+      const wx = (at.x - this.world.position.x) / this.world.scale.x;
+      const wy = (at.y - this.world.position.y) / this.world.scale.y;
+      const [sx, sy] = worldToSquare(wx, wy);
+      const dh = this.dugoutHits.find((h) => Math.hypot(h.x - wx, h.y - wy) <= h.r);
+      const pid = dh?.playerId ?? this.playersBySquare.get(`${sx},${sy}`);
+      // A mouse press here starts the setup drag; its stationary release is the host's tap. The pad reports that tap.
+      if (pid && this.onSetupTokenTap) {
+        this.onSetupTokenTap(pid);
+        this.rehoverVirtual(canvas, target);
+        return true;
+      }
+    }
+    this.tapAt(at.x, at.y, { shift: false, ctrl: false, alt: false }, true);
+    this.rehoverVirtual(canvas, target);
+    return true;
+  }
+
+  private rehoverVirtual(canvas: HTMLCanvasElement, target: PitchCrosshairTarget): void {
+    if (!this.virtualPointerActive || this.pointers.size > 0) return;
+    const at = this.crosshairCanvasPoint(target);
+    if (at) this.hoverAt(canvas, at.x, at.y);
+  }
+
+  /** The pad stops owning hover (the mouse took over or the crosshair hid): clear what the crosshair hovered. The
+   *  next real pointer move re-hovers. */
+  endVirtualPointer(): void {
+    if (!this.virtualPointerActive) return;
+    this.virtualPointerActive = false;
+    this.lastHoverSquare = null;
+    this.clearHoverSquareMarker();
+    if (this.squareHoverLast !== null) {
+      this.squareHoverLast = null;
+      this.onSquareHover?.(null);
+    }
+    if (this.actionHoverActive) {
+      this.actionHoverActive = false;
+      this.onActionHover?.(null);
+    }
+  }
+
+  /**
+   * Controller support P2a (owner o66mh): the camera follows the crosshair. It is USER input (like WASD), so this is
+   * NOT gated on the auto-director (the old follow went through nudgeToSquare, which returns at once with the director
+   * off — that is why it never fired). Keeps the target at least CROSSHAIR_FOLLOW_MARGIN squares inside the viewport:
+   *  - 'step': pan by the overshoot past that margin;
+   *  - 'jump' (D-pad cycle / start reset): a target outside the margin centres the camera on it.
+   * Eased over CROSSHAIR_FOLLOW_MS. Never fights a held pan (right stick / WASD): it waits, and the host calls it again
+   * when the pan ends. Works in both orientations and at every zoom (screen-space maths on the projected square).
+   * Returns the planned world-position delta (0, 0 when no pan) — also the unit-test seam.
+   */
+  followCrosshair(square: [number, number], mode: 'step' | 'jump', opts?: { gesture?: boolean }): { dx: number; dy: number } {
+    const none = { dx: 0, dy: 0 };
+    if (!this.app) return none;
+    // Owner 10-08: a USER crosshair move (stick / D-pad / cycle) releases a running cinematic (the turnover-splash
+    // window) so the follow pans instead of waiting it out. Automatic follows (a reset on mount / controller-mode
+    // entry / the turn reseat, the Kick-election centring) keep the cinematic (Astra review).
+    if (opts?.gesture) this.releaseCinematicForUser();
+    if (this.cinematic) return none;
+    if (this.panDir.x !== 0 || this.panDir.y !== 0) return none; // the held pan wins
+    const W = this.app.screen.width;
+    const H = this.app.screen.height;
+    const quad = squareQuad(square[0], square[1]).points;
+    const xs = quad.map((q) => q[0]);
+    const ys = quad.map((q) => q[1]);
+    const scale = this.world.scale.x;
+    const sqW = (Math.max(...xs) - Math.min(...xs)) * scale;
+    const sqH = (Math.max(...ys) - Math.min(...ys)) * scale;
+    const mx = Math.min(W / 2, sqW * PitchRenderer.CROSSHAIR_FOLLOW_MARGIN);
+    const my = Math.min(H / 2, sqH * PitchRenderer.CROSSHAIR_FOLLOW_MARGIN);
+    // Aim from where the camera is heading (a follow in flight), so consecutive steps add up.
+    const baseX = this.crosshairFollow ? this.crosshairFollow.toX : this.world.position.x;
+    const baseY = this.crosshairFollow ? this.crosshairFollow.toY : this.world.position.y;
+    const a = squareAnchor(square[0], square[1]);
+    const px = baseX + a.x * scale;
+    const py = baseY + a.y * scale;
+    const outside = px < mx || px > W - mx || py < my || py > H - my;
+    let dx = 0;
+    let dy = 0;
+    if (mode === 'jump') {
+      if (!outside) return none;
+      dx = W / 2 - px;
+      dy = H / 2 - py;
+    } else {
+      if (px < mx) dx = mx - px; else if (px > W - mx) dx = W - mx - px;
+      if (py < my) dy = my - py; else if (py > H - my) dy = H - my - py;
+    }
+    if (dx === 0 && dy === 0) return none;
+    this.noteManualCameraInput(); // direct input: the director stands down, as for WASD
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this.crosshairFollow = { fromX: this.world.position.x, fromY: this.world.position.y, toX: baseX + dx, toY: baseY + dy, start: now };
+    if (!this.crosshairFollowTick) {
+      const tick = (): void => {
+        const f = this.crosshairFollow;
+        if (!f || (this.panDir.x !== 0 || this.panDir.y !== 0) || this.cinematic) { this.stopCrosshairFollow(); return; }
+        const t = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const e = easeOutCubic((t - f.start) / PitchRenderer.CROSSHAIR_FOLLOW_MS);
+        this.world.position.set(f.fromX + (f.toX - f.fromX) * e, f.fromY + (f.toY - f.fromY) * e);
+        this.clampCamera();
+        if (e >= 1) this.stopCrosshairFollow();
+      };
+      this.crosshairFollowTick = tick;
+      this.app.ticker.add(tick);
+    }
+    return { dx, dy };
+  }
+  static readonly CROSSHAIR_FOLLOW_MARGIN = 1.5;
+  static readonly CROSSHAIR_FOLLOW_MS = 150;
+  private crosshairFollow: { fromX: number; fromY: number; toX: number; toY: number; start: number } | null = null;
+  private crosshairFollowTick: (() => void) | null = null;
+  private stopCrosshairFollow(): void {
+    this.crosshairFollow = null;
+    if (this.crosshairFollowTick && this.app) this.app.ticker.remove(this.crosshairFollowTick);
+    this.crosshairFollowTick = null;
+  }
+
+  /** Controller P2a (Astra): which of the renderer's pitch pickers is ARMED right now — the crosshair serves a server
+   *  pick only while its picker is live (a pick answered from a pane, or a disabled picker, is not a pitch pick). */
+  pitchPickers(): { push: boolean; kick: boolean; tile: boolean; tileSkill: string | undefined; player: boolean } {
+    return {
+      push: this.pushOptionCoords.length > 0,
+      kick: !!this.kickPickSquares,
+      tile: this.tilePickActive,
+      tileSkill: this.tilePickSkill,
+      player: !!this.playerPickIds && this.playerPickIds.size > 0,
+    };
+  }
+
+  /** Cancel a plotted route (the pad's B; the right-click waypoint cancel). False when there was none. */
+  cancelPlannedRoute(): boolean {
+    return this.dismissWaypointPlanForContextMenu();
+  }
+
+  /**
+   * Show / move / hide the rail crosshair. A square-to-square move glides over CROSSHAIR_GLIDE_MS (ease-out): BOTH rail
+   * lanes slide from the old target's row / column to the new one's, each slot interpolating its projected quad and its
+   * ray alpha, so the rays travel with the square (owner o66mg). The target square itself is not shaded — the hover
+   * outline (the dashed bracket square) marks it and terminates the rays. Neutral grey (RAIL_COLOR), never the accent.
+   */
+  setCrosshair(target: PitchCrosshairTarget | null): void {
+    const prev = this.crosshairTarget;
+    const same = !!prev && !!target && crosshairTargetKey(prev) === crosshairTargetKey(target)
+      && this.crosshairGeometryKey === geometryStateKey();
+    if (same && this.crosshairLayer.children.length > 0) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // A glide in flight continues from where the rail is NOW (no snap back to its old origin).
+    const from = prev && 'square' in prev ? this.crosshairRailOrigin(prev.square, now) : null;
+    this.crosshairTarget = target;
+    if (!target) {
+      this.stopCrosshairGlide();
+      for (const child of this.crosshairLayer.removeChildren()) child.destroy({ children: true });
+      return;
+    }
+    this.crosshairGlide = from && 'square' in target && !same ? { from, start: now } : null;
+    this.drawCrosshair(now);
+    if (this.crosshairGlide && this.app && !this.crosshairTickerFn) {
+      const tick = (): void => {
+        this.drawCrosshair(typeof performance !== 'undefined' ? performance.now() : Date.now());
+        if (!this.crosshairGlide) this.stopCrosshairGlide();
+      };
+      this.crosshairTickerFn = tick;
+      this.app.ticker.add(tick);
+    }
+  }
+
+  /** Where a gliding rail currently is, rounded to the nearer square (the next glide starts there). */
+  private crosshairRailOrigin(prevSquare: [number, number], now: number): [number, number] {
+    const glide = this.crosshairGlide;
+    if (!glide) return prevSquare;
+    const e = easeOutCubic((now - glide.start) / CROSSHAIR_GLIDE_MS);
+    return e >= 0.5 ? prevSquare : glide.from;
+  }
+
+  /** Astra P2-4: a projection change (orientation, flat, uniform figures, spectator flip) re-projects the rail at once,
+   *  ignoring the same-target cache (no glide: the old quads belong to the old projection). */
+  private redrawCrosshairForProjection(): void {
+    if (!this.crosshairTarget) return;
+    this.stopCrosshairGlide();
+    this.drawCrosshair(typeof performance !== 'undefined' ? performance.now() : Date.now());
+  }
+
+  getCrosshair(): PitchCrosshairTarget | null {
+    return this.crosshairTarget;
+  }
+
+  private stopCrosshairGlide(): void {
+    this.crosshairGlide = null;
+    if (this.crosshairTickerFn && this.app) this.app.ticker.remove(this.crosshairTickerFn);
+    this.crosshairTickerFn = null;
+  }
+
+  /** Glide progress 0..1 of the current frame (1 = settled). */
+  crosshairGlideProgress(now = typeof performance !== 'undefined' ? performance.now() : Date.now()): number {
+    const glide = this.crosshairGlide;
+    return glide ? easeOutCubic((now - glide.start) / CROSSHAIR_GLIDE_MS) : 1;
+  }
+
+  private drawCrosshair(now: number): void {
+    this.crosshairGeometryKey = geometryStateKey();
+    for (const child of this.crosshairLayer.removeChildren()) child.destroy({ children: true });
+    const target = this.crosshairTarget;
+    if (!target) return;
+    const glide = this.crosshairGlide;
+    const e = this.crosshairGlideProgress(now);
+    if (glide && e >= 1) this.crosshairGlide = null;
+    const g = new Graphics();
+    const color = RAIL_COLOR; // owner: neutral grey rays, never the accent
+    if ('square' in target) {
+      const from = glide && e < 1 ? glide.from : target.square;
+      for (const slot of railLanes(from, target.square)) {
+        const alpha = slot.alphaFrom + (slot.alphaTo - slot.alphaFrom) * e;
+        if (alpha <= 0.001) continue;
+        const qa = squareQuad(slot.from[0], slot.from[1]).points.flat();
+        const qb = squareQuad(slot.to[0], slot.to[1]).points.flat();
+        g.poly(qb.map((v, i) => qa[i]! + (v - qa[i]!) * e)).fill({ color, alpha });
+      }
+    } else {
+      // A setup reserve's dugout token has no pitch square (no hover outline, no rails): a thin ring marks it.
+      const hit = this.dugoutHits.find((h) => h.playerId === target.dugoutPlayerId);
+      if (hit) g.circle(hit.x, hit.y, hit.r + 2).stroke({ color, width: 2 / Math.max(0.05, this.world.scale.x), alpha: 1 });
+    }
+    this.crosshairLayer.addChild(g);
   }
 
   private currentPinchDistance(): number {
@@ -20160,10 +20617,40 @@ export class PitchRenderer {
   /** JLeav 09-23: an overlay that sits over the pitch (turn-boundary banners) hands its wheel here so the wheel
    *  still zooms the pitch instead of scrolling the overlay. Same factor as the canvas listener. */
   wheelFromOverlay(event: WheelEvent): void {
-    if (!this.app || this.cinematic) return;
+    if (!this.app) return;
+    // Owner 10-08: same release as the canvas wheel (the overlay IS the turnover banner) - with controller support on.
+    // Off: as public, the overlay wheel does nothing while a cinematic runs.
+    if (this.padCameraRelease) this.releaseCinematicForUser();
+    else if (this.cinematic) return;
     const rect = this.app.canvas.getBoundingClientRect();
     const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
     this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+  }
+  /** Controller support P1 (owner 10-07): one zoom level in (+1) or out (-1) about the screen centre (a trigger tap,
+   *  the = / - keys). */
+  zoomStep(direction: 1 | -1): void {
+    if (!this.app) return;
+    this.releaseCinematicForUser(); // owner 10-08: a trigger tap zooms through a cinematic, like the wheel
+    this.zoomAt(this.app.screen.width / 2, this.app.screen.height / 2, direction > 0 ? 1.12 : 1 / 1.12);
+  }
+  /** Owner 10-07: continuous zoom (a held trigger) — `steps` wheel-factor units (1.12 each, fractional, signed) about
+   *  the screen centre, unquantized, inside the same min / max as the wheel. */
+  zoomBySteps(steps: number): void {
+    if (!this.app || !Number.isFinite(steps) || steps === 0) return;
+    this.releaseCinematicForUser(); // owner 10-08: a held trigger zooms through a cinematic, like the wheel
+    this.noteManualCameraInput();
+    const oldScale = this.world.scale.x;
+    const minScale = this.clampToPitch ? this.cameraFitScale : 0.3;
+    const newScale = Math.min(PitchRenderer.MAX_WHEEL_ZOOM, Math.max(minScale, oldScale * Math.pow(1.12, steps)));
+    if (newScale === oldScale) return;
+    const cx = this.app.screen.width / 2;
+    const cy = this.app.screen.height / 2;
+    const applied = newScale / oldScale;
+    this.world.position.x = cx - (cx - this.world.position.x) * applied;
+    this.world.position.y = cy - (cy - this.world.position.y) * applied;
+    this.world.scale.set(newScale);
+    this.clampCamera();
+    this.updateOverlayScales();
   }
   private zoomAt(screenX: number, screenY: number, factor: number): void {
     this.noteManualCameraInput();

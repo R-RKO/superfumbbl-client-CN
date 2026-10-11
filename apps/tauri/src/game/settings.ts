@@ -6,6 +6,9 @@ import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
 import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type ConfirmationSettings } from './confirmationSettings';
+import { STICK_DEADZONE, clampDeadzone } from './gamepad';
+import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
+import { CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
 
 /**
  * App settings, persisted to localStorage (works in the web preview and the
@@ -63,6 +66,7 @@ const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OS
 // Before load(): the loader validates the stored rebindable keys with hotkeyConflict at module init.
 export type RebindableKey = 'confirmKey' | 'rosterKey' | 'logExpandKey';
 const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm move / pass target', rosterKey: 'Roster pop-out', logExpandKey: 'Enlarge the Log window' };
+const REBINDABLE_ACTION: Record<RebindableKey, ControlActionId> = { confirmKey: 'confirm', rosterKey: 'roster', logExpandKey: 'logExpand' };
 
 // Owner 10-04: each client confirmation prompt has its own on/off line (confirmationSettings.ts; all default on).
 export interface AppSettings extends ConfirmationSettings {
@@ -74,10 +78,32 @@ export interface AppSettings extends ConfirmationSettings {
   logExpandKey: string;
   /** Owner 09-05: WASD camera glide speed, screen px per frame (2-30, 9 = original). */
   cameraPanSpeed: number;
-  /** Owner 10-10 (same key and values as the controller branch): the player card loads on a player click ('auto',
-   *  the existing behaviour) or not from the pitch at all ('called' = "Player portraits off"; the middle mouse button
-   *  on the pitch flips it, game/playerCards.ts). */
+  /** Owner 10-10: controller support is OPT-IN (Settings > Controls "Enable controller support", default off). While
+   *  off nothing reads a gamepad: no poller, no listeners, no input switching, no crosshair / glyphs / rumble / toasts
+   *  (game/controllerRuntime.ts). Ticking the box asks first (the "mostly untested" notice). */
+  controllerSupportEnabled: boolean;
+  /** Controller support P1 (owner 10-07): 'auto' (default) follows the last device used (game/controls.ts activeInput);
+   *  'keyboard' / 'controller' pin it. The mouse and keyboard keep working in every mode. */
+  inputMethod: InputMethod;
+  /** The 1.5 s corner notice on each auto switch ("Controller" / "Mouse & keyboard"); default on. */
+  showInputSwitchNotice: boolean;
+  /** Every action's keyboard + controller bindings (game/controls.ts). The keyboard primary of confirm / roster /
+   *  log lives in confirmKey / rosterKey / logExpandKey (mirrored here). */
+  controlBindings: ControlBindings;
+  /** game/controls.ts CONTROL_BINDINGS_REVISION of the stored map (drives default-move migrations). */
+  controlBindingsRevision: number;
+  /** Settings > Controls: rumble on dice / turnover / casualty (arrives in P4; owner round 2: default on). */
+  controllerRumble: boolean;
+  /** Owner round 2 (10-07): radial stick deadzones, rescaled response (0.05-0.40, default 0.15). */
+  stickDeadzoneLeft: number;
+  stickDeadzoneRight: number;
+  /** Controller support P2a (owner round 2, 10-07): the player card loads on a player click ('auto', the existing
+   *  behaviour) or only when called (key P / pad Y / double-click / roster row). Settings > UI. */
   playerCardMode: PlayerCardMode;
+  /** Owner o66mh: pad crosshair speed, squares per second (Settings > Controls slider 3-15, default 8). */
+  crosshairSpeed: number;
+  /** Owner o66mh: the crosshair speeds up to 2x over 1 s of travel in one direction (default off = flat). */
+  crosshairAcceleration: boolean;
   // markings
   tackleZoneMode: 'off' | 'opposition' | 'friendly' | 'both';
   showDefaultSkills: boolean;
@@ -538,7 +564,17 @@ const DEFAULTS: AppSettings = {
   rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
   logExpandKey: 'KeyL', // owner 10-02: L doubles the Log window, L again restores it
   cameraPanSpeed: 16, // owner 10-07: 9 -> 16 px per frame
+  controllerSupportEnabled: false, // owner 10-10: opt-in
+  inputMethod: 'auto',
+  showInputSwitchNotice: true,
+  controlBindings: defaultControlBindings(),
+  controlBindingsRevision: CONTROL_BINDINGS_REVISION,
+  controllerRumble: true,
+  stickDeadzoneLeft: STICK_DEADZONE,
+  stickDeadzoneRight: STICK_DEADZONE,
   playerCardMode: 'auto',
+  crosshairSpeed: CROSSHAIR_SPEED_DEFAULT,
+  crosshairAcceleration: false,
   tackleZoneMode: 'opposition',
   showDefaultSkills: false,
   showPositionRings: true,
@@ -1027,13 +1063,31 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.chatPoppedOut = raw.chatPoppedOut === true;
     // Owner 10-02: the dock's Roster tab is off unless the stored value is literally true.
     merged.chatDockRosterTab = raw.chatDockRosterTab === true;
+    // Controller support P1: the legacy keys validate among themselves first (the registry, migrated below from the raw
+    // stored map, never displaces a coach's existing key — a new action's default yields instead).
+    delete (merged as Partial<AppSettings>).controlBindings;
     // Owner 10-02: default H - but never the confirm key (a coach who already bound Confirm to H gets R, then J).
     // Astra review: a hand-edited / stale value goes through the same rules as a rebind in Settings.
     merged.rosterKey = typeof raw.rosterKey === 'string' && !hotkeyConflict('rosterKey', raw.rosterKey, merged)
       ? raw.rosterKey : (['KeyH', 'KeyR', 'KeyJ'].find((k) => !hotkeyConflict('rosterKey', k, merged)) ?? 'KeyH');
     merged.logExpandKey = typeof raw.logExpandKey === 'string' && !hotkeyConflict('logExpandKey', raw.logExpandKey, merged)
       ? raw.logExpandKey : (['KeyL', 'KeyK', 'KeyO'].find((k) => !hotkeyConflict('logExpandKey', k, merged)) ?? 'KeyL');
+    // Controller support P1 (owner 10-07): the registry keeps every stored binding and takes the (validated) legacy
+    // keys above as their actions' keyboard primary — an existing coach's H / L / Space carry over untouched.
+    merged.controllerSupportEnabled = raw.controllerSupportEnabled === true; // owner 10-10: off unless the coach ticked the box
+    merged.inputMethod = raw.inputMethod === 'controller' || raw.inputMethod === 'keyboard' ? raw.inputMethod : 'auto';
+    merged.showInputSwitchNotice = raw.showInputSwitchNotice !== false;
+    // An older stored map (no revision) is r1: LT chords move to LB, untouched LB / RB zoom defaults take the new ones.
+    merged.controlBindings = migrateControlBindings(raw.controlBindings, merged,
+      raw.controlBindings ? normaliseBindingsRevision(raw.controlBindingsRevision) : CONTROL_BINDINGS_REVISION,
+      [...FIXED_SHORTCUT_CODES, ...UNBINDABLE_CODES]); // Astra P2 10-10: a stored map never takes an existing key
+    merged.controlBindingsRevision = CONTROL_BINDINGS_REVISION;
+    merged.controllerRumble = raw.controllerRumble !== false;
+    merged.stickDeadzoneLeft = clampDeadzone(raw.stickDeadzoneLeft);
+    merged.stickDeadzoneRight = clampDeadzone(raw.stickDeadzoneRight);
     merged.playerCardMode = raw.playerCardMode === 'called' ? 'called' : 'auto';
+    merged.crosshairSpeed = clampCrosshairSpeed(raw.crosshairSpeed);
+    merged.crosshairAcceleration = raw.crosshairAcceleration === true;
     const installedIdentity = (value: unknown) => typeof value === 'string'
       && (/^[a-f0-9]{32}$/.test(value) || value === '')
       ? value : '';
@@ -1688,18 +1742,42 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 
 /** Human-readable label for a KeyboardEvent.code binding. */
 /** Null when `code` may be bound to `which`; otherwise why not. */
-export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey>): string | null {
+export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey> & { controlBindings?: ControlBindings }): string | null {
   if (!code) return 'No key pressed';
   if (UNBINDABLE_CODES.includes(code)) return `${keyLabel(code)} can't be used as a shortcut`;
   if (FIXED_SHORTCUT_CODES.includes(code)) return `${keyLabel(code)} is already a fixed shortcut`;
   for (const other of Object.keys(REBINDABLE_LABEL) as RebindableKey[]) {
     if (other !== which && current[other] === code) return `${keyLabel(code)} is already bound to ${REBINDABLE_LABEL[other]}`;
   }
+  // Controller support P1: the registry's other keyboard cells (secondaries, new actions) count too.
+  if (current.controlBindings) {
+    const self = REBINDABLE_ACTION[which];
+    const holder = bindingConflict({ ...current, controlBindings: current.controlBindings, inputMethod: 'keyboard' } as AppSettings, self, 'keyboard', 'primary', code);
+    if (holder) return `${keyLabel(code)} is already bound to ${controlAction(holder).label}`;
+  }
   return null;
+}
+
+/** Controller support P1: null when `input` may go in that Settings > Controls cell; otherwise why not. Keyboard cells
+ *  follow the same rules as the legacy rebind (no Tab / modifiers / fixed shortcuts); both methods refuse an input
+ *  another action already holds. */
+export function controlBindingConflict(id: ControlActionId, method: BindingMethod, slot: BindingSlot, input: string, current: AppSettings): string | null {
+  if (!input) return null;
+  const name = method === 'keyboard' ? keyLabel(input) : input;
+  if (method === 'keyboard') {
+    // Owner 10-10: a mouse button never takes the three legacy keys (Confirm / Roster / Log live in their own key
+    // fields, read as keyboard codes all over the client).
+    if (isMouseInput(input) && controlAction(id).keyboardAlias) return `${name} can't be bound to ${controlAction(id).label}`;
+    if (UNBINDABLE_CODES.includes(input)) return `${name} can't be used as a shortcut`;
+    if (FIXED_SHORTCUT_CODES.includes(input)) return `${name} is already a fixed shortcut`;
+  }
+  const holder = bindingConflict(current, id, method, slot, input);
+  return holder ? `${name} is already bound to ${controlAction(holder).label}` : null;
 }
 
 export function keyLabel(code: string): string {
   if (code === 'Space') return '␣ Space';
+  if (code === MOUSE_MIDDLE) return 'Middle mouse'; // owner 10-10: the one mouse button a binding cell may hold
   return code.replace(/^Key/, '').replace(/^Digit/, '');
 }
 

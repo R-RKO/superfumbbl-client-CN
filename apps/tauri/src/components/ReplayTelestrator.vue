@@ -315,6 +315,8 @@ function finishToolbarPress(event: PointerEvent): void {
   if (armedToolbarPress?.pointerId === event.pointerId) armedToolbarPress = null;
 }
 
+// Controller support P1 (owner 10-07): the in-game action dispatcher toggles the telestrator (pad LT+B).
+defineExpose({ toggleExpanded });
 function toggleExpandedFromLauncher(event: MouseEvent): void {
   if (suppressToolbarClick) {
     suppressToolbarClick = false;
@@ -519,7 +521,7 @@ onBeforeUnmount(() => {
         :data-expanded="state.expanded"
         :data-dragging="toolbarDragging"
         :style="toolbarStyle">
-        <button v-if="!state.expanded" class="telestrator-collapsed-trigger" data-tour="hud-telestrator"
+        <button v-if="!state.expanded" class="telestrator-collapsed-trigger" data-tour="hud-telestrator" data-pad-action="telestrator"
           title="Open telestrator — long-press to move" aria-label="Open telestrator"
           @pointerdown="armToolbarDrag" @pointermove="moveToolbar"
           @pointerup="finishToolbarPress" @pointercancel="finishToolbarPress"

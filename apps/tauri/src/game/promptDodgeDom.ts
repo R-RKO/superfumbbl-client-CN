@@ -302,6 +302,19 @@ function clickGuard(el: HTMLElement, state: CardState, event: Event) {
   event.preventDefault();
 }
 
+/** Controller support (public integration, 10-10): a pad press has no pointer press for the card to have seen, so the
+ *  press itself is put to the same time rule - did it come at least the guard window after THIS prompt opened? True
+ *  for a control that is not inside a guarded card. The pad then activates the control with a keyboard-style click
+ *  (pointer id -1), which clickGuard never drops; this check is what keeps a press already on its way to the pitch
+ *  (A mashed as the card appears) from answering a card nobody has seen yet. */
+export function promptCardAcceptsPress(control: Element | null, now: number = performance.now()): boolean {
+  for (let node: Element | null = control; node; node = node.parentElement) {
+    const state = cards.get(node as HTMLElement);
+    if (state) return promptPressAnswers(now, state.openedAt);
+  }
+  return true;
+}
+
 /** `v-prompt-dodge="{ dragged, epoch, bounds }"` on a decision card's root element. */
 export const vPromptDodge: ObjectDirective<HTMLElement, PromptDodgeBinding | undefined> = {
   mounted(el, { value }) {

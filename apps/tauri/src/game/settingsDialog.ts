@@ -1,5 +1,6 @@
 export const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General' },
+  { id: 'controls', label: 'Controls' },
   { id: 'accessibility', label: 'Accessibility' },
   { id: 'display', label: 'Display' },
   { id: 'mods', label: 'Mods' },
@@ -16,9 +17,10 @@ export function resolveSettingsTab(value: unknown): SettingsTab {
     case 'account':
     case 'connection':
     case 'gameplay':
-    case 'controls':
     case 'spectator':
     case 'advanced': return 'general';
+    case 'controls':
+    case 'keyboard': return 'controls'; // controller support P1 (owner 10-07): keyboard + controller bindings
     case 'accessibility': return 'accessibility';
     case 'appearance':
     case 'display': return 'display';

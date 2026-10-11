@@ -18,10 +18,12 @@
  * structural greys/washes the token set does not name (see the hex ledger in the
  * handoff report).
  */
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import type { Blade, InducementPhase, InducementRole, PhaseMoney, PhaseOption, PickMap } from '../game/inducementsPhase';
 import { canAdd, fmtGold, skillToken } from '../game/inducementsPhase';
+import { vPadFocus, type PadFocusOptions } from '../game/cardFocus';
+import { popUndo, reconcileUndoStack, seedUndoStack, undoTarget } from '../game/inducementUndo';
 
 /** A star/merc sprite resolved by the mount. Iconsets use the frame-1 sheet crop;
  *  custom assets are already-normalized standalone 64px player sprites. */
@@ -168,13 +170,53 @@ function cardLive(card: PickerCard): boolean {
   return canAdd(card.option, props.picks, props.options, props.cap, selectorLimitFor(card.option)).ok;
 }
 
+/** Owner ruling 10-07: the add order of this selection session (the pad's B undoes it, latest first). Seeded from the
+ *  current selection when the screen mounts / the local coach's session (re)starts; reconciled with every picks update. */
+const undoStack = ref<string[]>(seedUndoStack(props.picks));
+watch(() => props.canAct, (live, was) => { if (live && !was) undoStack.value = seedUndoStack(props.picks); });
+watch(() => ({ ...props.picks }), (picks) => { undoStack.value = reconcileUndoStack(undoStack.value, picks); }, { deep: true });
+
 function onCard(card: PickerCard): void {
-  if (cardLive(card)) emit('add', card.key);
+  if (!cardLive(card)) return;
+  undoStack.value = [...undoStack.value, card.key];
+  emit('add', card.key);
 }
 
 const statusText = (s: PanelView['status']) => props.presetMode
   ? props.presetStatus
   : (s === 'selecting' ? 'Selecting…' : s === 'confirmed' ? '✔ Confirmed' : '⧗ Waiting…');
+
+/**
+ * Controller support P2b (owner round 3): LB / RB change panes (blades), the D-pad / stick move the target box over
+ * the cards, A adds (a focused summary ✕ removes), Y confirms the pane (the Confirm button), B removes the most
+ * recently added pick across every pane (owner ruling 10-07; inert when nothing is left). Preset / replay review:
+ * A acknowledges.
+ */
+function cycleBlade(direction: 1 | -1): void {
+  const i = BLADES.findIndex((b) => b.id === props.blade);
+  const next = BLADES[(i + direction + BLADES.length) % BLADES.length];
+  if (next) emit('blade', next.id);
+}
+/** The local coach's summary cards that cannot be removed (stars rostered before the phase, ...). */
+const fixedKeys = computed(() => {
+  const mine = props.mySide === 'underdog' ? props.underdog : props.overdog;
+  return new Set(mine.cards.filter((c) => c.removable === false).map((c) => c.key));
+});
+/** B: remove the most recently added pick (any pane); nothing left → inert (never leaves the screen). */
+function undoLastAdd(): void {
+  const key = undoTarget(undoStack.value, props.picks, (k) => !fixedKeys.value.has(k));
+  if (!key) return;
+  undoStack.value = popUndo(undoStack.value, key);
+  emit('remove', key);
+}
+const padFocus = computed<PadFocusOptions | false>(() => {
+  if (props.presetMode) return {};
+  if (!props.canAct || isDone.value) return false;
+  return {
+    keys: { LB: () => cycleBlade(-1), RB: () => cycleBlade(1), Y: () => { if (!props.confirmPending) emit('confirm'); } },
+    cancel: undoLastAdd,
+  };
+});
 
 /** Underdog-only waiting strip, spec footer #2. */
 const underdogWaiting = computed(() => !props.presetMode && props.phase === 'overdog');
@@ -207,7 +249,7 @@ function panelColor(panel: PanelView): SeatColor {
 </script>
 
 <template>
-  <div id="indgrid" class="ind-grid" data-testid="inducements-phase" :data-phase="phase" :data-preset="presetMode">
+  <div id="indgrid" v-pad-focus="padFocus" class="ind-grid" data-testid="inducements-phase" :data-phase="phase" :data-preset="presetMode">
     <!-- Preset (tournament/league) allocations: full-width banner over the whole phase. -->
     <div v-if="presetMode" class="ind-tournament-banner" data-testid="tournament-banner">
       <template v-for="(w, i) in words(presetBanner)" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
@@ -254,7 +296,8 @@ function panelColor(panel: PanelView): SeatColor {
         ⧗ {{ phase === 'overdog' ? 'Overdog' : 'Underdog' }} is choosing inducements… · budget <span class="ind-cash-gold">{{ fmtGold(oppCap ?? 0) }}</span>
       </div>
       <div v-if="!presetMode && (canAct || oppCards)" class="ind-cardgrid" :data-blade="blade" :data-readonly="!canAct">
-        <div v-for="c in (canAct ? cards : oppCards!)[blade]" :key="c.key" class="ind-card" :data-blade="blade"
+        <div v-for="(c, ci) in (canAct ? cards : oppCards!)[blade]" :key="c.key" class="ind-card" :data-blade="blade"
+          :data-pad-focus="canAct ? '' : undefined" :data-pad-value="c.key" :data-pad-primary="canAct && ci === 0 ? '' : undefined"
           :data-live="cardLive(c)" :data-testid="`card-${c.key}`" @click="onCard(c)">
           <div class="ind-card-top">
             <div v-if="blade === 'inducements'" class="ind-icon">

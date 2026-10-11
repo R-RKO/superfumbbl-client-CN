@@ -93,7 +93,7 @@ defineEmits<{
       </div>
     </div>
     <template v-if="prompt.mine" #actions>
-      <button type="button" class="apo-decline" @pointerdown.stop @click.stop="$emit('resolve', null)">
+      <button type="button" class="apo-decline" data-pad-cancel @pointerdown.stop @click.stop="$emit('resolve', null)">
         {{ prompt.noneLabel }}
       </button>
     </template>

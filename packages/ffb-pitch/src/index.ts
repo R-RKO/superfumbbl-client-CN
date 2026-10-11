@@ -41,6 +41,7 @@ export * from './movement';
 export * from './passing';
 export * from './playerState';
 export * from './apothecaryBox';
+export * from './crosshairRail';
 export { isPreSetupWindow, preSetupPlacements } from './preSetupFormation';
 export { rushTargetForPlayer } from './rushTarget';
 export { RING_TYPE_COLORS, ringTypeForName, type RingType } from './positionTypes';

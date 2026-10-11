@@ -22,8 +22,8 @@ const emit = defineEmits<{
     <span v-if="roll != null" class="charge-roll">Rolled {{ roll }}</span>
     <span class="charge-copy">Select up to {{ max }} Players - {{ selected }}/{{ max }}</span>
     <template #actions>
-      <button type="button" class="charge-confirm" :disabled="confirmDisabled" @click="emit('confirm')">Confirm</button>
-      <button v-if="declinable" type="button" class="charge-decline" @click="emit('decline')">Decline</button>
+      <button type="button" class="charge-confirm" data-pad-key="X" :disabled="confirmDisabled" @click="emit('confirm')">Confirm</button>
+      <button v-if="declinable" type="button" class="charge-decline" data-pad-cancel @click="emit('decline')">Decline</button>
     </template>
   </PitchConfirmationPanel>
 </template>

@@ -7,7 +7,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import D6Face from './D6Face.vue';
-import { blockDieFaceUrl } from '../game/blockDieFaceArt';
+import { blockDieFaceArt, markBlockDiePackFaceFailed } from '../game/blockDieFaceArt';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
 import PostGameRoster from './PostGameRoster.vue';
 import RosterBadge from './RosterBadge.vue';
@@ -73,6 +73,11 @@ watch(() => props.snapshot.key, () => {
   selectedRosterTeam.value = props.defaultRosterSide;
 });
 watch(() => props.defaultRosterSide, (s) => { selectedRosterTeam.value = s; });
+/** Owner 10-10: a broken PACK face image on the Block dice chart falls back to the bundled symbol. */
+function onBlockFaceImageError(value: number): void {
+  const art = blockDieFaceArt(value);
+  if (art?.pack) markBlockDiePackFaceFailed(art.url);
+}
 watch(() => props.showStats, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
 
 const pgMvpCards = computed<Record<Side, PgMvpCard | null>>(() => {
@@ -390,9 +395,12 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                       <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
                       <path :d="row.chart.expectedPath" class="pg-dice-expected" />
                       <!-- Owner 10-01 (S71): the Block dice columns are labelled with the client's block-die FACES, not words. -->
+                      <!-- Owner 10-10: a pack-bound face wins per face (blockDieFaceArt), contained in the same square
+                           box (xMidYMid meet), with the bundled symbol as the fallback of a broken pack image. -->
                       <template v-if="row.block">
-                        <image v-for="(b, i) in row.chart.bars" :key="'f' + i" :href="blockDieFaceUrl(i + 1) ?? undefined" :x="b.x + b.w / 2 - PG_BLOCK_FACE / 2" :y="PG_CHART_BASE + 3"
-                          :width="PG_BLOCK_FACE" :height="PG_BLOCK_FACE" class="pg-dice-face"><title>{{ b.label }}</title></image>
+                        <image v-for="(b, i) in row.chart.bars" :key="'f' + i" :href="blockDieFaceArt(i + 1)?.url" :x="b.x + b.w / 2 - PG_BLOCK_FACE / 2" :y="PG_CHART_BASE + 3"
+                          :width="PG_BLOCK_FACE" :height="PG_BLOCK_FACE" preserveAspectRatio="xMidYMid meet"
+                          :data-pack-face="blockDieFaceArt(i + 1)?.pack ? '' : undefined" @error="onBlockFaceImageError(i + 1)" class="pg-dice-face"><title>{{ b.label }}</title></image>
                       </template>
                       <template v-else>
                         <text v-for="(b, i) in row.chart.bars" :key="'l' + i" :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>

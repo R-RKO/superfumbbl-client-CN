@@ -53,7 +53,7 @@ defineEmits<{
         @pointerdown.stop @click.stop="$emit('bribe')">
         <img :src="coinIconUrl" class="sendoff-coin" alt="" /> Bribe
       </button>
-      <button type="button" class="sendoff-btn sendoff-action pass"
+      <button type="button" class="sendoff-btn sendoff-action pass" data-pad-cancel
         @pointerdown.stop @click.stop="$emit('pass')">Pass</button>
     </template>
   </PitchConfirmationPanel>

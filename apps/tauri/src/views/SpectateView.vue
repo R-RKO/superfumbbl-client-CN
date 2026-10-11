@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
+import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
 import {
   cachedBundledFumbblAsset,
@@ -104,6 +104,7 @@ import { opponentChoosingPushSquare } from '../game/opponentSideStepPick';
 import starBadgeUrl from '../assets/star-badge/star-badge.png';
 import starBadgeUsedUrl from '../assets/star-badge/star-badge-used-x.png';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
+import { resolveBlockStampArt } from '../game/blockResultStampArt';
 import { hasOffPitchCandidate, resolveRosterPickCandidates } from '../game/rosterPicker';
 import { d6LogParts, d6RequirementParts } from '../game/d6Log';
 import { blockDieLogParts, type BlockDieFaceValue, type BlockDieLogToken } from '../game/blockDieLog';
@@ -394,9 +395,19 @@ import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsM
 import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
+import { createCameraStickHandler, createHoldZoom, createHoldZoomOwner, createInGameActionRunner, type CrosshairActionDeps } from '../game/inGameActions';
+import { crosshairGateInput as deriveCrosshairGateInput, type CrosshairGateStoreState } from '../game/crosshairGateInput';
+import { createCrosshair, createPadCancel, crosshairGate, padPristineAction, type PadDeselectInput, crosshairStart, crosshairSuppressed, type CrosshairGateInput, type CrosshairTarget } from '../game/crosshair';
+import { PAD_FOCUS_PRIORITY, padFocusOwnsInput, setPadFocusGuard, setPadFocusMandatoryPitch, vPadFocus } from '../game/cardFocus';
+import PadGlyph from '../components/PadGlyph.vue';
+import { createPadSetupHost } from '../game/padSetup';
+import { createPadBlockDeclareWatch } from '../game/padBlockDeclare';
+import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCardRules';
+import { showCornerNotice } from '../game/cornerNotice';
+import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
-import { MIDDLE_CLICK_ACTIONS, decisionCardOpen, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
+import { decisionCardOpen, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
 // Owner 2026-07-06: supporter names for the crowd "I ♥ name" signs. The CSV is the
@@ -600,6 +611,14 @@ const kickElectionTargets = ref<Array<{
   label: string;
 }>>([]);
 
+// Astra P2-e: in controller mode the camera pans to the Kick election's candidates when it opens (the pad has no
+// pointer to go looking for them).
+watch(() => kickElectionTargets.value.length > 0, (open) => {
+  if (!open || activeInput.value !== 'controller' || !renderer) return;
+  const ts = kickElectionTargets.value;
+  const mid = (i: 0 | 1, hi: number) => Math.min(hi, Math.max(0, Math.round(ts.reduce((n, t) => n + t.raw[i], 0) / ts.length)));
+  renderer.followCrosshair([mid(0, 25), mid(1, 14)], 'jump'); // centre on the candidates (user-input pan, like the crosshair)
+});
 function stopKickElectionTracking(): void {
   cancelAnimationFrame(kickElectionRaf);
   kickElectionRaf = 0;
@@ -2068,6 +2087,8 @@ watch(
 watch(() => settings.endZoneLabel, (m) => renderer?.setEndZoneLabel(m));
 watch(() => settings.endZoneTint, (on) => renderer?.setEndZoneTint(on)); // owner 09-05
 watch(() => settings.cameraPanSpeed, (v) => renderer?.setPanSpeed(v)); // owner 09-05: Settings > Controls
+// Owner 10-10 (Astra P3): a pan / overlay wheel releases a running cinematic only while controller support is on.
+watch(() => settings.controllerSupportEnabled, (on) => renderer?.setPadCameraRelease(on));
 // Positional-ring density + colour override ('auto' → per-position palette).
 function ringColorOverrideInt(): number | null {
   if (settings.positionRingColor === 'auto') return null;
@@ -4031,25 +4052,30 @@ const BLOCK_STAMP_URLS: Record<string, string> = {
 // Owner 10-06: with the KrisB family the stamp uses KrisB's bundled faces (symbol -> face in tumble order
 // [skull, bothdown, push, powpush, pow]); default otherwise. Both are plain symbols: the block die SURFACE (plate)
 // never applies to the stamp, so it reads the family's ORIGINAL (plate-less) art.
-const KRISB_STAMP_FACE_INDEX: Record<string, number> = { 'attacker-down': 0, 'both-down': 1, push: 2, 'defender-stumbles': 3, pow: 4 };
-function blockStampUrl(symbol: string): string | null {
-  if (settings.blockDiceFamily === 'krisb') {
-    const index = KRISB_STAMP_FACE_INDEX[symbol];
-    return index === undefined ? null : PitchRenderer.originalBlockFaceUrls('krisb')[index] ?? null;
-  }
-  return BLOCK_STAMP_URLS[symbol] ?? null;
+// Report Fesz g1951899 (10-10): a PACK-bound face (user files / the assigned block-dice pack) wins per face, exactly
+// as on the block choice card - both read PitchRenderer.packBlockFaceUrl (resolveBlockStampArt).
+function blockStampArt(symbol: string): { url: string; fallbackUrl: string | null } | null {
+  void assetMods.blockDiceRevision; // pack bindings are not reactive: the revision bumps on every publish
+  return resolveBlockStampArt(symbol, {
+    packFaceUrl: (faceIndex) => PitchRenderer.packBlockFaceUrl(faceIndex),
+    family: settings.blockDiceFamily,
+    krisbFaceUrls: () => PitchRenderer.originalBlockFaceUrls('krisb'),
+    plainSymbolUrls: BLOCK_STAMP_URLS,
+  });
 }
 // Owner 10-04: the blocked player's fist becomes the applied block-die face (cleared when the stamp is retired).
 // Owner 10-06: re-applied when the block-dice family changes while the stamp is held.
-watch(() => [gameStore.state.blockResultStamp?.seq, settings.blockDiceFamily], () => {
+// 10-10: and when the block-dice pack bindings change (assetMods.blockDiceRevision); an unchanged url is a no-op.
+watch(() => [gameStore.state.blockResultStamp?.seq, settings.blockDiceFamily, assetMods.blockDiceRevision], () => {
   const stamp = gameStore.state.blockResultStamp;
-  renderer?.setAppliedBlockResult(stamp ? blockStampUrl(stamp.symbol) : null, stamp?.playerIds ?? []);
+  const art = stamp ? blockStampArt(stamp.symbol) : null;
+  renderer?.setAppliedBlockResult(art?.url ?? null, stamp?.playerIds ?? [], art?.fallbackUrl ?? null);
 }, { flush: 'sync' });
 watch(() => gameStore.state.blockResultStamp?.seq, () => {
   const stamp = gameStore.state.blockResultStamp;
   if (!stamp || !renderer || settings.spectatorClean) return;
-  const url = blockStampUrl(stamp.symbol);
-  if (url) renderer.playBlockResultStamp(stamp.playerIds, url);
+  const art = blockStampArt(stamp.symbol);
+  if (art) renderer.playBlockResultStamp(stamp.playerIds, art.url, art.fallbackUrl);
 });
 // Owner 09-05: gold pulse ring on a token placed during setup by another seat (spectator / opposing coach).
 watch(() => gameStore.state.setupPlacementPulse?.seq, () => {
@@ -7455,34 +7481,26 @@ function showPopup(playerId: string) {
   popup.visible = true;
   portrait.value = renderer?.playerPortrait(playerId) ?? null;
 }
-/** Owner 10-10: a player click on the pitch loads the card only in 'auto' (the existing behaviour); 'called'
- *  ("Player portraits off") leaves it to the explicit opens - a roster row - which call showPopup directly. */
+/** Controller support P2a (owner round 2): a player click on the pitch loads the card only in 'auto' (the existing
+ *  behaviour); 'called' ("Player portraits off") leaves it to the explicit opens - a roster row, the Player card key if
+ *  one is bound, the pad's Y - which call showPopup directly. */
 function autoShowPopup(playerId: string) {
   if (settings.playerCardMode === 'called') return;
   showPopup(playerId);
 }
-/** Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits" - flips
- *  the persisted playerCardMode and says so on the chat-toast stack (the existing "tell me, don't stop me" corner
- *  surface). Off closes a card that is open; explicit opens keep working. */
+/** Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits" - the
+ *  "Player portraits on / off" action flips Settings > UI "Player portraits" (persisted) and says so in the corner chip. Off
+ *  closes a card that is open; explicit opens keep working. */
 function togglePlayerCards(): boolean {
-  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: showPlayerCardsNotice });
+  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: (text) => showCornerNotice('player-cards', text) });
   return true;
 }
-/** The notice: one line, 1.5 s, a second press replaces the first. Its own slot in the .chat-toast look (like the
- *  interceptor-wait line) and not on the chat stack, which is hidden in the replayer and cleared by chat rules. */
-const playerCardsNotice = ref('');
-let playerCardsNoticeTimer = 0;
-function showPlayerCardsNotice(text: string) {
-  window.clearTimeout(playerCardsNoticeTimer);
-  playerCardsNotice.value = text;
-  playerCardsNoticeTimer = window.setTimeout(() => { playerCardsNotice.value = ''; }, 1500);
-}
-onBeforeUnmount(() => window.clearTimeout(playerCardsNoticeTimer));
-/** A middle-button CLICK on the pitch (the renderer reports it; a middle-button drag still pans). Always true: the
- *  click is this toggle's, so the renderer never also treats it as a left click. The toggle runs only when nothing
- *  else owns input: no Settings / wizard, no Game Menu or context menu, no modal, card or confirmation, no text field
- *  in focus. */
+/** A middle-button CLICK on the pitch (the renderer reports it; a middle-button drag still pans). True = the button is
+ *  bound (Settings > Controls), so the renderer must not also treat the click as a left click. The bound action runs
+ *  only when nothing else owns input: no Settings / wizard, no Game Menu or context menu, no modal, card or
+ *  confirmation, no text field in focus (the 1.0.168 hotfix's ownership rule, kept whole). */
 function onPitchMiddleClick(): boolean {
+  const bound = actionsForInput(settings, 'keyboard', MOUSE_MIDDLE, setupPhase.value ? 'setup' : 'game');
   const blocked = playerCardsToggleBlocked({
     shellModalOpen: appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
     gameMenuOpen: ui.gameMenuOpen,
@@ -7496,8 +7514,8 @@ function onPitchMiddleClick(): boolean {
     decisionCardOpen: decisionCardOpen(gameStore.state as unknown as DecisionCardStoreState),
     textFieldFocused: textFieldOwnsInput(typeof document !== 'undefined' ? document.activeElement : null),
   });
-  const decision = middleClickDecision({ bound: MIDDLE_CLICK_ACTIONS, blocked });
-  if (decision.run.includes('playerCardsToggle')) togglePlayerCards();
+  const decision = middleClickDecision({ bound, blocked });
+  for (const id of decision.run) if (runAction(id, 'keyboard')) break;
   return decision.consume;
 }
 
@@ -8491,9 +8509,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         return;
       }
       if (ttmCancel === 'already-cancelled') return;
-      const hasPlan = !!o66PendingMove.value || !!o66PendingPass.value || !!o66PendingPunt.value || !!o66PendingHandOff.value
-        || !!o66PendingFoul.value || !!o66ThrownMate.value
-        || !!o66PendingBlock.value || !!o66AggroStage.value
+      const hasPlan = o66HasPlan()
         || !!gameStore.armedGazeVictimId(); // owner 10-08: a right-click disarms the gaze victim, the activation stays
       if (hasPlan) {
         const cancelDeclaredFoul = !!o66PendingFoul.value
@@ -8520,8 +8536,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         // player server-side), so the renderer-local clearSelection alone is a no-op — the real deselect is the
         // implicit end-activation (store.ts endActivation, which backs the "End Move" menu). Safe no-op when
         // nothing is active. This is what arms right-click-empty to actually clear the on-select state.
-        r.clearSelection();
-        gameStore.endActivation();
+        deselectByClickOff();
       }
       return;
     }
@@ -8763,7 +8778,11 @@ function keyboardOwnedByTextControl(target: EventTarget | null): boolean {
 }
 function onKeyup(event: KeyboardEvent) {
   const pan = PAN_KEY_ALIASES[event.code];
-  if (pan) { heldPanKeys.delete(pan); updatePanDir(); }
+  if (pan) {
+    heldPanKeys.delete(pan);
+    updatePanDir();
+    if (heldPanKeys.size === 0) refollowCrosshair(); // Astra P2-2: like the right-stick release
+  }
 }
 function clearPan() { heldPanKeys.clear(); renderer?.setPanDirection(0, 0); }
 
@@ -9129,11 +9148,13 @@ const o66PendingConfirmLabel = computed(() => {
 });
 
 /** Esc clears an undeclared preview locally or cancels a declared action with its state-specific wire; otherwise it closes the popup, ends the activation, then opens Game Menu. */
-function escO66Cascade() {
+function escO66Cascade(allowed?: ReadonlySet<string>) {
   const g = gameStore.game.value;
   const st = g ? deriveClientState(g, o66Ctx()) : null;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (wideRailActivationPrompt.value) {
+    // Controller P2a (Astra P3-6): the pad's outcome gate covers this pre-branch too (a decline: B may take it).
+    if (allowed && !allowed.has('wide-rail-decline')) { padCascadeRefused = true; return; }
     if (!cancelWideRailBlitzTarget()) declineWideRailActivationRules();
     return;
   }
@@ -9175,6 +9196,8 @@ function escO66Cascade() {
     hasSelection: hasSelection.value,
   });
 
+  // Controller support P2a: the pad's B takes only the dismiss / cancel outcomes (PAD_CANCEL_KINDS).
+  if (allowed && !allowed.has(decision.kind)) { padCascadeRefused = true; return; }
   switch (decision.kind) {
     case 'hold-keep':
       // #111 blitz-flavor hold: no clean server-abort mid-block-commit (§4b — clearing the hold without committing
@@ -9229,13 +9252,422 @@ function escO66Cascade() {
   }
 }
 
+/** #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
+ *  END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical. */
+function escapeCascade(): void {
+  if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
+    popup.visible = false;
+  } else if (settings.order66 && gameStore.isPlaying.value) {
+    escO66Cascade();
+  } else if (ctxMenu.visible) {
+    ctxMenu.visible = false;
+  } else if (ui.gameMenuOpen) {
+    ui.gameMenuOpen = false;
+  } else if (hasSelection.value || popup.visible) {
+    renderer?.clearSelection();
+    popup.visible = false;
+  } else {
+    ui.gameMenuOpen = true;
+  }
+}
+/** The confirm key. Owner o66ad: it CONFIRMS the ORDER 66 planner (a previewed move/blitz path, or a pass target)
+ *  first; otherwise it falls through to the legacy queued-path confirm. Astra re-review 10-04: an open End Turn / End
+ *  Activation confirmation is answered BEFORE a staged attack. Owner 10-05: with a player switch pending, the confirm
+ *  key only drops it (it never sends the previous player's retained preview behind the "Switch player?" cue).
+ *  False when there was nothing to confirm. */
+function confirmShortcut(): boolean {
+  if (cancelDeferredFriendlySwitch()) { popup.visible = false; return true; }
+  if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) return true;
+  if (queuedSteps.value > 0) { confirmMove(); return true; }
+  return false;
+}
+/** The keys a focused target owns itself (shared guard, controller support P1): a text input, or the chat entry. */
+function targetOwnsKeys(target: EventTarget | null): boolean {
+  // Astra 10-09 (order-66): only a TEXT-entry input owns the keys; a check box / radio / button input does not.
+  return (target instanceof HTMLInputElement && !NON_TEXT_INPUT_TYPES.has(target.type)) || (!!target && target === chatInputEl.value);
+}
+/** The unanswered-prompt panel (S43) is up. */
+function unknownPanelUp(): boolean {
+  return !!gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden;
+}
+/** Astra review (P2.2): the guards onKeydown applies, for pad input — focus in a text field / the chat entry / an
+ *  editable region blocks every pad action (Start / LB / RB / View included). */
+function controllerInputBlocked(): boolean {
+  const focused = typeof document !== 'undefined' ? document.activeElement : null;
+  return targetOwnsKeys(focused) || keyboardOwnedByTextControl(focused);
+}
+/** The key each gated pad action stands in for (Astra B2 parity with unknownPanelKeyDecision). */
+const PAD_ACTION_KEY: Partial<Record<ControlActionId, { key: string; code: string }>> = {
+  gameMenu: { key: 'Escape', code: 'Escape' },
+  endTurn: { key: 'Enter', code: 'Enter' },
+};
+/** While the unanswered-prompt panel is up, the pad goes through the SAME gate as the keyboard: Start = Esc (closes an
+ *  open confirmation, no game command), View = Enter and confirm = the confirm key (swallowed). Everything else passes. */
+function unknownPanelPadGate(id: ControlActionId): boolean {
+  const as = id === 'confirm' ? { key: ' ', code: settings.confirmKey } : PAD_ACTION_KEY[id];
+  if (!as) return false;
+  const decision = unknownPanelKeyDecision({
+    panelUp: unknownPanelUp(), confirming: unknownConfirm.value !== null,
+    key: as.key, code: as.code, confirmKey: settings.confirmKey, targetIsButton: false,
+  });
+  if (decision.closeConfirmation) unknownConfirm.value = null;
+  return decision.handled;
+}
+// --- Controller support P2a (owner 10-07, spec-controller-support.md): the pitch crosshair ------------------------
+// Controller mode only. The crosshair square drives the renderer's OWN hover body (path preview, tips, marker), A / X
+// run its own click / right-click bodies there (renderer.virtualPointer — no second code path), B is the right-click-
+// on-grass cancel, Y the player card. game/crosshair.ts holds the state; the rail is drawn by the renderer.
+const crosshair = createCrosshair({
+  screenOf: (sq) => renderer?.squareCanvasPoint(sq) ?? { x: sq[1], y: -sq[0] },
+  dugoutSquare: (playerId) => renderer?.nearestPitchSquare({ dugoutPlayerId: playerId }) ?? null,
+  speed: () => settings.crosshairSpeed,
+  acceleration: () => settings.crosshairAcceleration,
+  // P2b (owner round 3): an armed server player pick locks the stick to the eligible players.
+  snapTargets: () => pickEligibleTargets().flatMap((t) => ('square' in t ? [t.square] : [])),
+});
+/** P2b: the server's eligible players of an ARMED on-pitch player pick (touchback, interception, Pick-Me-Up, ...) -
+ *  verbatim the set the renderer's picker arms; empty when no such pick is armed. */
+function pickEligibleIds(): string[] {
+  if (!renderer?.pitchPickers().player) return [];
+  const st = gameStore.state;
+  if (st.pickMeUpEligible?.playerIds.length) return [...st.pickMeUpEligible.playerIds];
+  const pick = st.playerPick;
+  return pick && !isPickKeptOffPitch(pick.key) ? [...(pick.eligibleIds ?? [])] : [];
+}
+function pickEligibleTargets(): CrosshairTarget[] {
+  return pickEligibleIds()
+    .sort((a, b) => rosterIndex(a) - rosterIndex(b))
+    .map(crosshairTargetOfPlayer)
+    .filter((t): t is CrosshairTarget => t !== null);
+}
+function playerIdAtSquare(square: readonly [number, number]): string | null {
+  const data = gameStore.game.value?.fieldModel?.playerDataArray?.find((d) => d.playerCoordinate
+    && d.playerCoordinate[0] === square[0] && d.playerCoordinate[1] === square[1]);
+  return data?.playerId ?? null;
+}
+function crosshairTargetOfPlayer(playerId: string): CrosshairTarget | null {
+  const c = gameStore.game.value?.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId)?.playerCoordinate;
+  if (c && c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14) return { square: [c[0], c[1]] };
+  return null;
+}
+/** Owner round 4: the acting player, else the ball, else the pitch centre. */
+function crosshairStartTarget(): CrosshairTarget {
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const acting = actingId ? crosshairTargetOfPlayer(actingId) : null;
+  const ball = (g?.fieldModel as { ballCoordinate?: [number, number] | null } | undefined)?.ballCoordinate ?? null;
+  return { square: crosshairStart(acting && 'square' in acting ? acting.square : null, ball) };
+}
+function rosterIndex(playerId: string): number {
+  const g = gameStore.game.value;
+  if (!g) return 0;
+  const home = g.teamHome.playerArray.findIndex((p) => p.playerId === playerId);
+  if (home >= 0) return home;
+  const away = g.teamAway.playerArray.findIndex((p) => p.playerId === playerId);
+  return away >= 0 ? away : Number.MAX_SAFE_INTEGER;
+}
+/** D-pad left / right order: in setup my reserves (dugout tokens) then my placed players; in play my players who can
+ *  still act this turn (the acting player included), roster order. Empty off my turn. */
+function crosshairCycleOrder(): CrosshairTarget[] {
+  const picks = pickEligibleTargets(); // P2b: a server player pick cycles its eligible players
+  if (picks.length) return picks;
+  const sp = setupPhase.value;
+  if (sp) {
+    const reserves: CrosshairTarget[] = sp.players
+      .filter((p) => !p.inert && !p.coord && !!renderer?.hasDugoutToken(p.playerId))
+      .sort((a, b) => rosterIndex(a.playerId) - rosterIndex(b.playerId))
+      .map((p) => ({ dugoutPlayerId: p.playerId }));
+    const placed: CrosshairTarget[] = sp.players
+      .filter((p) => !p.inert && !!p.coord)
+      .sort((a, b) => rosterIndex(a.playerId) - rosterIndex(b.playerId))
+      .map((p) => ({ square: [p.coord![0], p.coord![1]] as [number, number] }));
+    return [...reserves, ...placed];
+  }
+  if (!gameStore.isPlaying.value || !gameStore.myTurn.value) return [];
+  const ids = unactivatedOwnIds();
+  const active = gameStore.state.activePlayerId;
+  if (active && gameStore.iControl(active) && !ids.includes(active)) ids.push(active);
+  return ids
+    .sort((a, b) => rosterIndex(a) - rosterIndex(b))
+    .map(crosshairTargetOfPlayer)
+    .filter((t): t is CrosshairTarget => t !== null);
+}
+function crosshairPlayerId(): string | null {
+  const t = crosshair.target.value;
+  if (!t) return null;
+  return 'dugoutPlayerId' in t ? t.dugoutPlayerId : playerIdAtSquare(t.square);
+}
+const precisionHint = ref<{ x: number; y: number } | null>(null);
+let precisionHintRaf = 0;
+function trackPrecisionHint(): void {
+  cancelAnimationFrame(precisionHintRaf);
+  precisionHintRaf = 0;
+  const t = crosshair.target.value;
+  if (!crosshair.precision.value || !crosshair.visible.value || !t || !renderer) { precisionHint.value = null; return; }
+  const p = renderer.crosshairCanvasPoint(t);
+  precisionHint.value = p ? { x: p.x, y: p.y } : null;
+  precisionHintRaf = requestAnimationFrame(trackPrecisionHint); // follows camera pans / zoom while on
+}
+/** `gesture`: the run follows a REAL pad move (the target changed and the move was the user's) — only then does the
+ *  camera follow release a running cinematic. Visibility / precision-only runs (a card closing, the precision toggle)
+ *  pass false even when the last move was the user's (Astra confirmation pass). */
+function syncCrosshair(gesture = false): void {
+  if (!renderer) return;
+  const t = crosshair.target.value;
+  if (crosshair.visible.value && t) {
+    renderer.setCrosshair(t);
+    // Owner o66mh: the camera follows the crosshair (user input — not gated on the auto-director).
+    // Owner 10-08: only a USER move releases a running cinematic (the reseat / mode-entry reset keeps it).
+    if ('square' in t) renderer.followCrosshair(t.square, crosshair.lastMove, { gesture });
+    renderer.virtualPointer('hover', t);
+  } else {
+    renderer.setCrosshair(null);
+    renderer.endVirtualPointer(); // the mouse gets hover back on its next move
+  }
+  trackPrecisionHint();
+}
+watch([() => crosshair.visible.value, () => crosshair.target.value, () => crosshair.precision.value],
+  ([, target], [, prevTarget]) => syncCrosshair(target !== prevTarget && crosshair.lastMoveByUser));
+watch(activeInput, (input) => {
+  renderer?.setPointerHidden(input === 'controller'); // owner o66mg: no pitch cursor in controller mode
+  if (input === 'controller') crosshair.reset(crosshairStartTarget());
+  else crosshair.precision.value = false; // owner round 7: precision ends with controller mode
+});
+// A new turn (or the setup starting / ending) re-seats the crosshair on the acting player / ball.
+watch(
+  () => {
+    const g = gameStore.game.value as { half?: number; homePlaying?: boolean; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } } | null;
+    return `${g?.half ?? ''}|${g?.turnDataHome?.turnNr ?? ''}|${g?.turnDataAway?.turnNr ?? ''}|${g?.homePlaying ?? ''}|${!!setupPhase.value}`;
+  },
+  () => { if (activeInput.value === 'controller') crosshair.reset(crosshairStartTarget()); },
+);
+// Menus that own focus hide the crosshair (P2b adds the server cards).
+/** Astra review of P2a: the surfaces that gate the crosshair — a snapshot for game/crosshairGateInput.ts (pure). */
+function crosshairGateInput(): CrosshairGateInput {
+  return deriveCrosshairGateInput({
+    state: gameStore.state as unknown as CrosshairGateStoreState,
+    dialogOpen: !!(gameStore.game.value as { dialogParameter?: unknown } | null)?.dialogParameter,
+    view: {
+      wideRailPrompt: !!wideRailActivationPrompt.value,
+      endActivationConfirm: !!endActConfirm.value,
+      endTurnWarn: endTurnWarnCount.value !== null,
+      setupLegalityPanel: setupConfirmOpen.value,
+      unknownPanel: unknownPanelUp(),
+      unknownTilePick: unknownPanelUp() && unknownPickingTile.value,
+    },
+    pickers: renderer?.pitchPickers() ?? { push: false, kick: false, tile: false, tileSkill: undefined, player: false },
+  });
+}
+/** Left stick → the crosshair (one square per step, repeat with acceleration, precision = one step per tilt). */
+function onCrosshairStick(x: number, y: number): boolean {
+  if (activeInput.value !== 'controller' || !renderer) return false;
+  if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || crosshair.suppressed.value) {
+    crosshair.stick(0, 0); // Astra P3-7: a stick held through the suppression resumes as a fresh tilt
+    return true;
+  }
+  if (x === 0 && y === 0) { crosshair.stick(0, 0); return true; }
+  if (!crosshair.target.value) crosshair.reset(crosshairStartTarget());
+  crosshair.stick(x, y);
+  return true;
+}
+/** Set by escO66Cascade when the pad's outcome gate refused the cascade's outcome (nothing was done). */
+let padCascadeRefused = false;
+/** B: the right-click-on-grass cancel (game/crosshair.ts createPadCancel). */
+const controllerCancel = createPadCancel({
+  mandatoryChoiceOpen: () => crosshairGate(crosshairGateInput()).cancelInert,
+  cancelDeferredSwitch: cancelDeferredFriendlySwitch,
+  cancelPlannedRoute: () => !!renderer?.cancelPlannedRoute(),
+  o66Play: () => settings.order66 && gameStore.isPlaying.value,
+  runCascade: (allowed) => { padCascadeRefused = false; escO66Cascade(allowed); return !padCascadeRefused; },
+  deselectPristine: () => {
+    // The right-click-on-grass outcomes for an untouched selection, same paths: deselect, or (Astra P2-4) for a
+    // Blitz / Punt / ball action / Gaze the end-activation confirmation (it asks; nothing ends silently).
+    const action = padPristineAction(padDeselectInput());
+    if (action === 'deselect') deselectByClickOff();
+    else if (action === 'ask-end') requestEndActivation();
+    return action !== null;
+  },
+  contextMenuVisible: () => ctxMenu.visible,
+  closeContextMenu: () => { ctxMenu.visible = false; },
+  gameMenuOpen: () => ui.gameMenuOpen,
+  closeGameMenu: () => { ui.gameMenuOpen = false; },
+  popupVisible: () => popup.visible,
+  closePopup: () => { popup.visible = false; },
+  hasSelection: () => hasSelection.value,
+  clearSelection: () => { renderer?.clearSelection(); },
+});
+const crosshairActions: CrosshairActionDeps = {
+  active: () => crosshair.visible.value && !!renderer,
+  select: () => { const t = crosshair.target.value; return !!t && !!renderer && renderer.virtualPointer('tap', t); },
+  context: () => { const t = crosshair.target.value; return !!t && !!renderer && renderer.virtualPointer('context', t); },
+  cancel: controllerCancel,
+  cycle: (direction) => crosshair.cycle(direction, crosshairCycleOrder()),
+  togglePrecision: () => { crosshair.togglePrecision(); },
+};
+/** Player card call (owner round 2): pad Y = the crosshair player; key P = the hovered player, else the selected one.
+ *  Calling it again for the same player closes it. */
+function onPlayerCardCall(source: InputSource): void {
+  const hovered = renderer?.getHoveredSquare();
+  const pid = source === 'controller'
+    ? crosshairPlayerId()
+    : ((hovered ? playerIdAtSquare(hovered) : null) ?? renderer?.getSelectedPlayerId() ?? null);
+  if (!pid) return;
+  if (popup.visible && popup.playerId === pid) { popup.visible = false; return; }
+  showPopup(pid);
+}
+/** P2b (owner round 2): setup LB / RB - through the existing setup place / remove wire. */
+const padSetup = createPadSetupHost({
+  players: () => setupPhase.value?.players ?? null,
+  currentPlayerId: () => crosshairPlayerId(),
+  place: (playerId, square) => gameStore.setupPlace(playerId, square),
+  remove: (playerId) => gameStore.setupRemove(playerId),
+  cycleOrder: () => crosshairCycleOrder(),
+  moveCrosshair: (target) => { crosshair.moveTo(target); },
+  deselect: (playerId) => { if (selectedSetupPlayerId.value === playerId) selectedSetupPlayerId.value = null; },
+});
+watch(() => !!setupPhase.value, (on) => { if (!on) padSetup.pending.clear(); });
+/** P2b (owner round 3): the controller-only block declaration modal - A Block / X special / B Cancel. */
+// Astra P1-2: the production watcher (game/padBlockDeclare.ts) re-runs on every applied frame — a fresh quick Block's
+// stage 2 is set before the server acknowledges the declare, so the modal opens on the ack and re-validates after.
+const padBlockDeclareWatch = createPadBlockDeclareWatch({
+  frame: () => gameStore.state.appliedFrameSeq,
+  deps: () => [gameStore.game.value, o66AggroStage.value, activeInput.value, o66PendingBlockKind.value, o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value, gameStore.isPlaying.value],
+  input: () => {
+    const g = gameStore.game.value;
+    const st = o66AggroStage.value;
+    const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (!g || !st || !actingId || !settings.order66 || !gameStore.isPlaying.value) return null;
+    // Exactly the specials the attack menu offers on this target (openO66Menu): every flavor + Chomp.
+    const offers: string[] = blockAlternativeOffers(g, actingId).map((o) => o.kind);
+    if (chompAvailable(g, actingId)) offers.push('chomp');
+    return {
+      controller: activeInput.value === 'controller',
+      stage: st,
+      attackState: deriveClientState(g, o66Ctx()),
+      adjacentEnemyIds: adjacentStandingEnemyIds(g, actingId),
+      pendingKind: st.kind === 'blitz' ? o66PendingBlitzBlockKind.value : o66PendingBlockKind.value,
+      explicitChoice: o66ExplicitBlockChoice.value != null,
+      offers,
+    };
+  },
+});
+const padBlockDeclare = padBlockDeclareWatch.modal as Ref<{ target: string; kinds: BlockKind[] } | null>;
+const padBlockDeclareTargetName = computed(() => {
+  const g = gameStore.game.value;
+  const id = padBlockDeclare.value?.target;
+  if (!g || !id) return '';
+  return [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === id)?.playerName ?? id;
+});
+/** A = Block (kind null) / X = a special: the menu's own seams (pending kind + explicit choice), then the confirm. */
+function padBlockDeclareChoose(kind: BlockKind | null): void {
+  const st = o66AggroStage.value;
+  if (!padBlockDeclare.value || !st) return;
+  padBlockDeclare.value = null;
+  if (st.kind === 'blitz') o66PendingBlitzBlockKind.value = kind;
+  else o66PendingBlockKind.value = kind;
+  o66ExplicitBlockChoice.value = { kind };
+  confirmAggroStage();
+}
+/** B on the block-kind / foul chooser: the right-click dismissal (no wire); a hold it refuses keeps B inert. */
+function padDismissBlockAlternative(): void {
+  if (gameStore.dismissFoulChoice()) return;
+  if (!gameStore.state.blitzBlockChoice) return;
+  const dismissed = gameStore.dismissBlitzBlockChoice();
+  if (dismissed) o66AggroStage.value = { kind: dismissed.origin, target: dismissed.targetId, stage: 2 };
+}
+/** P2b reroll card in controller mode: Team Reroll first; Y = the single skill reroll. */
+const rerollOptionsShown = computed(() => {
+  const options = gameStore.state.reRollPrompt?.options ?? [];
+  return activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(options) : options;
+});
+const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
+function padBlockDeclareCancel(): void {
+  padBlockDeclare.value = null;
+  o66AggroStage.value = null;
+}
+let unregisterCrosshairStick: (() => void) | null = null;
+let stopCrosshairGateWatch: (() => void) | null = null;
+/**
+ * Controller support P1 (owner 10-07): the in-game action dispatcher (game/inGameActions.ts). The keydown handler and
+ * the gamepad router both land here, so a controller button runs exactly the keyboard's code. False = not handled
+ * here (the app shell gets the offer).
+ */
+const runAction = createInGameActionRunner({
+  shellModalOpen: () => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
+  inputBlocked: (source) => source === 'controller' && controllerInputBlocked(),
+  unknownPanelGate: (id) => unknownPanelPadGate(id),
+  rosterOpen: () => rosterPopoutOpen.value,
+  closeRoster: () => { rosterPopoutOpen.value = false; },
+  escapeCascade,
+  confirm: confirmShortcut,
+  endTurnAvailable: () => gameStore.isPlaying.value && gameStore.myTurn.value && !endTurnUnavailableDuringReaction.value,
+  endTurn,
+  toggleRoster: toggleRosterPopout,
+  toggleLogExpand: () => {
+    logExpanded.value = !logExpanded.value;
+    if (logExpanded.value) panelCollapsed.value = false;
+  },
+  cycleTackleZones,
+  cycleSprites,
+  cycleSkillDisplay,
+  toggleAutoDirector: () => { settings.autoDirector = !settings.autoDirector; },
+  openChat: () => {
+    if (settings.chatDisabled) return false;
+    panelTab.value = 'chat';
+    panelCollapsed.value = false;
+    void nextTick(() => chatInputEl.value?.focus());
+    return true;
+  },
+  toggleTelestrator: () => {
+    if (!telestratorRef.value) return false;
+    telestratorRef.value.toggleExpanded();
+    return true;
+  },
+  zoom: (direction) => {
+    if (!renderer) return false;
+    renderer.zoomStep(direction);
+    return true;
+  },
+  togglePlayerCards,
+  crosshair: crosshairActions,
+  setup: padSetup,
+});
+/** Controller camera stick = the WASD glide with magnitude; fail-safe neutralise (Astra review P1). */
+const onCameraStick = createCameraStickHandler({
+  shellModalOpen: () => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
+  setPan: (x, y) => { if (!renderer) return false; renderer.setPanDirection(x, y); return true; },
+  restoreKeys: () => {
+    updatePanDir();
+    refollowCrosshair(); // the right stick won while held; the crosshair follow resumes once it lets go
+  },
+});
+// Belt and braces: the pad glide stops whenever the controller stops being the active input or the last pad leaves,
+// even if the router's own neutral stick never arrives.
+watch([activeInput, connectedPadCount], ([input, pads]) => { if (input !== 'controller' || pads === 0) { onCameraStick.neutralise(); holdZoom.stop(); } });
+/** Owner 10-07: a held trigger = continuous zoom (renderer.zoomBySteps at zoomRatePerSecond); a tap = runAction zoom. */
+const holdZoom = createHoldZoom({
+  now: () => performance.now(),
+  requestFrame: (cb) => window.requestAnimationFrame(cb),
+  cancelFrame: (h) => window.cancelAnimationFrame(h),
+  zoomSteps: (steps) => { if (!renderer) return false; renderer.zoomBySteps(steps); return true; },
+  // Astra review: the runner's guards every frame — LB+Y opening chat or Settings opened by mouse stops the zoom.
+  allowed: () => !appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) && !controllerInputBlocked(),
+});
+/** Per-trigger hold ownership (Astra review): the most recent held trigger drives; releasing it falls back to the
+ *  other still-held trigger. holdZoom.start refuses (and keeps re-checking) the runner guards itself. */
+const onControlHold = createHoldZoomOwner(holdZoom);
+let unregisterControlHold: (() => void) | null = null;
+let unregisterControlActions: (() => void) | null = null;
+let unregisterCameraStick: (() => void) | null = null;
+const telestratorRef = ref<InstanceType<typeof ReplayTelestrator> | null>(null);
+
 function onKeydown(event: KeyboardEvent) {
   // App-shell modals own the keyboard while open. In particular, Settings Esc must
   // run its transactional rollback path rather than this gameplay handler closing it.
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen)) return;
   // S43: while the unanswered-prompt panel is up, Enter / Space / Esc reach no game command (Esc may close its confirmation).
   const ucKey = unknownPanelKeyDecision({
-    panelUp: !!gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden, confirming: unknownConfirm.value !== null,
+    panelUp: unknownPanelUp(), confirming: unknownConfirm.value !== null,
     key: event.key, code: event.code, confirmKey: settings.confirmKey, targetIsButton: event.target instanceof HTMLButtonElement,
   });
   if (ucKey.handled) {
@@ -9247,54 +9679,32 @@ function onKeydown(event: KeyboardEvent) {
   // marks) keeps its own activation keys - Space, Enter, the arrows - and lets every other key (H, Escape ...) through.
   if (event.target instanceof HTMLInputElement && inputOwnsKey(event.target, event.key)) return;
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
-  // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else).
-  if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); rosterPopoutOpen.value = false; return; }
-  // Owner 10-02: the roster key (default H, Settings > Keyboard) toggles the Helmet roster pop-out on every screen
-  // (text fields keep their letters).
-  // Owner 10-02: "H should always pop up the roster unless the user is at the play/spectate menu screens" - every in-game
-  // screen (this view only exists in a game); only a text field typing the letter keeps it.
-  if (event.code === settings.rosterKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
+  // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else) — the first step of the gameMenu action.
+  if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); runAction('gameMenu', 'keyboard'); return; }
+  // Controller support P1 (owner 10-07): every REBINDABLE keyboard binding (Settings > Controls) runs through runAction,
+  // the dispatcher the controller uses too — the roster key (default H; owner 10-02: "H should always pop up the roster
+  // unless the user is at the play/spectate menu screens", so every in-game screen), the Log enlarge key (default L;
+  // owner 10-02: "a second L push returns it to its old size") and any key the coach bound to another action. Text
+  // fields keep their letters. The confirm key keeps its own branch below (a focused prompt button owns it).
+  // A key bound to actions in different contexts (Zoom out in game, Previous blade on the main screen) tries each.
+  const boundActions = actionsForInput(settings, 'keyboard', event.code, setupPhase.value ? 'setup' : 'game');
+  // Astra final P2: context-first on the keyboard too — confirm wins only when it is the context's first candidate.
+  const keyActions = resolveKeyActions(boundActions);
+  if (keyActions.tryFirst.length && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
     && !keyboardOwnedByTextControl(event.target)) {
-    event.preventDefault(); toggleRosterPopout(); return;
+    for (const id of keyActions.tryFirst) if (runAction(id, 'keyboard')) { event.preventDefault(); return; }
   }
-  // Owner 10-02: "When a user pushes L, let's expand the log window so it's larger and twice its size. A second L push
-  // returns it to its old size." (Settings > Keyboard can rebind it.)
-  if (event.code === settings.logExpandKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
-    && !keyboardOwnedByTextControl(event.target)) {
-    event.preventDefault(); logExpanded.value = !logExpanded.value; if (logExpanded.value) panelCollapsed.value = false; return;
-  }
+  const boundAction = keyActions.confirm ? 'confirm' : (boundActions[0] ?? null);
   if (event.key === 'Escape') {
-    // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
-    // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
-    if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
-      popup.visible = false;
-    } else if (settings.order66 && gameStore.isPlaying.value) {
-      escO66Cascade();
-    } else if (ctxMenu.visible) {
-      ctxMenu.visible = false;
-    } else if (ui.gameMenuOpen) {
-      ui.gameMenuOpen = false;
-    } else if (hasSelection.value || popup.visible) {
-      renderer?.clearSelection();
-      popup.visible = false;
-    } else {
-      ui.gameMenuOpen = true;
-    }
-  } else if ((event.code === settings.confirmKey || event.key === 'Enter')
+    runAction('gameMenu', 'keyboard');
+  } else if ((boundAction === 'confirm' || event.key === 'Enter')
     && (focusedPromptButton(event.target) || keyboardFocusedOutsideButton(event.target))) {
     // Astra review 10-04: the coach tabbed to a button inside a client confirmation ("Go back") - the key belongs to
     // that button (native click), never to the global "confirm the open prompt" shortcut. Re-review: the same holds
     // for Enter (it used to open chat instead) and for a keyboard-focused button outside the panel.
-  } else if (event.code === settings.confirmKey) {
-    // Owner o66ad: Space CONFIRMS the ORDER 66 planner (a previewed move/blitz path, or a pass target) first;
-    // otherwise it falls through to the legacy queued-path confirm. preventDefault only when we actually consume it
-    // (Space would otherwise scroll / re-click a focused button).
-    // Astra re-review 10-04: an open End Turn / End Activation confirmation is answered BEFORE a staged attack.
-    // Owner 10-05: with a player switch pending, the confirm key only drops it (it never sends the previous
-    // player's retained preview behind the "Switch player?" cue).
-    if (cancelDeferredFriendlySwitch()) { event.preventDefault(); popup.visible = false; }
-    else if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
-    else if (queuedSteps.value > 0) { event.preventDefault(); confirmMove(); }
+  } else if (boundAction === 'confirm') {
+    // preventDefault only when we actually consume it (Space would otherwise scroll / re-click a focused button).
+    if (runAction('confirm', 'keyboard')) event.preventDefault();
   } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target)) {
     // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04; arrow keys 09-14): W/A pan
     // toward the top/left (content shifts down/right), S/D the opposite. Held keys
@@ -9307,9 +9717,7 @@ function onKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Enter' && !settings.chatDisabled) {
     // Enter initiates a chat message (owner 2026-07-03 r3): open + focus chat.
     event.preventDefault();
-    panelTab.value = 'chat';
-    panelCollapsed.value = false;
-    void nextTick(() => chatInputEl.value?.focus());
+    runAction('openChat', 'keyboard');
   } else if (hasSelection.value && /^Digit[1-6]$/.test(event.code)) {
     const button = hotbarActions.value[Number(event.code.slice(5)) - 1];
     if (button && !button.used) setAction(button.mode);
@@ -9508,6 +9916,7 @@ onMounted(async () => {
   renderer.setEndZoneLabel(settings.endZoneLabel); // owner 2026-07-08: team name | TOUCHDOWN
   renderer.setEndZoneTint(settings.endZoneTint); // owner 09-05: red/blue end-zone shading toggle
   renderer.setPanSpeed(settings.cameraPanSpeed); // owner 09-05: WASD pan speed
+  renderer.setPadCameraRelease(settings.controllerSupportEnabled); // owner 10-10: box off = public camera behaviour
   renderer.setPositionRingOptions({ density: settings.positionRingDensity, color: ringColorOverrideInt() });
   renderer.setDieTagPosition(settings.dieTagPosition); // owner 2026-07-04: on-die cause tag
   renderer.setReducedMotion(bpReducedMotion.value);
@@ -10429,6 +10838,11 @@ onMounted(async () => {
     if (!playerId) popup.visible = false;
   };
   renderer.onRightClickReset = () => { deferredFriendlySwitch.value = null; }; // Astra pass 4: renderer-consumed double right-click
+  // Controller support P2a: the pad's A on a setup token = the mouse's stationary press-release (the drag mode's tap).
+  renderer.onSetupTokenTap = (playerId) => {
+    const mode = renderer?.onDugoutSetupDragStart === startSwarmingPlayerDrag ? swarmingDragMode : setupDragMode;
+    if (mode.eligible(playerId)) mode.onTap(playerId);
+  };
   renderer.onWaypointPlanCancel = () => {
     deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
     if (routeRightClickAnswersOpenPrompt()) return; // Astra 10-10 (P3): under an open prompt this is "Go back", nothing else
@@ -10559,6 +10973,28 @@ onMounted(async () => {
   gameStore.setInteractiveSetup(true);
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('keyup', onKeyup);
+  unregisterControlActions = registerActionHandler(runAction, CONTROL_PRIORITY_GAME);
+  unregisterCameraStick = registerAnalogHandler(onCameraStick, CONTROL_PRIORITY_GAME);
+  unregisterControlHold = registerHoldHandler(onControlHold, CONTROL_PRIORITY_GAME);
+  unregisterCrosshairStick = registerPointerStickHandler(onCrosshairStick, CONTROL_PRIORITY_GAME);
+  setPlayerCardHook(onPlayerCardCall);
+  // Astra P2-1: an open card / dialog owns focus — the crosshair hides and A / X stay off the pitch, except for the
+  // server square / player picks it serves. (Registered here: the gate reads view state declared further down.)
+  stopCrosshairGateWatch?.();
+  stopCrosshairGateWatch = watchEffect(() => { crosshairSuppressed.value = ui.gameMenuOpen || ui.settingsOpen || padFocusOwnsInput.value || crosshairGate(crosshairGateInput()).suppress; });
+  // P2b: Settings / the wizard rerun over the game keep the pad off the server cards behind them; an open context
+  // menu / Game Menu is answered first (B closes it in the Esc order, ahead of the card's own decline).
+  setPadFocusGuard(() => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || ctxMenu.visible || ui.gameMenuOpen);
+  // Astra P2-a: a mandatory pitch choice (push direction, kick aim) keeps every non-mandatory card off the pad.
+  setPadFocusMandatoryPitch(() => {
+    const pk = renderer?.pitchPickers();
+    return (!!gameStore.state.pushChoice && !!pk?.push) || (!!gameStore.state.kickPlacement && !!pk?.kick);
+  });
+  // Astra P2-f: presses resolve setup-context actions first during setup, in-play actions in play.
+  setActiveControlContext(() => (setupPhase.value ? 'setup' : 'game'));
+  if (activeInput.value === 'controller') crosshair.reset(crosshairStartTarget());
+  renderer?.setPointerHidden(activeInput.value === 'controller');
+  syncCrosshair();
   window.addEventListener('blur', clearPan); // stop the glide if focus leaves the window
   window.addEventListener('pointerdown', onGlobalPointerDown);
   document.addEventListener('fullscreenchange', syncFullscreenSouthPanRange);
@@ -10580,6 +11016,23 @@ onBeforeUnmount(() => {
   unregisterSpectatorRendererCancellation = null;
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('keyup', onKeyup);
+  unregisterControlActions?.();
+  unregisterCrosshairStick?.();
+  unregisterCrosshairStick = null;
+  setPlayerCardHook(null);
+  setPadFocusGuard(null);
+  setPadFocusMandatoryPitch(null);
+  setActiveControlContext(null);
+  stopCrosshairGateWatch?.(); // Astra P3-c: created after an await in onMounted, so not auto-stopped with the instance
+  stopCrosshairGateWatch = null;
+  cancelAnimationFrame(precisionHintRaf);
+  crosshairSuppressed.value = false;
+  unregisterControlActions = null;
+  unregisterCameraStick?.();
+  unregisterCameraStick = null;
+  unregisterControlHold?.();
+  unregisterControlHold = null;
+  holdZoom.stop();
   window.removeEventListener('blur', clearPan);
   window.removeEventListener('pointerdown', onGlobalPointerDown);
   document.removeEventListener('fullscreenchange', syncFullscreenSouthPanRange);
@@ -12179,6 +12632,40 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
   const decision = endActivationConfirmDecision({ origin, kind, rollPlayerId: gameStore.bigGuyActivateRollPlayerId(), actingId, rollLabel: bigGuyRollEndLabel(gameStore.game.value, actingId) });
   endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind], ...(decision.copy ?? {}), roll: decision.roll };
 }
+/** Any o66 plan in progress (waypoints / a pending 2-click target) — the right-click-on-grass "clear the plan" case. */
+function o66HasPlan(): boolean {
+  return !!o66PendingMove.value || !!o66PendingPass.value || !!o66PendingPunt.value || !!o66PendingHandOff.value
+    || !!o66PendingFoul.value || !!o66ThrownMate.value || !!o66PendingBlock.value || !!o66AggroStage.value;
+}
+/** Owner 2026-07-13: the right-click-on-grass DESELECT (no plan pending). In o66 a left-click auto-declared Move, so the
+ *  real deselect is the implicit end-activation (a safe no-op when nothing is active). Shared with the pad's B. */
+function deselectByClickOff(): void {
+  renderer?.clearSelection();
+  gameStore.endActivation();
+}
+/** A held pan (right stick / WASD) won over the crosshair follow; on its release the follow runs again. */
+function refollowCrosshair(): void {
+  const t = crosshair.target.value;
+  if (renderer && crosshair.visible.value && t && 'square' in t) renderer.followCrosshair(t.square, 'step', { gesture: true }); // the stick just let go: a gesture
+}
+/** Owner o66mh: the pad's B deselects a selected player whose activation has NOT started — exactly when the right-click
+ *  on grass deselects without asking: no plan, and the acting player (if any) is the selection, untouched (no square,
+ *  no block) and not in a state whose end needs a confirmation (Blitz / Punt / ball actions / Gaze). */
+function padDeselectInput(): PadDeselectInput {
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || null;
+  const st = g ? deriveClientState(g, o66Ctx()) : '';
+  return {
+    playing: !!g && gameStore.isPlaying.value,
+    myTurn: gameStore.myTurn.value,
+    selectedId: renderer?.getSelectedPlayerId() ?? null,
+    actingId,
+    hasPlan: o66HasPlan(),
+    untouched: blitzUntouched(g),
+    endNeedsConfirm: requiresBlitzEndConfirmation(st) || st === 'PUNT' || !!declaredActionEndConfirmKind(st) || !!gameStore.state.gazeIntent,
+    cardOpen: crosshairGateInput().cardOpen || padFocusOwnsInput.value, // P2b: any card that owns the pad answers first
+  };
+}
 /** The declared blitzer (or punter) has done nothing yet: no squares moved, no block thrown. */
 /** Astra 10-07 (P2): a right-click that would clear a plotted route asks instead where Escape asks (a declared Foul with
  *  a nominated target). Go back keeps route + nomination: the renderer may already have wiped its drawn route
@@ -12654,6 +13141,8 @@ function sendChat() {
       <div ref="pitchHost" class="pitch-host"
         :class="settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
         :style="hudAccessibilityStyle">
+        <div v-if="precisionHint" class="crosshair-precision-hint" data-testid="crosshair-precision-hint"
+          :style="{ left: `${precisionHint.x}px`, top: `${precisionHint.y}px` }">Precision</div>
         <input v-if="markLabelField" ref="markLabelInputEl" v-model="markLabelField.value"
           class="mark-label-field" :class="`mark-label-${markLabelField.request.kind}`" type="text"
           aria-label="Mark label" autocomplete="off" spellcheck="false"
@@ -12664,6 +13153,7 @@ function sendChat() {
           @pointerdown.stop @pointerup.stop @click.stop @contextmenu.stop @wheel.stop
           @blur="commitMarkLabelField" />
         <ReplayTelestrator
+          ref="telestratorRef"
           :enabled="true"
           :toolbar-bottom="telestratorBottom"
           :toolbar-right="telestratorRight"
@@ -12769,7 +13259,7 @@ function sendChat() {
             :data-opponent="!gameStore.myTurn.value"
             :data-setup="endTurnButtonText === 'Confirm Setup'"
             :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : setupPhase ? 'Confirm your setup' : 'End the current turn (or kick-off mini-phase)'"
-            @click="endTurn()">{{ endTurnButtonText }}</button>
+            @click="endTurn()">{{ endTurnButtonText }}<PadGlyph name="View" class="end-turn-glyph" /></button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
             :title="`${awayPanel?.coach ?? 'Away'} — turn ${awayPanel?.turnNr ?? 0}`">Turn {{ awayPanel?.turnNr ?? 0 }}</span>
         </div>
@@ -12814,12 +13304,12 @@ function sendChat() {
           </template>
           <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)" data-tour="hud-menu"
             @click="ui.gameMenuOpen = !ui.gameMenuOpen">⚙</QuickBarButton>
-          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
+          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" data-pad-action="tackleZones" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
             @click="cycleTackleZones()">🛡</QuickBarButton>
-          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites"
+          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites" data-pad-action="sprites"
             :title="`Sprites: ${spriteChoiceLabel}`"
             @click="cycleSprites()">👤</QuickBarButton>
-          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills"
+          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills" data-pad-action="skillDisplay"
             :data-skill-mode="skillMode" :aria-label="`Skill display: ${SKILL_MODE_LABELS[skillMode]}`"
             :title="`Skill display: ${SKILL_MODE_LABELS[skillMode]} (toggle Icons/Markings)`"
             @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
@@ -12828,12 +13318,12 @@ function sendChat() {
           <!-- Owner 10-06: the stadium toggle left the quick bar (Settings > Display keeps it). -->
           <!-- Owner 2026-07-03: Auto Director — one toggle for the automatic camera
                work (zoom + track + nudge to the action). Off = a calm static cam. -->
-          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director"
+          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director" data-pad-action="autoDirector"
             :title="`Auto Director — auto zoom + track the action: ${settings.autoDirector ? 'ON (click to calm the camera)' : 'OFF'}`"
             @click="settings.autoDirector = !settings.autoDirector">🎬</QuickBarButton>
           <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
                opt-in via Settings > UI. -->
-          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn"
+          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn" data-pad-action="roster"
             :title="`Roster (${keyLabel(settings.rosterKey)}) — every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
             @click="toggleRosterPopout()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
           <QuickBarButton class="report-btn" data-tour="hud-report" title="Report an issue — sends your description with the wire log"
@@ -12903,14 +13393,6 @@ function sendChat() {
             <span class="chat-toast-text">{{ interceptWaitText }}</span>
           </div>
         </div>
-        <!-- Owner 10-10: "Player portraits off" / "Player portraits on" (middle mouse button on the pitch). Same slot and
-             look as the interceptor-wait line (one row lower when both are up); never takes a click. -->
-        <div v-if="playerCardsNotice" class="chat-toast-stack" data-testid="player-cards-notice" role="status"
-          :style="{ top: ((centerPanelBox?.bottom ?? 0) + (interceptWaitText ? 56 : 8)) + 'px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }">
-          <div class="chat-toast">
-            <span class="chat-toast-text">{{ playerCardsNotice }}</span>
-          </div>
-        </div>
 
         <!-- floating MMO-style panel (owner 2026-07-02): Log | Chat | Roster.
              B2-8/9 (UI7): draggable by the tab bar, resizable, opacity/font
@@ -12932,7 +13414,7 @@ function sendChat() {
                keeping their 📋/💬 emoji; Roster is the word only. -->
           <nav class="tabs" @pointerdown="startPanelDrag">
             <span class="drag-grip" data-tour="hud-log-grip" title="Drag to move the window" aria-hidden="true">⠿</span>
-            <button class="stencil-tab" data-tour="hud-log-tab" title="Log" :data-active="panelTab === 'log'"
+            <button class="stencil-tab" data-tour="hud-log-tab" data-pad-action="logExpand" title="Log" :data-active="panelTab === 'log'"
               @click="panelTab = 'log'; panelCollapsed = false"><span class="tab-emoji">📋</span><span class="tab-stencil">LOG</span></button>
             <!-- Owner 08-19 (2nd): ROSTER before CHAT in the tab row. -->
             <!-- Owner 10-02: opt-in (Settings > UI › Roster tab in the chat dock); the Helmet pop-out is the default. -->
@@ -12942,7 +13424,7 @@ function sendChat() {
             <!-- Owner 08-19: while chat is POPPED OUT the tab leaves the row entirely (the old
                  click-to-redock tab is retired) — the popout's own dock (⤓) button is the sole
                  way back. -->
-            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" data-tour="hud-chat-tab" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
+            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" data-tour="hud-chat-tab" data-pad-action="openChat" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
               :aria-label="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
               :data-active="panelTab === 'chat'"
               :class="{ 'has-badge': chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden), 'live-chat-tab': gameStore.spectatorReview.value.active }"
@@ -13030,7 +13512,7 @@ function sendChat() {
               </button>
             </div>
             <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
-              <textarea ref="chatInputEl" v-model="chatInput" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
+              <textarea ref="chatInputEl" v-model="chatInput" data-pad-action="virtualKeyboard" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
             </form>
           </ChatDock>
         </div>
@@ -13052,7 +13534,7 @@ function sendChat() {
           :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
 
         <!-- Server-derived single/multiple Apothecary election. -->
-        <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice" :key="gameStore.state.apothecaryChoice.seq"
+        <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice" v-pad-focus="gameStore.state.apothecaryChoice.mine ? {} : false" :key="gameStore.state.apothecaryChoice.seq"
           :prompt="gameStore.state.apothecaryChoice" :icon-url="apothecaryIconUrl"
           :portrait="apoChoicePortrait" :skills="apoChoiceSkills"
           :skill-mode="skillMode" :skill-icon-style="effectiveIconStyle"
@@ -13064,7 +13546,7 @@ function sendChat() {
         <!-- Apothecary re-roll CHOICE (owner 2026-07-03 r6f; redesign owner 08-18): the d16
              disc is SUPPRESSED — the card is the red-cross identity plus the two result
              TITLES (Original vs Re-Rolled), console token/bevel/raised-caps treatment. -->
-        <ApothecaryResultChoice v-if="apoResultCardShown" :key="'d16-' + apoResultCardShown.seq + '-' + apoResultCardShown.playerId"
+        <ApothecaryResultChoice v-if="apoResultCardShown" v-pad-focus="gameStore.state.apothecaryD16?.mine ? {} : false" :key="'d16-' + apoResultCardShown.seq + '-' + apoResultCardShown.playerId"
           :choice="apoResultCardShown" :icon-url="apothecaryIconUrl"
           :position-style="reactivePromptStyle('apothecaryD16')"
           @drag-start="startReactivePromptDrag('apothecaryD16', $event)"
@@ -13243,7 +13725,7 @@ function sendChat() {
              coach; a 20%-opacity player silhouette behind. Spectators see the
              same tooltip (no buttons) until the coach resolves it. -->
         <!-- #237 (owner-fg 07-29): body drag; answer controls are excluded in the shared pointer guard. -->
-        <div v-if="gameStore.state.skillChoice?.mine" class="skill-choice"
+        <div v-if="gameStore.state.skillChoice?.mine" v-pad-focus class="skill-choice"
           v-prompt-dodge="promptDodge('skillChoice', gameStore.state.skillChoice.seq, skillChoicePos.ready)"
           :style="reactivePromptStyle('skillChoice', skillChoicePos.ready ? { x: skillChoicePos.x, y: skillChoicePos.y } : undefined)"
           title="Drag to move" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
@@ -13288,12 +13770,12 @@ function sendChat() {
                 :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.modifyingSkill!, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" alt="" />
               <template v-else>{{ modifierSkillCardCopy.modifierLabel }}</template>
             </button>
-            <button class="sc-no" @click="gameStore.resolveSkillUse(false)">None</button>
+            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">None</button>
           </div>
           <div v-else class="sc-actions">
             <!-- Owner 08-18 (Swoop copy): "Swoop" / "Scatter Normally" (was Glide / Land now); wire answers byte-identical. -->
             <button class="sc-yes" @click="gameStore.resolveSkillUse(true)">{{ swoopCardCopy?.accept ?? 'Yes' }}</button>
-            <button class="sc-no" @click="gameStore.resolveSkillUse(false)">{{ swoopCardCopy?.decline ?? 'No' }}</button>
+            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">{{ swoopCardCopy?.decline ?? 'No' }}</button>
           </div>
         </div>
         <div v-else-if="gameStore.state.skillChoice && skillChoicePos.ready"
@@ -13303,7 +13785,7 @@ function sendChat() {
           <div class="fu-title">{{ passiveSkillDecisionText }}</div>
         </div>
 
-        <PitchConfirmationPanel v-if="wideRailActivationPrompt" title="Special Ability"
+        <PitchConfirmationPanel v-if="wideRailActivationPrompt" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Special Ability"
           v-prompt-dodge="promptDodge('wideRailActivation', wideRailActivationPrompt.seq)"
           label="Activation special confirmation">
           <div>Use a special before continuing {{ wideRailActivationPrompt.playerAction }}?</div>
@@ -13311,7 +13793,7 @@ function sendChat() {
             <div class="rr-options">
               <button v-for="option in wideRailActivationPrompt.options" :key="option.ruleId" class="rr-use"
                 @click="acceptWideRailActivationRule(option.ruleId)">{{ option.label }}</button>
-              <button class="rr-decline" @click="declineWideRailActivationRules()">Continue without a special</button>
+              <button class="rr-decline" data-pad-cancel @click="declineWideRailActivationRules()">Continue without a special</button>
             </div>
           </template>
         </PitchConfirmationPanel>
@@ -13509,6 +13991,12 @@ function sendChat() {
           </ul>
           <!-- Owner 10-08: the "Selected: <player> — click a square ..." line is gone; it kept resizing the panel on
                every selection and the placement gestures no longer need explaining here. -->
+          <div v-if="activeInput === 'controller'" class="setup-pad-hints" data-testid="setup-pad-hints">
+            <span><PadGlyph name="DpadLeft" /><PadGlyph name="DpadRight" /> players</span>
+            <span><PadGlyph name="LB" /> line of scrimmage</span>
+            <span><PadGlyph name="RB" /> reserves</span>
+            <span><PadGlyph name="View" /> confirm</span>
+          </div>
           <!-- Owner 10-03: the pane carries no confirm (the scoreboard's Confirm Setup opens the setup confirmation) nor
                Concede (a prompt asks when conceding is legal); owner 10-05: nor a Reserve button - a placed player goes
                back by clicking it then the dugout, or by dragging it off the pitch. -->
@@ -13553,7 +14041,7 @@ function sendChat() {
         </div>
 
         <!-- Modern-only referee decision surface. ClassicView retains its direct-port dialog. -->
-        <SendOffPrompt v-if="gameStore.state.sendOff"
+        <SendOffPrompt v-if="gameStore.state.sendOff" v-pad-focus
           :player-name="gameStore.state.sendOff.playerName"
           :can-argue="gameStore.state.sendOff.canArgue"
           :can-bribe="gameStore.state.sendOff.canBribe"
@@ -13574,7 +14062,7 @@ function sendChat() {
         <!-- Owner 2026-07-04e: UNKNOWN-CALL diagnostic panel — a server dialog we
              don't recognize. Notice + screenshot/copy/log + describe + (if it
              wants a coordinate) a pitch tile picker. -->
-        <div v-if="gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden" class="unknown-call" :style="unknownCallStyle"
+        <div v-if="gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.unknownPanel, pitch: unknownPickingTile }" class="unknown-call" :style="unknownCallStyle"
           role="dialog" aria-label="Unanswered server prompt">
           <div class="uc-head" title="Drag to move" @pointerdown="startUnknownDrag($event)">⚠ {{ gameStore.state.unknownCall.view.title }} ⠿</div>
           <div class="uc-body">
@@ -13650,7 +14138,7 @@ function sendChat() {
 
         <!-- Owner 2026-07-04d: persistent ADMIN BROADCAST (serverAdminMessage),
              top-right; the player must Acknowledge to clear. -->
-        <div v-if="gameStore.state.adminMessage" class="admin-message center-left-notice">
+        <div v-if="gameStore.state.adminMessage" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.info }" class="admin-message center-left-notice">
           <div class="admin-message-head">⚠ Admin broadcast</div>
           <div class="admin-message-body">{{ gameStore.state.adminMessage }}</div>
           <button class="admin-message-ack" @click="gameStore.dismissAdminMessage()">Acknowledge</button>
@@ -13658,14 +14146,14 @@ function sendChat() {
 
         <!-- Owner 2026-07-10: server-side messages (concede-not-granted, weather change, …) as a center-left
              modal instead of a chat toast. Sits just below the admin broadcast if both are up. -->
-        <div v-if="serverNoticeVisible" class="admin-message center-left-notice server-notice">
+        <div v-if="serverNoticeVisible" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.info }" class="admin-message center-left-notice server-notice">
           <div class="admin-message-head">Server message</div>
           <div class="admin-message-body">{{ gameStore.state.infoNotice?.text }}</div>
           <button class="admin-message-ack" @click="gameStore.state.infoNotice = null">Dismiss</button>
         </div>
 
         <!-- Generic selectSkill dialog. Skill icons (or plaintext when using markers). -->
-        <div v-if="gameStore.state.selectSkill" class="yesno-card select-skill-card"
+        <div v-if="gameStore.state.selectSkill" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
           v-prompt-dodge="promptDodge('selectSkill', gameStore.state.selectSkill.seq)"
           :style="reactivePromptStyle('selectSkill')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('selectSkill', $event)">
@@ -13687,7 +14175,7 @@ function sendChat() {
         </div>
 
         <!-- Weather Mage: every button is an exact name/modifier pair offered by DialogSelectWeather. -->
-        <div v-if="gameStore.state.selectWeather" class="yesno-card select-skill-card">
+        <div v-if="gameStore.state.selectWeather" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card">
           <div class="yesno-text">Choose the weather</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.selectWeather.options" :key="option.name"
@@ -13700,21 +14188,23 @@ function sendChat() {
 
         <!-- Owner 10-05 (g1950414): Raise the Dead - the raising coach picks the new player's roster position. Every
              button is an exact position id offered by DialogSelectPosition; Cancel only when the server allows none. -->
-        <div v-if="gameStore.state.selectPosition" class="yesno-card select-skill-card" data-testid="select-position-card">
+        <div v-if="gameStore.state.selectPosition" v-pad-focus="{ mandatory: gameStore.state.selectPosition.minSelects !== 0 }" class="yesno-card select-skill-card" data-testid="select-position-card">
           <div class="yesno-text">{{ selectPositionTitle }}</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.selectPosition.options" :key="option.positionId"
-              class="skill-select-opt" @click="gameStore.resolveSelectPosition(option.positionId)">
+              class="skill-select-opt" :data-pad-primary="raiseDeadPadKey(option.label) === 'A' ? '' : undefined"
+              :data-pad-key="raiseDeadPadKey(option.label) === 'X' ? 'X' : undefined"
+              @click="gameStore.resolveSelectPosition(option.positionId)">
               <span>{{ option.label }}</span>
             </button>
           </div>
           <div v-if="gameStore.state.selectPosition.minSelects === 0" class="yesno-actions">
-            <button class="rr-decline" @click="gameStore.resolveSelectPosition(null)">Cancel</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.resolveSelectPosition(null)">Cancel</button>
           </div>
         </div>
 
         <!-- Upstream DialogUseInducement: every server-offered inducement/card plus decline. -->
-        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" class="yesno-card select-skill-card">
+        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.inducementUse.options"
@@ -13722,25 +14212,25 @@ function sendChat() {
               @click="gameStore.resolveUseInducement(option.kind, option.value)">
               <span>{{ option.kind === 'card' ? 'Card: ' : '' }}{{ option.label }}</span>
             </button>
-            <button class="rr-decline" @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
           </div>
         </div>
 
         <!-- #8 (owner tester): voluntary End-Turn guard — a client-side confirm when own players
              are still unactivated (server acted-flag count, Meero C-8). NOT a server dialog. -->
-        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" title="End Turn?" label="End turn confirmation"
+        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="End Turn?" label="End turn confirmation"
           :position-style="reactivePromptStyle('endTurnWarn')" draggable
           @drag-start="startReactivePromptDrag('endTurnWarn', $event)">
           <template v-if="endTurnWarnBallAction">Your {{ END_TURN_ACTION_NOUN[endTurnWarnBallAction] }} has not been completed. </template>
           <template v-if="endTurnWarnCount > 0">{{ endTurnWarnCount }} of your players {{ endTurnWarnCount === 1 ? 'has' : 'have' }} not activated yet.</template>
           <template #actions>
             <button class="rr-use" @click="confirmEndTurnAnyway()">End turn</button>
-            <button class="rr-decline" @click="cancelEndTurnWarn()">Go back</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelEndTurnWarn()">Go back</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Owner 10-03: Confirm Setup asks first; an illegal setup lists what is wrong (arrows mark the offenders). -->
-        <PitchConfirmationPanel v-if="setupConfirm" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup'"
+        <PitchConfirmationPanel v-if="setupConfirm" v-pad-focus="{ pitch: true, priority: PAD_FOCUS_PRIORITY.confirmation }" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup'"
           label="Setup confirmation" test-id="setup-confirm"
           :position-style="reactivePromptStyle('setupConfirm')" draggable
           @drag-start="startReactivePromptDrag('setupConfirm', $event)">
@@ -13758,8 +14248,8 @@ function sendChat() {
             </ul>
           </div>
           <template #actions>
-            <button v-if="!setupConfirm.problems.length" class="rr-use" @click="confirmSetupNow()">Confirm setup</button>
-            <button class="rr-decline" @click="cancelSetupConfirm()">Go back</button>
+            <button v-if="!setupConfirm.problems.length" class="rr-use" data-pad-key="View" @click="confirmSetupNow()">Confirm setup</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelSetupConfirm()">Go back</button>
             <!-- The checklist is the standard rules; the server referees league options (Astra review 10-03). -->
             <button v-if="setupConfirm.problems.length" class="rr-decline" data-testid="setup-submit-anyway"
               title="Send this setup to the referee as it is. The server decides whether it is legal."
@@ -13779,13 +14269,13 @@ function sendChat() {
         </PitchConfirmationPanel>
 
         <!-- #12/#231: the single shared confirmation surface for every guarded end-activation trigger. -->
-        <PitchConfirmationPanel v-if="endActConfirm" :title="endActConfirm.title ?? 'End Activation?'" label="End activation confirmation"
+        <PitchConfirmationPanel v-if="endActConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="endActConfirm.title ?? 'End Activation?'" label="End activation confirmation"
           :position-style="reactivePromptStyle('endActConfirm')" draggable
           @drag-start="startReactivePromptDrag('endActConfirm', $event)">
           {{ endActConfirm.text }}
           <template #actions>
             <button class="rr-use" @click="confirmEndActivation()">{{ endActConfirm.confirmLabel }}</button>
-            <button class="rr-decline" @click="cancelEndActivation()">Go back</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelEndActivation()">Go back</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -13804,7 +14294,7 @@ function sendChat() {
 
         <!-- Owner 2026-07-06 (note 4/5): BB2025 selectKeyword — the injured player's
              coach picks a keyword to hate (Getting Even / Hatred). N options, one pick. -->
-        <div v-if="gameStore.state.keywordChoice" class="yesno-card select-skill-card"
+        <div v-if="gameStore.state.keywordChoice" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
           :style="reactivePromptStyle('keywordChoice')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('keywordChoice', $event)">
           <div class="yesno-text">{{ gameStore.state.keywordChoice.playerName }} — choose a keyword to hate</div>
@@ -13818,7 +14308,7 @@ function sendChat() {
         </div>
 
         <!-- Owner 2026-07-04d: minimal BUY-CARD menu — pick a card or Done. -->
-        <div v-if="gameStore.state.cardChoice" class="yesno-card card-buy-menu"
+        <div v-if="gameStore.state.cardChoice" v-pad-focus class="yesno-card card-buy-menu"
           :style="reactivePromptStyle('cardChoice')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('cardChoice', $event)">
           <div class="yesno-text">Buy a card? <span class="card-gold">{{ gameStore.state.cardChoice.availableGold }}gp</span></div>
@@ -13829,12 +14319,12 @@ function sendChat() {
               <span class="card-buy-desc">{{ opt.description }}</span>
             </button>
           </div>
-          <button class="sendoff-btn pass card-buy-done" @click="gameStore.resolveCardChoice(null)">Done</button>
+          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveCardChoice(null)">Done</button>
         </div>
 
         <!-- case 478: BUY CARDS WITH GOLD — spend inducement gold on random cards drawn from
              per-type decks. Click a deck to buy one (server draws + re-shows to loop), or Done. -->
-        <div v-if="gameStore.state.cardBuy" class="yesno-card card-buy-menu"
+        <div v-if="gameStore.state.cardBuy" v-pad-focus class="yesno-card card-buy-menu"
           :style="reactivePromptStyle('cardBuy')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('cardBuy', $event)">
           <div class="yesno-text">Buy cards
@@ -13850,13 +14340,13 @@ function sendChat() {
               <span class="card-buy-desc">{{ d.nrOfCards }} in deck</span>
             </button>
           </div>
-          <button class="sendoff-btn pass card-buy-done" @click="gameStore.resolveBuyCard(null)">Done</button>
+          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveBuyCard(null)">Done</button>
         </div>
 
 
         <!-- Owner 2026-07-04d: interactive COIN CALL — Heads/Tails buttons, each
              with the coin side beside it (heads = FUMBBL skull, tails = T). -->
-        <div v-if="gameStore.state.coinChoicePrompt" class="yesno-card coin-choice-card"
+        <div v-if="gameStore.state.coinChoicePrompt" v-pad-focus="{ mandatory: true }" class="yesno-card coin-choice-card"
           :style="reactivePromptStyle('coinChoice')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('coinChoice', $event)">
           <div class="yesno-text">Call the coin toss</div>
@@ -13880,7 +14370,7 @@ function sendChat() {
         </div>
 
         <!-- Gate Kick/Receive behind the queued coin-result cine so result always precedes the choice. -->
-        <div v-if="gameStore.state.receiveChoicePrompt && !gameStore.cineShowing.value" class="yesno-card coin-choice-card"
+        <div v-if="gameStore.state.receiveChoicePrompt && !gameStore.cineShowing.value" v-pad-focus="{ mandatory: true }" class="yesno-card coin-choice-card"
           :style="reactivePromptStyle('receiveChoice')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('receiveChoice', $event)">
           <div class="toss-winner-splash">🪙 {{ gameStore.state.receiveChoicePrompt.winner }} won the toss!</div>
@@ -13893,7 +14383,7 @@ function sendChat() {
 
         <!-- Owner 2026-07-04 (interaction catalog 0.2): generic YES/NO prompt —
              renders any accompanying server text verbatim. -->
-        <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq"
+        <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq" v-pad-focus
           title="Confirm" label="Confirmation" :position-style="reactivePromptStyle('yesNo')" draggable
           :spaced="!!gameStore.state.yesNo.bullets"
           @drag-start="startReactivePromptDrag('yesNo', $event)">
@@ -13904,14 +14394,14 @@ function sendChat() {
           <template v-else>{{ gameStore.state.yesNo.text }}</template>
           <template #actions>
             <button class="sendoff-btn argue" @click="gameStore.resolveYesNo(true)">{{ gameStore.state.yesNo.yesLabel }}</button>
-            <button class="sendoff-btn pass" @click="gameStore.resolveYesNo(false)">{{ gameStore.state.yesNo.noLabel }}</button>
+            <button class="sendoff-btn pass" data-pad-cancel @click="gameStore.resolveYesNo(false)">{{ gameStore.state.yesNo.noLabel }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Bloodlust reroll/decision card. The feed beat uses the pitch player-pick rail. -->
         <!-- #237 (owner-fg 07-29): manual drag position takes precedence over the RAF token anchor. -->
         <div v-if="gameStore.state.bloodlust && gameStore.state.bloodlust.stage !== 'bite'" :key="'bl-' + gameStore.state.bloodlust.seq"
-          class="skill-choice reroll-bar bloodlust-card"
+          v-pad-focus class="skill-choice reroll-bar bloodlust-card"
           :style="reactivePromptStyle('bloodlust', bloodlustPos.ready ? { x: bloodlustPos.x, y: bloodlustPos.y } : undefined)"
           title="Drag to move" @pointerdown="startReactivePromptDrag('bloodlust', $event)">
           <!-- Owner W37 mock: the RE-ROLL beat restructures to 3 lines — headline states the failure plainly
@@ -13941,7 +14431,7 @@ function sendChat() {
                     :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
                   <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
                 </button>
-                <button class="bl-opt bl-decline rr-decline-chip" title="Keep the roll"
+                <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel title="Keep the roll"
                   @click="gameStore.resolveBloodlustReroll(null)">✕</button>
               </div>
             </template>
@@ -13968,19 +14458,19 @@ function sendChat() {
              the prompt + red Decline beside the movement confirm bar's slot. -->
         <!-- #237 (owner-fg 07-29): body drag leaves buttons, labels, and inputs on their original click path. -->
         <!-- Triage #4 (owner 08-11): the SHADOWING class retires this bottom bar for a position-anchored pill below. -->
-        <ChargePickPanel v-if="chargePick" :max="chargePick.maxPicks" :selected="chargePick.picked.length"
+        <ChargePickPanel v-if="chargePick" v-pad-focus="{ pitch: true }" :max="chargePick.maxPicks" :selected="chargePick.picked.length"
           :confirm-disabled="chargePick.picked.length < chargePick.minPicks || chargePick.picked.length === 0"
           :declinable="chargePick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <ChargePickPanel v-else-if="dwarfenWisdomPick" title="Dwarfen Wisdom"
+        <ChargePickPanel v-else-if="dwarfenWisdomPick" v-pad-focus="{ pitch: true }" title="Dwarfen Wisdom"
           label="Dwarfen Wisdom player selection" :roll="dwarfenWisdomPick.roll"
           :max="dwarfenWisdomPick.maxPicks" :selected="dwarfenWisdomPick.picked.length"
           :confirm-disabled="dwarfenWisdomPick.picked.length < dwarfenWisdomPick.minPicks"
           :declinable="dwarfenWisdomPick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <ChargePickPanel v-else-if="prayerBoardPick" :title="prayerBoardTitle"
+        <ChargePickPanel v-else-if="prayerBoardPick" v-pad-focus="{ pitch: true }" :title="prayerBoardTitle"
           :label="`${prayerBoardTitle} player selection`"
           :max="prayerBoardPick.maxPicks" :selected="prayerBoardPick.picked.length"
           :confirm-disabled="prayerBoardPick.picked.length < prayerBoardPick.minPicks"
@@ -13988,17 +14478,17 @@ function sendChat() {
           @decline="gameStore.resolvePlayerPick(null)" />
 
         <PitchConfirmationPanel v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && !pickMeUpPrompt"
-          title="Select Players" label="Player selection confirmation" :position-style="reactivePromptStyle('playerPick')"
+          v-pad-focus="{ pitch: true }" title="Select Players" label="Player selection confirmation" :position-style="reactivePromptStyle('playerPick')"
           draggable @drag-start="startReactivePromptDrag('playerPick', $event)">
           <span>{{ gameStore.state.playerPick.prompt }}</span>
           <span v-if="gameStore.state.playerPick.confirm && gameStore.state.playerPick.maxPicks > 1" class="pick-count">
             {{ gameStore.state.playerPick.picked.length }}/{{ gameStore.state.playerPick.maxPicks }}
           </span>
           <template #actions>
-            <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm"
+            <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
               :disabled="gameStore.state.playerPick.picked.length < gameStore.state.playerPick.minPicks || gameStore.state.playerPick.picked.length === 0"
               @click="gameStore.confirmPlayerPick()">Confirm</button>
-            <button v-if="gameStore.state.playerPick.declinable" class="pick-decline"
+            <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" data-pad-cancel
               @click="gameStore.resolvePlayerPick(null)">Decline</button>
             <button v-if="rosterPickFallback" class="pick-decline" type="button"
               @click="rosterPickFallbackOpen = !rosterPickFallbackOpen">{{ rosterPickFallbackOpen ? 'Hide list' : 'Pick from roster' }}</button>
@@ -14007,13 +14497,13 @@ function sendChat() {
 
         <!-- Pick-Me-Up remains token/scoreboard anchored; it is a contextual election, not a global confirm. -->
         <div v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && pickMeUpPrompt"
-          class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
+          v-pad-focus="{ pitch: true }" class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
           title="Drag to move" @pointerdown="startReactivePromptDrag('playerPick', $event)">
           <span class="pick-prompt">{{ gameStore.state.playerPick.prompt }}</span>
-          <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm"
+          <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
             :disabled="gameStore.state.playerPick.picked.length < gameStore.state.playerPick.minPicks || gameStore.state.playerPick.picked.length === 0"
             @click="gameStore.confirmPlayerPick()">Confirm</button>
-          <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" @click="gameStore.resolvePlayerPick(null)">Decline</button>
+          <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" data-pad-cancel @click="gameStore.resolvePlayerPick(null)">Decline</button>
         </div>
 
         <div v-if="rosterPickFallback && rosterPickFallbackOpen" class="roster-pick-fallback-panel">
@@ -14027,7 +14517,7 @@ function sendChat() {
         <!-- Triage #4 (owner 08-11): SHADOWING pill — a position-anchored Confirm/Decline at the shadower (the
              reactive-election / follow-up idiom), replacing the bottom bar for this class. Same playerPick wire. -->
         <!-- Owner 10-05: the Shadowing chip rides the modern confirmation panel too (Tentacles / pick-me-up language). -->
-        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" title="Shadow the runner?" label="Shadowing decision"
+        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" v-pad-focus title="Shadow the runner?" label="Shadowing decision"
           compact draggable test-id="shadowing-panel"
           v-prompt-dodge="promptDodge('shadowing', shadowingPick.seq)"
           :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
@@ -14035,7 +14525,7 @@ function sendChat() {
           <span>{{ shadowerName }} can follow the runner</span>
           <template #actions>
             <button class="rr-use" @click="answerShadowing(true)">Shadow</button>
-            <button v-if="shadowingPick.declinable" class="rr-decline" @click="answerShadowing(false)">Decline</button>
+            <button v-if="shadowingPick.declinable" class="rr-decline" data-pad-cancel @click="answerShadowing(false)">Decline</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -14118,7 +14608,7 @@ function sendChat() {
              badge), footer (count + one confirm button), waiting line and idle button. They differ only in the title,
              the button label, the maximum, the team and the eligible players. -->
         <!-- Owner 09-29: ASSIGN TOUCHDOWN (concede) - its own end-game step before the MVP step; one pick, answered here. -->
-        <EndGamePickPane v-if="assignScreenActive" kind="assign-touchdown" data-testid="assign-touchdown-pane"
+        <EndGamePickPane v-if="assignScreenActive" v-pad-focus kind="assign-touchdown" data-testid="assign-touchdown-pane"
           :pick="assignRosterPick" :round-key="assignRoundKey" title="Assign Touchdown" :max="1"
           confirm-label="Assign Touchdown" :confirm-disabled="!assignPick || assignPick.picked.length !== 1"
           :waiting-text="assignWaitingText" idle-label="Assign Touchdown"
@@ -14136,7 +14626,7 @@ function sendChat() {
         <!-- Owner 2026-07-15: unified staged MVP screen. Result banner · both-teams MVP chips (mvpRoll:
              Pending…→roulette→reveal, opponent flashes in) · MY roster with the nomination (only on my
              turn; the button is inert while it's the opponent's turn) · Continue once both sides resolve. -->
-        <EndGamePickPane v-if="mvpScreenActive" kind="mvp" data-testid="mvp-nominate-pane"
+        <EndGamePickPane v-if="mvpScreenActive" v-pad-focus kind="mvp" data-testid="mvp-nominate-pane"
           :pick="mvpRosterPick" :round-key="mvpRoundKey" :title="mvpPick?.prompt ?? ''" :max="mvpPick?.maxPicks ?? 0"
           confirm-label="Nominate MVP's" :confirm-disabled="!mvpPick || mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
           :waiting-text="mvpWaiting ? 'Waiting for opponent' : null" :idle-label="mvpBothResolved ? 'Continue' : 'Nominate MVP\'s'" :idle-disabled="!mvpBothResolved"
@@ -14228,6 +14718,9 @@ function sendChat() {
           <div class="yesno-text">Kicking coach deciding whether to use Kick…</div>
         </div>
         <!-- DialogKickSkillHandler.java:25-58: choose the server-sent semantic square; never echo a coordinate. -->
+        <!-- Controller support P2b: the election's pitch buttons are one pad card (D-pad / stick move the ring, A picks);
+             display: contents keeps every button positioned exactly as before. -->
+        <div v-if="kickElectionTargets.length" v-pad-focus="{ mandatory: true }" class="kick-election-group" data-testid="kick-election-group" style="display: contents">
         <button v-for="target in kickElectionTargets" :key="`${target.key}:${target.choice}`"
           class="kick-election-target"
           :class="{ reduced: target.choice === 'kick', boundary: !target.onPitch, icon: target.iconOnly, stacked: target.stackIndex > 0 }"
@@ -14243,6 +14736,7 @@ function sendChat() {
           </template>
           <span v-else-if="!target.onPitch" class="kick-election-label">Normal</span>
         </button>
+        </div>
 
         <!-- #94: persistent blitz-used badges — owner 09-07: drawn by the renderer on the chest row (setBlitzTokens). -->
 
@@ -14270,7 +14764,19 @@ function sendChat() {
         <BlockAttackConfirmModal v-if="blockAttackConfirm" :preview="blockAttackConfirm.preview"
           :target-name="blockAttackConfirm.targetName" @confirm="confirmAggroStage()"
           @cancel="o66AggroStage = null" />
-        <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" class="block-alt-modal"
+        <!-- Controller support P2b (owner round 3): the controller-only block declaration ask - A Block, X the special,
+             B Cancel. Specials = exactly the attack menu's offers on this target; the choice rides the menu's seams. -->
+        <PitchConfirmationPanel v-if="padBlockDeclare" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Block or special?" label="Block declaration"
+          test-id="pad-block-declare">
+          <span>{{ padBlockDeclareTargetName }}</span>
+          <template #actions>
+            <button data-pad-primary data-testid="pad-block-declare-block" @click="padBlockDeclareChoose(null)">🛡️ Block</button>
+            <button v-for="(kind, ki) in padBlockDeclare.kinds" :key="kind" :data-pad-key="ki === 0 ? 'X' : undefined"
+              :data-testid="`pad-block-declare-${kind}`" @click="padBlockDeclareChoose(kind)">{{ BLOCK_KIND_EMOJI[kind] }} {{ BLOCK_KIND_LABEL[kind] }}</button>
+            <button class="rr-decline" data-pad-cancel @click="padBlockDeclareCancel()">Cancel</button>
+          </template>
+        </PitchConfirmationPanel>
+        <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" v-pad-focus="{ cancel: padDismissBlockAlternative }" class="block-alt-modal"
           :style="reactivePromptStyle('blockAlternative')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('blockAlternative', $event)">
           <template v-if="gameStore.state.foulChoiceHold">
@@ -14286,8 +14792,8 @@ function sendChat() {
           <template v-else-if="gameStore.state.blitzBlockChoice">
           <div class="block-alt-title">Choose the {{ gameStore.state.blitzBlockChoice.origin === 'blitz' ? 'blitz' : 'block' }} attack</div>
           <div class="block-alt-actions">
-            <button @click="chooseBlitzBlockAlternative(null)">🛡️ Block</button>
-            <button v-for="offer in gameStore.state.blitzBlockChoice.offers" :key="offer.kind"
+            <button data-pad-primary @click="chooseBlitzBlockAlternative(null)">🛡️ Block</button>
+            <button v-for="(offer, oi) in gameStore.state.blitzBlockChoice.offers" :key="offer.kind" :data-pad-key="oi === 0 ? 'X' : undefined"
               @click="chooseBlitzBlockAlternative(offer.kind as BlockKind)">
               {{ BLOCK_KIND_EMOJI[offer.kind as BlockKind] }} {{ offer.label }}
               <small v-if="blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) != null">
@@ -14297,15 +14803,15 @@ function sendChat() {
           </div>
           </template>
         </div>
-        <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm"
+        <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
           title="Chainsaw Attack?" label="Chainsaw attack confirmation"
           :position-style="reactivePromptStyle('blockAlternative')" draggable
           @drag-start="startReactivePromptDrag('blockAlternative', $event)">
           <!-- Display only: +3 comes from upstream skill/bb2025/Chainsaw.java:47; kick-back on 1 is server-owned. -->
           Armour {{ chainsawBlitzTarget ?? '—' }}+ · kick-back on 1
           <template #actions>
-            <button @click="chainsawBlitzConfirm = false">Back</button>
-            <button class="danger" @click="confirmChainsawBlitz()">Use Chainsaw</button>
+            <button data-pad-cancel @click="chainsawBlitzConfirm = false">Back</button>
+            <button class="danger" data-pad-primary @click="confirmChainsawBlitz()">Use Chainsaw</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -14331,14 +14837,14 @@ function sendChat() {
           </span>
         </div>
 
-        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" title="Cast Zap?"
+        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Cast Zap?"
           label="Zap target confirmation" compact>
           {{ gameStore.state.wizardTargetConfirm.playerName }} — Zap requires
           <D6Face :value="gameStore.state.wizardTargetConfirm.requiredRoll"
             :label="`Zap needs ${gameStore.state.wizardTargetConfirm.requiredRoll}`" />+
           <template #actions>
             <button class="rr-use" @click="gameStore.confirmWizardTarget()">Confirm</button>
-            <button class="rr-decline" @click="gameStore.cancelWizardTarget()">Cancel</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelWizardTarget()">Cancel</button>
           </template>
         </PitchConfirmationPanel>
         <!-- Owner ⑩ / W29: pass/bomb targeting tooltip — throw N+ and catch M+ for a standing target-square catcher
@@ -14387,14 +14893,14 @@ function sendChat() {
         <!-- Owner 2026-07-04 (interaction catalog 28, PRIORITY): follow-up chip card
              at the block square (offset so the square stays visible); the passive
              shared passive variant carries no buttons. -->
-        <div v-if="gameStore.state.followupChoice && followupPos" class="followup-chip"
+        <div v-if="gameStore.state.followupChoice && followupPos" v-pad-focus class="followup-chip"
           v-prompt-dodge="promptDodge('followup', gameStore.state.followupChoice.seq)"
           :style="reactivePromptStyle('followup', { x: followupPos.x, y: followupPos.y })"
           title="Drag to move" @pointerdown="startReactivePromptDrag('followup', $event)">
           <div class="fu-title">Follow up?</div>
           <div class="fu-actions">
-            <button class="fu-btn follow" @click="answerFollowup(true)">Follow up</button>
-            <button class="fu-btn stay" @click="answerFollowup(false)">Stay</button>
+            <button class="fu-btn follow" data-pad-primary @click="answerFollowup(true)">Follow up</button>
+            <button class="fu-btn stay" data-pad-cancel @click="answerFollowup(false)">Stay</button>
           </div>
         </div>
         <!-- Owner 2026-07-06: the passive toast mounts to the player's HEAD — centred
@@ -14585,7 +15091,7 @@ function sendChat() {
         <!-- Owner 2026-07-05: BB2025 block PARTIAL re-roll — options to the LEFT of the
              team-reroll logo; dice become clickable to accept, or (in Pro/Consummate
              mode) to choose which die to re-roll. -->
-        <div v-if="gameStore.state.blockPartial" class="block-partial"
+        <div v-if="gameStore.state.blockPartial" v-pad-focus="blockDialogMine ? { mandatory: !!gameStore.state.blockPartial.pickable } : false" class="block-partial"
           :style="reactivePromptStyle('blockPartial', blockRerollPos ?? undefined)"
           title="Drag to move" @pointerdown="startReactivePromptDrag('blockPartial', $event)">
           <BlockChooserCopy v-if="blockChooserCaptionTeamId != null" :game="gameStore.game.value"
@@ -14690,7 +15196,7 @@ function sendChat() {
              cbd0f598). A click on a die for a coach-pickable target sends the plain choice → resolves that target
              (answers the reRollBlockForTargets dialog TK g748 wedged on). Reuses the .bp-die block-face art. The
              re-roll affordances (team/pro/brawler/consummate) are a fast-follow — invocation being pinned w/ Tarkin. -->
-        <div v-if="gameStore.state.multiBlockResolution" class="multi-block-resolution"
+        <div v-if="gameStore.state.multiBlockResolution" v-pad-focus="multiBlockDialogMine ? { mandatory: gameStore.state.multiBlockResolution.rolls.some((r) => r.isOwnChoice === true) } : false" class="multi-block-resolution"
           :style="reactivePromptStyle('multiBlock')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
           <div class="mbr-title">MULTIPLE BLOCK</div>
@@ -14830,7 +15336,7 @@ function sendChat() {
              (data-chosen) before the rest of the events render. -->
         <template v-if="gameStore.state.reRollPrompt">
           <!-- #237 (owner-fg 07-29): both reroll presentations share the same manual override. -->
-          <div class="block-partial reroll-bar"
+          <div v-pad-focus="gameStore.state.reRollPrompt.mine ? {} : false" class="block-partial reroll-bar"
             :data-spectator="!gameStore.state.reRollPrompt.mine"
             :style="reactivePromptStyle('reroll', { x: rerollMenuPos.x, y: rerollMenuPos.y + 18 })"
             title="Drag to move" @pointerdown="startReactivePromptDrag('reroll', $event)">
@@ -14872,9 +15378,9 @@ function sendChat() {
               <span v-for="(message, i) in gameStore.state.reRollPrompt.messages" :key="i">{{ message }}</span>
               <span v-if="gameStore.state.reRollPrompt.loner" class="rr-loner-line">{{ rerollLonerCopy }}</span>
             </div>
-            <div class="bp-actions">
-              <template v-for="opt in gameStore.state.reRollPrompt.options" :key="opt.source">
-                <button v-if="opt.source === 'Team ReRoll'" class="bp-team" :title="opt.label"
+            <div class="bp-actions" :class="{ 'pad-list': activeInput === 'controller' && gameStore.state.reRollPrompt.mine }">
+              <template v-for="opt in rerollOptionsShown" :key="opt.source">
+                <button v-if="opt.source === 'Team ReRoll'" class="bp-team" data-pad-primary :title="opt.label"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
                   <img :src="resourceIcon('re_roll')" :alt="opt.label" />
@@ -14885,6 +15391,7 @@ function sendChat() {
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
                 <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(opt.source, effectiveIconStyle) }"
+                  :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
                   :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Reroll with ${opt.label}`"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
@@ -14900,7 +15407,7 @@ function sendChat() {
                   </span>
                 </button>
               </template>
-              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" title="No reroll"
+              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel title="No reroll"
                 @click="gameStore.resolveReRoll(null)">✕</button>
             </div>
           </div>
@@ -14912,7 +15419,7 @@ function sendChat() {
              non-owners (data-spectator → buttons inert), the owner's pick GLOWS
              activation-gold (data-chosen, §A0). Holds the pipeline until answered. -->
         <ul v-if="gameStore.state.injuryInteraction && injuryGatePos.ready"
-          class="context-menu reroll-menu injury-gate"
+          v-pad-focus="gameStore.state.injuryInteraction.mine ? {} : false" class="context-menu reroll-menu injury-gate"
           :data-spectator="!gameStore.state.injuryInteraction.mine"
           :data-side="gameStore.state.injuryInteraction.side"
           :style="reactivePromptStyle('injuryInteraction', { x: injuryGatePos.x, y: injuryGatePos.y + 16 })"
@@ -19146,6 +19653,18 @@ function sendChat() {
   position: relative;
 }
 /* Owner 10-01: the Shift+click mark-label field — styled like the chat entry (same surface, border and face). */
+/* Controller support P2b: the reroll card reads as a focused LIST in controller mode; glyph hints. */
+.bp-actions.pad-list { flex-direction: column; align-items: stretch; }
+.bp-actions.pad-list > button { justify-content: flex-start; }
+.setup-pad-hints { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0; font-size: 0.8rem; opacity: 0.9; }
+.setup-pad-hints > span { display: inline-flex; align-items: center; gap: 3px; }
+.end-turn-glyph { margin-left: 6px; }
+/* Controller support P2a (owner round 7): the precision toggle's hint, just under the crosshair square. */
+.crosshair-precision-hint {
+  position: absolute; z-index: 6; pointer-events: none; transform: translate(-50%, 18px);
+  padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--ui-text-on-accent, #fff); background: var(--ui-accent, #4f9dff); opacity: 0.92;
+}
 .mark-label-field {
   position: absolute;
   z-index: 40;

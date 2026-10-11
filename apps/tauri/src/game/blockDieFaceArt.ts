@@ -1,4 +1,6 @@
+import { reactive } from 'vue';
 import { blockDieLogSymbol, isBlockDieFaceValue, type BlockDieLogSymbol } from './blockDieLog';
+import { BLOCK_STAMP_FACE_INDEX } from './blockResultStampArt';
 import { settings, type AppSettings } from './settings';
 
 export type BlockDiceFamily = AppSettings['blockDiceFamily'];
@@ -23,7 +25,8 @@ export const BLOCK_DIE_FACE_SYMBOL_URLS: Readonly<Record<BlockDiceFamily, Readon
   },
 };
 
-/** The 64 px face image for a block-die symbol in a family (an unknown family reads as 'default'). */
+/** The BUNDLED 64 px face image for a block-die symbol in a family (an unknown family reads as 'default'). Never a
+ *  pack face: the roster RIP skull and the fallback of a broken pack image read this. */
 export function blockDieSymbolUrl(symbol: BlockDieLogSymbol, family: BlockDiceFamily = settings.blockDiceFamily): string {
   return (BLOCK_DIE_FACE_SYMBOL_URLS[family] ?? BLOCK_DIE_FACE_SYMBOL_URLS.default)[symbol];
 }
@@ -32,4 +35,49 @@ export function blockDieSymbolUrl(symbol: BlockDieLogSymbol, family: BlockDiceFa
  *  The family defaults to the live `settings.blockDiceFamily` (reactive when read during a render). */
 export function blockDieFaceUrl(value: number, family: BlockDiceFamily = settings.blockDiceFamily): string | null {
   return isBlockDieFaceValue(value) ? blockDieSymbolUrl(blockDieLogSymbol(value), family) : null;
+}
+
+// Owner 10-10 ("let's connect log line and end of game dice stats to the dice faces"): the small DOM faces - the
+// log-line dice (BlockDieFace.vue) and the end-game Block dice chart (PostGamePanel.vue) - follow the PACK-bound
+// faces too, resolved the way the block choice card resolves them: the pack face of that face first (user files,
+// else the assigned block-dice pack), else the bundled symbol those surfaces have always drawn.
+// The pack layer is published here by assetMods.publishBlockDicePackFaces - the same call, with the same per-face
+// urls, that feeds PitchRenderer.setBlockFaceSources (the card / 3D die / pitch) - and it is reactive, so an open log
+// or Dice pane follows a pack change without a reload. The bindings are the LOCAL viewer's (spectator / replay too).
+const packFaces = reactive({
+  /** Tumble order [skull, bothdown, push, powpush, pow]; null = no pack binds that face. */
+  urls: [null, null, null, null, null] as (string | null)[],
+  /** Pack urls whose image failed to load in the DOM this session: those faces draw the bundled symbol. */
+  failed: [] as string[],
+});
+
+/** Publish the pack-bound face urls (tumble order). Every publish forgets earlier load failures. */
+export function setBlockDiePackFaceUrls(urls: readonly (string | null | undefined)[]): void {
+  packFaces.urls = [0, 1, 2, 3, 4].map((index) => urls[index] || null);
+  packFaces.failed = [];
+}
+
+/** A pack face image failed to load (an <img> / <image> error event): fall back to the bundled symbol for it. */
+export function markBlockDiePackFaceFailed(url: string): void {
+  if (url && !packFaces.failed.includes(url)) packFaces.failed.push(url);
+}
+
+export interface BlockDieDomArt {
+  url: string;
+  /** `url` is a pack face: a full die image (tile and all), any size - drawn contained, as supplied (the block
+   *  die surface / family settings do not restyle it). False = the bundled 64 px content-trimmed symbol. */
+  pack: boolean;
+}
+
+/** The small DOM art of a block-die symbol: the pack face of that face, else the bundled symbol of the family.
+ *  Both Push values share the push face; Stumble = the powpush face; Pow = the pow face (as on the choice card). */
+export function blockDieSymbolArt(symbol: BlockDieLogSymbol, family: BlockDiceFamily = settings.blockDiceFamily): BlockDieDomArt {
+  const pack = packFaces.urls[BLOCK_STAMP_FACE_INDEX[symbol] ?? -1];
+  if (pack && !packFaces.failed.includes(pack)) return { url: pack, pack: true };
+  return { url: blockDieSymbolUrl(symbol, family), pack: false };
+}
+
+/** The small DOM art for a block die value (1..6); null when not a face. */
+export function blockDieFaceArt(value: number, family: BlockDiceFamily = settings.blockDiceFamily): BlockDieDomArt | null {
+  return isBlockDieFaceValue(value) ? blockDieSymbolArt(blockDieLogSymbol(value), family) : null;
 }

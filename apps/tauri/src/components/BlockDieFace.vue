@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { blockDieLogSymbol, isBlockDieFaceValue } from '../game/blockDieLog';
-import { blockDieSymbolUrl } from '../game/blockDieFaceArt';
+import { blockDieSymbolArt, markBlockDiePackFaceFailed } from '../game/blockDieFaceArt';
 import { settings } from '../game/settings';
 
 const props = defineProps<{
@@ -14,15 +14,24 @@ const props = defineProps<{
 // Owner 10-06: the set follows the bundled block-dice family (Settings > Asset packs > Block dice).
 const valid = computed(() => isBlockDieFaceValue(props.value));
 const symbol = computed(() => isBlockDieFaceValue(props.value) ? blockDieLogSymbol(props.value) : null);
-const url = computed(() => symbol.value ? blockDieSymbolUrl(symbol.value, settings.blockDiceFamily) : '');
+// Owner 10-10: a PACK-bound face wins per face, as on the block choice card (blockDieSymbolArt; reactive to pack
+// changes). A pack face is a full die image with its own plate and may be any size: it is drawn as supplied, contained
+// in the same box as the bundled symbol (object-fit: contain below) - no stretch, no change to the line box.
+const art = computed(() => symbol.value ? blockDieSymbolArt(symbol.value, settings.blockDiceFamily) : null);
+const url = computed(() => art.value?.url ?? '');
 const failed = ref(false);
-watch(() => [props.value, settings.blockDiceFamily], () => { failed.value = false; });
+watch(() => [props.value, settings.blockDiceFamily, url.value], () => { failed.value = false; });
+/** A broken pack image falls back to the bundled symbol (never a blank); a broken bundled symbol to the value tile. */
+function onImageError(): void {
+  if (art.value?.pack) markBlockDiePackFaceFailed(art.value.url);
+  else failed.value = true;
+}
 </script>
 
 <template>
-  <span v-if="valid" class="block-die-face" :data-symbol="symbol" role="img" :aria-label="result">
+  <span v-if="valid" class="block-die-face" :data-symbol="symbol" :data-pack-face="art?.pack ? '' : undefined" role="img" :aria-label="result">
     <span class="block-die-result">{{ result }}</span>
-    <img v-if="!failed" :src="url" alt="" aria-hidden="true" @error="failed = true" />
+    <img v-if="!failed" :src="url" alt="" aria-hidden="true" @error="onImageError" />
     <span v-else class="block-die-fallback" :data-value="value" aria-hidden="true"></span>
   </span>
   <span v-else>{{ result }}</span>

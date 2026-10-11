@@ -135,7 +135,8 @@ const BAR: Record<string, { anchor: string; label: string; body: string }> = {
 };
 
 export const SETTINGS_LINES: Record<SettingsTab, string> = {
-  general: 'General holds your connection, keyboard and mouse controls, confirmations, the movement planner and diagnostics.',
+  general: 'General holds your connection, mouse controls, confirmations, the movement planner and diagnostics.',
+  controls: 'Controls picks keyboard or controller and edits every key and button binding.',
   accessibility: 'Accessibility sets text size and contrast, pitch grid lines and the click echo.',
   display: 'Display covers video, the pitch, player sprites, movement animation, dice, the log and skill markings.',
   mods: 'Mods is where you import and manage mod packs: sprites, sounds and icons from friends or online.',

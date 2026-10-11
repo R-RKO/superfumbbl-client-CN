@@ -302,8 +302,19 @@ export function stopPresentationSounds(): void {
   notifyAudioSettlement();
 }
 
+/** Controller support P2b: listeners told of every cue that would play (before the volume / mute check) — the pad
+ *  rumble (game/haptics.ts) rides the same beat. Never told while suppressed (fast-forward catch-up). */
+const soundCueListeners = new Set<(soundId: string) => void>();
+export function onSoundCue(listener: (soundId: string) => void): () => void {
+  soundCueListeners.add(listener);
+  return () => { soundCueListeners.delete(listener); };
+}
+
 export function playSound(soundId: string | null | undefined): void {
   if (!soundId || suppressed) return;
+  for (const listener of [...soundCueListeners]) {
+    try { listener(soundId); } catch { /* presentation-only */ }
+  }
   // Owner 08-17: replay's fast collapse path (2x/4x) now calls this from a plain model-fold — an
   // environment without a real Audio constructor (headless test runner, an embedding without media)
   // must not throw and abort the fold. Sound is presentation-only; missing playback is a silent no-op.

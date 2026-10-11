@@ -16,6 +16,7 @@ import {
   type WalkSheetBindingTransport,
   type WalkSheetSpecTransport,
 } from '@fumbbl40k/ffb-pitch';
+import { setBlockDiePackFaceUrls } from './blockDieFaceArt';
 import { activateSoundEventPack, prepareSoundEventPack, waitForSoundUrlsRetirement } from './sounds';
 import { setLocalFumbblLogoBindings, setSelectedLocalFumbblAssetBindings } from './fumbblAssetCache';
 import {
@@ -243,11 +244,20 @@ export function blockFaceSource(face: string): string | null {
 export function publishBlockDiceBindings(): void {
   void PitchRenderer.setBlockFaceFamily(settings.blockDiceFamily); // owner 10-06: the bundled fallback family (KrisB)
   void PitchRenderer.setBlockDieSurface(settings.blockDiceSurface); // owner 10-06: the plate the bundled faces sit on
-  PitchRenderer.setBlockFaceSources(Object.fromEntries(
-    ['skull', 'bothdown', 'push', 'powpush', 'pow']
+  publishBlockDicePackFaces(Object.fromEntries(
+    BLOCK_FACE_IDS
       .map((face) => [face, blockFaceSource(face)])
       .filter((entry): entry is [string, string] => !!entry[1]),
   ));
+}
+
+const BLOCK_FACE_IDS = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const;
+/** The ONE publish of the pack-bound block die faces: the renderer (choice card, 3D die, pitch dice, on-pitch
+ *  result) and the small DOM faces (log-line dice, end-game Block dice chart: blockDieFaceArt.ts) get the same
+ *  per-face urls in the same call, then the block-dice revision bumps. */
+export function publishBlockDicePackFaces(sources: Partial<Record<(typeof BLOCK_FACE_IDS)[number], string>>): void {
+  PitchRenderer.setBlockFaceSources(sources);
+  setBlockDiePackFaceUrls(BLOCK_FACE_IDS.map((face) => sources[face] ?? null));
   bumpBlockDiceRevision();
 }
 

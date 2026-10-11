@@ -58,7 +58,14 @@ import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { CONFIRMATION_SETTING_ROWS } from './game/confirmationSettings';
-import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { CONTROL_ACTIONS, activeInput, isPadOnlyAction, connectedPads, padShortName, bodyCursorHider, createInputSwitcher, legacyCollisionNote, mouseButtonInput, actionsForInput, controlAction, controllerInputLabel, createControllerRouter, dispatchControlAction, findBindingConflicts, getBinding, isBindingEditable, nextInCycle, registerActionHandler, resetControlBindings, setBinding, type BindingMethod, type BindingSlot, type ControlActionId } from './game/controls';
+import { CROSSHAIR_SPEED_MAX, CROSSHAIR_SPEED_MIN } from './game/crosshair';
+import { CONTROLLER_SUPPORT_NOTICE, CONTROLLER_SUPPORT_NOTICE_BUTTON, CONTROLLER_SUPPORT_NOTICE_TITLE, createControllerOptIn, createControllerRuntime, effectiveInputMethod } from './game/controllerRuntime';
+import { cornerNotice, hideControllerNotices, hideCornerNotice, showCornerNotice } from './game/cornerNotice';
+import PadOverlay from './components/PadOverlay.vue';
+import { browserHapticPads, hapticForSound } from './game/haptics';
+import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
+import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
@@ -1208,7 +1215,7 @@ async function toggleFullscreen(): Promise<void> {
 // S49 (owner 09-30): F11 / Alt+Enter toggle fullscreen app-wide. Capture phase + stopImmediatePropagation so the game
 // view's own Enter (open chat) and the webview's F11 / Alt+Enter defaults never also act.
 function onFullscreenHotkey(e: KeyboardEvent): void {
-  if (fullscreenKeyDecision(e, { confirmKey: settings.confirmKey, capturingKey: !!capturingKey.value }) !== 'toggle') return;
+  if (fullscreenKeyDecision(e, { confirmKey: settings.confirmKey, capturingKey: !!capturingKey.value || !!capturingBinding.value }) !== 'toggle') return;
   e.preventDefault();
   e.stopImmediatePropagation();
   void toggleFullscreen();
@@ -1304,28 +1311,37 @@ watchEffect(() => {
 
 function escSettings(e: KeyboardEvent) {
   if (e.code !== 'Escape') return;
+  if (!settingsEscape()) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}
+/** The Settings-family Escape step (topmost modal first). Controller support P1: a pad's Start reaches the same step.
+ *  False when no Settings-family surface is open. */
+function settingsEscape(): boolean {
+  // Owner 10-10: Escape on the controller-support notice closes the notice only (the box stays off).
+  if (controllerOptIn.noticeOpen.value) { controllerOptIn.dismiss(); return true; }
   const action = settingsEscapeAction({
     settingsOpen: ui.settingsOpen,
     credentialsOpen: credsMenuOpen.value,
     registrationOpen: registerModalOpen.value,
-    capturingKey: !!capturingKey.value,
+    capturingKey: !!capturingKey.value || !!capturingBinding.value,
   });
-  if (!action) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
+  if (!action) return false;
   if (action === 'cancel-key-capture') {
     capturingKey.value = null;
-    return;
+    capturingBinding.value = null;
+    return true;
   }
   if (action === 'close-registration') {
     closeRegisterModal();
-    return;
+    return true;
   }
   if (action === 'close-credentials') {
     closeCredsMenu();
-    return;
+    return true;
   }
   void cancelSettingsChanges();
+  return true;
 }
 watch(() => ui.settingsOpen, (open) => {
   // Astra F5: Settings closed or cancelled - a markings import still in flight must not land afterwards.
@@ -1624,6 +1640,7 @@ watch(leaveGamePrompt, (open) => {
 onBeforeUnmount(() => window.removeEventListener('keydown', escLeaveGame, true));
 
 function captureKey(event: KeyboardEvent) {
+  if (capturingBinding.value) { captureBindingKey(event); return; }
   if (!capturingKey.value) return;
   event.preventDefault();
   event.stopPropagation();
@@ -1635,6 +1652,313 @@ function captureKey(event: KeyboardEvent) {
   }
   capturingKey.value = null;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Controller support P1 (owner 10-07, spec-controller-support.md): Settings > Controls binding table, the pad poller,
+// the controller router (same action handlers as the keys), main-screen actions and the connect / disconnect toast.
+const BINDING_METHODS: readonly BindingMethod[] = ['keyboard', 'controller'];
+const BINDING_SLOTS: readonly BindingSlot[] = ['primary', 'secondary'];
+/** The cell waiting for a key / button (null = none). */
+const capturingBinding = ref<{ id: ControlActionId; method: BindingMethod; slot: BindingSlot } | null>(null);
+const bindingRefusal = ref('');
+const bindingConflicts = computed(() => findBindingConflicts(settings));
+function bindingFixedLabel(id: ControlActionId, method: BindingMethod): string {
+  const action = controlAction(id);
+  return (method === 'keyboard' ? action.keyboardFixed : action.controllerFixed) ?? '';
+}
+function isCapturingBinding(id: ControlActionId, method: BindingMethod, slot: BindingSlot): boolean {
+  const c = capturingBinding.value;
+  return !!c && c.id === id && c.method === method && c.slot === slot;
+}
+function bindingCellText(id: ControlActionId, method: BindingMethod, slot: BindingSlot): string {
+  if (isCapturingBinding(id, method, slot)) return method === 'keyboard' ? 'press a key…' : 'press a button…';
+  const input = getBinding(settings, id)[method][slot];
+  if (!input && method === 'keyboard' && slot === 'primary') {
+    // Astra review P2.8: migration kept the coach's existing key over this new action's default.
+    const note = legacyCollisionNote(settings, id);
+    if (note) return `unbound (your ${keyLabel(note.key)} key kept ${controlAction(note.keptBy).label})`;
+  }
+  if (!input) return '—';
+  return method === 'keyboard' ? keyLabel(input) : controllerInputLabel(input);
+}
+/** The pre-registry Keyboard table's test hooks, kept on the same cells (Roster / Log keyboard primary). */
+function legacyBindTestId(id: ControlActionId, method: BindingMethod, slot: BindingSlot): string | undefined {
+  if (method !== 'keyboard' || slot !== 'primary') return undefined;
+  return id === 'roster' ? 'roster-key-bind' : id === 'logExpand' ? 'log-key-bind' : undefined;
+}
+/** Fixed shortcuts (not rebindable) — listed read-only under the bindings table. */
+const FIXED_SHORTCUT_ROWS: readonly { label: string; keys: string }[] = [
+  { label: 'Clear selection / close', keys: 'Esc' },
+  { label: 'Pick action 1–6 (selected player)', keys: '1 – 6' },
+  { label: 'Camera pan', keys: 'W A S D / Arrows' },
+  { label: 'Open chat', keys: 'Enter' },
+  { label: 'Toggle fullscreen', keys: 'F11 / Alt + Enter' },
+  { label: 'Mark square / player', keys: 'Shift + click' },
+  { label: 'Mark row · column', keys: 'Ctrl+Shift · Alt+Shift + click' },
+];
+/** Capture: B held this long cancels; a shorter B press binds B. */
+const CAPTURE_CANCEL_HOLD_MS = 600;
+let captureBHoldTimer: ReturnType<typeof setTimeout> | null = null;
+/** The pad whose B started the hold (Astra B3: the floor moving to another pad cancels the hold, not the capture). */
+let captureBHoldPad: number | null = null;
+function clearCaptureBHold(): void { if (captureBHoldTimer) clearTimeout(captureBHoldTimer); captureBHoldTimer = null; captureBHoldPad = null; }
+function startBindingCapture(id: ControlActionId, method: BindingMethod, slot: BindingSlot): void {
+  clearCaptureBHold();
+  routePadEvent.neutralise(); // Astra review P1: a capture never leaves the camera gliding
+  if (!isBindingEditable(id, method)) return;
+  capturingKey.value = null;
+  bindingRefusal.value = '';
+  capturingBinding.value = { id, method, slot };
+}
+function commitBinding(input: string): void {
+  const c = capturingBinding.value;
+  if (!c) return;
+  capturingBinding.value = null;
+  const refusal = controlBindingConflict(c.id, c.method, c.slot, input, settings);
+  if (refusal) { bindingRefusal.value = refusal; return; }
+  setBinding(settings, c.id, c.method, c.slot, input);
+}
+/** Backspace / Delete clears a secondary binding (a primary keeps its value). */
+function clearCapturedSecondary(): void {
+  const c = capturingBinding.value;
+  capturingBinding.value = null;
+  if (c?.slot === 'secondary') setBinding(settings, c.id, c.method, c.slot, '');
+}
+function captureBindingKey(event: KeyboardEvent): void {
+  const c = capturingBinding.value;
+  if (!c) return;
+  event.preventDefault();
+  event.stopPropagation();
+  bindingRefusal.value = '';
+  if (event.code === 'Escape') { capturingBinding.value = null; return; }
+  if (event.code === 'Backspace' || event.code === 'Delete') { clearCapturedSecondary(); return; }
+  if (c.method === 'keyboard') commitBinding(event.code);
+  // a controller cell ignores other keys (the pad answers it)
+}
+/** Pad input while a cell captures. Uniform across methods: holding B (600 ms) cancels any cell, Esc too. In a
+ *  controller cell a short B press binds B, a chord commits on the chord press, and a bare LT / RT is refused (reserved
+ *  chord modifiers — Astra review P2.6). A keyboard cell ignores every other pad input. */
+function captureBindingPad(event: PadEvent): boolean {
+  const c = capturingBinding.value;
+  if (!c) return false;
+  // Another pad took the floor mid-hold: its B release will never arrive — drop the hold, keep the capture open.
+  if (captureBHoldTimer && 'pad' in event && event.pad !== captureBHoldPad) clearCaptureBHold();
+  if (event.type === 'press') {
+    if (event.input === 'B') {
+      clearCaptureBHold();
+      captureBHoldPad = event.pad;
+      captureBHoldTimer = setTimeout(() => { captureBHoldTimer = null; captureBHoldPad = null; capturingBinding.value = null; }, CAPTURE_CANCEL_HOLD_MS);
+      return true;
+    }
+    // A keyboard cell ignores pad input. LB (chord modifier) and the bare triggers are judged on release / by their
+    // gesture; a trigger's hold gesture never binds (its tap form carries both).
+    if (c.method !== 'controller' || ['LB', 'LT', 'RT'].includes(event.input) || /\(hold\)$/.test(event.input)) return true;
+    clearCaptureBHold();
+    bindingRefusal.value = '';
+    commitBinding(event.input);
+  } else if (event.type === 'release') {
+    if (event.input === 'B' && captureBHoldTimer) {
+      clearCaptureBHold();
+      if (c.method !== 'controller') return true; // a keyboard cell keeps waiting for a key
+      bindingRefusal.value = '';
+      commitBinding('B');
+    } else if (c.method === 'controller' && event.input === 'LB' && !event.wasModifier) {
+      clearCaptureBHold();
+      bindingRefusal.value = '';
+      commitBinding('LB'); // LB pressed and released alone (held + another button captured the chord instead)
+    } else if (c.method === 'controller' && (event.input === 'LT' || event.input === 'RT') && !event.wasModifier) {
+      // Held past the tap window with nothing else: the trigger binds as its tap gesture, not a plain press.
+      capturingBinding.value = null;
+      bindingRefusal.value = `${event.input} binds as a quick tap (tap = one step, hold = continuous) — tap it`;
+    }
+  }
+  return true;
+}
+function resetBindings(): void {
+  clearCaptureBHold();
+  capturingBinding.value = null;
+  bindingRefusal.value = '';
+  resetControlBindings(settings);
+}
+watch(() => ui.settingsOpen, (open) => { if (!open) { clearCaptureBHold(); capturingBinding.value = null; bindingRefusal.value = ''; } });
+
+/** The main-screen blades in ribbon order (only those the ribbon shows). */
+function visibleBlades(): AppView[] {
+  const blades: AppView[] = homeBladeEnabled ? ['home'] : [];
+  blades.push('play', 'spectate', 'replay');
+  if (FORK_EDITION) blades.push('team');
+  return blades;
+}
+/** Main-screen (and app-wide) half of the action dispatcher; the in-game view registers over it. */
+/** Astra review P2.2: focus in a text field owns the input (the keyboard path's rule, for pad presses too). */
+function focusOwnsTyping(): boolean {
+  const el = typeof document !== 'undefined' ? document.activeElement : null;
+  return el instanceof HTMLElement && !!el.closest('input, textarea, select, [contenteditable="true"]');
+}
+function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'): boolean {
+  if (id === 'fullscreen') { void toggleFullscreen(); return true; }
+  if (id === 'gameMenu') {
+    if (settingsEscape()) return true; // Settings (or a modal over it) is open: the same Esc step
+    if (gameStore.game.value || ui.setupWizardRerunOpen) return false;
+    if (source === 'controller' && !focusOwnsTyping()) { openSettings(); return true; } // spec: Start on the main screen = Settings
+    return false; // the keyboard's Esc keeps escConsoleMenu
+  }
+  if (id === 'bladePrev' || id === 'bladeNext') {
+    if (gameStore.game.value || view.value === 'console' || appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen)) return false;
+    if (source === 'controller' && focusOwnsTyping()) return false;
+    const next = nextInCycle(visibleBlades(), view.value, id === 'bladeNext' ? 1 : -1);
+    if (next) selectBlade(next);
+    return !!next;
+  }
+  return false;
+}
+/** Rebindable keyboard bindings on the main screen (in a game SpectateView's own keydown owns them). */
+function onShellActionKey(event: KeyboardEvent): void {
+  if (gameStore.game.value || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || capturingKey.value || capturingBinding.value) return;
+  if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  // Astra review P2.7: a key bound in two contexts (Zoom out in game + Previous blade here) tries each, like the pad.
+  for (const id of actionsForInput(settings, 'keyboard', event.code)) {
+    if (dispatchControlAction(id, 'keyboard')) { event.preventDefault(); return; }
+  }
+}
+
+/** Settings > Controls live stick readout (after the deadzone) — owner round 2. */
+const stickReadout = reactive({ connected: 0, left: { x: 0, y: 0 }, right: { x: 0, y: 0 } });
+function trackStickReadout(event: PadEvent): void {
+  if (event.type === 'connected') stickReadout.connected++;
+  else if (event.type === 'disconnected') stickReadout.connected = Math.max(0, stickReadout.connected - 1);
+  else if (event.type === 'stick') stickReadout[event.stick] = { x: event.x, y: event.y };
+}
+const fmtAxis = (v: number): string => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2);
+
+/** Owner (10-07): the 1.5 s corner notice on each auto input switch, and the disconnect toast (game/cornerNotice.ts;
+ *  owner 10-10: the same chip says "Player portraits on / off"). */
+const controllerToast = cornerNotice;
+const showControllerToast = showCornerNotice;
+/** Controller support P2a (owner o66mg): hide / show the OS cursor at the window level (immediate, unlike CSS). */
+let nativeCursorVisible = true;
+async function setNativeCursorVisible(visible: boolean): Promise<void> {
+  if (!inTauri || nativeCursorVisible === visible) return;
+  nativeCursorVisible = visible;
+  try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().setCursorVisible(visible); } catch { /* API unavailable */ }
+}
+/** Owner 10-10: controller support is opt-in. The switcher reads the EFFECTIVE method: the coach's choice while the
+ *  box is ticked, the mouse / keyboard pin while it is not (game/controllerRuntime.ts). */
+const controllerInputSettings = {
+  get inputMethod() { return effectiveInputMethod(settings); },
+  get showInputSwitchNotice() { return settings.showInputSwitchNotice; },
+};
+/** Astra 10-10: put the cursor back whatever the cached state says (window blur while the pad hid it, the box being
+ *  unticked). Only ever called while / right after controller support was on. */
+function restoreCursor(): void {
+  if (typeof document !== 'undefined') bodyCursorHider(document.body)(false);
+  nativeCursorVisible = false; // force the native call through
+  void setNativeCursorVisible(true);
+}
+const inputSwitcher = createInputSwitcher({
+  settings: controllerInputSettings,
+  showNotice: (text, durationMs) => showControllerToast('switch', text, durationMs),
+  setCursorHidden: (hidden) => {
+    if (typeof document !== 'undefined') bodyCursorHider(document.body)(hidden);
+    // Owner o66mg: the OS cursor must vanish at once — WebView2 only re-reads CSS `cursor` on the next mouse event
+    // (which would switch back to the mouse), so the native window hides it too. Browser build: CSS only.
+    void setNativeCursorVisible(!hidden);
+  },
+  // Astra review P1: leaving the controller (auto switch or a pin) drops any pad pan at once.
+  onChange: (next) => { if (next !== 'controller') routePadEvent.neutralise(); },
+});
+const routePadEvent = createControllerRouter({
+  settings,
+  switcher: inputSwitcher,
+  showToast: (text, durationMs) => showControllerToast('disconnect', text, durationMs),
+  showConnectToast: (text, durationMs, standard) => showControllerToast(standard ? 'connect' : 'nonstandard', text, durationMs),
+  capture: captureBindingPad,
+});
+inputSwitcher.sync();
+watch(() => effectiveInputMethod(settings), () => inputSwitcher.sync());
+/** Owner 10-10: everything that listens to a gamepad lives in this runtime and runs ONLY while Settings > Controls
+ *  "Enable controller support" is ticked (default off). Off = no poller, no gamepad / mouse-use listeners, no pad
+ *  interceptor, no rumble; unticking unwinds it all at once. */
+const controllerRuntime = createControllerRuntime({
+  inputTarget: window,
+  switcher: inputSwitcher,
+  router: routePadEvent,
+  pollerOptions: () => ({ deadzoneLeft: settings.stickDeadzoneLeft, deadzoneRight: settings.stickDeadzoneRight }),
+  onPadEvent: trackStickReadout,
+  restoreCursor,
+  // Controller support P2b: rumble on dice / turnover / casualty cues (Settings > Controls "Rumble").
+  onSoundCue: (id) => { hapticForSound(id, { enabled: () => settings.controllerRumble && activeInput.value === 'controller', pads: browserHapticPads }); },
+  onStopped: () => {
+    clearCaptureBHold();
+    if (capturingBinding.value?.method === 'controller') capturingBinding.value = null; // its column is gone
+    stickReadout.connected = 0;
+    stickReadout.left = { x: 0, y: 0 };
+    stickReadout.right = { x: 0, y: 0 };
+    hideControllerNotices();
+  },
+});
+/** The opt-in box: ticking asks first (the owner's notice), the setting turns on only on its OK. */
+const controllerOptIn = createControllerOptIn(settings);
+function onControllerBoxChange(event: Event): void {
+  const box = event.target as HTMLInputElement;
+  const checked = box.checked;
+  controllerOptIn.boxChanged(checked);
+  box.checked = settings.controllerSupportEnabled; // the box shows the SETTING: still off until the notice is acknowledged
+}
+watch(() => ui.settingsOpen, (open) => { if (!open) controllerOptIn.dismiss(); });
+const controllerNoticeOk = ref<HTMLButtonElement | null>(null);
+const controllerNoticeDialog = ref<HTMLElement | null>(null);
+/** Astra P3 10-10: Tab / Shift+Tab stay inside the notice (it is modal over Settings). The dialog's own keydown trap
+ *  covers focus inside it; this capture listener pulls a Tab pressed with focus anywhere else back to the OK button. */
+function trapControllerNoticeTab(event: KeyboardEvent): void {
+  if (event.key !== 'Tab' || !controllerOptIn.noticeOpen.value) return;
+  const dialog = controllerNoticeDialog.value;
+  if (dialog && dialog.contains(document.activeElement)) return; // the dialog's own trap handles it
+  event.preventDefault();
+  event.stopPropagation();
+  controllerNoticeOk.value?.focus();
+}
+watch(controllerOptIn.noticeOpen, (open) => {
+  if (open) window.addEventListener('keydown', trapControllerNoticeTab, true);
+  else window.removeEventListener('keydown', trapControllerNoticeTab, true);
+});
+watch(controllerOptIn.noticeOpen, (open) => { if (open) void nextTick(() => controllerNoticeOk.value?.focus()); });
+/** The binding table's columns: the controller pair only while controller support is on. */
+const bindingMethods = computed<readonly BindingMethod[]>(() => (settings.controllerSupportEnabled ? BINDING_METHODS : ['keyboard']));
+/** ... and its rows: the pad-only actions (crosshair, setup bumpers, ...) are listed only while it is on. */
+const shownControlActions = computed(() => CONTROL_ACTIONS.filter((action) => settings.controllerSupportEnabled || !isPadOnlyAction(action.id)));
+/** Owner 10-10: a keyboard cell also captures the middle mouse button (never the left or right button). */
+function captureBindingMouse(event: MouseEvent): void {
+  const c = capturingBinding.value;
+  if (!c || c.method !== 'keyboard') return;
+  const input = mouseButtonInput(event.button);
+  if (!input) return;
+  event.preventDefault(); // no autoscroll
+  event.stopPropagation();
+  bindingRefusal.value = '';
+  commitBinding(input);
+}
+let offShellActions: (() => void) | null = null;
+let stopControllerGate: (() => void) | null = null;
+onMounted(() => {
+  offShellActions = registerActionHandler(runShellAction);
+  window.addEventListener('keydown', onShellActionKey);
+  stopControllerGate = watch(() => settings.controllerSupportEnabled, (on) => {
+    if (on) controllerRuntime.start(); else controllerRuntime.stop();
+  }, { immediate: true, flush: 'sync' });
+});
+onBeforeUnmount(() => {
+  offShellActions?.();
+  window.removeEventListener('keydown', onShellActionKey);
+  stopControllerGate?.();
+  stopControllerGate = null;
+  controllerRuntime.stop();
+  window.removeEventListener('keydown', trapControllerNoticeTab, true);
+  clearCaptureBHold(); // Astra review P3
+  bodyCursorHider(document.body)(false);
+  hideCornerNotice();
+});
 </script>
 
 <template>
@@ -1897,7 +2221,7 @@ function captureKey(event: KeyboardEvent) {
     </div>
     </Teleport>
     <div v-if="settingsOpen" class="modal-backdrop" @click.self="requestCloseSettings()"
-      @keydown.capture="captureKey" tabindex="-1">
+      @keydown.capture="captureKey" @mousedown.capture="captureBindingMouse" tabindex="-1">
       <!-- owner 2026-07-06: large settings window — left sidebar of categories,
            the selected category's controls fill the scrollable content pane. -->
       <div ref="settingsDialog" class="settings-pane" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title"
@@ -2036,49 +2360,6 @@ function captureKey(event: KeyboardEvent) {
           </fieldset>
 
           <fieldset class="settings-group">
-            <legend>Keyboard</legend>
-            <p class="hint">Click a highlighted key to rebind it, then press the new key (Esc cancels). The others are fixed.</p>
-            <!-- Owner 10-02: every binding in one table (action | key). -->
-            <table class="keybind-table">
-              <thead><tr><th scope="col">Action</th><th scope="col">Key</th></tr></thead>
-              <tbody>
-                <tr>
-                  <td>Confirm move / pass target</td>
-                  <td><button class="keybind" :aria-label="`Confirm move / pass target: ${capturingKey === 'confirmKey' ? 'press a key' : keyLabel(settings.confirmKey)}. Click to rebind.`" @click="capturingKey = 'confirmKey'">
-                    {{ capturingKey === 'confirmKey' ? 'press a key…' : keyLabel(settings.confirmKey) }}
-                  </button></td>
-                </tr>
-                <tr>
-                  <td>Roster pop-out</td>
-                  <td><button class="keybind" data-testid="roster-key-bind" :aria-label="`Roster pop-out: ${capturingKey === 'rosterKey' ? 'press a key' : keyLabel(settings.rosterKey)}. Click to rebind.`" @click="capturingKey = 'rosterKey'">
-                    {{ capturingKey === 'rosterKey' ? 'press a key…' : keyLabel(settings.rosterKey) }}
-                  </button></td>
-                </tr>
-                <tr>
-                  <td>Enlarge the Log window (press again to restore)</td>
-                  <td><button class="keybind" data-testid="log-key-bind" :aria-label="`Enlarge the Log window: ${capturingKey === 'logExpandKey' ? 'press a key' : keyLabel(settings.logExpandKey)}. Click to rebind.`" @click="capturingKey = 'logExpandKey'">
-                    {{ capturingKey === 'logExpandKey' ? 'press a key…' : keyLabel(settings.logExpandKey) }}
-                  </button></td>
-                </tr>
-                <tr><td>Clear selection / close</td><td><span class="keybind static">Esc</span></td></tr>
-                <tr><td>Pick action 1–6 (selected player)</td><td><span class="keybind static">1 – 6</span></td></tr>
-                <tr><td>Camera pan</td><td><span class="keybind static">W A S D / Arrows</span></td></tr>
-                <tr><td>Open chat</td><td><span class="keybind static">Enter</span></td></tr>
-                <tr><td>Toggle fullscreen</td><td><span class="keybind static">F11 / Alt + Enter</span></td></tr>
-                <tr><td>Player portraits on / off (on the pitch)</td><td><span class="keybind static">Middle mouse</span></td></tr>
-                <tr><td>Mark square / player</td><td><span class="keybind static">Shift + click</span></td></tr>
-                <tr><td>Mark row · column</td><td><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></td></tr>
-              </tbody>
-            </table>
-            <p v-if="keybindRefusal" class="hint keybind-refusal" role="status">{{ keybindRefusal }}</p>
-            <label class="row">
-              <span>Camera pan speed</span>
-              <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
-              <span>{{ settings.cameraPanSpeed }} px</span>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
             <legend>Mouse</legend>
             <label class="row">
               <input v-model="settings.friendlyPlayerSwitch" type="checkbox" />
@@ -2097,7 +2378,7 @@ function captureKey(event: KeyboardEvent) {
               <span>Left click opens context menu</span>
             </label>
             <p class="hint">Shows the selected friendly player's legal actions instead of immediately declaring Move.
-              Right click always opens the player context menu; Shift+click marks (see Keyboard).</p>
+              Right click always opens the player context menu; Shift+click marks (see Controls › Keyboard).</p>
           </fieldset>
 
           <!-- Owner 10-04: every client confirmation prompt has its own line. Off = the gesture goes straight through. -->
@@ -2191,6 +2472,134 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <span class="hint">The dev stream is always captured (it rides bug reports); this only shows the live panel.</span>
             </template>
+          </fieldset>
+        </section>
+
+        <!-- ============================ CONTROLS ============================ -->
+        <!-- Controller support P1 (owner 10-07, spec-controller-support.md): input method, every key / button binding. -->
+        <section v-if="settingsTab === 'controls'" data-testid="settings-controls">
+          <!-- Owner 10-10: controller support is opt-in. Ticking the box asks first (the notice below the Settings
+               window); it turns on when the coach presses OK. While off nothing here reads a gamepad. -->
+          <fieldset class="settings-group" data-testid="controller-support">
+            <legend>Controller</legend>
+            <label class="row">
+              <input type="checkbox" data-testid="controller-support-enabled" :checked="settings.controllerSupportEnabled"
+                @change="onControllerBoxChange" />
+              <span>Enable controller support</span>
+            </label>
+            <p class="hint">Off by default. Controller support is mostly untested; the mouse and keyboard keep working
+              when it is on.</p>
+          </fieldset>
+
+          <fieldset v-if="settings.controllerSupportEnabled" class="settings-group" data-testid="input-method-group">
+            <legend>Input method</legend>
+            <label class="row">
+              <span>Input method</span>
+              <select v-model="settings.inputMethod" data-testid="input-method">
+                <option value="auto">Auto (follow the last device used)</option>
+                <option value="keyboard">Keyboard</option>
+                <option value="controller">Controller</option>
+              </select>
+            </label>
+            <p class="hint">An Xbox-layout pad (or a DualShock / DualSense) runs the same actions as the keys. Auto switches
+              to the controller the moment you press a button or move a stick, and back to mouse and keyboard when you move
+              the mouse, click, scroll or type. The mouse and keyboard keep working in every mode.</p>
+            <label class="row">
+              <input v-model="settings.showInputSwitchNotice" type="checkbox" data-testid="input-switch-notice" />
+              <span>Show input switch notice</span>
+            </label>
+            <label class="row">
+              <input v-model="settings.controllerRumble" type="checkbox" data-testid="controller-rumble" />
+              <span>Rumble (dice, turnovers, casualties)</span>
+            </label>
+          </fieldset>
+
+          <fieldset v-if="settings.controllerSupportEnabled" class="settings-group" data-testid="stick-deadzones">
+            <legend>Stick deadzones</legend>
+            <label class="row">
+              <span>Left stick deadzone</span>
+              <input v-model.number="settings.stickDeadzoneLeft" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-left" />
+              <span>{{ settings.stickDeadzoneLeft.toFixed(2) }}</span>
+            </label>
+            <label class="row">
+              <span>Right stick deadzone</span>
+              <input v-model.number="settings.stickDeadzoneRight" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-right" />
+              <span>{{ settings.stickDeadzoneRight.toFixed(2) }}</span>
+            </label>
+            <label class="row">
+              <span>Crosshair speed</span>
+              <input v-model.number="settings.crosshairSpeed" v-fill-range type="range" :min="CROSSHAIR_SPEED_MIN" :max="CROSSHAIR_SPEED_MAX" step="1" data-testid="crosshair-speed" />
+              <span>{{ settings.crosshairSpeed }} sq/s</span>
+            </label>
+            <label class="row">
+              <input v-model="settings.crosshairAcceleration" type="checkbox" data-testid="crosshair-acceleration" />
+              <span>Crosshair acceleration</span>
+            </label>
+            <p class="hint">The left stick moves the pitch crosshair at a steady speed; with acceleration on it speeds up to
+              twice that while you hold one direction. Precision (L3) halves it.</p>
+            <p class="hint stick-readout" data-testid="stick-readout" aria-live="off">
+              <template v-if="stickReadout.connected > 0">
+                Left x {{ fmtAxis(stickReadout.left.x) }} y {{ fmtAxis(stickReadout.left.y) }} ·
+                Right x {{ fmtAxis(stickReadout.right.x) }} y {{ fmtAxis(stickReadout.right.y) }}
+              </template>
+              <template v-else>No controller seen yet — press a button on the pad to show the live readout.</template>
+            </p>
+            <ul v-if="connectedPads.length" class="hint connected-pads" data-testid="connected-pads">
+              <li v-for="pad in connectedPads" :key="pad.pad" :data-mapping="pad.standard ? 'standard' : 'non-standard'">
+                {{ padShortName(pad.id) }} — <strong>{{ pad.standard ? 'standard' : 'non-standard' }}</strong>
+                <span v-if="!pad.standard"> (not usable — run the client through Steam Input so it appears as an Xbox pad)</span>
+              </li>
+            </ul>
+            <p class="hint">Raise a deadzone if a resting stick drifts (the readout shows non-zero with the stick
+              untouched); lower it for finer control. Output is 0 at the deadzone edge and 1 at full tilt.</p>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="edit-bindings">
+            <legend>Edit Bindings</legend>
+            <!-- Owner 10-02 + controller support P1: every binding in one table (action | keyboard | controller).
+                 Owner 10-10: the controller columns (and the pad-only actions) show only while controller support is on. -->
+            <p v-if="settings.controllerSupportEnabled" class="hint">Click a cell, then press a key or a controller button. Hold LB (or RT) and press another
+              button for a chord; LB acts when released, so a plain LB (blade cycling) fires on letting go. LT and RT bind as a quick tap (the same binding zooms continuously while held). Esc, or
+              holding B for 0.6 s, cancels any cell; in a controller cell a short B press binds B. Backspace or Delete
+              clears a secondary binding. A keyboard cell also takes the middle mouse button.</p>
+            <p v-else class="hint" data-testid="bindings-hint-keyboard">Click a cell, then press the new key (the middle mouse button works too). Esc cancels;
+              Backspace or Delete clears a secondary binding.</p>
+            <table class="keybind-table bindings-table">
+              <thead><tr><th scope="col">Action</th><th scope="col" colspan="2">Keyboard / mouse</th><th v-if="settings.controllerSupportEnabled" scope="col" colspan="2">Controller</th></tr></thead>
+              <tbody>
+                <tr v-for="action in shownControlActions" :key="action.id" :data-action="action.id">
+                  <td>{{ action.label }}</td>
+                  <template v-for="method in bindingMethods" :key="method">
+                    <td v-if="bindingFixedLabel(action.id, method)" colspan="2"><span class="keybind static">{{ bindingFixedLabel(action.id, method) }}</span></td>
+                    <template v-else>
+                      <td v-for="slot in BINDING_SLOTS" :key="slot">
+                        <button type="button" class="keybind binding-cell" :data-binding="`${action.id}:${method}:${slot}`"
+                          :data-testid="legacyBindTestId(action.id, method, slot)"
+                          :data-capturing="isCapturingBinding(action.id, method, slot)"
+                          :aria-label="`${action.label}, ${method} ${slot}: ${bindingCellText(action.id, method, slot)}. Click to rebind.`"
+                          @click="startBindingCapture(action.id, method, slot)">{{ bindingCellText(action.id, method, slot) }}</button>
+                      </td>
+                    </template>
+                  </template>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="bindingRefusal" class="hint keybind-refusal" role="status" data-testid="binding-refusal">{{ bindingRefusal }}</p>
+            <h4 class="fixed-shortcuts-title">Fixed shortcuts</h4>
+            <ul class="fixed-shortcuts" data-testid="fixed-shortcuts">
+              <li v-for="row in FIXED_SHORTCUT_ROWS" :key="row.label"><span>{{ row.label }}</span><span class="keybind static">{{ row.keys }}</span></li>
+            </ul>
+            <p v-for="conflict in bindingConflicts" :key="`${conflict.method}:${conflict.input}`" class="hint keybind-refusal" role="status" data-testid="binding-conflict">
+              {{ conflict.method === 'keyboard' ? keyLabel(conflict.input) : controllerInputLabel(conflict.input) }} is bound to more than one action:
+              {{ conflict.actions.map((id) => controlAction(id).label).join(', ') }}.</p>
+            <div class="row">
+              <button type="button" data-testid="reset-bindings" @click="resetBindings()">Reset to defaults</button>
+            </div>
+            <label class="row">
+              <span>Camera pan speed</span>
+              <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
+              <span>{{ settings.cameraPanSpeed }} px</span>
+            </label>
           </fieldset>
         </section>
 
@@ -2745,6 +3154,16 @@ function captureKey(event: KeyboardEvent) {
               zones, skill icons, …) at the bottom-right, so the Log leads in reading order. On by
               default; uncheck to swap them back (Quick bar left, Log right).</p>
             <label class="row">
+              <span>Player portraits</span>
+              <select v-model="settings.playerCardMode" data-testid="player-card-mode">
+                <option value="auto">On: show automatically (default)</option>
+                <option value="called">Off: only when called</option>
+              </select>
+            </label>
+            <p class="hint">On: clicking a player on the pitch opens their card (portrait, stats and skills), as before.
+              Off: the pitch opens no card; it still opens from a roster row, or with the Player card key if you bind one
+              (Settings › Controls). The middle mouse button on the pitch switches portraits off and on (also bindable there).</p>
+            <label class="row">
               <input v-model="settings.chatDockRosterTab" type="checkbox" />
               <span>Roster tab in the chat dock</span>
             </label>
@@ -3065,6 +3484,22 @@ function captureKey(event: KeyboardEvent) {
     <!-- Owner 2026-07-04: tabbed LOGIN CREDENTIALS menu — FUMBBL (official account)
          + Super FUMBBL (fork account), each entered separately. Opened by the button
          on the launch splash or Settings → Connection. -->
+    <!-- Owner 10-10: ticking "Enable controller support" asks first - the owner's wording, one button. OK turns it on;
+         Escape / a click outside closes the notice and leaves the box off. Shown on every off -> on. -->
+    <div v-if="controllerOptIn.noticeOpen.value" class="modal-backdrop save-prompt-backdrop controller-notice-backdrop"
+      data-testid="controller-support-notice" @click.self="controllerOptIn.dismiss()">
+      <div ref="controllerNoticeDialog" class="save-prompt controller-notice" role="alertdialog" aria-modal="true"
+        aria-labelledby="controller-notice-title" aria-describedby="controller-notice-text"
+        @keydown="trapDialogFocus($event, controllerNoticeDialog)">
+        <h3 id="controller-notice-title">{{ CONTROLLER_SUPPORT_NOTICE_TITLE }}</h3>
+        <p id="controller-notice-text" class="hint controller-notice-text" data-testid="controller-support-notice-text">{{ CONTROLLER_SUPPORT_NOTICE }}</p>
+        <div class="save-prompt-actions">
+          <button ref="controllerNoticeOk" class="primary" type="button" data-testid="controller-support-notice-ok"
+            @click="controllerOptIn.acknowledge()">{{ CONTROLLER_SUPPORT_NOTICE_BUTTON }}</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="credsMenuOpen" class="modal-backdrop creds-menu-backdrop" @click.self="closeCredsMenu">
       <div ref="credsMenuDialog" class="creds-menu" role="dialog" aria-modal="true" aria-labelledby="credentials-dialog-title"
         @keydown="trapCredsFocus">
@@ -3204,6 +3639,11 @@ function captureKey(event: KeyboardEvent) {
          deep-links). Also reachable any time from ☰ → Help / Field Manual. -->
     <FieldManual v-if="guideOpen" @close="guideOpen = false" @play-tutorial="playTutorial()"
       @open-settings="(tab) => { guideOpen = false; openSettings(tab); }" />
+    <!-- Controller support P1 (owner 10-07): the auto input-switch notice (corner, 1.5 s) / controller disconnect.
+         Owner 10-10: also "Player portraits on / off". Kept OUTSIDE the private fence above (everything in it is cut from
+         the public export). -->
+    <div v-if="controllerToast" class="controller-toast" role="status" aria-live="polite" :data-kind="controllerToast.kind"
+      data-testid="controller-toast">{{ controllerToast.text }}</div>
     <!-- Owner ruling (08-18): the header's "Signed in as" identity block relocates here, stacked directly
          above the version stamp — same quiet/muted styling family, bottom-left, under every panel (owner 08-18 2nd). -->
     <div class="corner-stamp">
@@ -3255,6 +3695,8 @@ function captureKey(event: KeyboardEvent) {
   />
   <FirstOpenContributions v-else-if="contributionsOpen" @continue="continueContributions" />
   <FirstLaunchSetup v-else @finish="finishSetupWizard" />
+  <!-- Controller support P2b: card focus ring + glyph badges, chord-layer badges (pointer-transparent). -->
+  <PadOverlay v-if="settings.controllerSupportEnabled" />
 </template>
 
 <style>
@@ -4166,6 +4608,25 @@ textarea:focus-visible,
 .settings-pane .keybind-table button.keybind { border-color: var(--ui-accent); }
 .settings-pane .keybind.static { display: inline-block; cursor: default; background: transparent; text-align: center; }
 .settings-pane .keybind-refusal { color: var(--ui-danger, #e05a5a); }
+.settings-pane .bindings-table td:not(:first-child), .settings-pane .bindings-table th:not(:first-child) { width: 1%; white-space: nowrap; text-align: center; }
+.settings-pane .bindings-table .binding-cell { min-width: 5.5rem; }
+.settings-pane .fixed-shortcuts-title { margin: 0.8rem 0 0.3rem; font-size: max(var(--ui-min-text-size, 12px), 0.72rem); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ui-muted); }
+.settings-pane .fixed-shortcuts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.settings-pane .fixed-shortcuts li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.settings-pane .bindings-table .binding-cell[data-capturing="true"] { background: color-mix(in srgb, var(--ui-accent) 25%, transparent); }
+/* Controller support P1 (owner 10-07): pad input in controller mode hides the OS cursor until the mouse moves. */
+body.pad-cursor-hidden, body.pad-cursor-hidden * { cursor: none !important; }
+/* Owner 10-10: the controller-support notice sits above the Settings window (the save-prompt idiom, a little wider). */
+.controller-notice-backdrop { z-index: 260; }
+.save-prompt.controller-notice { width: min(440px, 92vw); }
+.save-prompt .controller-notice-text { color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); line-height: 1.45; }
+.controller-toast {
+  position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 2000; max-width: min(92vw, 560px);
+  padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid var(--ui-accent); background: var(--ui-surface, #1b1b1f);
+  color: var(--ui-text, #fff); box-shadow: 0 6px 24px rgb(0 0 0 / 45%); pointer-events: none; text-align: center;
+}
+/* The auto-switch notice is a small corner chip. */
+.controller-toast[data-kind="switch"], .controller-toast[data-kind="connect"], .controller-toast[data-kind="player-cards"] { left: auto; right: 16px; top: 16px; bottom: auto; transform: none; padding: 0.35rem 0.75rem; font-size: 0.85rem; }
 .settings-pane .actions {
   display: flex;
   justify-content: flex-end;

@@ -108,3 +108,8 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
 
 - **Kristofer Bengtsson (KrisB)** — Block dice faces (the "KrisB (built-in)" block dice option), used with
   permission.
+- **Controller button prompts** (`apps/tauri/src/assets/glyphs/`) — an original, generic SVG set drawn for Super FUMBBL
+  (coloured-letter face buttons, bumper / trigger pills, D-pad, sticks, View / Menu; a ✕ ○ □ △ shape set for Sony
+  pads). They are NOT Microsoft's or Sony's artwork. When the official Xbox controller button images are dropped in,
+  this entry becomes: "Xbox controller button images © Microsoft, used per the Xbox 360 Controller Button Images
+  licence" (licence text shipped beside the images).

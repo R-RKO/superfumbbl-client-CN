@@ -12,11 +12,11 @@
  *    row).
  * The setting is the ordinary persisted one, so the choice survives a restart.
  *
- * HOTFIX SHAPE (lifted from codex/controller-public ahead of the controls registry): same file, same setting key and
- * values, same togglePlayerCardMode / middleClickDecision / notice texts. On that branch `bound` comes from the
- * binding table (Settings > Controls) and the ownership check from the crosshair gate; here the middle button is
- * fixed and the ownership check is the small one below. When that branch merges, its version of this file wins.
+ * Shipped first as the 1.0.168 hotfix (fixed middle button); with the controls registry the bound actions come from
+ * the binding table (Settings > Controls: "Player portraits on / off", default Middle mouse, rebindable) and the
+ * action runs through the in-game action runner. The hotfix's ownership rule below is kept whole.
  */
+import type { ControlActionId } from './controls';
 import { isAssignTouchdownPickKey, isMvpPickKey } from './endGamePick';
 
 export type PlayerCardMode = 'auto' | 'called';
@@ -39,12 +39,11 @@ export function togglePlayerCardMode(deps: PlayerCardToggleDeps): PlayerCardMode
   return next;
 }
 
-/** The one action the middle button carries until the binding table ships. */
-export type PlayerCardAction = 'playerCardsToggle';
-export const MIDDLE_CLICK_ACTIONS: readonly PlayerCardAction[] = ['playerCardsToggle'];
+/** What the middle button can carry: any registry action bound to it (Settings > Controls). */
+export type PlayerCardAction = ControlActionId;
 
 export interface MiddleClickInput {
-  /** The actions bound to the middle mouse button (fixed here; the binding table on the controller branch). */
+  /** The actions bound to the middle mouse button in this context (Settings > Controls). */
   bound: readonly PlayerCardAction[];
   /** Something else owns input: Settings / the wizard, the Game Menu or a context menu, a card or confirmation, a
    *  text field in focus. */

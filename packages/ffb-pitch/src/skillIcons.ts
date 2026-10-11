@@ -1,4 +1,4 @@
-import { textureParserFor } from './artPack';
+import { installedUrlHeldBy, loadInstalledTexture } from './installedTexture';
 import { Assets, Rectangle, Texture } from 'pixi.js';
 import { rosterRaceKey } from './bundledWalk';
 import skillIconAliases from './skillIconAliases.json';
@@ -158,7 +158,9 @@ function scheduleRetirementFrame(): void {
     const active = allActiveUrls();
     const loading = new Set([...inFlightUrls.values()].flatMap((set) => [...set]));
     for (const url of [...retirementUrls]) {
-      if (active.has(url)) {
+      // Astra round 2: another consumer of installed textures (the block die faces) may hold the same url - the same
+      // pack file bound to a skill and a die face. Unloading would destroy the texture under it.
+      if (active.has(url) || installedUrlHeldBy(url)) {
         retirementUrls.delete(url);
         continue;
       }
@@ -466,17 +468,6 @@ function resolveSkillTarget(
   candidates.push(skillTargetKey(skill, null, 'any'));
   for (const key of candidates) if (urls.has(key)) return key;
   return undefined;
-}
-
-async function loadInstalledTexture(url: string): Promise<Texture> {
-  // Native asset URLs deliberately end in an opaque integrity token rather than a
-  // filename. Pixi selects its default image loader by URL extension, so a bare
-  // Assets.load(url) resolves null without ever fetching these validated PNGs.
-  const texture = await Assets.load<Texture>({ src: url, parser: textureParserFor(url) });
-  if (!(texture instanceof Texture) || !texture.source) {
-    throw new Error('Installed presentation texture could not be decoded');
-  }
-  return texture;
 }
 
 function skillBindings(snapshot: SkillIconPackSnapshot | null): SkillIconBinding[] {
