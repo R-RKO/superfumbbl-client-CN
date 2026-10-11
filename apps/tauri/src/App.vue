@@ -47,6 +47,7 @@ import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
 import { UI_FONTS } from './game/uiFonts';
+import DisplayCaps from './components/DisplayCaps.vue';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
@@ -2125,24 +2126,26 @@ onBeforeUnmount(() => {
     <!-- Game Menu (Esc; owner 2026-07-02 — first step toward the BB3-style shell) -->
     <div v-if="ui.gameMenuOpen" class="modal-backdrop game-menu-backdrop" @click.self="ui.gameMenuOpen = false">
       <div class="game-menu" :data-wide="statsOpen">
-        <h2>Game Menu</h2>
+        <!-- Owner 10-11 ("Graduate C"): the menu's title, buttons and hint are lettered by DisplayCaps (Nuffle lead
+             letter per word, Graduate small capitals after). Each label stays plain text in its `text`. -->
+        <h2><DisplayCaps text="Game Menu" /></h2>
         <template v-if="!statsOpen">
-          <button @click="ui.gameMenuOpen = false">Resume</button>
+          <button @click="ui.gameMenuOpen = false"><DisplayCaps text="Resume" /></button>
           <button :disabled="!gameStats" :title="gameStats ? '' : 'No game loaded'"
-            @click="statsOpen = true">Game statistics</button>
-          <button @click="openSettings('general')">Settings</button>
+            @click="statsOpen = true"><DisplayCaps text="Game statistics" /></button>
+          <button @click="openSettings('general')"><DisplayCaps text="Settings" /></button>
           <!-- Owner 09-10: Help moved here from the retired hamburger; the Protocol console is a fork-edition dev tool. -->
-          <button @click="ui.gameMenuOpen = false; guideOpen = true">Help / Field Manual</button>
-          <button v-if="FORK_EDITION" @click="openConsole()">Protocol console</button>
+          <button @click="ui.gameMenuOpen = false; guideOpen = true"><DisplayCaps text="Help / Field Manual" /></button>
+          <button v-if="FORK_EDITION" @click="openConsole()"><DisplayCaps text="Protocol console" /></button>
           <button :disabled="!gameStore.game.value"
             :title="gameStore.game.value ? '' : 'No game loaded'"
-            @click="requestLeaveGame()">Return to Menu</button>
+            @click="requestLeaveGame()"><DisplayCaps text="Return to Menu" /></button>
           <!-- Owner 2026-07-06 (note 5): request to concede (play mode only). The
                server confirms via the concedeGame dialog if concession is legal. -->
           <button :disabled="!gameStore.canConcedeGame"
             :title="gameStore.canConcedeGame ? 'Request to concede the game' : 'Available only at the start of your turn'"
-            @click="gameStore.concedeGame(); ui.gameMenuOpen = false">Concede</button>
-          <p class="hint">Esc closes</p>
+            @click="gameStore.concedeGame(); ui.gameMenuOpen = false"><DisplayCaps text="Concede" /></button>
+          <p class="hint"><DisplayCaps text="Esc closes" /></p>
         </template>
         <template v-else-if="gameStats">
           <div class="pg-stats">
@@ -2161,7 +2164,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <button @click="statsOpen = false">Back</button>
+          <button @click="statsOpen = false"><DisplayCaps text="Back" /></button>
         </template>
       </div>
     </div>
@@ -3351,6 +3354,13 @@ onBeforeUnmount(() => {
                 <a href="http://www.pixelsagas.com"
                   @click.prevent="openExternal('http://www.pixelsagas.com')"
                   title="Nuffle by Neale Davidson (Pixel Sagas, SIL Open Font License 1.1)">Neale Davidson — Pixel Sagas (OFL 1.1)</a>
+              </span>
+            </li>
+            <li>
+              <span>Menu and pitch lettering font (Graduate):
+                <a href="https://fonts.google.com/specimen/Graduate"
+                  @click.prevent="openExternal('https://fonts.google.com/specimen/Graduate')"
+                  title="Graduate by Eduardo Tunni (SIL Open Font License 1.1)">Eduardo Tunni (SIL Open Font License 1.1)</a>
               </span>
             </li>
             <!-- Owner 09-09: licensed and generated art credited here to match docs/licenses/ and the provenance ledger. -->

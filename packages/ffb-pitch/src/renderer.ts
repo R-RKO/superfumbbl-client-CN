@@ -1,7 +1,8 @@
 import { textureParserFor } from './artPack';
 import { fitInSquare, holdInstalledUrls, loadInstalledTexture } from './installedTexture';
-import { Application, Assets, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
+import { Application, Assets, CanvasSource, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
+import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZONE_LETTERING, composeDisplayLettering, displayFontState, fitInkInBand, loadDisplayFonts, type DisplayLetteringStyle } from './displayLettering';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { PIPELINE_TIMINGS } from './blockPipeline';
@@ -1339,13 +1340,6 @@ export function fitDugoutLabelScale(textWidth: number, scale: number, bandLength
   const cap = bandLength * 0.9;
   return drawn > cap && drawn > 0 ? scale * (cap / drawn) : scale;
 }
-const DUGOUT_LABEL_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
-  fontSize: 11,
-  fontWeight: 'bold',
-  letterSpacing: 2,
-  fill: 0xffffff, // owner 2026-07-02: bold white
-});
 /** Owner 2026-07-07: the SW turn/score/re-roll track — outlined so the numbers read on stone. */
 const TURN_TRACK_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
@@ -1526,16 +1520,14 @@ const ROLL_DIE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, f
 const RUSH_LABEL_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: 0x8a2a2a, stroke: { color: 0xf2efe6, width: 2.5, join: 'round' } });
 const TZ_OPPOSITION_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0xff8a8a });
 const TZ_FRIENDLY_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0x9ab8ff });
-// B2-16/UI11: Nuffle display font, heavier weight; sized at render time so
-// the word spans the full end-zone length
+// B2-16/UI11: the end-zone word is sized at render time so it spans the full end-zone length.
 // Owner 09-16: bold WHITE (was a cream 0xf0ece0 at 0.8 alpha, which read as cream over the red band).
-const ENDZONE_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
-  fontSize: 28,
-  fontWeight: '900',
-  letterSpacing: 6,
-  fill: 0xffffff,
-});
+// Owner 10-11 ("Graduate C"): each word's first letter in Nuffle, 25% larger, the rest in Graduate small capitals,
+// whatever case the team name was typed in. Two font families cannot share one Pixi Text, so the word is drawn once
+// to a canvas texture: the style (ENDZONE_LETTERING) and the composer live in displayLettering.ts, the casing in
+// displayCaps.ts.
+/** One cached piece of pitch lettering: its texture, the box it is fitted by, and where its ink really lies. */
+interface LetteringArt { texture: Texture; fitWidth: number; fitHeight: number; inkHeight: number; inkUp: number; inkDown: number; inkTall: boolean; height: number }
 
 /**
  * App19: base ring colors denote the player's position on the team
@@ -2219,6 +2211,81 @@ export class PitchRenderer {
    *  would otherwise leave the placards blank after a same-game cancel/restore). The stadium was ~9 ms of every
    *  ~11.5 ms model sync while its inputs change only via setters, a game change or asset arrival. */
   private stadiumDrawKey: string | null = null;
+  /** Owner 10-11: the composed Graduate C lettering on the pitch (end zones, dugout box labels, apothecary caption), one texture per
+   *  surface and label on screen. The key carries the state of the two display faces, so lettering rasterised before
+   *  Graduate / Nuffle arrived is rebuilt once they have. Each surface's draw reuses its entries and drops the ones
+   *  it no longer draws (pruneLettering): a redraw never rasterises a label it already has, and none outlives its use. */
+  private letteringArt = new Map<string, LetteringArt>();
+  /** The font state the lettering on screen was drawn with; the listener redraws only when it has moved on. */
+  private letteringFontDrawn: string = DISPLAY_FONTS_LOADED;
+  private letteringFontLoadAsked: string | null = null;
+  private letteringFontListener: (() => void) | null = null;
+  private letteringFailureWarned = false;
+  private letteringFor(surface: 'endzone' | 'dugout' | 'apothecary', label: string, style: DisplayLetteringStyle, fontState: string, used: Set<string>): LetteringArt | null {
+    const key = `${surface}|${fontState}|${label}`;
+    const cached = this.letteringArt.get(key);
+    if (cached) { used.add(key); return cached; }
+    // A 2D canvas that cannot be made or drawn on must never take the pitch down with it: the label is left out
+    // (null) and the draw that asked for it carries on.
+    try {
+      const art = composeDisplayLettering(label, style);
+      if (!art) return null;
+      // Owner 09-14 / 09-16: 4x raster + linear filtering + mipmaps (the marking-text rule) - a 1x canvas read
+      // low-res under the camera zoom.
+      const source = new CanvasSource({ resource: art.canvas, resolution: style.resolution, scaleMode: 'linear', autoGenerateMipmaps: true, label: `${surface}-lettering` });
+      const entry: LetteringArt = { texture: new Texture({ source }), fitWidth: art.fitWidth, fitHeight: art.fitHeight, inkHeight: art.inkHeight, inkUp: art.inkUp, inkDown: art.inkDown, inkTall: art.inkTall, height: art.height };
+      this.letteringArt.set(key, entry);
+      used.add(key);
+      return entry;
+    } catch (error) {
+      if (!this.letteringFailureWarned) {
+        this.letteringFailureWarned = true;
+        console.warn('ffb-pitch: pitch lettering could not be drawn; the label is left out', error);
+      }
+      return null;
+    }
+  }
+  /** Destroy one surface's lettering that the draw just finished did not use (every surface when none is named). */
+  private pruneLettering(surface?: 'endzone' | 'dugout' | 'apothecary', keep?: Set<string>): void {
+    for (const [key, entry] of this.letteringArt) {
+      if (surface && !key.startsWith(`${surface}|`)) continue;
+      if (keep?.has(key)) continue;
+      entry.texture.destroy(true);
+      this.letteringArt.delete(key);
+    }
+  }
+  /** The app loads both faces before it mounts (main.ts), so this normally does nothing. A page that draws the pitch
+   *  while a face is still loading, or registers one later, gets one redraw when it arrives instead of lettering left
+   *  in the fallback font. No waits: everything is drawn at once either way, and only a CHANGED font state redraws. */
+  private watchLetteringFonts(drawnState: string): void {
+    this.letteringFontDrawn = drawnState;
+    if (drawnState === DISPLAY_FONTS_LOADED || drawnState === DISPLAY_FONTS_UNSUPPORTED) {
+      this.stopLetteringFontListener();
+      return;
+    }
+    let settle = this.letteringFontListener;
+    if (!settle) {
+      const listener = (): void => {
+        if (this.destroyed || !this.app || this.letteringFontListener !== listener) return;
+        if (displayFontState() === this.letteringFontDrawn) return;
+        this.drawPitch();
+        this.redrawDugoutsWithArrows();
+        this.drawTurnTrack();
+      };
+      settle = listener;
+      this.letteringFontListener = listener;
+      try { document.fonts.addEventListener('loadingdone', listener); } catch { /* no font events: load() below still settles */ }
+    }
+    if (drawnState.includes('pending') && this.letteringFontLoadAsked !== drawnState) {
+      this.letteringFontLoadAsked = drawnState;
+      void loadDisplayFonts().then(settle);
+    }
+  }
+  private stopLetteringFontListener(): void {
+    if (!this.letteringFontListener) return;
+    try { document.fonts.removeEventListener('loadingdone', this.letteringFontListener); } catch { /* nothing to remove */ }
+    this.letteringFontListener = null;
+  }
   /** Bumped at every stadium asset mutation (async texture arrival, generated crowd add/remove, camera/light incl.
    *  their null-on-failure) — collection identity never changes on `.set/.push`, so the key carries this instead. */
   private stadiumAssetRevision = 0;
@@ -5437,6 +5504,8 @@ export class PitchRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     PitchRenderer.instances.delete(this);
+    this.stopLetteringFontListener();
+    this.pruneLettering();
     this.disposeActionDice3d();
     this.hostEl = null;
     this.blockFaceLoadGeneration++;
@@ -10079,7 +10148,14 @@ export class PitchRenderer {
     this.dugoutLayer.sortableChildren = true;
     this.dugoutGroundLayer.sortableChildren = true;
     this.dugoutHits = []; // owner 2026-07-08: rebuilt below for the direct dugout click hit-test
-    if (!this.game || !this.dugoutsEnabled || this.boardCleared) return; // owner 2026-07-15: clear the board at end of game
+    // Owner 10-11: the box labels are Graduate C lettering, one cached texture per label text (letteringFor); the ones
+    // this draw does not use are destroyed at the end (and here, when there is nothing to draw).
+    const dugoutFonts = displayFontState();
+    const dugoutLetteringKeys = new Set<string>();
+    if (!this.game || !this.dugoutsEnabled || this.boardCleared) { // owner 2026-07-15: clear the board at end of game
+      this.pruneLettering('dugout', dugoutLetteringKeys);
+      return;
+    }
     // Sections run from each team's OWN end zone toward the line of
     // scrimmage (owner 2026-07-02): CAS at the end-zone edge, KO in the middle,
     // RESERVES nearest midfield/opposition (owner 2026-07-07, case 353 — CAS and
@@ -10253,9 +10329,12 @@ export class PitchRenderer {
         this.dugoutGroundLayer.addChild(band);
 
         // Owner 09-14: 4x raster + linear filtering — the band text read low-res under the camera zoom (marking-text rule).
-        const label = new Text({ text: section.label, style: DUGOUT_LABEL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+        // Owner 10-11: Graduate C lettering like the end zones (Nuffle lead letter, Graduate small capitals; "RESERVES"
+        // is lettered "Reserves"). The label is a sprite of the cached lettering; it is placed, turned and depth-scaled
+        // exactly as the old Text was, then held inside the band (placeLabel below, once the count is known).
+        const label = new Sprite(Texture.EMPTY);
         label.anchor.set(0.5, 0.5);
-        label.scale.set(depthScale(labelRow, columns[1]!));
+        const labelDepthScale = depthScale(labelRow, columns[1]!);
         label.rotation = pitchTextRotation(labelRow, columns[1]!); // owner 09-10: E-W turns the band text with the pitch
         const mid = squareAnchor(labelRow, columns[1]!);
         label.position.set(mid.x, mid.y);
@@ -10270,6 +10349,25 @@ export class PitchRenderer {
         }
         label.zIndex = 0;
         this.dugoutGroundLayer.addChild(label);
+        const setLabel = (text: string): void => {
+          label.label = text; // the plain text this label shows (tests and the dev tools read it)
+          const art = this.letteringFor('dugout', text, DUGOUT_LETTERING, dugoutFonts, dugoutLetteringKeys);
+          if (!art) { label.visible = false; return; }
+          label.texture = art.texture;
+          // The PROJECTED band: its long axis (in E-W the text runs along the band's depth, not TILE_W) and its
+          // thickness. The lettering never leaves it: 90% of the length (owner 10-06, as before: shrink, never
+          // abbreviate, never grow), 90% of the thickness for the capitals' box, and all of the ink inside it.
+          const bandLen = Math.hypot(
+            (bandQuad[2]! + bandQuad[4]!) / 2 - (bandQuad[0]! + bandQuad[6]!) / 2,
+            (bandQuad[3]! + bandQuad[5]!) / 2 - (bandQuad[1]! + bandQuad[7]!) / 2,
+          );
+          const bandThickness = Math.hypot(
+            (bandQuad[4]! + bandQuad[6]!) / 2 - (bandQuad[0]! + bandQuad[2]!) / 2,
+            (bandQuad[5]! + bandQuad[7]!) / 2 - (bandQuad[1]! + bandQuad[3]!) / 2,
+          );
+          const fitLength = fitDugoutLabelScale(art.fitWidth, labelDepthScale, bandLen);
+          label.scale.set(Math.min(fitLength, fitDugoutLabelScale(art.fitHeight, labelDepthScale, bandThickness), bandThickness / art.inkHeight));
+        };
 
         // #129/#331 (owner 08-17, superseded): the standalone bench sprite is replaced by the
         // labeled APOTHECARY box on the turn-track margin (drawApothecaryBox) — the token now
@@ -10304,21 +10402,12 @@ export class PitchRenderer {
         const members = section.label === 'INJURED'
           ? [...unsortedMembers].sort((a, b) => severity(b) - severity(a))
           : unsortedMembers;
-        if (this.dugoutCountsOn) {
-          // Owner 10-06: leading player count; shrink (never abbreviate) if the longer text would overflow the 3-column band.
-          // Owner 10-06 (final ruling): sent-off players count in INJURED like the Java client's "Out" (they still
-          // stand on the corner apron, never inside the box).
-          const banned = section.label === 'INJURED'
-            ? offPitch.filter((d) => baseState(d.playerState) === PlayerStateBase.BANNED).length : 0;
-          label.text = dugoutLabel(section.label, members.length + banned, true);
-          // Cap against the PROJECTED band's long axis (in E-W the text runs along the band's depth, not TILE_W).
-          const bandLen = Math.hypot(
-            (bandQuad[2]! + bandQuad[4]!) / 2 - (bandQuad[0]! + bandQuad[6]!) / 2,
-            (bandQuad[3]! + bandQuad[5]!) / 2 - (bandQuad[1]! + bandQuad[7]!) / 2,
-          );
-          const sx = label.scale.x || 1;
-          label.scale.set(fitDugoutLabelScale(label.width / sx, sx, bandLen));
-        }
+        // Owner 10-06: leading player count; shrink (never abbreviate) if the longer text would overflow the 3-column band.
+        // Owner 10-06 (final ruling): sent-off players count in INJURED like the Java client's "Out" (they still
+        // stand on the corner apron, never inside the box).
+        const banned = this.dugoutCountsOn && section.label === 'INJURED'
+          ? offPitch.filter((d) => baseState(d.playerState) === PlayerStateBase.BANNED).length : 0;
+        setLabel(dugoutLabel(section.label, members.length + banned, this.dugoutCountsOn));
         // Owner 2026-07-07: HARD-BOUNDED zones — every player that belongs in a section
         // stays VISIBLE inside it (no clipping/occlusion). When the count exceeds the slots
         // (rows below the label × columns), the rows PACK tighter into the section and the
@@ -10497,6 +10586,8 @@ export class PitchRenderer {
         }
       });
     }
+    this.pruneLettering('dugout', dugoutLetteringKeys);
+    this.watchLetteringFonts(dugoutFonts);
   }
 
   /** Owner 2026-07-07: the SCORE / TURN-TIMER / RE-ROLL tracks. Two MIRRORED 3-column × 9-row
@@ -10510,10 +10601,18 @@ export class PitchRenderer {
     this.turnTrackLayer.sortableChildren = true;
     // gated on dugoutsEnabled so FUMBBL-Classic (which disables the on-pitch dugouts) also
     // hides the on-pitch tracks — classic carries the info in its sidebars.
-    if (!this.game || !this.dugoutsEnabled || !this.turnTrackEnabled) return;
-    this.drawOneTrack(true); // home — SW (west margin, south rows)
-    this.drawOneTrack(false); // away — NE (east margin, north rows), mirrored
+    // Owner 10-11: the apothecary caption's cached lettering; what this draw does not use is destroyed at its end.
+    this.turnTrackFonts = displayFontState();
+    this.turnTrackLetteringKeys = new Set<string>();
+    if (this.game && this.dugoutsEnabled && this.turnTrackEnabled) {
+      this.drawOneTrack(true); // home — SW (west margin, south rows)
+      this.drawOneTrack(false); // away — NE (east margin, north rows), mirrored
+    }
+    this.pruneLettering('apothecary', this.turnTrackLetteringKeys);
+    this.watchLetteringFonts(this.turnTrackFonts);
   }
+  private turnTrackFonts: string = DISPLAY_FONTS_LOADED;
+  private turnTrackLetteringKeys = new Set<string>();
 
   /** Owner 2026-07-07: toggle the on-pitch turn/score/re-roll tracks (Settings › UI) + redraw. */
   setTurnTrackEnabled(on: boolean): void {
@@ -10769,15 +10868,24 @@ export class PitchRenderer {
     // Compact ground-plane caption at the near side of the station; the socket itself is
     // reserved for the token. Its position and non-uniform scale come from the same projected
     // quad as the box, avoiding the old screen-Y offset/perspective mismatch.
-    const label = new Text({ text: 'APOTHECARY', style: DUGOUT_LABEL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
-    label.anchor.set(0.5);
+    // Owner 10-11: Graduate C lettering like the dugout box labels ("Apothecary"), one cached texture for both teams.
+    // The caption's box is unchanged: the lettering is stretched into the same share of the projected cell the old
+    // Text's line box was - its capitals box, or ALL of its ink when that is taller (Nuffle's "A" carries a spur below
+    // the baseline), the ink then centred in the box.
     const stationScale = depthScale(apoX, boxY);
-    const labelBounds = label.getLocalBounds();
-    const labelPlacement = projectedApothecaryLabelPlacement(quad, labelBounds.width, labelBounds.height);
-    label.scale.set(labelPlacement.scaleX, labelPlacement.scaleY);
-    label.position.set(labelPlacement.x, labelPlacement.y);
-    label.zIndex = this.depthZ(apoX, boxY) + 6;
-    this.turnTrackLayer.addChild(label);
+    const caption = this.letteringFor('apothecary', 'APOTHECARY', DUGOUT_LETTERING, this.turnTrackFonts, this.turnTrackLetteringKeys);
+    if (caption) {
+      const label = new Sprite(caption.texture);
+      label.label = 'APOTHECARY';
+      const captionInk = caption.inkUp + caption.inkDown;
+      const inkBound = captionInk > caption.fitHeight;
+      label.anchor.set(0.5, inkBound ? 0.5 + (caption.inkDown - caption.inkUp) / 2 / caption.height : 0.5);
+      const labelPlacement = projectedApothecaryLabelPlacement(quad, caption.fitWidth, Math.max(caption.fitHeight, captionInk));
+      label.scale.set(labelPlacement.scaleX, labelPlacement.scaleY);
+      label.position.set(labelPlacement.x, labelPlacement.y);
+      label.zIndex = this.depthZ(apoX, boxY) + 6;
+      this.turnTrackLayer.addChild(label);
+    }
 
     if (state === 'token' && this.apothecaryTexture) {
       const ds = stationScale;
@@ -16541,15 +16649,21 @@ export class PitchRenderer {
     // TOUCHDOWN end zones (owner 2026-07-02: red checker marks removed;
     // the 90% team shading above carries the zone)
     const ew = getOrientation() === 'ew';
+    const endZoneFonts = displayFontState();
+    const endZoneKeys = new Set<string>();
     for (const endX of [0, PITCH_COLS - 1]) {
       // Owner 2026-07-08: FUMBBL writes the TEAM NAME on its own end zone (home
       // south = endX 0, away north). 'touchdown' keeps the plain word. Fall back to
       // "TOUCHDOWN" when a team name is missing (standalone/unnamed teams).
       const teamName = endX === 0 ? this.game?.teamHome.teamName : this.game?.teamAway.teamName;
       const label = this.endZoneLabel === 'touchdown' ? 'TOUCHDOWN' : (teamName?.trim() || 'TOUCHDOWN');
-      // Owner 09-16: 4x raster + linear filtering + mipmaps (the marking-text rule) — the 1x canvas read low-res
-      // under the camera zoom; full alpha so the white stays white.
-      const td = new Text({ text: label.toUpperCase(), style: ENDZONE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+      // Owner 10-11: Graduate C lettering, composed once per label (letteringFor); the casing of the name as typed
+      // does not matter. Full alpha so the white stays white. `fit` is the box sized to the band: the letters' advance
+      // width and the capitals' height box, both centred on the sprite's centre.
+      const art = this.letteringFor('endzone', label, ENDZONE_LETTERING, endZoneFonts, endZoneKeys);
+      if (!art) continue;
+      const td = new Sprite(art.texture);
+      const fit = { width: art.fitWidth, height: art.fitHeight, ink: art.inkHeight };
       td.anchor.set(0.5, 0.5);
       td.alpha = 1;
       if (ew) {
@@ -16573,7 +16687,9 @@ export class PitchRenderer {
         const e0 = extPoint(endX, midY);
         const e1 = extPoint(endX + 1, midY);
         const thickness = Math.abs((e1.x - e0.x) * uy - (e1.y - e0.y) * ux) || 1;
-        td.scale.set(Math.min((length * 0.95) / td.width, (thickness * 0.85) / td.height));
+        // 95% of the length, 85% of the thickness for the capitals' box, and ALL the ink inside the band (a name with
+        // stacked accents or deep descenders shrinks instead of leaving the end zone).
+        td.scale.set(Math.min((length * 0.95) / fit.width, (thickness * 0.85) / fit.height, thickness / fit.ink));
         // read up the field: left end zone top→bottom, right end zone bottom→top
         let ang = Math.atan2(lenDy, lenDx);
         if (endX === 0) ang += Math.PI;
@@ -16592,14 +16708,32 @@ export class PitchRenderer {
         const by = corners.map((p) => p.y);
         const bandW = Math.max(...bx) - Math.min(...bx);
         const bandH = Math.max(...by) - Math.min(...by);
-        td.scale.set(Math.min((bandW * 0.95) / td.width, (bandH * 0.85) / td.height));
+        td.scale.set(Math.min((bandW * 0.95) / fit.width, (bandH * 0.85) / fit.height, bandH / fit.ink));
         // owner 2026-07-02: south text rotated 180° (reads from the far LOS).
         if (endX === 0) td.angle = 180;
         const c = squareAnchor(endX, Math.floor(PITCH_ROWS / 2));
         td.position.set(c.x, c.y);
       }
+      if (art.inkTall) {
+        // A name whose ink reaches past the plain capitals (stacked accents, deep descenders): the fit above measures
+        // the band at one depth and centres the capitals, which lets such ink cross the band's edge where the band is
+        // narrower or the label is not on its middle. Measure the band where the label actually lies (its two long
+        // edges, over the label's own extent), cut the scale until ALL the ink fits the narrowest room, and centre
+        // the ink in it. Names of plain capitals and small capitals never come here: their size and place are
+        // exactly what the fit above gave.
+        const edge = (x: number): { x: number; y: number }[] => Array.from({ length: PITCH_ROWS + 1 }, (_, j) => extPoint(x, j));
+        const placed = fitInkInBand({
+          edges: [edge(endX), edge(endX + 1)], centre: { x: td.position.x, y: td.position.y }, rotation: td.rotation,
+          scale: td.scale.x, fitWidth: art.fitWidth, inkUp: art.inkUp, inkDown: art.inkDown,
+        });
+        td.scale.set(placed.scale);
+        td.anchor.set(0.5, 0.5 + (art.inkDown - art.inkUp) / 2 / art.height); // the sprite's origin = the ink's centre
+        td.position.set(placed.x, placed.y);
+      }
       this.pitchLayer.addChild(td);
     }
+    this.pruneLettering('endzone', endZoneKeys);
+    this.watchLetteringFonts(endZoneFonts);
 
     // (no center circle — American football; the midfield line above suffices)
 

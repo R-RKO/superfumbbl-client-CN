@@ -113,3 +113,14 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
   pads). They are NOT Microsoft's or Sony's artwork. When the official Xbox controller button images are dropped in,
   this entry becomes: "Xbox controller button images © Microsoft, used per the Xbox 360 Controller Button Images
   licence" (licence text shipped beside the images).
+
+## Fonts
+
+Typefaces bundled with Super FUMBBL (`apps/tauri/public/fonts/`), each under the SIL Open Font License 1.1 with its
+licence text shipped beside the font file.
+
+- **Eduardo Tunni**: Graduate (`Graduate-Regular.ttf`: the Game Menu, end zone and dugout lettering). Copyright (c) 2012,
+  Eduardo Tunni (http://www.tipo.net.ar), with Reserved Font Name "Graduate". SIL Open Font License 1.1, licence text
+  in `OFL-Graduate.txt`. The font file is used unmodified.
+- **Neale Davidson (Pixel Sagas)**: Nuffle (`Nuffle.otf`: the display font). SIL Open Font License 1.1, licence text
+  in `OFL-Nuffle.txt`.

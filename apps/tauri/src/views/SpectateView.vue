@@ -82,7 +82,7 @@ import SppGainToast from '../components/SppGainToast.vue';
 import TurnToast from '../components/TurnToast.vue';
 import { visibleMatchLogEntries } from '../game/logVisibility';
 import {
-  bladeOf, phaseMoney, phaseOf, roleFromWire, summaryCards,
+  bladeOf, ownedResources, phaseMoney, phaseOf, roleFromWire, summaryCards, usesFanFactor,
   type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption } from '../game/inducementsPhase';
 import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
 import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
@@ -5404,18 +5404,28 @@ function induceTeamForRole(role: InducementRole): InducementCardTeam | null {
   return role === 'overdog' ? g.teamHome : g.teamAway;
 }
 
+/** Owner 10-11 side panels: the team's name, the crest the coach corners show for it (pack logo, else the bundled race
+ *  crest in that field seat's kit), and what it owns BEFORE inducements - the roster counts off the team model, never
+ *  TurnData and never the pick map (game/inducementsPhase.ts `ownedResources`). */
+function inducePanelIdentity(team: InducementCardTeam | null, seat: 'home' | 'away'): Pick<PanelView, 'teamName' | 'logo' | 'owned'> {
+  return {
+    teamName: team?.teamName || '—',
+    logo: team ? teamLogo(team, seat) : null,
+    owned: ownedResources(team, { fanFactorRuleset: usesFanFactor(gameStore.game.value) }), // BB2016: the fans are the Fan Factor
+  };
+}
+
 function inducePanel(role: InducementRole): PanelView {
   const mine = gameStore.isPlaying.value && role === induceMyRole.value;
   const reveal = gameStore.state.inducementReveal;
   const team = induceTeamForRole(role);
   const g = gameStore.game.value;
   const seat = g && team && String(team.teamId) === String(g.teamHome.teamId) ? 'home' : 'away';
-  const teamLabel = team ? `${team.teamName} · ${team.coach || '—'}` : '—';
   const confirmed = mine ? !!reveal?.mine : !!reveal?.opp?.ready;
   const active = inducePhase.value === role && !confirmed;
   return {
     role, seat,
-    team: teamLabel,
+    ...inducePanelIdentity(team, seat),
     status: confirmed ? 'confirmed' : active ? 'selecting' : 'waiting',
     money: mine ? induceMyMoney.value : active ? induceOppMoney.value : null, // owner 09-21: the opponent's derived budget while they choose
     cards: mine
@@ -5424,7 +5434,9 @@ function inducePanel(role: InducementRole): PanelView {
     editable: mine && induceCanAct.value,
     // Spec: the UNDERDOG panel dims through the overdog phase.
     dimmed: role === 'underdog' && inducePhase.value === 'overdog',
-    emptyNote: active ? 'Nothing selected yet.' : confirmed ? 'No inducements.' : 'Waiting…',
+    // A finished leg rebuilt from the model (rejoin): an empty set is "not known", not "bought nothing" (the server
+    // can hold a confirmed purchase outside the model until both coaches have answered).
+    emptyNote: active ? 'Nothing selected yet.' : confirmed ? (mine && reveal?.mineFromModel ? 'Your choices are locked in.' : 'No inducements.') : 'Waiting…',
   };
 }
 const induceOverdogPanel = computed(() => inducePanel('overdog'));
@@ -5504,7 +5516,7 @@ function presetPanel(seat: 'home' | 'away', role: InducementRole): PanelView {
   return {
     role,
     seat,
-    team: team ? `${team.teamName} · ${team.coach || '—'}` : '—',
+    ...inducePanelIdentity(team, seat),
     status: 'confirmed',
     money: null,
     cards: induceRevealCards(presetChoiceFor(seat), team),

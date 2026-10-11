@@ -24,6 +24,7 @@ import { refreshPostGameDice } from './postGameCache';
 import { postGameKey } from './postGameProjection';
 import { SpectatorDiceLedger } from './spectatorDiceLedger';
 import { inducementChoiceLabel } from './inducementChoiceLabel';
+import { waitingSeatRole } from './inducementsPhase';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
@@ -1079,6 +1080,10 @@ const legacyState = reactive({
     mine: InducementChoice | null;
     /** Owner 07-08: UNDERDOG — opponent chooses FIRST; my side waits until my turn (or already bought). */
     mineWaiting?: boolean;
+    /** `mine` was rebuilt from the game model (a finished leg found on a rejoin / a skipped leg), not remembered from
+     *  my own confirm. The model may not carry a purchase yet (parallel legs queue it server-side), so an EMPTY
+     *  `mine` here means "not known", never "bought nothing". Absent on every reveal made by my own confirm. */
+    mineFromModel?: boolean;
     /**
      * MY role in StepBuyInducements' HOME→AWAY leg order, so the phase pane can mount
      * its mirrored Overdog/Underdog columns for BOTH seats — including while I hold no
@@ -21317,9 +21322,15 @@ function revealMyInducements(mine: InducementChoice, myRole: 'overdog' | 'underd
 /** Final authoritative team-model projection used when the phase closes before
  * Vue's incremental opponent watcher can publish the last (including empty) set. */
 function finalOpponentInducementChoice(g: GameJson): InducementChoice {
+  return modelInducementChoice(g, 'opponent');
+}
+/** One coach's bought inducements as the MODEL carries them: that team's TurnData inducement set (the server adds a
+ *  purchase there, StepBuyInducements.handleTeamInducements) and its Star players. No costs: the model has none. */
+function modelInducementChoice(g: GameJson, whose: 'mine' | 'opponent'): InducementChoice {
   const myTeam = myPlayTeam(g);
-  const oppTeam = myTeam === g.teamHome ? g.teamAway : g.teamHome;
-  const oppTurn = myTeam === g.teamHome ? g.turnDataAway : g.turnDataHome;
+  const wantHome = (myTeam === g.teamHome) === (whose === 'mine');
+  const oppTeam = wantHome ? g.teamHome : g.teamAway;
+  const oppTurn = wantHome ? g.turnDataHome : g.turnDataAway;
   const positions = (oppTeam.roster as { positionArray?: { positionId: string; positionName?: string }[] }).positionArray ?? [];
   const items = ((oppTurn?.inducementSet?.inducementArray ?? []) as {
     inducementType?: unknown; value?: unknown;
@@ -21421,15 +21432,34 @@ function drivePregameStep() {
         // until it's my turn — but only while I still have a choice to make.
         if (play.active && humanSetupSurface() && !fastPregame && dialogParam?.teamId && !state.inducementReveal?.mine && !state.inducementReveal?.mineWaiting) {
           const oppTeam = myTeamId === (g.teamHome as { teamId?: string }).teamId ? g.teamAway : g.teamHome;
+          // Astra 10-11 (P2): this branch used to assume "the opponent holds the FIRST leg, so I am the underdog and
+          // still to choose". A coach who REJOINS (the snapshot handler's resetPlayback clears the local reveal
+          // memory) while the opponent selects may be the OVERDOG whose leg is already over, and an overdog whose leg
+          // the server skipped lands here too. Where the server state PROVES it (game/inducementsPhase.ts
+          // `waitingSeatRole`: by team id, off the underdog's pettyCashFromTvDiff, never off home / away position), the
+          // role and "my leg is over" come from there, and my purchases from the model. In every other state (equal
+          // values, parallel legs, no marker, BB2016) the old default below stands exactly.
+          const results = g.gameResult as { teamResultHome?: { pettyCashFromTvDiff?: unknown } | null; teamResultAway?: { pettyCashFromTvDiff?: unknown } | null } | null | undefined;
+          const seat = waitingSeatRole({
+            myTeamId,
+            dialogTeamId: dialogParam.teamId,
+            dialogUsesTreasury: (dialogParam as { usesTreasury?: unknown }).usesTreasury,
+            teams: [
+              { teamId: (g.teamHome as { teamId?: unknown }).teamId, pettyCashFromTvDiff: results?.teamResultHome?.pettyCashFromTvDiff },
+              { teamId: (g.teamAway as { teamId?: unknown }).teamId, pettyCashFromTvDiff: results?.teamResultAway?.pettyCashFromTvDiff },
+            ],
+          });
+          const myLegOver = seat?.myLegOver ?? false;
           state.inducementReveal = {
             seq: (state.inducementReveal?.seq ?? 0) + 1,
-            mine: null, mineWaiting: true,
+            mine: myLegOver ? modelInducementChoice(g, 'mine') : null, mineWaiting: !myLegOver,
+            ...(myLegOver ? { mineFromModel: true } : {}),
             // The opponent holds the FIRST leg (StepBuyInducements init() opens on the
             // overdog), so I am the underdog. This is what lets the inducements phase
             // pane mount for the WAITING seat too — owner 08-18: the underdog used to
             // see nothing until the overdog finished, because every inducement surface
             // hung off `state.inducementBuy`, which only the addressee ever gets.
-            myRole: 'underdog',
+            myRole: seat?.myRole ?? 'underdog',
             opp: { coach: (oppTeam as { coach?: string }).coach ?? '', ready: false, items: [], stars: [] },
           };
         }

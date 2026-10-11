@@ -251,6 +251,8 @@ export function nextControl(items: HTMLElement[], from: HTMLElement | null, dir:
 }
 
 function controllerMode(): boolean { return activeState.value === 'controller'; }
+/** True while the controller is the active input (the mode in which a card's pad focus, not the keyboard's, acts). */
+export function padFocusControllerMode(): boolean { return controllerMode(); }
 
 /** Recompute the overlay (ring + glyph badges) and `padFocusOwnsInput`. Cheap; the overlay calls it per frame. */
 export function refreshPadFocus(): void {

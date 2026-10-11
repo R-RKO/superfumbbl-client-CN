@@ -307,6 +307,124 @@ export function phaseOf(input: {
   return input.mineConfirmed ? 'underdog' : 'done';
 }
 
+/** What a team owns BEFORE inducements: the five roster counts on the inducement screen's side panels (owner 10-11).
+ *  A count is `null` when the team model does not carry that field: the screen then shows "not available", never a
+ *  number the server did not send. */
+export interface OwnedResources {
+  rerolls: number | null;
+  apothecaries: number | null;
+  /** The team's fans count for this game's ruleset (see `fansLabel` for which field it is). */
+  dedicatedFans: number | null;
+  /** Names the field `dedicatedFans` was read from: BB2020 / BB2025 Dedicated Fans, or the BB2016 Fan Factor. */
+  fansLabel: 'Dedicated fans' | 'Fan factor';
+  assistantCoaches: number | null;
+  cheerleaders: number | null;
+}
+
+/** BB2016 is the one ruleset whose fans are the team's Fan Factor (see `ownedResources`). Same option the client's
+ *  other ruleset switches read (`statsMechanicFor`). */
+export function usesFanFactor(
+  game: { gameOptions?: { gameOptionArray?: readonly { gameOptionId?: unknown; gameOptionValue?: unknown }[] } | null } | null | undefined,
+): boolean {
+  const version = game?.gameOptions?.gameOptionArray?.find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  return /^BB2016$/i.test(String(version ?? '').trim());
+}
+
+/**
+ * The roster counts, read off the TEAM model only (`Team.toJsonValue`: reRolls / apothecaries / dedicatedFans /
+ * fanFactor / assistantCoaches / cheerleaders). Nothing the server does in a match writes these fields: purchases land
+ * on TurnData (`reRolls`, `apothecaries`, `inducementSet`; StepBuyInducements.handleTeamInducements, StateMechanic) and
+ * the wire has no model change that targets a team's counts. So these numbers do not move while inducements are
+ * selected or after they are bought, and they are the same public roster facts both coaches and spectators already
+ * receive. Deliberately NOT read: TurnData (live rerolls / apothecaries including Extra Training and Wandering
+ * Apothecaries) and the local pick map.
+ *
+ * FANS. Upstream serialises BOTH `fanFactor` and `dedicatedFans` on every team, as plain ints, in every ruleset
+ * (Team.toJsonValue), so presence alone cannot tell which one is the team's fans: a BB2016 team arrives as
+ * `fanFactor: 7, dedicatedFans: 0`. Upstream picks by ruleset (GameMechanic.fans: bb2016 `team.getFanFactor()`,
+ * bb2020 / bb2025 `team.getDedicatedFans()`), and so does this: `fanFactorRuleset` (BB2016) reads `fanFactor`, every
+ * other ruleset reads `dedicatedFans`; whichever field that is, the other is the fallback when it is absent. The label
+ * follows the field actually read.
+ *
+ * A field the model does not carry is `null` (shown as "not available"), never a zero; a present zero is a zero.
+ */
+export function ownedResources(team: unknown, rules: { fanFactorRuleset?: boolean } = {}): OwnedResources | null {
+  if (!team || typeof team !== 'object') return null;
+  const t = team as Record<string, unknown>;
+  const count = (value: unknown): number | null => {
+    if (value === undefined || value === null || value === '' || typeof value === 'boolean') return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  };
+  const dedicated = count(t.dedicatedFans);
+  const factor = count(t.fanFactor);
+  const fromFactor = rules.fanFactorRuleset ? factor !== null : dedicated === null && factor !== null;
+  return {
+    rerolls: count(t.reRolls),
+    apothecaries: count(t.apothecaries),
+    dedicatedFans: fromFactor ? factor : dedicated,
+    fansLabel: fromFactor ? 'Fan factor' : 'Dedicated fans',
+    assistantCoaches: count(t.assistantCoaches),
+    cheerleaders: count(t.cheerleaders),
+  };
+}
+
+/**
+ * The role of a coach who holds NO dialog while the OPPONENT's inducement dialog is open, and whether that coach's own
+ * leg is already over. Returns null unless the server state PROVES it; the caller then keeps its old default.
+ *
+ * Upstream (bb2020 / bb2025 StepBuyInducements.init, mixed StepPettyCash):
+ *   - StepPettyCash writes `pettyCashFromTvDiff` (= the team-value gap) on the UNDERDOG's team result only ("we set
+ *     this value always to know who should go first in the inducement step").
+ *   - StepBuyInducements then runs an ORDERED flow: the overdog's leg, then (swapTeam) the underdog's.
+ *   - With no gap (both zero) and spending allowed it runs "parallel" from the ORIGINAL home team, and a confirmed
+ *     coach's purchase is queued outside the game model until both have answered.
+ *
+ * Everything is keyed by TEAM ID, never by home / away position: the away coach receives a perspective-swapped model
+ * (Game.transform: its own team is `teamHome`, the results swap with the teams, the dialog keeps its team id), so
+ * "home goes first" cannot be read off the model that seat holds.
+ *
+ * TRUTH TABLE (the open dialog belongs to the OTHER team; mine is not open):
+ *
+ *   pettyCashFromTvDiff > 0 on ...   | the open dialog's team is ... | result
+ *   ---------------------------------+-------------------------------+--------------------------------------------
+ *   exactly one team: the OPPONENT   | the underdog (second leg)     | I am the OVERDOG, my leg is over
+ *   exactly one team: MINE           | the overdog (first leg)       | I am the UNDERDOG, my leg is still to come
+ *   neither / both / absent          | not provable                  | null -> the caller's old default
+ *   (equal values, parallel legs, a snapshot from before StepPettyCash)
+ *
+ *   also null: the dialog is mine or has no team id; it carries no boolean `usesTreasury` (BB2016 `buyInducements`,
+ *   whose legs are not this ordered flow); a team id is missing or the marked team is neither of the two.
+ *
+ * `usesTreasury` is deliberately NOT used to tell the legs apart: it is true on the overdog leg but also on a
+ * parallel or always-use-treasury second leg. Its presence only identifies the two-leg dialog.
+ */
+export function waitingSeatRole(input: {
+  /** The local coach's own team id. */
+  myTeamId: unknown;
+  /** The open dialog's `teamId` and `usesTreasury`, exactly as received. */
+  dialogTeamId: unknown;
+  dialogUsesTreasury: unknown;
+  /** Both teams as the model pairs them: a team id with ITS OWN team result's pettyCashFromTvDiff. */
+  teams: readonly { teamId: unknown; pettyCashFromTvDiff: unknown }[];
+}): { myRole: InducementRole; myLegOver: boolean } | null {
+  const id = (value: unknown): string | null => (value === undefined || value === null || value === '' ? null : String(value));
+  const mine = id(input.myTeamId);
+  const dialogTeam = id(input.dialogTeamId);
+  if (!mine || !dialogTeam || dialogTeam === mine) return null;
+  if (typeof input.dialogUsesTreasury !== 'boolean') return null;
+  if (input.teams.length !== 2) return null;
+  const marked = input.teams.filter((team) => {
+    const gap = typeof team.pettyCashFromTvDiff === 'number' ? team.pettyCashFromTvDiff : Number.NaN;
+    return Number.isFinite(gap) && gap > 0;
+  });
+  if (marked.length !== 1) return null;
+  const underdog = id(marked[0]!.teamId);
+  if (underdog === dialogTeam) return { myRole: 'overdog', myLegOver: true };
+  if (underdog === mine) return { myRole: 'underdog', myLegOver: false };
+  return null;
+}
+
 /** Format gold the way the rest of the client does (300000 → "300k"). */
 export function fmtGold(gold: number): string {
   return `${Math.round(gold / 1000)}k`;

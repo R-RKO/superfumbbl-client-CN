@@ -47,6 +47,20 @@ async function boot() {
   } catch (error) {
     console.warn('Nuffle font failed to load — falling back to system fonts', error);
   }
+  // Owner 10-11 ("Graduate C"): Graduate (Eduardo Tunni, SIL OFL 1.1; licence beside it as OFL-Graduate.txt) letters
+  // the Game Menu, the end zones and the dugout labels after each word's Nuffle lead letter. It is REGISTERED and its
+  // load STARTED here, never awaited: a slow or stalled font request must not hold the app back (no new waits).
+  // Until it arrives the lettering shows in the fallback of its font stack (Nuffle): the menu swaps to Graduate by
+  // itself (display: swap), and the pitch renderer redraws its lettering once when the face reports loaded.
+  try {
+    const graduate = new FontFace('Graduate', 'url(/fonts/Graduate-Regular.ttf)', { display: 'swap' });
+    (document.fonts as unknown as { add(face: FontFace): void }).add(graduate);
+    void graduate.load().catch((error: unknown) => {
+      console.warn('Graduate font failed to load, menu and pitch lettering fall back to Nuffle', error);
+    });
+  } catch (error) {
+    console.warn('Graduate font could not be registered, menu and pitch lettering fall back to Nuffle', error);
+  }
   // Owner 2026-07-11: SNES Italic — the exact "Super FUMBBL" wordmark face (629Fonts, free,
   // https://famfonts.com/super-nintendo/). Bundled so the brand lockup can render live/at any size.
   try {

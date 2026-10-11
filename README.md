@@ -115,7 +115,8 @@ the assets or putting them on merchandise, credit FUMBBL with a link and indicat
   by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
 - **CC BY 4.0** — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff
   (freesound.org). Ship in the installer.
-- **SIL Open Font License 1.1** — Nuffle by Neale Davidson (Pixel Sagas); the licence text ships beside the font.
+- **SIL Open Font License 1.1** — Nuffle by Neale Davidson (Pixel Sagas) and Graduate by Eduardo Tunni (used
+  unmodified); each licence text ships beside its font.
 - **Flaticon licence (attribution)** — American football helmet icon by justicon.
 - **Licensed purchases, use in the product only** — SakPix "Football Championship Megapack" (stadium props, in this
   tree as derivative crops); Acasas / unTied pitch textures via GameDev Market; The Sound Guild, Gamemaster Audio and

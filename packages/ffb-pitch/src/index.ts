@@ -67,3 +67,4 @@ export { bundledStadiumPacks, type BundledStadiumPack } from './bundledStadium';
 export const loadBlockDice3d = () => import('./blockDice3d');
 export { ACTION_DIE_TUMBLE_MS } from './actionDice3d';
 export type { BlockDiceRow } from './blockDice3d';
+export { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayCapsWords, type DisplayCapsPart, type DisplayCapsRun, type DisplayCapsWord } from './displayCaps';

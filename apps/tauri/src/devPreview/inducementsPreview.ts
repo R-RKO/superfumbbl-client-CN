@@ -11,9 +11,10 @@ import { createApp, h, reactive } from 'vue';
 import { applyTheme } from '../game/theme';
 import InducementsPhase, { type PanelView, type PickerCard, type SummaryCardView } from '../components/InducementsPhase.vue';
 import {
-  KIND_LABEL, bladeOf, phaseMoney, summaryCards,
+  KIND_LABEL, bladeOf, ownedResources, phaseMoney, summaryCards,
   type Blade, type InducementPhase, type InducementRole, type PhaseOption,
 } from '../game/inducementsPhase';
+import { crestDataUrl } from '../game/teamCrests';
 
 const OPTIONS: PhaseOption[] = [
   { key: 'bribes', label: 'Bribe', cost: 100_000, max: 3, available: true },
@@ -82,7 +83,23 @@ const state = reactive({
   picks: {} as Record<string, number>,
   /** Tournament/league preset mode: read-only allocations + TOURNAMENT MODE banner. */
   preset: false,
+  /** Owner 10-11 side panels: passive viewer (no local seat), a 40+ character team name, crest states. */
+  viewer: 'play' as 'play' | 'spectate',
+  longName: false,
+  logo: 'crest' as 'crest' | 'none' | 'broken',
+  /** Team-model shapes: BB2020+ (default), a BB2016 team (fans = Fan Factor), or a model missing most counts. */
+  roster: 'bb2025' as 'bb2025' | 'bb2016' | 'sparse',
+  /** A finished leg rebuilt from the model after a rejoin, the model carrying no purchase: the neutral note. */
+  lockedIn: false,
 });
+
+/** Mock TEAM models: the side panels' owned-resource tiles read these roster fields through the real projection
+ *  (`ownedResources`), exactly as the mount does. Zero and two-digit counts are in here on purpose. */
+const TEAMS = {
+  overdog: { teamName: 'Deathskull Ladz', race: 'Orc', reRolls: 3, apothecaries: 1, dedicatedFans: 7, assistantCoaches: 2, cheerleaders: 1 },
+  underdog: { teamName: 'Penguin Academy', race: 'Human', reRolls: 2, apothecaries: 0, dedicatedFans: 12, assistantCoaches: 0, cheerleaders: 10 },
+};
+const LONG_NAME = 'The Extraordinarily Longwinded Gentlemen of Altdorf-upon-Reik';
 
 /** Preselections mirroring the prototype's fixture, so the summaries are populated. */
 // Kept inside each side's cap so the readouts stay meaningful: the overdog sits
@@ -126,21 +143,29 @@ const UNDER_MONEY = (spent: number) => phaseMoney({
 });
 
 function panelFor(role: InducementRole): PanelView {
-  const mine = role === state.seat;
+  const mine = state.viewer === 'play' && role === state.seat;
   const live = state.phase === role;
   const picks = mine && live ? state.picks : role === 'overdog' ? OVERDOG_PICKS : UNDERDOG_PICKS;
   const confirmed = state.phase === 'done' || (role === 'overdog' && state.phase === 'underdog');
   const spent = summaryCards(picks, OPTIONS).reduce((n, c) => n + c.total, 0);
-  const showCards = confirmed || live;
+  // As the mount: a coach's picks reach anyone else only once that coach confirms (the reveal), and budgets are sent
+  // to the dialog's addressee alone, so they exist only while the local coach holds the live dialog.
+  const showCards = confirmed || (mine && live);
   return {
     role, seat: role === 'overdog' ? 'home' : 'away',
-    team: role === 'overdog' ? 'Deathskull Ladz · GrimIronjaw' : 'Penguin Academy · TheArtemisBlack',
+    teamName: state.longName ? LONG_NAME : TEAMS[role].teamName,
+    logo: state.logo === 'none' ? null : state.logo === 'broken' ? '/missing-team-logo.png'
+      : crestDataUrl(TEAMS[role].race, role === 'overdog' ? 'home' : 'away'),
+    owned: state.roster === 'bb2016'
+      ? ownedResources({ ...TEAMS[role], fanFactor: TEAMS[role].dedicatedFans, dedicatedFans: 0 }, { fanFactorRuleset: true })
+      : state.roster === 'sparse' ? ownedResources({ teamName: TEAMS[role].teamName, reRolls: TEAMS[role].reRolls, apothecaries: 0 })
+        : ownedResources(TEAMS[role]),
     status: confirmed ? 'confirmed' : live ? 'selecting' : 'waiting',
-    money: mine ? (role === 'overdog' ? OVER_MONEY(spent) : UNDER_MONEY(spent)) : null,
-    cards: showCards ? cardsOf(picks) : [],
+    money: mine && live ? (role === 'overdog' ? OVER_MONEY(spent) : UNDER_MONEY(spent)) : null,
+    cards: showCards && !(state.lockedIn && mine && confirmed) ? cardsOf(picks) : [],
     editable: mine && live,
     dimmed: role === 'underdog' && state.phase === 'overdog',
-    emptyNote: live ? 'Nothing selected yet.' : confirmed ? 'No inducements.' : 'Waiting…',
+    emptyNote: live ? 'Nothing selected yet.' : confirmed ? (state.lockedIn && mine ? 'Your choices are locked in.' : 'No inducements.') : 'Waiting…',
   };
 }
 
@@ -149,11 +174,13 @@ const canAct = () => state.phase === state.seat;
 
 createApp({
   render: () => h(InducementsPhase, {
+    class: 'induce-phase', // the mount's class: the host rules in inducements-preview.html key off it, as the client's do
     phase: state.phase,
     overdog: panelFor('overdog'),
     underdog: panelFor('underdog'),
-    mySide: state.seat,
-    canAct: canAct() && !state.preset,
+    mySide: state.viewer === 'play' ? state.seat : null,
+    viewerMode: state.viewer,
+    canAct: canAct() && !state.preset && state.viewer === 'play',
     picks: state.picks,
     options: canAct() ? OPTIONS : [],
     cap: state.seat === 'overdog' ? 400_000 : 390_000,
@@ -192,3 +219,19 @@ for (const s of ['overdog', 'underdog'] as const) {
   button(`seat: ${s}`, () => state.seat === s, () => { state.seat = s; });
 }
 button('preset (tournament)', () => state.preset, () => { state.preset = !state.preset; });
+button('spectator', () => state.viewer === 'spectate', () => { state.viewer = state.viewer === 'play' ? 'spectate' : 'play'; });
+button('roster: BB2016', () => state.roster === 'bb2016', () => { state.roster = state.roster === 'bb2016' ? 'bb2025' : 'bb2016'; });
+button('roster: sparse', () => state.roster === 'sparse', () => { state.roster = state.roster === 'sparse' ? 'bb2025' : 'sparse'; });
+button('rejoin: locked in', () => state.lockedIn, () => { state.lockedIn = !state.lockedIn; });
+button('long name', () => state.longName, () => { state.longName = !state.longName; });
+button('logo: none', () => state.logo === 'none', () => { state.logo = state.logo === 'none' ? 'crest' : 'none'; });
+button('logo: broken', () => state.logo === 'broken', () => { state.logo = state.logo === 'broken' ? 'crest' : 'broken'; });
+// A long selections list for the acting seat (ignores the cap: this is a layout fixture, nothing is sent anywhere).
+button('fill picks', () => Object.keys(state.picks).length > 6, () => {
+  const full = Object.keys(state.picks).length > 6;
+  for (const k of Object.keys(state.picks)) delete state.picks[k];
+  if (!full) for (const o of OPTIONS.slice(0, 16)) state.picks[o.key] = o.key === 'bribes' ? 3 : 1;
+});
+// The real mount bounds the phase to the middle 84% of the pitch host; `free` drops that to inspect natural heights.
+const appHost = document.getElementById('app')!;
+button('host: free height', () => !appHost.classList.contains('pitch-host'), () => { appHost.classList.toggle('pitch-host'); });

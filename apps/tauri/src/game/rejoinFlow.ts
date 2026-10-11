@@ -222,14 +222,9 @@ export function deriveRejoinModal(launch: RejoinLaunch | null, snap: RejoinSnaps
       steps: markProgress(steps, 2),
       // owner 10-06: no "Joined — waiting ... to reconnect" subtext (the opponent has usually not joined at all yet)
       message: '',
-      // Owner 10-10 (g1952048): the server's own seat count. Alone in the game = the other coach is not connected,
-      // which is why nothing happens; the coach is in and need not launch again.
-      notes: [
-        ...notesFor(launch, false),
-        ...(snap.playersJoined === 1
-          ? [`You are in the game. ${launch.opponent || 'The other coach'} has not connected yet; the game goes ahead when both coaches are connected.`]
-          : []),
-      ],
+      // Owner 10-11: the extra "You are in the game..." line shown while alone in the game was removed again;
+      // the title and the last step already say the client is waiting for the opponent.
+      notes: notesFor(launch, false),
     };
   }
   return { kind: 'progress', title: titleFor(launch, 'progress'), steps: markProgress(steps, Math.max(reachedIndex(snap.sessionState), launch.reachedStep ?? 0)), notes: notesFor(launch, false) };
