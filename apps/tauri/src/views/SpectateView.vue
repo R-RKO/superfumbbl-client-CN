@@ -2726,6 +2726,14 @@ watch(
   () => !!gameStore.state.injurySplash,
   (active) => renderer?.setHoldBallDuringInjury(active),
 );
+// Owner 10-10: a KO'd / casualtied player's token stays on his square until his armour roll and injury pill have been
+// shown (the store's injuryTokenHolds; the renderer reads the list on every refresh). A RELEASE has no model change of
+// its own, so it asks for a redraw here - after this flush, so the frame's own setGame always goes first.
+watch(
+  () => gameStore.state.injuryTokenHolds,
+  () => { void nextTick(() => renderer?.syncInjuryTokenHolds()); },
+  { flush: 'post' },
+);
 
 // Owner 2026-07-08: VAMPIRE FEED — a 🧛 pops over the bitten Thrall just before the "bitten"
 // injury plays (armed by pumpInjuries), so the feed reads before the injury roll.
@@ -9473,6 +9481,7 @@ onMounted(async () => {
   bindPlayersAnimating(() => renderer?.playersAnimating() ?? false); // owner 09-14: touchdown-sound gate sees the rendered walk
   renderer.movementPendingProbe = movementStepsPending; // owner 09-23: the planner swallows clicks while steps are still pending
   bindArmourDiceShowing(() => renderer?.armourDiceShowing() ?? false); // owner 09-15: the injury toast waits for 'ARMOR BREAKS!' to retire
+  renderer.injuryTokenHoldsProbe = () => gameStore.state.injuryTokenHolds; // owner 10-10: the token waits for its armour roll + pill
   turfCatalog.options = renderer.turfOptions();
   // if a persisted turf is no longer available, fall back to the first option
   if (!turfCatalog.options.includes(settings.turf)) settings.turf = turfCatalog.options[0] ?? 'grass1';
@@ -11451,8 +11460,9 @@ function panelFor(side: 'home' | 'away') {
 const homePanel = computed(() => panelFor('home'));
 const awayPanel = computed(() => panelFor('away'));
 // Owner 10-06: the coach-corner "N RES / N OUT" tabs — the dugout box membership rules (game/dugoutCounts.ts).
-const homeBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'home'));
-const awayBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'away'));
+// Owner 10-10: a player held on the pitch for his injury presentation is counted with the same rule the renderer draws by.
+const homeBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'home', gameStore.state.injuryTokenHolds));
+const awayBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'away', gameStore.state.injuryTokenHolds));
 const passiveSkillDecisionText = computed(() => {
   const choice = gameStore.state.skillChoice;
   if (!choice) return '';

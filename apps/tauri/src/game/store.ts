@@ -54,7 +54,7 @@ import {
   type ServerCommand,
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
-import { SETUP_TEMPLATES, validateSetup, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, TTM_THROW_MS, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation } from '@fumbbl40k/ffb-pitch';
+import { SETUP_TEMPLATES, validateSetup, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, TTM_THROW_MS, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createReportLogContext, formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
@@ -529,6 +529,9 @@ const legacyState = reactive({
   livePulse: 0,
   /** B4-1/B6-1: BB3-style injury banner (null = hidden). */
   injurySplash: null as InjuryEvent | null,
+  /** Owner 10-10: players the injury took off the pitch whose armour roll / injury pill is still to be shown - the
+   *  renderer keeps their token on `square` until the store drops them here (see armInjuryTokenHold). */
+  injuryTokenHolds: [] as InjuryTokenHold[],
   /** B5-5/B7-1: one-shot cinematic request (square where the armor broke +
    *  the injured playerId for the knockdown-frame slow-mo). */
   /** One-shot: a player attempts to catch the ball (catchRoll) — pulses a ring
@@ -1367,7 +1370,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'bombBlast', 'fireballAnim', 'zapAnim', 'leap', 'leapFail', 'trickster', 'crowdSurf',
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
-  'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPuff',
+  'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPuff', 'injuryTokenHolds',
   'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
@@ -3563,6 +3566,209 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
 /** B6-2: injuries in a single frame play one at a time, not on top of. */
 const injuryQueue: InjuryEvent[] = [];
 let injuryPlaying = false;
+/** The injury event whose slot is running (from its dequeue to the end of its pill). */
+let injuryPresenting: InjuryEvent | null = null;
+
+/** Owner 10-10 ("The player token on a KO or casualty disappears before the die toast applies. Can we also hold that
+ *  until after the armor roll and pill toast are displayed?").
+ *  What the server sends (g1951999 #1377, g1951682 #601 / #2633, g1951658 #621 ...): ONE serverModelSync carries the
+ *  injury report (armour roll, injury roll, casualty roll) AND the player's new state AND his dugout-box coordinate.
+ *  The model is applied on arrival, so the token left the pitch ~1.6 s before the armour dice had torn down and
+ *  ~3.4 - 4.3 s before the KO / casualty pill had read. (With an apothecary on offer the player stays on the pitch in
+ *  the model until the answer; a quick answer takes him off before the pill all the same.)
+ *  A player who leaves the pitch for the KO / casualty box (or the reserves: Regeneration, a crowd push that only
+ *  stuns, an apothecary patch-up) while an injury event of his is still queued or on screen is now HELD: the renderer
+ *  keeps drawing him, fallen, on his last server-confirmed pitch square and keeps him out of the dugout.
+ *  A CROWD PUSH takes him off one frame earlier (g1951682 #2631: fieldModelRemovePlayer rides the `pushback` report,
+ *  the injury report follows 16 ms later in #2633): that removal arms the hold too, on the square he was pushed from.
+ *  RELEASE = the presentation's own acknowledgement: the end of that event's injury slot (pumpInjuries - the pill has
+ *  been up for its severity beat, after the armour dice were torn down). The waits themselves are unchanged.
+ *  WAKES (every hold needs one):
+ *   - the model moves on: he is back on the pitch, another player stands on the held square, or the board is being
+ *     reset for a new drive / the game is over (reconcileInjuryTokenHolds, every frame);
+ *   - an apothecary escort starts for him (it carries the real token off itself: playApothecary);
+ *   - the model object is replaced (reconnect snapshot, replay seek, game change), catch-up cleanup, clearCinematics;
+ *   - its OWN clocks (Astra 10-10: one shared timer restarted by any injury progress let an orphan live as long as
+ *     other injuries kept presenting): INJURY_TOKEN_HOLD_STALL_MS since this hold last made progress - it was armed,
+ *     or the pump moved while an event of THIS player was queued / on screen - and INJURY_TOKEN_HOLD_CAP_MS since it
+ *     was armed, whatever happens. A plain timer, so it fires with the frame loop asleep and survives
+ *     clearAllGameTimeouts.
+ *  A plain turn end does NOT release it: the turn / turnover splash itself waits for the injury presentation.
+ *  EXACTLY ONCE (Astra P1 10-10): an apothecary escort draws the player itself. From the moment one starts for him
+ *  (state.apothecaryAnim, whatever raised it and in whatever order with the server's removal frame) an existing hold
+ *  is dropped and none is armed behind it. The escort's ownership ENDS WITH THE ESCORT (Astra round 2: a 30 s memory
+ *  by player id also swallowed a later, legitimate hold - reserves, next drive, injured again): it covers
+ *   - the server's reply to THAT answer: the one transition that takes him off the pitch while the apothecary dialog
+ *     the answer belonged to is still the model's dialog (no timer; a reply that leaves him on the pitch ends the
+ *     wait), and
+ *   - the escort presentation itself, for its own run time and no longer - whenever it was raised.
+ *  It is forgotten once that run is over (and the wait, if any, has ended), at a board reset / drive change / game
+ *  end, and with every reset.
+ *  Presentation only: no wire, no model, no planner reads this. */
+export const INJURY_TOKEN_HOLD_STALL_MS = 6000;
+export const INJURY_TOKEN_HOLD_CAP_MS = 15000;
+/** renderer.playApothecary: run 700 + bounce 950 + exit 1150 with the doctor; the declined escort is the 1150 exit alone. */
+const INJURY_ESCORT_MEDIC_MS = 2800;
+const INJURY_ESCORT_DECLINED_MS = 1150;
+const INJURY_TOKEN_HOLD_STATES = new Set<number>([
+  PlayerStateBase.KNOCKED_OUT, PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY, PlayerStateBase.RIP, PlayerStateBase.RESERVE,
+]);
+/** Turn modes in which the pitch is being cleared / re-populated: a token must not be left behind on it. */
+const INJURY_TOKEN_HOLD_BOARD_RESET_MODES = new Set(['setup', 'startGame', 'endGame']);
+const injuryTokenHoldClocks = new Map<string, { armedAt: number; progressAt: number }>();
+/** A running escort: `awaitingRemoval` = it started while the model still had him on the pitch (the coach's own answer)
+ *  and the server's removal has not come yet; `endsAt` = when the escort presentation is over. */
+const injuryEscorts = new Map<string, { endsAt: number; awaitingRemoval: boolean }>();
+function apothecaryDialogOpenFor(model: GameJson | null, playerId: string): boolean {
+  const dialog = model?.dialogParameter as { dialogId?: unknown; playerId?: unknown; playerIds?: unknown } | null | undefined;
+  if (!dialog || !/apothecar/i.test(String(dialog.dialogId ?? ''))) return false;
+  const named = [dialog.playerId, ...(Array.isArray(dialog.playerIds) ? dialog.playerIds : [])].filter((id) => id != null).map(String);
+  return named.length === 0 || named.includes(playerId);
+}
+/** Forget the escorts that are over (see the hold's header). Runs on every applied frame / published position. */
+function reconcileInjuryEscorts(model: GameJson | null): void {
+  if (injuryEscorts.size === 0) return;
+  if (!model || (model as { finished?: unknown }).finished === true || INJURY_TOKEN_HOLD_BOARD_RESET_MODES.has(String(model.turnMode ?? ''))) { injuryEscorts.clear(); return; }
+  const now = Date.now();
+  for (const [playerId, escort] of [...injuryEscorts]) {
+    const data = model.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+    const onPitch = !!data && isPitchSquare(data.playerCoordinate);
+    if (!data) injuryEscorts.delete(playerId);
+    else if (onPitch) {
+      // The reply to the answer closed the dialog and left him on the pitch: the escort no longer waits for a removal -
+      // but its record stays for the escort's own run time (Astra round 3: the renderer's escort figure is still on
+      // screen until then, so a removal inside the run must not arm a hold next to it). After the run it is gone, and
+      // a later, separate injury arms normally.
+      if (escort.awaitingRemoval && !apothecaryDialogOpenFor(model, playerId)) escort.awaitingRemoval = false;
+      if (!escort.awaitingRemoval && now >= escort.endsAt) injuryEscorts.delete(playerId);
+    } else {
+      escort.awaitingRemoval = false; // the removal is in the model (whether or not a hold was asked for)
+      if (now >= escort.endsAt) injuryEscorts.delete(playerId);
+    }
+  }
+}
+let injuryTokenHoldTimer: ReturnType<typeof setTimeout> | null = null;
+function isPitchSquare(square: readonly number[] | null | undefined): square is [number, number] {
+  return !!square && square.length === 2 && square[0]! >= 0 && square[0]! < 26 && square[1]! >= 0 && square[1]! < 15;
+}
+function injuryEventPendingFor(playerId: string): boolean {
+  return injuryPresenting?.playerId === playerId || injuryQueue.some((event) => event.playerId === playerId);
+}
+/** Does an escort own `playerId`'s on-pitch presentation right now? `removal` = the caller is the transition that
+ *  takes him off the pitch: the reply the escort was waiting for is thereby consumed. */
+function injuryEscortOwns(playerId: string, removal = false): boolean {
+  const escort = injuryEscorts.get(playerId);
+  if (!escort) return false;
+  if (escort.awaitingRemoval) { if (removal) escort.awaitingRemoval = false; return true; }
+  if (Date.now() < escort.endsAt) return true;
+  injuryEscorts.delete(playerId);
+  return false;
+}
+function injuryTokenHoldDeadline(playerId: string): number {
+  const clock = injuryTokenHoldClocks.get(playerId);
+  return clock ? Math.min(clock.progressAt + INJURY_TOKEN_HOLD_STALL_MS, clock.armedAt + INJURY_TOKEN_HOLD_CAP_MS) : 0;
+}
+/** One timer for the earliest deadline among the holds; every arm / release / progress re-plans it. */
+function planInjuryTokenHoldTimer(): void {
+  if (injuryTokenHoldTimer) { clearTimeout(injuryTokenHoldTimer); injuryTokenHoldTimer = null; }
+  const holds = state.injuryTokenHolds;
+  for (const id of [...injuryTokenHoldClocks.keys()]) if (!holds.some((hold) => hold.playerId === id)) injuryTokenHoldClocks.delete(id);
+  if (holds.length === 0) return;
+  const next = Math.min(...holds.map((hold) => injuryTokenHoldDeadline(hold.playerId)));
+  injuryTokenHoldTimer = setTimeout(() => {
+    injuryTokenHoldTimer = null;
+    const now = Date.now();
+    const expired = state.injuryTokenHolds.filter((hold) => injuryTokenHoldDeadline(hold.playerId) <= now).map((hold) => hold.playerId);
+    if (expired.length > 0) state.injuryTokenHolds = state.injuryTokenHolds.filter((hold) => !expired.includes(hold.playerId));
+    planInjuryTokenHoldTimer();
+  }, Math.max(0, next - Date.now()));
+}
+/** The injury pump moved (a pill went up / a slot ended): that is progress for the holds whose own event is the one
+ *  on screen or still in the queue behind it - never for a hold nothing in the queue will ever present. */
+function noteInjuryTokenHoldProgress(alsoPlayerId?: string): void {
+  if (state.injuryTokenHolds.length === 0) return;
+  const now = Date.now();
+  for (const hold of state.injuryTokenHolds) {
+    const clock = injuryTokenHoldClocks.get(hold.playerId);
+    if (clock && (hold.playerId === alsoPlayerId || injuryEventPendingFor(hold.playerId))) clock.progressAt = now;
+  }
+  planInjuryTokenHoldTimer();
+}
+function armInjuryTokenHold(playerId: string, square: readonly number[], priorState: number): void {
+  if (!playerId || !isPitchSquare(square) || injuryEscortOwns(playerId, true)) return;
+  // The fallen pose: the server's own state bits with the base set to PRONE (it sends PRONE one frame ahead of a
+  // block injury anyway; a crowd-pushed or coalesced player is drawn down the same way).
+  const playerState = (priorState & ~0xff) | PlayerStateBase.PRONE;
+  state.injuryTokenHolds = [...state.injuryTokenHolds.filter((hold) => hold.playerId !== playerId),
+    { playerId, square: [square[0]!, square[1]!], playerState }];
+  const now = Date.now();
+  injuryTokenHoldClocks.set(playerId, { armedAt: now, progressAt: now });
+  planInjuryTokenHoldTimer();
+}
+function releaseInjuryTokenHold(playerId: string): void {
+  if (!state.injuryTokenHolds.some((hold) => hold.playerId === playerId)) return;
+  state.injuryTokenHolds = state.injuryTokenHolds.filter((hold) => hold.playerId !== playerId);
+  planInjuryTokenHoldTimer();
+}
+function clearInjuryTokenHolds(): void {
+  if (state.injuryTokenHolds.length > 0) state.injuryTokenHolds = [];
+  planInjuryTokenHoldTimer();
+}
+function crowdPushedInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
+  return reports.some((report) => String(report.reportId) === 'pushback' && String(report.defenderId ?? '') === playerId);
+}
+/** @internal The ONE arming rule, shared by the live applier and the live-review publication (Astra P2 10-10: review
+ *  had its own approximation and lost both crowd pushes). Who does this model transition + its reports take off the
+ *  pitch with an injury still to be presented?
+ *   - he was on the pitch before it and is not after it, and
+ *   - he is now in an injury box state (KO / BH / SI / RIP / reserves) AND an injury event of his is queued, on screen
+ *     or carried by these very reports; OR these reports push him off the pitch (`pushback` naming him - a crowd push,
+ *     whatever state he is left in: FALLING in #2631, standing in #2515; his injury report is the next frame's).
+ *  Pure apart from `eventPending`. */
+export function injuryTokenHoldArms(
+  model: GameJson,
+  before: ReadonlyMap<string, readonly number[] | null>,
+  beforeStates: ReadonlyMap<string, number>,
+  reports: readonly Record<string, unknown>[],
+  eventPending: (playerId: string) => boolean,
+  squareOf: (playerId: string) => readonly number[] | null = () => null,
+): { playerId: string; square: [number, number]; priorState: number }[] {
+  if (INJURY_TOKEN_HOLD_BOARD_RESET_MODES.has(String(model.turnMode ?? ''))) return [];
+  const arms: { playerId: string; square: [number, number]; priorState: number }[] = [];
+  for (const data of model.fieldModel.playerDataArray) {
+    const was = before.get(data.playerId);
+    if (!isPitchSquare(was) || isPitchSquare(data.playerCoordinate)) continue;
+    const injured = INJURY_TOKEN_HOLD_STATES.has((data.playerState ?? 0) & 0xff) && (eventPending(data.playerId)
+      || reports.some((report) => String(report.defenderId ?? report.playerId ?? '') === data.playerId && injuryPresentation(report, model, was, false) !== null));
+    if (!injured && !crowdPushedInReports(reports, data.playerId)) continue;
+    const square = squareOf(data.playerId);
+    arms.push({ playerId: data.playerId, square: isPitchSquare(square) ? [square[0], square[1]] : [was[0], was[1]], priorState: beforeStates.get(data.playerId) ?? PlayerStateBase.PRONE });
+  }
+  return arms;
+}
+function armInjuryTokenHoldsForTransition(
+  model: GameJson,
+  before: ReadonlyMap<string, readonly number[] | null>,
+  beforeStates: ReadonlyMap<string, number>,
+  reports: readonly Record<string, unknown>[],
+  squareOf?: (playerId: string) => readonly number[] | null,
+): void {
+  if (playback.catchingUp) return;
+  for (const arm of injuryTokenHoldArms(model, before, beforeStates, reports, injuryEventPendingFor, squareOf)) armInjuryTokenHold(arm.playerId, arm.square, arm.priorState);
+}
+/** The model-moved-on wakes (see the hold's header). Runs on every applied frame / published position. */
+function reconcileInjuryTokenHolds(model: GameJson | null): void {
+  reconcileInjuryEscorts(model);
+  if (state.injuryTokenHolds.length === 0) return;
+  if (!model || playback.catchingUp || (model as { finished?: unknown }).finished === true
+      || INJURY_TOKEN_HOLD_BOARD_RESET_MODES.has(String(model.turnMode ?? ''))) { clearInjuryTokenHolds(); return; }
+  const players = model.fieldModel.playerDataArray;
+  for (const hold of [...state.injuryTokenHolds]) {
+    const data = players.find((d) => d.playerId === hold.playerId);
+    const occupied = players.some((d) => d.playerCoordinate?.[0] === hold.square[0] && d.playerCoordinate?.[1] === hold.square[1]);
+    if (!data || isPitchSquare(data.playerCoordinate) || occupied || injuryEscortOwns(hold.playerId)) releaseInjuryTokenHold(hold.playerId);
+  }
+}
 let casualtyPresentationsOutstanding = 0;
 let casualtySppGeneration = 0;
 let pendingCasualtySpp: SppGainPart[] = [];
@@ -3583,6 +3789,9 @@ function flushCasualtySpp(): void {
 
 function resetCasualtySppPacing(): void {
   casualtySppGeneration += 1;
+  injuryPresenting = null;
+  clearInjuryTokenHolds(); // owner 10-10: the pump that would have released them is void from here
+  injuryEscorts.clear();
   casualtyPresentationsOutstanding = 0;
   pendingCasualtySpp = [];
 }
@@ -3666,11 +3875,36 @@ function clearRockImpactGate(): boolean {
   return true;
 }
 
+/** @internal Owner 10-10 injury token hold: arm one with no injury event behind it (the stall wake must still release it). */
+export function installInjuryTokenHoldTestHarness(): { arm(playerId: string, square: [number, number], priorState: number): void; clear(): void } {
+  return { arm: armInjuryTokenHold, clear: () => { clearInjuryTokenHolds(); injuryEscorts.clear(); } };
+}
+
+/** Owner 10-10: an apothecary escort carries the player's real token off the pitch itself (renderer.playApothecary
+ *  snapshots it). Astra P1: the coach's answer starts the escort while the model still has him on the pitch, and the
+ *  server's removal frame follows - so the escort is REMEMBERED (injuryEscortOwns): it drops a hold that exists and
+ *  keeps any later one from arming, in either order. */
+watch(() => state.apothecaryAnim?.seq, () => {
+  const escort = state.apothecaryAnim;
+  if (!escort?.playerId || escort.outcome === 'stay') return;
+  const onPitch = isPitchSquare(game.value?.fieldModel.playerDataArray.find((d) => d.playerId === escort.playerId)?.playerCoordinate);
+  injuryEscorts.set(escort.playerId, {
+    endsAt: Date.now() + presentationMs(escort.medic ? INJURY_ESCORT_MEDIC_MS : INJURY_ESCORT_DECLINED_MS),
+    // only the coach's own answer starts an escort ahead of the removal, and it does so with the dialog still open
+    awaitingRemoval: onPitch && apothecaryDialogOpenFor(game.value, escort.playerId),
+  });
+  releaseInjuryTokenHold(escort.playerId);
+}, { flush: 'sync' });
+/** Astra round 2: the end-of-game board clear draws no pitch token and no dugout at all - nobody is "held on the pitch"
+ *  then, so no count may leave a held player out (the renderer skips its hold pass under boardCleared). */
+watch(() => state.endGame.finalPresentationReady, (ready) => { if (ready) clearInjuryTokenHolds(); }, { flush: 'sync' });
+
 function pumpInjuries() {
   if (injuryPlaying) return;
   const event = injuryQueue.shift();
   if (!event) return;
   injuryPlaying = true;
+  injuryPresenting = event;
   const sppGeneration = casualtySppGeneration;
   // Phase 3b: the injury slot lifetime is SEVERITY-scaled (stun 1200 / KO 1800 / casualty 2700) — the pump holds the slot + tracks idle for exactly that beat.
   const stepMs = injuryStepMs(event.injuryBase);
@@ -3692,6 +3926,7 @@ function pumpInjuries() {
   const presentInjury = () => {
     if (sppGeneration !== casualtySppGeneration) return;
     state.injurySplash = event;
+    noteInjuryTokenHoldProgress(event.playerId); // owner 10-10: his pill is up - his own slot has started
     // Owner 07-08: KO/casualty removal frame lands a frame later and yanked the token mid-toast — HOLD the spectator drain for the splash window (no-op in play).
     if (event.isCasualty || event.injuryBase === 0x05 || event.injuryBase === 0x09) holdPlayback(stepMs); // 0x09: crowd-surf -> reserves removal (owner 09-15)
     // Live-authoritative puff is shared by every audience; no seat/cinematic gate.
@@ -3701,7 +3936,11 @@ function pumpInjuries() {
     scheduleGameTimeout(() => {
       if (sppGeneration !== casualtySppGeneration) return;
       state.injurySplash = null;
-      injuryPlaying = false;
+      injuryPlaying = false; injuryPresenting = null;
+      injuryPresenting = null;
+      // Owner 10-10: his armour roll and pill have been shown - the held token leaves for the dugout now.
+      if (!injuryQueue.some((queued) => queued.playerId === event.playerId)) releaseInjuryTokenHold(event.playerId);
+      noteInjuryTokenHoldProgress(); // the queue moved on: progress for the holds still waiting in it
       if (event.isCasualty) {
         casualtyPresentationsOutstanding = Math.max(0, casualtyPresentationsOutstanding - 1);
         flushCasualtySpp();
@@ -3935,6 +4174,8 @@ const game = customRef<GameJson | null>((track, trigger) => ({
   get() { track(); return spectatorPublication.position.value?.checkpoint.model ?? legacyGame.value; },
   set(value) {
     if (spectatorPublication.position.value) throw new Error('Cannot mutate the published spectator position');
+    // Owner 10-10: a replaced model (reconnect snapshot, replay seek, game change) is drawn as it is - no held injury token.
+    if (value !== legacyGame.value) { clearInjuryTokenHolds(); injuryEscorts.clear(); }
     legacyGame.value = value; trigger();
   },
 }));
@@ -4257,6 +4498,22 @@ async function pauseSpectatorView(): Promise<void> {
       transitionInjuryOutcomes = structuredClone(previous?.durableProjection.injuryOutcomes
         ?? position.durableProjection.injuryOutcomes);
       spectatorPublication.publish(position, snap);
+      // Owner 10-10: the injury token hold on the review path. A seek / snapshot draws the model as it is; a played
+      // transition arms here, in the synchronous publication boundary (the model watcher has not flushed yet).
+      // Astra P2: by the SAME rule as the live applier, from the reports of the event this publication plays (its
+      // injury is queued by present() a little later; the hold's own clocks cover that gap) - and with no per-event
+      // release, so the state-only frame between a crowd push and its injury report cannot drop the hold.
+      if (snap || !previous) clearInjuryTokenHolds();
+      else if (previous.cursor.sequence !== position.cursor.sequence) {
+        const played = history.eventAfter(previous.cursor);
+        const playedReports = played && played.cursor.sequence === position.cursor.sequence
+          ? ((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []) : null;
+        if (playedReports) {
+          armInjuryTokenHoldsForTransition(position.model, coordinates,
+            new Map(previous.model.fieldModel.playerDataArray.map((player) => [player.playerId, player.playerState ?? 0])), playedReports);
+        }
+        reconcileInjuryTokenHolds(position.model);
+      }
       // The publication now owns the visible model. Release the retired legacy
       // graph rather than retaining a fourth full match copy throughout review.
       legacyGame.value = null;
@@ -5120,6 +5377,7 @@ let blastinNoticeKey: string | null = null; // S46: the beat instance the picker
 function clearCatchupTransients(): void {
   state.blockTargetCue = null; state.foulTargetCue = null; state.pushArrows = null;
   clearActionDice(); state.rollModal = null; state.injurySplash = null; state.turnover = null;
+  clearInjuryTokenHolds(); // owner 10-10: nothing of the fast-forwarded history stays held on the live board
   // Astra confirmation (B3): a fail -> reroll staging still pending belongs to the history that was just fast-forwarded.
   // Its timers would publish the reroll use / the rerolled die onto the live board after this cleanup: drop them, and
   // the result pin with them (its release timer is one of them).
@@ -7280,6 +7538,7 @@ function applyFrameContents(frame: QueuedFrame) {
       d.playerCoordinate ? [d.playerCoordinate[0], d.playerCoordinate[1]] : null,
     ]),
   );
+  const preStates = new Map<string, number>(game.value.fieldModel.playerDataArray.map((d) => [d.playerId, d.playerState ?? 0]));
   const preSppTotals = captureSppBreakdown(game.value);
   let sppGainsThisFrame: SppGainPart[] = [];
   const preActing = game.value.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
@@ -7993,6 +8252,9 @@ function applyFrameContents(frame: QueuedFrame) {
       injuryQueue.push(event);
     }
   }
+  // Owner 10-10: whoever this frame took off the pitch with his injury still to be presented keeps his token there.
+  armInjuryTokenHoldsForTransition(game.value, preCoords, preStates, reports, failedMovementDestination);
+  reconcileInjuryTokenHolds(game.value);
   surfaceAutoAcceptedApothecaryReturn(
     reports,
     Number.isFinite(Number((cmd as { commandNr?: unknown }).commandNr))
@@ -10826,7 +11088,7 @@ function clearCinematics(hardGameBoundary = false) {
   turnoverArmed = false; turnoverArmedAfterInjury = false; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; armourShownAt = 0; // Phase 3a: drop stale turnover/block/armour gates
   visibleBlockContext.defenderSquare = null; lastBlitzDeclKey = ''; // #1/#5 + blitz-decl
   injuryQueue.length = 0;
-  injuryPlaying = false;
+  injuryPlaying = false; injuryPresenting = null;
   blockPipeline.reset(); // Phase 1: drop any in-flight run so it can't gate the next game
   resetPresentation(); // #67: drop any in-flight movement drain so it can't leak into the next game
   pendingFireballBeats = 0;
@@ -10925,7 +11187,7 @@ function clearLeaveGameResidualState(): void {
   rerollSplashClearTimer = null;
   clearApothecaryFixUps();
   rerollStageTimers = [];
-  injuryPlaying = false;
+  injuryPlaying = false; injuryPresenting = null;
 
   dropPendingPickPrompt();
   pendingKickoffTurnStartSide = null;
@@ -15815,7 +16077,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
 
   resetPresentation();
   injuryQueue.length = 0;
-  injuryPlaying = false;
+  injuryPlaying = false; injuryPresenting = null;
   pendingFireballBeats = 0;
   game.value = fixture;
   play.active = true;
@@ -15848,7 +16110,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
       resetPresentation();
       clearAllGameTimeouts();
       injuryQueue.length = 0;
-      injuryPlaying = false;
+      injuryPlaying = false; injuryPresenting = null;
       pendingFireballBeats = 0;
       warnedAnimationTypes.clear();
       for (const type of priorWarned) warnedAnimationTypes.add(type);
@@ -16265,7 +16527,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
   resetPresentation();
   blockPipeline.reset();
   injuryQueue.length = 0;
-  injuryPlaying = false;
+  injuryPlaying = false; injuryPresenting = null;
   pendingFollowup = null;
   armourAfterFollow = null;
   lastPushFrom.clear();
@@ -16294,7 +16556,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
       blockPipeline.reset();
       clearAllGameTimeouts();
       injuryQueue.length = 0;
-      injuryPlaying = false;
+      injuryPlaying = false; injuryPresenting = null;
       pendingFollowup = null;
       armourAfterFollow = null;
       lastPushFrom.clear();

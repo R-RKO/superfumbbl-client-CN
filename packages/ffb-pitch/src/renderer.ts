@@ -1221,6 +1221,30 @@ export function groundBallPickupHoldSquare(input: {
 export const GROUND_BALL_HOLD_IDLE_MARGIN_MS = 100;
 export const GROUND_BALL_HOLD_STALL_MS = 4000;
 export const GROUND_BALL_HOLD_CAP_MS = 6000;
+/** Owner 10-10: a player the injury took off the pitch whose armour roll / injury pill is still to be shown. `square`
+ *  is his last server-confirmed pitch square, `playerState` the pose he is drawn in there (see injuryTokenHoldsProbe). */
+export interface InjuryTokenHold { playerId: string; square: [number, number]; playerState: number }
+/** The holds that are DRAWN for this model: the player is off the pitch in it, his square is a pitch square and nobody
+ *  stands on it in the model (two tokens never share a square because of a hold), one per player and per square.
+ *  The renderer draws exactly these on the pitch and leaves exactly these out of the dugout; every count of "who is in
+ *  the dugout" (the dugout labels here, the coach-corner RES / OUT tabs) excludes exactly these too. */
+export function injuryTokenHoldsDrawn(
+  game: { fieldModel?: { playerDataArray?: readonly { playerId: string; playerCoordinate?: readonly number[] | null }[] } } | null | undefined,
+  holds: readonly InjuryTokenHold[] | null | undefined,
+): InjuryTokenHold[] {
+  const players = game?.fieldModel?.playerDataArray;
+  if (!players || !holds) return [];
+  const out: InjuryTokenHold[] = [];
+  for (const hold of holds) {
+    if (!hold || !isOnPitch(hold.square) || out.some((other) => other.playerId === hold.playerId)) continue;
+    const data = players.find((d) => d.playerId === hold.playerId);
+    if (!data || isOnPitch(data.playerCoordinate as [number, number] | null | undefined)) continue;
+    if (players.some((d) => d.playerCoordinate?.[0] === hold.square[0] && d.playerCoordinate?.[1] === hold.square[1])) continue;
+    if (out.some((other) => other.square[0] === hold.square[0] && other.square[1] === hold.square[1])) continue;
+    out.push(hold);
+  }
+  return out;
+}
 /** A failed die shown this recently is taken to be the roll a just-opened reroll prompt is about. */
 export const PROMPT_DIE_FRESH_MS = 4000;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
@@ -5527,6 +5551,84 @@ export class PitchRenderer {
     }
   }
 
+  /** Owner 10-10 ("The player token on a KO or casualty disappears before the die toast applies. Can we also hold that
+   *  until after the armor roll and pill toast are displayed?"): the server takes an injured player off the pitch in the
+   *  SAME frame as his injury report (state + dugout coordinate + armour / injury rolls in one serverModelSync), so the
+   *  token was gone before the armour dice, the injury dice and the pill were shown at his square.
+   *  The store names the players whose injury presentation is still to be shown (their last server-confirmed pitch
+   *  square and a fallen pose); refresh() keeps drawing each of them there for as long as the MODEL has him off the
+   *  pitch, and drawDugouts() leaves him out of the dugout meanwhile - never both, never neither. Pull-based: every
+   *  refresh reads the current list, so a hold the store has dropped is gone with the next refresh
+   *  (syncInjuryTokenHolds forces one). Pacing only: nothing here is clickable, plannable or part of the model. */
+  injuryTokenHoldsProbe: (() => readonly InjuryTokenHold[]) | null = null;
+  /** The players drawn on the pitch by the hold in the last refresh (the dugout skips exactly these). */
+  private injuryHeldDrawn = new Set<string>();
+  private drawInjuryHeldTokens(
+    playersById: ReadonlyMap<string, PlayerJson>,
+    homeIds: ReadonlySet<string>,
+    baselines: ReadonlyMap<string, Set<string>>,
+    carriedTweenPos: ReadonlyMap<string, { x: number; y: number; tween: MoveTweenRecord }>,
+  ): Set<string> {
+    const drawn = new Set<string>();
+    this.injuryHeldDrawn = drawn;
+    if (!this.game || this.boardCleared) return drawn;
+    for (const hold of this.injuryTokenHoldsNow()) {
+      const data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === hold.playerId);
+      const player = playersById.get(hold.playerId);
+      if (!data || !player) continue;
+      const isHome = homeIds.has(hold.playerId);
+      const team = isHome ? this.game.teamHome : this.game.teamAway;
+      const [x, y] = hold.square;
+      let token: Container | undefined;
+      try {
+        token = this.buildPlayerToken(player, { ...data, playerCoordinate: [x, y], playerState: hold.playerState }, isHome, team, baselines.get(player.positionId));
+        this.tokenLayer.addChild(token);
+        registerLiveWalker(token);
+      } catch (error) {
+        if (token && !token.destroyed) token.destroy({ children: true });
+        throw error;
+      }
+      // Findable by id (toasts and dice anchor on the token), but NOT in playersBySquare: the square is free in the model.
+      this.tokensById.set(hold.playerId, token);
+      drawn.add(hold.playerId);
+      // He may still be on his way to that square (pushed, then knocked out a few ms later): the slide goes on.
+      const previous = this.lastSquares.get(hold.playerId);
+      const carried = carriedTweenPos.get(hold.playerId);
+      if (carried) {
+        const dest = this.tokenPos(x, y);
+        const end = carried.tween.waypoints[carried.tween.waypoints.length - 1];
+        const plain = !carried.tween.psStep && !carried.tween.movementIntent && !carried.tween.reconcileKey && !carried.tween.postStepCorrectionKey;
+        if (plain && end && Math.abs(end.x - dest.x) < 0.5 && Math.abs(end.y - dest.y) < 0.5) {
+          this.moveTweens.set(hold.playerId, { ...carried.tween, token });
+          token.position.set(carried.x, carried.y);
+        } else this.continueMoveTween(hold.playerId, token, carried, [x, y]);
+      } else if (previous && (previous[0] !== x || previous[1] !== y)) {
+        this.startMoveTween(hold.playerId, token, previous, [x, y]);
+      }
+      this.lastSquares.set(hold.playerId, [x, y]);
+    }
+    return drawn;
+  }
+  /** The holds drawn for the model as it is (injuryTokenHoldsDrawn). */
+  private injuryTokenHoldsNow(): InjuryTokenHold[] {
+    if (!this.game || !this.injuryTokenHoldsProbe) return [];
+    let holds: readonly InjuryTokenHold[];
+    try { holds = this.injuryTokenHoldsProbe(); } catch { return []; }
+    return injuryTokenHoldsDrawn(this.game, holds);
+  }
+  /** The store's hold list changed (a release is the case that matters): redraw when what is on screen no longer
+   *  matches it. An arm reaches the screen with the frame's own setGame, a release has no model change of its own. */
+  syncInjuryTokenHolds(): void {
+    if (!this.game) return;
+    const wanted = this.injuryTokenHoldsNow();
+    const same = wanted.length === this.injuryHeldDrawn.size && wanted.every((hold) => this.injuryHeldDrawn.has(hold.playerId));
+    if (!same) this.refresh();
+  }
+  /** Test / rig inspection: the players the injury hold is drawing on the pitch right now. */
+  injuryTokenHoldProbe(): string[] {
+    return [...this.injuryHeldDrawn];
+  }
+
   private effectiveCoordinate(data: PlayerDataJson): [number, number] | null {
     if (isOnPitch(data.playerCoordinate)) return data.playerCoordinate!;
     return this.preSetupCoords.get(data.playerId) ?? null;
@@ -6187,8 +6289,11 @@ export class PitchRenderer {
       this.moveTweens.delete(refreshStep.playerId);
       preservedPresentationToken.destroy({ children: true });
     }
+    // Owner 10-10: a player the injury just took off the pitch stays drawn on his square until his armour roll and
+    // injury pill have been shown (the store says who, where and for how long; see injuryTokenHoldsProbe).
+    const heldForInjury = this.drawInjuryHeldTokens(playersById, homeIds, baselines, carriedTweenPos);
     for (const id of [...this.lastSquares.keys()]) {
-      if (!seenOnPitch.has(id)) {
+      if (!seenOnPitch.has(id) && !heldForInjury.has(id)) {
         this.lastSquares.delete(id);
         this.moveTweens.delete(id);
       }
@@ -10025,6 +10130,8 @@ export class PitchRenderer {
         (d) => team.playerArray.some((p) => p.playerId === d.playerId)
           // Formation-presented players leave the dugout visually; overflow/unfieldable players stay pickable here.
           && !this.preSetupCoords.has(d.playerId)
+          // Owner 10-10: a player still drawn on the pitch for his injury presentation is not in the dugout yet.
+          && !this.injuryHeldDrawn.has(d.playerId)
           && (baseState(d.playerState) === PlayerStateBase.RESERVE || !isOnPitch(d.playerCoordinate)),
       );
       for (const section of sections) {
@@ -11589,6 +11696,9 @@ export class PitchRenderer {
     let nearest: { playerId: string; distance: number } | null = null;
     for (const [playerId, token] of this.tokensById) {
       if (token.destroyed || !token.visible) continue;
+      // Owner 10-10 / Astra round 2: a token held for its injury presentation is not a player on that square (the
+      // model has him off the pitch) - a Shift-click there marks the SQUARE, it never annotates the off-pitch victim.
+      if (this.injuryHeldDrawn.has(playerId)) continue;
       const scale = Math.max(0.1, Math.abs(token.scale.x));
       const centerY = token.position.y - 18 * scale;
       const dx = (worldX - token.position.x) / (TILE_W * 0.48 * scale);
