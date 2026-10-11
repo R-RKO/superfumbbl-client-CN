@@ -197,7 +197,10 @@ export function formatAppLog(
 export function sanitizeSettingsJsonForReport(json: string | null | undefined): string | null {
   if (!json) return null;
   try {
-    return JSON.stringify(stripSecretFields(JSON.parse(json) as Record<string, unknown>), null, 2);
+    const parsed = stripSecretFields(JSON.parse(json) as Record<string, unknown>);
+    // Owner 10-11: the local record of which teams were played here stays on this machine (recentPlayedTeams.ts)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) delete parsed.recentPlayedTeams;
+    return JSON.stringify(parsed, null, 2);
   } catch {
     return null;
   }

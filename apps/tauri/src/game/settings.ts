@@ -522,6 +522,10 @@ export interface AppSettings extends ConfirmationSettings {
     playerNumbers: number[];
     playerCoordinates: [number, number][];
   }>>;
+  /** Owner 10-11: which of each FUMBBL coach account's teams were played on this machine, newest first (game/
+   *  recentPlayedTeams.ts). Local only: leads the recent-games team order, and is left out of bug reports. The coach
+   *  name is a VALUE (`account`), never a key: stripSecretFields deletes keys that look like a credential. */
+  recentPlayedTeams: { account: string; teams: { teamId: number; at: number }[] }[];
   /** Owner 2026-07-05: persisted-settings schema version. Bumped when a default
    *  change should be FORCED onto existing installs (see `load()` migrations). */
   settingsVersion: number;
@@ -739,6 +743,7 @@ const DEFAULTS: AppSettings = {
   modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
   classicEffects: false, // owner 2026-07-08 (FC-D3): classic is effects-off by default
   savedSetupPreviews: {},
+  recentPlayedTeams: [],
   completedFirstRun: false,
   legalAcceptanceVersion: 0,
   contributionsSeenVersion: 0,

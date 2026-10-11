@@ -40,6 +40,7 @@ export const SETTINGS_TRANSACTION_EXCLUDED = new Set([
   'logPos', 'logSize', 'setupBrowserPos', 'setupBrowserSize', 'uiLayout', 'chatPoppedOut', 'chatPopPos', 'chatPopSize',
   'coach', 'password', 'coach40k', 'activeServerTarget',
   'completedFirstRun', 'savedSetupPreviews',
+  'recentPlayedTeams', // owner 10-11: written when an official game is joined, never by the dialog
   'clientTourSeenVersion', // the client walkthrough sets it outside the dialog; its "run again" button must survive Cancel
   // Owner 10-06: the FUMBBL.COM walkthrough / zoom keys.
   'homeTourSeenVersion', // the walkthrough sets it outside the dialog; its "run again" button must not be undone by Cancel

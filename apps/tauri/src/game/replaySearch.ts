@@ -13,6 +13,7 @@
  * Never connects anything itself: the user clicks Replay.
  */
 import { fetchRecentFumbblMatches, type FumbblRecentMatch, type RecentTeamCap } from './fumbblRecentMatches';
+import { localPlayedTeamIds, playedTeamsAccountKey } from './recentPlayedTeams';
 import { resultLetter } from './fumbblPlayBlade';
 import { FUMBBL_SITE } from './settings';
 import leagueIndexData from '../assets/data/league-index.json';
@@ -498,6 +499,8 @@ export interface ReplaySearchContext {
   fetcher: FetchLike;
   /** the raw fetch for the live /p/groups refresh, so it gets its own signal instead of the search's (Astra P2-2) */
   liveFetch?: AbortableFetch;
+  /** owner 10-11: the local coach's recently played team ids, most recent first (default: the client's own record) */
+  localTeamIds?: (coach: string) => readonly number[];
 }
 
 /**
@@ -511,13 +514,25 @@ export interface ReplaySearchResolver {
   resolve(query: string, ctx: ReplaySearchContext): Promise<ReplaySearchResult | null>;
 }
 
+/**
+ * Owner 10-11: the teams the LOCAL coach played on this machine, most recent first, lead the team order of that coach's
+ * own list. `coach` is the local coach only when it is ctx.ownCoach (settings.coach) ignoring ASCII case - the empty
+ * search, or the coach typing their own name; any other name gets no local teams and the unchanged status order.
+ * A read that throws is the status order too: the list never waits on, or fails with, the local record.
+ */
+function ownPlayedTeamIds(ctx: ReplaySearchContext, coach: string): readonly number[] {
+  const own = playedTeamsAccountKey(ctx.ownCoach);
+  if (!own || playedTeamsAccountKey(coach) !== own) return [];
+  try { return (ctx.localTeamIds ?? localPlayedTeamIds)(ctx.ownCoach); } catch { return []; }
+}
+
 export const ownGamesResolver: ReplaySearchResolver = {
   kind: 'own',
   accepts: (query) => classifyQuery(query).kind === 'own',
   async resolve(_query, ctx) {
     const coach = ctx.ownCoach.trim();
     if (!coach) return { kind: 'own', query: '', coach, rows: [] };
-    const { matches, teamCap } = await fetchRecentFumbblMatches(coach, ctx.fetcher);
+    const { matches, teamCap } = await fetchRecentFumbblMatches(coach, ctx.fetcher, 30, ownPlayedTeamIds(ctx, coach));
     return { kind: 'own', query: '', coach, rows: matches.map((m) => rowFromRecent(m, coach)), ...(teamCap ? { teamCap } : {}) };
   },
 };
@@ -568,7 +583,8 @@ export const coachResolver: ReplaySearchResolver = {
   async resolve(query, ctx) {
     const q = classifyQuery(query);
     if (q.kind !== 'coach') return null;
-    const { matches, found, teamCap } = await fetchRecentFumbblMatches(q.coach, ctx.fetcher);
+    // owner 10-11: another coach has no local record (ownPlayedTeamIds answers [] for any name but the local coach's)
+    const { matches, found, teamCap } = await fetchRecentFumbblMatches(q.coach, ctx.fetcher, 30, ownPlayedTeamIds(ctx, q.coach));
     if (!found) return null;
     if (!matches.length) {
       // rig 10-06: "NAF" is also a FUMBBL coach (34 teams, no games) - a coach with NO games yields to leagues of the
@@ -634,10 +650,14 @@ export async function runReplaySearch(
   ownCoach: string,
   fetcher: FetchLike,
   resolvers: readonly ReplaySearchResolver[] = REPLAY_SEARCH_RESOLVERS,
-  options: { liveFetch?: AbortableFetch } = {},
+  options: { liveFetch?: AbortableFetch; localTeamIds?: (coach: string) => readonly number[] } = {},
 ): Promise<ReplaySearchResult> {
   const query = normalizeQuery(raw);
-  const ctx: ReplaySearchContext = { ownCoach, fetcher, ...(options.liveFetch ? { liveFetch: options.liveFetch } : {}) };
+  const ctx: ReplaySearchContext = {
+    ownCoach, fetcher,
+    ...(options.liveFetch ? { liveFetch: options.liveFetch } : {}),
+    ...(options.localTeamIds ? { localTeamIds: options.localTeamIds } : {}),
+  };
   for (const resolver of resolvers) {
     if (!resolver.accepts(query)) continue;
     const result = await resolver.resolve(query, ctx);

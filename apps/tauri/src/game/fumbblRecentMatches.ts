@@ -79,15 +79,54 @@ export function mergeRecent(lists: FumbblRecentMatch[][], limit = 30): FumbblRec
  * Owner 10-06 (Replay pane rig): a veteran coach can own hundreds of teams (RickWreckless: 340, 261 retired) and one
  * matches page per team meant hundreds of requests - over HTTP/1.1 that queued for minutes and starved every other
  * FUMBBL request. Only the most likely teams are read, capped, a few requests at a time. /api/coach/teams carries NO
- * last-played date (checked 10-06: no lastMatch field), so the order is by status - "Post Match Sequence" (just
+ * last-played date (checked 10-06: no lastMatch field), so the order is by status - an in-between state (just
  * played) first, then Active, then the rest, Retired last - and then the newest team (highest id). When the cap
  * applies the result says so (`teamCap`) and the lists show it.
+ *
+ * Owner 10-11 ("Let's use local logs as the first indication of which games to pull"): for the LOCAL coach the client's
+ * own record of the teams played on this machine (recentPlayedTeams.ts), most recent first, leads that order; the
+ * status order fills the remaining slots. Same endpoints, same cap, same concurrency.
  */
+/** Statuses that do not mean "just played": a team that has not started, or is waiting on the site staff. */
+const SETTLED_TEAM_STATUSES: ReadonlySet<string> = new Set(['new', 'pending approval', 'waiting for approval', 'rejected', 'blocked', 'deleted', 'disbanded']);
 export const RECENT_TEAM_CAP = 16;
 export const RECENT_FETCH_CONCURRENCY = 4;
-export function pickRecentTeams<T extends Pick<FumbblCoachTeam, 'id' | 'status'>>(teams: readonly T[], cap = RECENT_TEAM_CAP): T[] {
-  const rank = (t: T): number => (t.status === 'Post Match Sequence' ? 0 : t.status === 'Active' ? 1 : t.status === 'Retired' ? 3 : 2);
-  return [...teams].sort((a, b) => rank(a) - rank(b) || b.id - a.id).slice(0, cap);
+/** At most this many of the RECENT_TEAM_CAP slots come from the local record; the rest always follow the status order. */
+export const RECENT_LOCAL_TEAM_MAX = 10;
+/** A locally recorded team leads only when it was played within this long of now (30 days). */
+export const RECENT_LOCAL_TEAM_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export function pickRecentTeams<T extends Pick<FumbblCoachTeam, 'id' | 'status'>>(
+  teams: readonly T[], cap = RECENT_TEAM_CAP, localTeamIds: readonly number[] = [],
+): T[] {
+  // Owner 10-11: a game went missing from the list because its team had moved to an end-of-season prompt - not
+  // "Post Match Sequence", so it ranked below every Active team and fell outside the cap. A team is in such an
+  // in-between state BECAUSE it just played (post-match sequence, season end / redraft), so every status that is not
+  // a settled one leads the order; the exact wording FUMBBL uses for those states is not relied on.
+  const rank = (t: T): number => {
+    const status = (t.status ?? '').trim().toLowerCase();
+    if (!status) return 2;
+    if (status === 'active') return 1;
+    if (status === 'retired') return 3;
+    return SETTLED_TEAM_STATUSES.has(status) ? 2 : 0;
+  };
+  // Owner 10-11: the teams this machine saw played lead, most recent first, whatever their status (a Retired team that
+  // was just played still has the game). A team the coach no longer has is skipped; a repeated id counts once.
+  // At most RECENT_LOCAL_TEAM_MAX lead: a game played elsewhere (another machine, the Java client) is only known by
+  // its team's status, so the status order always keeps the remaining slots. The caller drops rows older than
+  // RECENT_LOCAL_TEAM_MAX_AGE_MS (recentPlayedTeams.playedTeamIds).
+  const byId = new Map<number, T>();
+  for (const team of teams) if (!byId.has(team.id)) byId.set(team.id, team);
+  const leading: T[] = [];
+  const led = new Set<number>();
+  for (const id of localTeamIds) {
+    if (leading.length >= RECENT_LOCAL_TEAM_MAX) break;
+    const team = byId.get(id);
+    if (!team || led.has(id)) continue;
+    led.add(id);
+    leading.push(team);
+  }
+  const rest = teams.filter((team) => !led.has(team.id)).sort((a, b) => rank(a) - rank(b) || b.id - a.id);
+  return [...leading, ...rest].slice(0, cap);
 }
 export interface RecentTeamCap { shown: number; total: number }
 /** The one-line note for a capped list (both the Replay pane and the Play blade). */
@@ -104,7 +143,9 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
   return out;
 }
 
-export async function fetchRecentFumbblMatches(coach: string, fetcher: FetchLike, limit = 30): Promise<{
+/** `localTeamIds`: the LOCAL coach's teams played in the last 30 days, most recent first (recentPlayedTeams.localPlayedTeamIds).
+ *  Only a caller listing the local coach's own games passes it; a search for another coach passes nothing. */
+export async function fetchRecentFumbblMatches(coach: string, fetcher: FetchLike, limit = 30, localTeamIds: readonly number[] = []): Promise<{
   teams: FumbblCoachTeam[];
   matches: FumbblRecentMatch[];
   /** false = FUMBBL knows no such coach (owner 10-06: the Replay pane then tries a league) */
@@ -114,7 +155,7 @@ export async function fetchRecentFumbblMatches(coach: string, fetcher: FetchLike
 }> {
   const result = await fetchFumbblCoachTeams(coach, fetcher as unknown as typeof fetch);
   if (result.kind === 'not-found') return { teams: [], matches: [], found: false };
-  const picked = pickRecentTeams(result.teams);
+  const picked = pickRecentTeams(result.teams, RECENT_TEAM_CAP, localTeamIds);
   const lists = await mapLimited(picked, RECENT_FETCH_CONCURRENCY, async (team) => {
     try {
       const res = await fetcher(`${FUMBBL_SITE}/api/team/matches/${team.id}/0`);

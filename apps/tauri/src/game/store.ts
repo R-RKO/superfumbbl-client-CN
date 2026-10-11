@@ -80,6 +80,7 @@ import { settings, FORK_SERVER_HOST } from './settings';
 import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
 import { clearOfficialRejoinTarget, peekOfficialRejoinTarget, setOfficialRejoinTarget } from './officialRejoinTarget';
+import { noteOfficialGameJoined } from './recentPlayedTeams';
 import { starUseSkillElection, starRuleById } from './logic/coachActionDispatch';
 import {
   WIDE_RAIL_PRE_ACTION_RULES,
@@ -24594,6 +24595,7 @@ export const gameStore = {
           return;
         }
         prepared?.onAccepted?.(Number((cmd.game as { gameId?: string | number }).gameId ?? 0)); // S44: the served id lets a later rejoin find this game
+        noteOfficialGameJoined(cmd.game, params.coach, officialFumbbl); // owner 10-11: the local record that leads the recent-games team order
       }
       expectingGame = false;
       state.waitingForMatch = null; // the match started — drop the waiting modal

@@ -23,6 +23,7 @@ import {
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { teamLogoUrl } from '../../game/teamLogos';
 import { fetchRecentFumbblMatches, recentTeamCapNote, type FumbblRecentMatch, type RecentTeamCap } from '../../game/fumbblRecentMatches';
+import { localPlayedTeamIds } from '../../game/recentPlayedTeams';
 import { parseActiveGames, phaseLabel, relativeTime, resultLetter, toBrowserMatch, type FumbblActiveGame, type FumbblActiveTeam } from '../../game/fumbblPlayBlade';
 import { gameStore } from '../../game/store';
 import { sharedReplayFileImporter } from '../../game/replay/replayFileImport';
@@ -126,7 +127,8 @@ async function refreshRecent(): Promise<void> {
   if (!coach.value) { recent.value = []; return; }
   recentLoading.value = true;
   try {
-    const { matches, teamCap } = await fetchRecentFumbblMatches(coach.value, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch);
+    // owner 10-11: this is the local coach's own list - the teams played on this machine lead the team order
+    const { matches, teamCap } = await fetchRecentFumbblMatches(coach.value, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch, 30, localPlayedTeamIds(coach.value));
     recent.value = matches;
     recentTeamCap.value = teamCap;
     recentError.value = '';
