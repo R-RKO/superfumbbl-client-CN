@@ -382,14 +382,15 @@ export async function setBundledSkillBadgeFamily(family: BundledSkillBadgeFamily
 }
 
 /** Owner 09-08: opaque content boxes ([x, y, w, h], alpha > 16) of the bundled 1254 px status icons whose art
- *  carries transparent padding — MA-up fills only 72% of its box while the 48 px skill badges fill theirs, so a
+ *  carries transparent padding (MA-up filled only 72% of its box until the owner 10-11 re-export brought it to the
+ *  92% of its siblings, for the DOM surfaces that draw the file unframed) while the 48 px skill badges fill theirs, so a
  *  badge row sized from the texture box drew the stat icons visibly smaller. The loader frames each texture on the
  *  SQUARE around its content (no stretch), so every icon in the row fills the same badge. Pinned by test. */
 export const STATUS_ICON_CONTENT: Readonly<Record<string, readonly [number, number, number, number]>> = {
   statupag: [52, 35, 1150, 1151],
-  statupav: [101, 73, 1055, 1050],
-  statupma: [175, 163, 905, 891],
-  statupmv: [175, 163, 905, 891],
+  statupav: [52, 54, 1150, 1145],
+  statupma: [52, 61, 1150, 1132],
+  statupmv: [52, 61, 1150, 1132],
   statuppa: [49, 51, 1156, 1149],
   statupst: [53, 43, 1148, 1117],
   statdownav: [121, 108, 1012, 1007],
