@@ -378,6 +378,55 @@ export function worldToSquare(worldX: number, worldY: number): FieldCoordinateJs
   return orientation === 'ns' ? [d, w] : [w, d];
 }
 
+/** Owner 10-12 (pitch view flip, Astra review): the CONTINUOUS inverse of extPoint for the projection as it stands
+ *  NOW: world pixels -> fractional game coordinates of the ground point drawn there (square [x, y] spans x..x+1,
+ *  y..y+1; beyond the pitch it extrapolates the same way extPoint does). The returned function closes over the
+ *  current projection, so it keeps answering for the OLD view after an orientation / flat / flip change:
+ *  `extPoint(...inverse(p))` then moves a retained ground pixel to where the same ground point is drawn now. */
+export function projectionInverse(): (worldX: number, worldY: number) => { x: number; y: number } {
+  const proj = P;
+  const flip = fieldFlip;
+  const o = orientation;
+  const scaleAt = (d: number): number => 1 - (d / proj.rows) * (1 - proj.far);
+  const leftAt = (d: number): number => proj.centerX - (proj.cols * proj.widthTile * scaleAt(d)) / 2;
+  return (worldX, worldY) => {
+    let d: number;
+    const near = proj.boundaryY[0]!;
+    const far = proj.boundaryY[proj.rows]!;
+    if (worldY <= near && worldY >= far) {
+      let row = 0;
+      while (row < proj.rows - 1 && worldY < proj.boundaryY[row + 1]!) row++;
+      const a = proj.boundaryY[row]!;
+      const b = proj.boundaryY[row + 1]!;
+      d = row + (a === b ? 0 : (a - worldY) / (a - b));
+    } else if (worldY > near) {
+      // nearer than the pitch: bands of depthTile * scale(i - 0.5), stepping away from the near edge (depthBoundaryY)
+      let edge = near;
+      let i = 0;
+      d = 0;
+      for (let guard = 0; guard < 64; guard++) {
+        const band = proj.depthTile * scaleAt(i - 0.5);
+        if (worldY <= edge + band) { d = i - (worldY - edge) / band; break; }
+        edge += band; i--; d = i;
+      }
+    } else {
+      let edge = far;
+      let i = proj.rows;
+      d = proj.rows;
+      for (let guard = 0; guard < 64; guard++) {
+        const band = proj.depthTile * scaleAt(i + 0.5);
+        if (!(band > 0)) break; // the vanishing row: nothing is drawn beyond it
+        if (worldY >= edge - band) { d = i + (edge - worldY) / band; break; }
+        edge -= band; i++; d = i;
+      }
+    }
+    const s = scaleAt(d);
+    let w = s > 0 ? (worldX - leftAt(d)) / (proj.widthTile * s) : proj.cols / 2;
+    if (flip) { d = proj.rows - d; w = proj.cols - w; }
+    return o === 'ns' ? { x: d, y: w } : { x: w, y: d };
+  };
+}
+
 export function isOnPitch(coordinate: FieldCoordinateJson | null | undefined): coordinate is FieldCoordinateJson {
   if (!coordinate) return false;
   const [x, y] = coordinate;

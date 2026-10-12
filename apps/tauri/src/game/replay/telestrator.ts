@@ -97,6 +97,32 @@ export const clampThickness = (value: number) => Math.min(
 const copyPoint = (point: SketchPoint): SketchPoint => ({ x: Number(point.x), y: Number(point.y) });
 const movePoint = (point: SketchPoint, dx: number, dy: number): SketchPoint => ({ x: point.x + dx, y: point.y + dy });
 
+/** A view change, as the renderer reports it (PitchRenderer.onProjectionChange): the projection keys before and after,
+ *  the OLD projection's inverse (world pixel -> ground point) and the NEW projection (ground point -> world pixel). */
+export interface SketchProjectionChange {
+  fromKey: string;
+  toKey: string;
+  toGround(point: SketchPoint): SketchPoint;
+  fromGround(point: SketchPoint): SketchPoint;
+}
+/** The points that pin a drawing to the ground: a circle is its centre and the four ends of its two axes. */
+function groundPoints(element: SketchElement): SketchPoint[] {
+  if (element.kind === 'stroke' || element.kind === 'path') return [...element.points];
+  if (element.kind === 'arrow') return [element.from, element.to];
+  const { center, radiusX, radiusY } = element;
+  return [center, { x: center.x + radiusX, y: center.y }, { x: center.x - radiusX, y: center.y }, { x: center.x, y: center.y + radiusY }, { x: center.x, y: center.y - radiusY }];
+}
+function fromGroundPoints(element: SketchElement, points: SketchPoint[]): SketchElement {
+  if (element.kind === 'stroke' || element.kind === 'path') return { ...element, points };
+  if (element.kind === 'arrow') return { ...element, from: points[0]!, to: points[1]! };
+  const center = points[0]!;
+  const extent = (axis: 'x' | 'y', fallback: number): number => {
+    const value = Math.max(...points.slice(1).map((point) => Math.abs(point[axis] - center[axis])));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  return { ...element, center, radiusX: extent('x', element.radiusX), radiusY: extent('y', element.radiusY) };
+}
+
 /** Local pitch-coordinate drawings. This class has deliberately no transport dependency. */
 export class ReplayTelestrator {
   private value: TelestratorState = {
@@ -268,6 +294,31 @@ export class ReplayTelestrator {
       limitNotice: null,
     };
   }
+  /** Owner 10-12 (pitch view flip): the drawings are stored in the renderer's world pixels, which are pixels of ONE
+   *  projection. When the view turns (the coach's flip, the spectator drive flip, an orientation switch) the host
+   *  passes the change and every drawing moves with the ground it was drawn on. LOSSLESS under repeated turns: each
+   *  drawing remembers its ground form (taken once, from the geometry the coach drew) and the geometry it had in every
+   *  projection it has been shown in, so turning back restores the very same object, and a projection seen for the
+   *  first time is always computed from the ORIGINAL ground form, never from an earlier remap. An edited drawing is a
+   *  new object and starts again from what the coach made it. Ids, order, selection, tool, colour and thickness are
+   *  untouched; a drawing in progress moves too. */
+  reproject(change: SketchProjectionChange): void {
+    const move = (element: SketchElement): SketchElement => {
+      let form = this.groundForms.get(element);
+      if (!form) form = { ground: groundPoints(element).map((point) => copyPoint(change.toGround(point))), shown: new Map([[change.fromKey, element]]) };
+      let next = form.shown.get(change.toKey);
+      if (!next) {
+        next = fromGroundPoints(element, form.ground.map((point) => copyPoint(change.fromGround(point))));
+        form.shown.set(change.toKey, next);
+      }
+      this.groundForms.set(element, form);
+      this.groundForms.set(next, form);
+      return next;
+    };
+    this.value = { ...this.value, elements: this.value.elements.map(move) };
+    if (this.draft) this.draft = move(this.draft);
+  }
+  private groundForms = new WeakMap<SketchElement, { ground: SketchPoint[]; shown: Map<string, SketchElement> }>();
   clear(): void { this.draft = null; this.value = { ...this.value, elements: [], selectedId: null, limitNotice: null }; }
   resetForSession(): void {
     this.nextId = 1;

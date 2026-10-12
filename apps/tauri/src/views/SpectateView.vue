@@ -55,6 +55,8 @@ import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/bal
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
 import { teamBoxCounts } from '../game/dugoutCounts';
 import QuickBarButton from '../components/QuickBarButton.vue';
+import QuickBarPopTip from '../components/QuickBarPopTip.vue';
+import { createPressOrder } from '../game/quickBarTipPlacement';
 import OnTheBallWaitingModal from '../components/OnTheBallWaitingModal.vue';
 import { placeCarriedPlayerNotice, placeCarriedPlayerInfoNoticeText, serverMessageForPlacement } from '../game/placeCarriedPlayerNotice';
 import { hailMaryPassNoticeStyle as hailMaryPassNoticeDockStyle, HMP_NOTICE_Z_INDEX } from '../game/hailMaryPassNoticeDock';
@@ -97,7 +99,8 @@ import { assignTouchdownPanel, mvpConcededSides, postGameKey, postGamePublic, ty
 import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
-import { setupProblems } from '../game/setupProblems';
+import { setupProblems, wideZoneWord, wideZoneWordsSwapped } from '../game/setupProblems';
+import { installSetupDragExits } from '../game/setupDragExits';
 import { endActivationConfirmEnabled } from '../game/confirmationSettings';
 import { starBadgeFor } from '../game/starBadge';
 import { opponentChoosingPushSquare } from '../game/opponentSideStepPick';
@@ -391,6 +394,7 @@ import refereeIconUrl from '../assets/resources/biased_ref.png';
 import superFumbblLogoUrl from '../assets/resources/super-fumbbl-logo.png';
 import { useDelayedPresence } from '../game/delayedPresence';
 import { activeServerTarget, applyServerTarget, botConfigBaseUrl, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
+import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
 import { coachPassword } from '../game/credentials';
 import {
   BUG_REPORT_DESCRIPTION_MAX,
@@ -593,6 +597,36 @@ const rosterPopoutTeams = computed(() => {
 function toggleRosterPopout(): void {
   if (!rosterPopoutOpen.value) rosterPopoutSide.value = gameStore.myTeamIsHome.value ? 'home' : 'away';
   rosterPopoutOpen.value = !rosterPopoutOpen.value;
+}
+/** Owner 10-12: a quick-bar press (mouse, keyboard shortcut or controller chord, which all run these handlers) pops
+ *  that button's tooltip with its new state. The button is found by `data-quick-tip`; once Vue has re-rendered its
+ *  `title`, QuickBarPopTip shows it, or nothing when the bar is hidden / off screen (a keyboard press then pops nothing). */
+const quickBarPopTip = ref<InstanceType<typeof QuickBarPopTip> | null>(null);
+/** Astra P2: press order. Every press takes the next number; a pop whose press is no longer the latest (the Sprites
+ *  pack activation finishing after a newer press) shows nothing. The tip stays off the bar and its Pause / Live row. */
+const quickBarPresses = createPressOrder();
+function popQuickBarTip(id: string, press = quickBarPresses.take()): void {
+  void nextTick(() => {
+    if (!quickBarPresses.isLatest(press)) return;
+    void quickBarPopTip.value?.pop(document.querySelector<HTMLElement>(`.config-bar [data-quick-tip="${id}"]`),
+      [document.querySelector('.config-bar'), document.querySelector('.config-bar .quick-match-controls')]);
+  });
+}
+function quickToggleGameMenu(): void {
+  ui.gameMenuOpen = !ui.gameMenuOpen;
+  popQuickBarTip('menu');
+}
+function quickToggleRoster(): void {
+  toggleRosterPopout();
+  popQuickBarTip('roster');
+}
+function toggleAutoDirector(): void {
+  settings.autoDirector = !settings.autoDirector;
+  popQuickBarTip('autoDirector');
+}
+function quickOpenReport(): void {
+  openReport();
+  popQuickBarTip('report');
 }
 const panelCollapsed = ref(false);
 let renderer: PitchRenderer | null = null;
@@ -1732,11 +1766,26 @@ const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => ['walk', 
 /** Match11: all display states, including a real Off state, live on the quick bar. */
 const TZ_MODES = ['opposition', 'friendly', 'both', 'off'] as const;
 const TZ_LABELS: Record<string, string> = { opposition: 'Opposition', friendly: 'Friendly', both: 'Both', off: 'Off' };
-const tackleZonesActive = computed(() => settings.tackleZoneMode !== 'off');
+/** Owner 10-12: spectate and replay cycle their own absolute modes (none -> home -> away -> all), stored separately;
+ *  play keeps TZ_MODES / settings.tackleZoneMode exactly as before. */
+const spectatorTackleZones = computed(() => usesSpectatorTackleZones(props.mode));
+const tackleZonesActive = computed(() => spectatorTackleZones.value
+  ? settings.spectatorTackleZoneMode !== 'none'
+  : settings.tackleZoneMode !== 'off');
+const tackleZonesTitle = computed(() => spectatorTackleZones.value
+  ? spectatorTackleZoneTitle(settings.spectatorTackleZoneMode)
+  : `Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`);
+/** What the renderer draws for spectators: held at 'none' in play so play's zones stay the o66OppTzActive path only. */
+const rendererSpectatorTackleZoneMode = computed<SpectatorTackleZoneMode>(() => spectatorTzForRenderer(props.mode, settings));
 
 function cycleTackleZones() {
-  const next = TZ_MODES[(TZ_MODES.indexOf(settings.tackleZoneMode) + 1) % TZ_MODES.length]!;
-  settings.tackleZoneMode = next;
+  if (spectatorTackleZones.value) {
+    settings.spectatorTackleZoneMode = nextSpectatorTackleZoneMode(settings.spectatorTackleZoneMode);
+  } else {
+    const next = TZ_MODES[(TZ_MODES.indexOf(settings.tackleZoneMode) + 1) % TZ_MODES.length]!;
+    settings.tackleZoneMode = next;
+  }
+  popQuickBarTip('tackleZones');
 }
 
 // In-game control owns presentation only. Pack selection lives in Settings → UI.
@@ -1760,6 +1809,7 @@ function skillIconUrl(
 const kickElectionIconUrl = computed(() => skillIconUrl('Kick', effectiveIconStyle.value));
 function cycleSkillDisplay() {
   toggleSkillDisplay(settings);
+  popQuickBarTip('skillDisplay');
 }
 
 /** Owner 09-22 (telestrator Path tool): world point → pitch square (null off the pitch), and a square's world centre. */
@@ -1827,7 +1877,10 @@ async function applySpriteChoice(value: string): Promise<void> {
 function cycleSprites() {
   const choices = spriteChoices.value;
   const index = choices.indexOf(currentSpriteChoice.value);
-  void applySpriteChoice(choices[(index + 1) % choices.length] ?? 'walk');
+  // A pack choice commits asynchronously; pop once the label reflects it, unless a newer press came meanwhile (the
+  // press number is taken BEFORE the activation is awaited).
+  const press = quickBarPresses.take();
+  void applySpriteChoice(choices[(index + 1) % choices.length] ?? 'walk').finally(() => popQuickBarTip('sprites', press));
 }
 
 // Owner feature request 2026-08-18: Report now opens a MODAL — the tester writes a short description
@@ -2123,10 +2176,12 @@ watch(
   (variant) => renderer?.setD6FaceVariant(variant),
 );
 watch(() => settings.stadiumStands, (style) => renderer?.setStandStyle(style)); // owner 09-25
+watch(() => [settings.backdrop, settings.backdropColor] as const, ([kind, color]) => { void renderer?.setBackdrop(kind, color); }); // owner 10-12
 watch(
   () => settings.tackleZoneMode,
   (mode) => renderer?.setTackleZoneMode(mode),
 );
+watch([spectatorTackleZones, rendererSpectatorTackleZoneMode], ([surface, mode]) => renderer?.setSpectatorTackleZones(surface, mode)); // owner 10-12
 watch(
   () => settings.showDefaultSkills,
   (show) => {
@@ -2207,7 +2262,11 @@ watch(
 // Owner 2026-07-04f: FLAT (non-isometric) render toggle
 watch(() => settings.flatRender, (flat) => renderer?.setFlatMode(flat));
 // Owner 09-10: uniform figures is per orientation — the effective flag follows the pitch orientation.
-const uniformFiguresEffective = computed(() => (settings.pitchOrientation === 'ew' ? settings.uniformFiguresEw : settings.uniformFigures));
+/** Owner 10-12: the pitch view as it is DRAWN (renderer.onProjectionApplied). A flip or an orientation switch asked
+ *  for while something is in flight is applied a moment later, so anything in the DOM that depends on which way the
+ *  pitch faces reads THIS, never the setting (the Settings controls themselves show what was asked for). */
+const appliedPitchView = ref<{ orientation: 'ns' | 'ew'; flipped: boolean }>({ orientation: settings.pitchOrientation, flipped: settings.pitchFlipped });
+const uniformFiguresEffective = computed(() => (appliedPitchView.value.orientation === 'ew' ? settings.uniformFiguresEw : settings.uniformFigures));
 watch(uniformFiguresEffective, (on) => renderer?.setUniformFigures(on)); // owner 09-09: option 3
 watch(() => settings.dugoutCounts, (on) => renderer?.setDugoutCounts(on)); // owner 10-06
 watch(() => settings.showStadium, (on) => renderer?.setStadiumEnabled(on)); // owner 08-19: Settings > UI stadium toggle
@@ -2913,8 +2972,11 @@ watch(
 // driving team attacks north. The store only bumps seq on a real change (drive
 // boundary / play-mode toggle) and keeps flip=false in play mode. Default ('pre')
 // flush so the redraw lands before any same-tick setGame.
+// Owner 10-11: under Settings > Spectator and replay view the value can be fixed for the game; a published review
+// position keeps its epoch as seq, so a change of that setting mid-review arrives as a flip change alone - watch both.
+// setFieldFlipMode is a no-op when the value is unchanged (no redraw, no camera reset).
 watch(
-  () => gameStore.state.fieldFlip.seq,
+  [() => gameStore.state.fieldFlip.seq, () => gameStore.state.fieldFlip.flip],
   () => {
     if (renderer) renderer.setFieldFlipMode(gameStore.state.fieldFlip.flip);
   },
@@ -4561,18 +4623,35 @@ const setupDragMode: DragMode = {
 // Owner 2026-07-14 (setup overhaul cond-b/c + #3): begin a drag-to-pitch — a DUGOUT reserve (place) OR a PLACED
 // on-pitch player (move); both fire the renderer's onDugoutSetupDragStart on a canvas pointerdown, both drop via
 // mode.place. INERT/ineligible: mode.eligible() gates both starting AND completing a drag.
-function startPlayerDrag(mode: DragMode, playerId: string, clientX: number, clientY: number) {
+function startPlayerDrag(mode: DragMode, playerId: string, clientX: number, clientY: number, pointerId?: number) {
   if (!mode.eligible(playerId)) return;
   setupDrag.value = { playerId, label: mode.label(playerId), x: clientX, y: clientY, sx: clientX, sy: clientY, mode };
   window.addEventListener('pointermove', onSetupDragMove);
   window.addEventListener('pointerup', onSetupDragEnd);
+  // Owner 10-12: a drag the page loses (ITS pointer cancelled, the window losing focus, the page hidden) ENDS,
+  // placing nothing: `setupDrag` must not outlive the press (the renderer holds a waiting view change while it is set).
+  removeSetupDragExits?.();
+  removeSetupDragExits = installSetupDragExits(pointerId, cancelSetupDrag);
 }
-function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number) {
+let removeSetupDragExits: (() => void) | null = null;
+function removeSetupDragListeners(): void {
+  window.removeEventListener('pointermove', onSetupDragMove);
+  window.removeEventListener('pointerup', onSetupDragEnd);
+  removeSetupDragExits?.();
+  removeSetupDragExits = null;
+}
+/** The drag is over without a release the page saw: drop it; no place, no remove, no tap. */
+function cancelSetupDrag(): void {
+  removeSetupDragListeners();
+  setupDrag.value = null;
+}
+onBeforeUnmount(cancelSetupDrag);
+function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number, pointerId?: number) {
   // Owner 10-08: "surface portrait view for opposing players during the setup phase". A press on a token I cannot
   // place (an opposing player, or one of mine that is out) used to be dropped here with no feedback: the renderer
   // hands every setup press to this drag start, and an ineligible player never reached the tap that shows the card.
   if (!setupDragMode.eligible(playerId)) { autoShowPopup(playerId); return; }
-  startPlayerDrag(setupDragMode, playerId, clientX, clientY);
+  startPlayerDrag(setupDragMode, playerId, clientX, clientY, pointerId);
 }
 // Owner 2026-07-14 (setup overhaul #5/#3): a TAP on a PLACED player selects it; a 2nd tap on another placed
 // player swaps. Shared by onSetupClick and a stationary setup-drag release (on-pitch pointerdowns are intercepted
@@ -4601,8 +4680,7 @@ function onSetupDragMove(e: PointerEvent) {
   if (setupDrag.value) { setupDrag.value.x = e.clientX; setupDrag.value.y = e.clientY; }
 }
 function onSetupDragEnd(e: PointerEvent) {
-  window.removeEventListener('pointermove', onSetupDragMove);
-  window.removeEventListener('pointerup', onSetupDragEnd);
+  removeSetupDragListeners();
   const d = setupDrag.value; setupDrag.value = null;
   if (!d || !renderer) return;
   const mode = d.mode;
@@ -6379,8 +6457,8 @@ const swarmingDragMode: DragMode = {
   onTap: (playerId) => selectSwarmingPlayer(playerId),
   clearSelection: () => { selectedSwarming.value = null; },
 };
-function startSwarmingPlayerDrag(playerId: string, clientX: number, clientY: number) {
-  startPlayerDrag(swarmingDragMode, playerId, clientX, clientY);
+function startSwarmingPlayerDrag(playerId: string, clientX: number, clientY: number, pointerId?: number) {
+  startPlayerDrag(swarmingDragMode, playerId, clientX, clientY, pointerId);
 }
 function selectSwarmingPlayer(playerId: string) {
   const player = swarmingPlayers.value.find((candidate) => candidate.playerId === playerId);
@@ -7016,6 +7094,12 @@ watch(() => settings.trailMarks, (m) => { if (renderer) renderer.trailMarkStyle 
 watch(
   () => settings.pitchOrientation,
   (o) => renderer?.setPitchOrientation(o),
+);
+// Owner 10-12: the coach's own 180 degree view flip (the `pitchFlip` hotkey / the Settings checkbox). The renderer XORs it
+// with the spectator drive-north flip; seats, model and commands are untouched.
+watch(
+  () => settings.pitchFlipped,
+  (on) => renderer?.setUserPitchFlip(on),
 );
 
 // B9-2: shared live-play-adopted active-player signal. The
@@ -9736,7 +9820,7 @@ const runAction = createInGameActionRunner({
   confirm: confirmShortcut,
   endTurnAvailable: () => gameStore.isPlaying.value && gameStore.myTurn.value && !endTurnUnavailableDuringReaction.value,
   endTurn,
-  toggleRoster: toggleRosterPopout,
+  toggleRoster: quickToggleRoster,
   toggleLogExpand: () => {
     logExpanded.value = !logExpanded.value;
     if (logExpanded.value) panelCollapsed.value = false;
@@ -9744,7 +9828,8 @@ const runAction = createInGameActionRunner({
   cycleTackleZones,
   cycleSprites,
   cycleSkillDisplay,
-  toggleAutoDirector: () => { settings.autoDirector = !settings.autoDirector; },
+  toggleAutoDirector,
+  togglePitchFlip: () => { settings.pitchFlipped = !settings.pitchFlipped; return true; },
   openChat: () => {
     if (settings.chatDisabled) return false;
     panelTab.value = 'chat';
@@ -9964,6 +10049,8 @@ onMounted(async () => {
   mountedRenderer.actionDecorationStyle = settings.actionDecorations;
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);
+  // Owner 10-12 (Astra): the saved backdrop BEFORE init, so init loads only the chosen image (never the skybox first).
+  void mountedRenderer.setBackdrop(settings.backdrop, settings.backdropColor);
   if (!await initPitchRendererMount(
     mountedRenderer,
     pitchHost.value!,
@@ -10037,6 +10124,7 @@ onMounted(async () => {
   // tokenLayer, where badges live) so they render ON TOP — intended.
   renderer.blockDotsHeadFactor = 0.76;
   renderer.setTackleZoneMode(settings.tackleZoneMode);
+  renderer.setSpectatorTackleZones(spectatorTackleZones.value, rendererSpectatorTackleZoneMode.value); // owner 10-12: spectate / replay only
   renderer.showDefaultSkills = settings.showDefaultSkills;
   renderer.showPositionRings = settings.showPositionRings;
   // owner 2026-07-08: block-dice preview toggle — arm for the active player if on
@@ -10077,6 +10165,15 @@ onMounted(async () => {
   // Seat/orientation P1 (g868): the drive-north flip is store state but the watch below is seq-driven and
   // renderer-guarded, so a bump that lands before this mount is dropped. Seed it here, same as orientation/flat.
   renderer.setFieldFlipMode(gameStore.state.fieldFlip.flip);
+  renderer.setUserPitchFlip(settings.pitchFlipped); // owner 10-12: the coach's own view flip, on top of the automatic one
+  // Owner 10-12: the telestrator's drawings are world pixels; when the view turns (flip, orientation) they move with it.
+  renderer.onProjectionChange = (change) => { telestratorRef.value?.reprojectDrawings(change); };
+  // Owner 10-12: DOM that depends on which way the pitch faces follows the view actually on screen.
+  renderer.onProjectionApplied = (view) => { appliedPitchView.value = view; };
+  appliedPitchView.value = renderer.appliedProjection();
+  // Owner 10-12: a gesture that ends on a pitch square must end in the projection it began in: while a setup drag or
+  // a telestrator stroke is in progress the renderer holds a waiting view change back.
+  renderer.hostGestureActive = () => (setupDrag.value ? 'setupDrag' : telestratorRef.value?.gestureActive() ? 'telestrator' : null);
   renderer.turnTrackEnabled = settings.turnTrack; // owner 2026-07-07: on-pitch tracks toggle
   renderer.setOnPitchPresentationStyle(settings.modernHudStyle);
   renderer.setMarkColor(markColorInt()); // owner 2026-07-04f: pitch marking colour
@@ -11032,7 +11129,7 @@ onMounted(async () => {
     renderer.restoreSpectatorPosition(gameStore.game.value, {
       activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
       recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
-      fieldFlip: !p.drive.offenseIsHome,
+      fieldFlip: gameStore.publishedFieldFlip(publishedPosition), // owner 10-11: Settings > Spectator and replay view
       blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
       heldTeamMate: p.heldTeamMate, passDestination: publishedPosition.passive.passDestination,
       hmpScatterMarks: publishedPosition.passive.hmpScatterMarks,
@@ -11216,7 +11313,7 @@ watch(
       renderer.restoreSpectatorPosition(game, {
         activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
         recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
-        fieldFlip: !p.drive.offenseIsHome,
+        fieldFlip: gameStore.publishedFieldFlip(published), // owner 10-11: Settings > Spectator and replay view
         blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
         heldTeamMate: p.heldTeamMate, passDestination: published.passive.passDestination,
         hmpScatterMarks: published.passive.hmpScatterMarks,
@@ -12555,7 +12652,9 @@ function unactivatedOwnCount(): number { return unactivatedOwnIds().length; }
  *  formation, and the offender arrows follow it until the formation is legal or the setup ends. */
 const setupConfirmOpen = ref(false);
 const setupArrowsActive = ref(false);
-const setupReview = computed(() => (setupPhase.value ? setupProblems(setupPhase.value.players, setupPhase.value.validation) : null));
+/** Owner 10-12: in the flipped north / south view the wide-zone words name the side each zone is DRAWN on. */
+const setupWideWordsSwapped = computed(() => wideZoneWordsSwapped({ pitchOrientation: appliedPitchView.value.orientation, pitchFlipped: appliedPitchView.value.flipped }));
+const setupReview = computed(() => (setupPhase.value ? setupProblems(setupPhase.value.players, setupPhase.value.validation, setupWideWordsSwapped.value) : null));
 const setupConfirm = computed(() => (setupConfirmOpen.value && setupReview.value && setupPhase.value
   ? { problems: setupReview.value.problems, refereeErrors: setupPhase.value.setupErrors } : null));
 function syncSetupArrows(): void {
@@ -13436,14 +13535,14 @@ function sendChat() {
             <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('config-bar', $event)"></span>
             <button class="ui-reset" title="Reset to default" @click="resetPanel('config-bar')">↺</button>
           </template>
-          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)" data-tour="hud-menu"
-            @click="ui.gameMenuOpen = !ui.gameMenuOpen">⚙</QuickBarButton>
-          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" data-pad-action="tackleZones" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
+          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)" data-tour="hud-menu" data-quick-tip="menu"
+            @click="quickToggleGameMenu()">⚙</QuickBarButton>
+          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" data-pad-action="tackleZones" data-quick-tip="tackleZones" :title="tackleZonesTitle"
             @click="cycleTackleZones()">🛡</QuickBarButton>
-          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites" data-pad-action="sprites"
+          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites" data-pad-action="sprites" data-quick-tip="sprites"
             :title="`Sprites: ${spriteChoiceLabel}`"
             @click="cycleSprites()">👤</QuickBarButton>
-          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills" data-pad-action="skillDisplay"
+          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills" data-pad-action="skillDisplay" data-quick-tip="skillDisplay"
             :data-skill-mode="skillMode" :aria-label="`Skill display: ${SKILL_MODE_LABELS[skillMode]}`"
             :title="`Skill display: ${SKILL_MODE_LABELS[skillMode]} (toggle Icons/Markings)`"
             @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
@@ -13452,16 +13551,16 @@ function sendChat() {
           <!-- Owner 10-06: the stadium toggle left the quick bar (Settings > Display keeps it). -->
           <!-- Owner 2026-07-03: Auto Director — one toggle for the automatic camera
                work (zoom + track + nudge to the action). Off = a calm static cam. -->
-          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director" data-pad-action="autoDirector"
-            :title="`Auto Director — auto zoom + track the action: ${settings.autoDirector ? 'ON (click to calm the camera)' : 'OFF'}`"
-            @click="settings.autoDirector = !settings.autoDirector">🎬</QuickBarButton>
+          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director" data-pad-action="autoDirector" data-quick-tip="autoDirector"
+            :title="settings.autoDirector ? 'Auto Director: On (auto zoom and track the action)' : 'Auto Director: Off (calm, static camera)'"
+            @click="toggleAutoDirector()">🎬</QuickBarButton>
           <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
                opt-in via Settings > UI. -->
-          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn" data-pad-action="roster"
-            :title="`Roster (${keyLabel(settings.rosterKey)}) — every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
-            @click="toggleRosterPopout()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
-          <QuickBarButton class="report-btn" data-tour="hud-report" title="Report an issue — sends your description with the wire log"
-            @click="openReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
+          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn" data-pad-action="roster" data-quick-tip="roster"
+            :title="`Roster (${keyLabel(settings.rosterKey)}): every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
+            @click="quickToggleRoster()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
+          <QuickBarButton class="report-btn" data-tour="hud-report" data-quick-tip="report" title="Report an issue: sends your description with the wire log"
+            @click="quickOpenReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
           <div class="quick-brand-menu">
             <div class="quick-match-controls">
             <button v-if="props.mode === 'spectate' && !gameStore.state.demoMode"
@@ -13507,6 +13606,8 @@ function sendChat() {
             <span v-if="gameStore.spectatorReview.value.active" class="sr-only" role="status">{{ gameStore.spectatorReview.value.feedStale ? 'Live feed unavailable — GO TO LIVE reconnects' : gameStore.spectatorReview.value.phase === 'pausing' ? 'Pausing…' : 'Reviewing recorded match position' }}</span>
           </div>
         </nav>
+        <!-- Owner 10-12: a quick-bar press pops that button's tooltip (new state) for 1.5 s. -->
+        <QuickBarPopTip ref="quickBarPopTip" />
 
         <!-- incoming-chat toast (owner 2026-07-03): under the home coach panel
              when the chat tab isn't focused; click to open chat. -->
@@ -14120,11 +14221,11 @@ function sendChat() {
             </li>
             <li :class="{ ok: setupPhase.validation.leftOk }">
               <span class="setup-mark">{{ setupPhase.validation.leftOk ? '✓' : '✗' }}</span>
-              Max 2 in the left wide zone ({{ setupPhase.validation.leftWide }})
+              Max 2 in the {{ wideZoneWord('left', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.leftWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.rightOk }">
               <span class="setup-mark">{{ setupPhase.validation.rightOk ? '✓' : '✗' }}</span>
-              Max 2 in the right wide zone ({{ setupPhase.validation.rightWide }})
+              Max 2 in the {{ wideZoneWord('right', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.rightWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.countOk }">
               <span class="setup-mark">{{ setupPhase.validation.countOk ? '✓' : '✗' }}</span>
@@ -19432,7 +19533,10 @@ function sendChat() {
    a dragged/persisted position (settings.logPos) overrides this. */
 .log-panel {
   position: absolute;
-  z-index: 11;
+  /* Owner 10-12: the docked chat stays clickable where it overlaps the telestrator launcher/palette
+     (ReplayTelestrator .telestrator-shell, layer 28), so it sits one above that shell. The inducement
+     (47/48) and endgame (57) overrides below still win. */
+  z-index: 29;
   right: 14px;
   bottom: 56px;
   width: 360px;
@@ -19489,7 +19593,7 @@ function sendChat() {
 /* The inducement phase is modal: the dock stays UNDER the complete picker/summary/footer surface. It shares the
    phase's layer (47) and comes earlier in the tree than the phase, so the panes paint and hit-test over it, while the
    gap catcher (47, earlier still) sits under it. Being above the shader (44) now, it carries the shader's dim itself
-   until it is raised. The attribute makes this phase-only; ordinary log stacking stays at 11, while diagnostics at
+   until it is raised. The attribute makes this phase-only; ordinary log stacking is 29 (just above the telestrator shell, 28), while diagnostics at
    52+ remain above the phase. */
 .log-panel[data-induce-open='true'] { z-index: 47; }
 .log-panel[data-induce-open='true']:not(.over-inducements) { filter: brightness(0.78); }

@@ -1,4 +1,5 @@
 import { reactive, watch } from 'vue';
+import { SPECTATOR_TACKLE_ZONE_MODES, type SpectatorTackleZoneMode } from './tackleZoneQuickBar';
 import { FORK_EDITION } from './edition';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { FLOAT_QUEUE_MIN, sanitizeFloatPos, sanitizeFloatSize, sanitizeFloatZoom } from './fumbblFloatLayout';
@@ -8,6 +9,7 @@ import { normalizeLegalAcceptanceVersion } from './legalNotice';
 import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type ConfirmationSettings } from './confirmationSettings';
 import { STICK_DEADZONE, clampDeadzone } from './gamepad';
 import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
+import { DEFAULT_SPECTATOR_VIEW, normalizeSpectatorView, type SpectatorView } from './spectatorView';
 import { CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
 
 /**
@@ -65,6 +67,7 @@ const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OS
 
 // Before load(): the loader validates the stored rebindable keys with hotkeyConflict at module init.
 export type RebindableKey = 'confirmKey' | 'rosterKey' | 'logExpandKey';
+export { SPECTATOR_TACKLE_ZONE_MODES, type SpectatorTackleZoneMode };
 const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm move / pass target', rosterKey: 'Roster pop-out', logExpandKey: 'Enlarge the Log window' };
 const REBINDABLE_ACTION: Record<RebindableKey, ControlActionId> = { confirmKey: 'confirm', rosterKey: 'roster', logExpandKey: 'logExpand' };
 
@@ -106,6 +109,9 @@ export interface AppSettings extends ConfirmationSettings {
   crosshairAcceleration: boolean;
   // markings
   tackleZoneMode: 'off' | 'opposition' | 'friendly' | 'both';
+  /** Owner 10-12: spectate / replay only (play keeps tackleZoneMode). Absolute teams: whose zones the quick bar shows
+   *  while watching, regardless of whose turn it is. Default 'none' = no change until the viewer presses it. */
+  spectatorTackleZoneMode: SpectatorTackleZoneMode;
   showDefaultSkills: boolean;
   showPositionRings: boolean;
   /** Owner 2026-07-08: persistently show the block-dice preview (count over each
@@ -174,6 +180,11 @@ export interface AppSettings extends ConfirmationSettings {
   showStadium: boolean;
   /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles, 'classic' = seat atlas + fan sprites (default again, owner 10-05). */
   stadiumStands: 'crowd' | 'classic';
+  /** Owner 10-12: what sits behind the stadium. 'skybox' = the fantasy skybox (default, unchanged), 'space', 'parking'
+   *  = the old night parking lot, 'galaxy' = ESA/Hubble's Whirlpool Galaxy (credited in Settings), 'color' = a plain fill in `backdropColor`. */
+  backdrop: BackdropSetting;
+  /** Owner 10-12: the plain backdrop colour (CSS #rrggbb), used when `backdrop` is 'color'. */
+  backdropColor: string;
   /** Owner 2026-07-04e: UI-CUSTOMIZE mode — when on, the corner panels grow a
    *  drag grip (top-left) + a resizer (bottom-right) so they can be moved/scaled. */
   uiCustomize: boolean;
@@ -284,6 +295,10 @@ export interface AppSettings extends ConfirmationSettings {
   replaySearchHideScores: boolean;
   /** B5-2: spectator-clean — hide planner + dice previews while spectating. */
   spectatorClean: boolean;
+  /** Owner 10-11: which end each team is drawn at while spectating, in a replay and in review (never in play).
+   *  'drive' (default) follows the drive as before; 'home' / 'away' keep that team at the bottom; 'mine' keeps the
+   *  viewer's own team there when the viewer coached one of the two teams (else follows the drive). game/spectatorView.ts. */
+  spectatorView: SpectatorView;
   /** B6-4: when cinematic injury playback fires.
    *  'armor-break' (default) = every armor break; 'casualty' = casualties
    *  only; 'off' = never (splash still shows). */
@@ -293,6 +308,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** B8-8: pitch orientation. 'ns' (default) = end zones top/bottom;
    *  'ew' = end zones left/right (the projection rotated 90°). */
   pitchOrientation: 'ns' | 'ew';
+  /** Owner 10-12: the pitch VIEW turned around 180 degrees (north / south or east / west swapped). A view choice only:
+   *  teams, HUD seats and every command are unchanged. Toggled by the `pitchFlip` action and the Settings checkbox beside the pitch orientation. */
+  pitchFlipped: boolean;
   /** ORDER 66 (A.2): route play-mode interaction through the ported state machine (deriveClientState →
    *  action menu + click-per-square move) instead of the hotbar/planner. Off = legacy path untouched. */
   order66: boolean;
@@ -563,6 +581,12 @@ export interface SkillConfigEntry {
 
 export type PlayerCardMode = 'auto' | 'called';
 
+/** Owner 10-12: the Whirlpool Galaxy image is ESA/Hubble heic0506a, CC BY 4.0: its credit must be visible and unaltered. */
+export const GALAXY_BACKDROP_CREDIT = 'Image: NASA, ESA, S. Beckwith (STScI), and The Hubble Heritage Team (STScI/AURA)';
+export const GALAXY_BACKDROP_URL = 'https://esahubble.org/images/heic0506a/';
+/** The renderer's clear colour: the plain backdrop starts there. */
+export const DEFAULT_BACKDROP_COLOR = '#14161a';
+
 const DEFAULTS: AppSettings = {
   confirmKey: 'Space', // owner 2026-07-02: Space confirms queued moves
   rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
@@ -580,6 +604,7 @@ const DEFAULTS: AppSettings = {
   crosshairSpeed: CROSSHAIR_SPEED_DEFAULT,
   crosshairAcceleration: false,
   tackleZoneMode: 'opposition',
+  spectatorTackleZoneMode: 'none',
   showDefaultSkills: false,
   showPositionRings: true,
   showBlockDice: false,
@@ -613,6 +638,8 @@ const DEFAULTS: AppSettings = {
   fpsCap: 60,
   showStadium: true,
   stadiumStands: 'classic',
+  backdrop: 'skybox',
+  backdropColor: DEFAULT_BACKDROP_COLOR,
   brightness: 100,
   soundVolume: 20,
   soundStyles: {},
@@ -662,8 +689,10 @@ const DEFAULTS: AppSettings = {
   replayControlsSize: null,
   replaySearchHideScores: true, // owner 10-06: on by default (spoiler-safe)
   spectatorClean: false,
+  spectatorView: DEFAULT_SPECTATOR_VIEW,
   cinematicMode: 'armor-break',
   pitchOrientation: 'ns',
+  pitchFlipped: false,
   // Owner 2026-07-10: DEVELOPER mode — unlocked by the `-dev` exe arg (or `?dev` URL query). Gates the
   // Settings → Developer section + the live Developer log panel (client `log()` fires incl. the block/
   // action drop-watchdog + the server-side/client-side wire traffic). NOT persisted-on by default; a
@@ -769,6 +798,27 @@ export function iconBehaviourDefault(): SkillBehaviour {
   return settings.showDefaultSkills ? 'always' : 'added';
 }
 export const MARKER_BEHAVIOUR_DEFAULT: SkillBehaviour = 'never';
+
+/** Owner 10-12: backdrop choices behind the stadium (Settings -> Stadium). */
+export type BackdropSetting = 'skybox' | 'space' | 'galaxy' | 'parking' | 'color';
+export const BACKDROP_OPTIONS: readonly { value: BackdropSetting; label: string }[] = [
+  { value: 'skybox', label: 'Fantasy skybox' },
+  { value: 'space', label: 'Space' },
+  { value: 'galaxy', label: 'Whirlpool Galaxy (Hubble)' },
+  { value: 'parking', label: 'Night parking lot' },
+  { value: 'color', label: 'Plain colour' },
+];
+export function normalizeBackdrop(value: unknown): BackdropSetting {
+  return BACKDROP_OPTIONS.some((o) => o.value === value) ? value as BackdropSetting : 'skybox';
+}
+/** A #rrggbb string (any case; #rgb expands), else the default colour. */
+export function normalizeBackdropColor(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_BACKDROP_COLOR;
+  const v = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(v)) return v;
+  if (/^#[0-9a-f]{3}$/.test(v)) return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+  return DEFAULT_BACKDROP_COLOR;
+}
 
 /** Human-readable, provider-neutral turf labels for the Settings picker. */
 export const TURF_LABELS: Record<string, string> = {
@@ -943,6 +993,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       raw.rosterOpacity === undefined ? raw.logOpacity : merged.rosterOpacity,
       DEFAULTS.rosterOpacity,
     );
+    merged.spectatorView = normalizeSpectatorView(raw.spectatorView); // owner 10-11: missing / unknown -> 'drive' (today's view)
     merged.modernHudStyle = raw.modernHudStyle === 'chrome' ? 'chrome' : 'minimalist'; // owner 10-05: a stored chrome pick is kept; everything else is minimalist
     // Current-version blobs bypass migrations, so malformed video values must be
     // normalized independently. Only choices exposed by Settings are accepted;
@@ -1036,12 +1087,16 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.tackleZoneMode = ['off', 'opposition', 'friendly', 'both'].includes(String(raw.tackleZoneMode))
       ? raw.tackleZoneMode as AppSettings['tackleZoneMode']
       : DEFAULTS.tackleZoneMode;
+    merged.spectatorTackleZoneMode = typeof raw.spectatorTackleZoneMode === 'string' && (SPECTATOR_TACKLE_ZONE_MODES as readonly string[]).includes(raw.spectatorTackleZoneMode)
+      ? raw.spectatorTackleZoneMode as SpectatorTackleZoneMode
+      : DEFAULTS.spectatorTackleZoneMode;
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' ? 'black' : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
     merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
     merged.rosterHideInnateSkills = raw.rosterHideInnateSkills !== false; // owner 10-10: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
+    merged.pitchFlipped = raw.pitchFlipped === true; // owner 10-12: only an explicit true flips the view
     // Keychain move: password40k is no longer a settings field. Lift any stored copy out of the
     // merged object so the deep watcher below never writes it back, and hand it to credentials.ts.
     const storedPw = (raw as { password40k?: unknown }).password40k;
@@ -1051,6 +1106,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.chatDisabled = raw.chatDisabled === true;
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
     merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
+    merged.backdrop = normalizeBackdrop(raw.backdrop); // owner 10-12: missing or unknown -> the skybox
+    merged.backdropColor = normalizeBackdropColor(raw.backdropColor);
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
     merged.hideConfirmBar = raw.hideConfirmBar === true; // owner 10-08: the bar shows unless the user hid it
     merged.replaySearchHideScores = raw.replaySearchHideScores !== false; // owner 10-06: ON by default; only an explicit false turns it off

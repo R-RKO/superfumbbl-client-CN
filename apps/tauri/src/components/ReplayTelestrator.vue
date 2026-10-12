@@ -316,7 +316,46 @@ function finishToolbarPress(event: PointerEvent): void {
 }
 
 // Controller support P1 (owner 10-07): the in-game action dispatcher toggles the telestrator (pad LT+B).
-defineExpose({ toggleExpanded });
+/** Owner 10-12: the view turned (renderer.onProjectionChange): every drawing moves with its ground, losslessly. */
+function reprojectDrawings(change: {
+  fromKey: string; toKey: string;
+  toGround: (worldX: number, worldY: number) => SketchPoint;
+  fromGround: (gameX: number, gameY: number) => SketchPoint;
+}): void {
+  const toGround = (point: SketchPoint): SketchPoint => change.toGround(point.x, point.y);
+  const fromGround = (point: SketchPoint): SketchPoint => change.fromGround(point.x, point.y);
+  model.reproject({ fromKey: change.fromKey, toKey: change.toKey, toGround, fromGround });
+  if (moving.value) moving.value = { point: fromGround(toGround(moving.value.point)) };
+  refresh();
+}
+/** A stroke is being drawn or a drawing dragged (pointer down on the sketch surface). False whenever the sketch
+ *  surface is not taking input (disabled, collapsed), whatever the flags say. */
+function gestureActive(): boolean { return props.enabled && state.value.expanded && (drawing.value || moving.value !== null); }
+/** Owner 10-12: a gesture the surface LOSES (capture lost, the window losing focus, the page hidden, the surface
+ *  disabled / collapsed / unmounted) ends here: what was drawn so far is kept exactly as a release would keep it,
+ *  without the release-point step of the Path tool. A normal release (pointerUp) is unchanged and has already
+ *  cleared the flags by the time its own lostpointercapture arrives. */
+function endLostGesture(): void {
+  if (!drawing.value && moving.value === null) return;
+  if (drawing.value) model.commit(); else model.finishInteraction();
+  drawing.value = false;
+  moving.value = null;
+  pathSquare = null;
+  pendingSquare = null;
+  refresh();
+}
+function endLostGestureWhenHidden(): void { if (document.visibilityState === 'hidden') endLostGesture(); }
+onMounted(() => {
+  window.addEventListener('blur', endLostGesture);
+  document.addEventListener('visibilitychange', endLostGestureWhenHidden);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('blur', endLostGesture);
+  document.removeEventListener('visibilitychange', endLostGestureWhenHidden);
+  endLostGesture();
+});
+watch(() => props.enabled && state.value.expanded, (taking) => { if (!taking) endLostGesture(); });
+defineExpose({ toggleExpanded, reprojectDrawings, gestureActive });
 function toggleExpandedFromLauncher(event: MouseEvent): void {
   if (suppressToolbarClick) {
     suppressToolbarClick = false;
@@ -590,6 +629,7 @@ onBeforeUnmount(() => {
          every shape off its drawn spot. -->
     <svg ref="root" class="telestrator-layer" :class="{ active: state.expanded }"
       @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp"
+      @lostpointercapture="endLostGesture"
       @contextmenu="clearOnRightClick" @wheel="forwardWheel">
       <defs>
         <marker v-for="preset in TELESTRATOR_COLOR_PRESETS" :id="`replay-arrow-head-${preset.value.slice(1)}`"

@@ -109,6 +109,11 @@
     "size": 4988972,
     "sha256": "a6ebbcf4a9401b04b6a145ab5379372c0d3776a0d5c422632ab1141a2dcbf2e6"
   },
+  "app@190fd52b68d68bf7": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-190fd52b.zip",
+    "size": 5377706,
+    "sha256": "298323809bc96587e381991ed22acfed6e174feb68d8e97ba3939b7fc3d6ea77"
+  },
   "app@19817e59a78c142e": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-19817e59.zip",
     "size": 4704747,
@@ -789,6 +794,11 @@
     "size": 4991463,
     "sha256": "e4192d38b2d4f27762baf7e250fc595ed9946b8ff1315f1ec05e14c5692aa983"
   },
+  "backdrops@c5d949967b085ce6": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/backdrops-c5d94996.zip",
+    "size": 7028989,
+    "sha256": "abd7856420f9dea0f281c9cb037ea0e3434e1f65c6e52c29941f061ce485b5fb"
+  },
   "blockdice-krisb@67beea54c4a24af4": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/blockdice-krisb-67beea54.zip",
     "size": 860484,
@@ -898,6 +908,11 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/images-2768b53a.zip",
     "size": 15453724,
     "sha256": "d49203e60e8dc125021a5965c1a3e61ba4d2419994557531f4f5c47dceae6c6d"
+  },
+  "images@38ad309aca998ae3": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/images-38ad309a.zip",
+    "size": 13644897,
+    "sha256": "87e060afbf3d4e75c0fff44ee077c8a83e475c431d64f8effd0b6353c16224a4"
   },
   "images@5e2a90ded710e91a": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/images-5e2a90de.zip",

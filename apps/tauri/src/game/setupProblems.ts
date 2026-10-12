@@ -9,9 +9,21 @@ export interface SetupProblemReview {
   offenders: string[];
 }
 
+/** Owner 10-12 (pitch view flip): "left" / "right" in the setup texts name the side of the SCREEN the zone is drawn on
+ *  in the north / south view. The model's left wide zone (columns 0..3) is drawn on the right once that view is turned
+ *  around, so the words swap with it; which players and counts each line means never changes. East / west keeps its
+ *  wording (there the zones are top and bottom, flipped or not). */
+export function wideZoneWordsSwapped(view: { pitchOrientation: 'ns' | 'ew'; pitchFlipped: boolean }): boolean {
+  return view.pitchOrientation === 'ns' && view.pitchFlipped === true;
+}
+export function wideZoneWord(zone: 'left' | 'right', swapped: boolean): 'left' | 'right' {
+  return swapped ? (zone === 'left' ? 'right' : 'left') : zone;
+}
+
 export function setupProblems(
   players: readonly { playerId: string; coord: [number, number] | null; inert?: boolean }[],
   validation: SetupValidation,
+  wordsSwapped = false,
 ): SetupProblemReview {
   const problems: string[] = [];
   const offenders = new Set<string>();
@@ -22,11 +34,11 @@ export function setupProblems(
     problems.push(`Only ${validation.onLos} on the line of scrimmage. You need ${needed} in the centre (the wide zones don't count).`);
   }
   if (!validation.leftOk) {
-    problems.push(`${validation.leftWide} players in the left wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
+    problems.push(`${validation.leftWide} players in the ${wideZoneWord('left', wordsSwapped)} wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
     for (const player of placed) if (isLeftWideColumn(player.coord[1])) offenders.add(player.playerId);
   }
   if (!validation.rightOk) {
-    problems.push(`${validation.rightWide} players in the right wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
+    problems.push(`${validation.rightWide} players in the ${wideZoneWord('right', wordsSwapped)} wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
     for (const player of placed) if (isRightWideColumn(player.coord[1])) offenders.add(player.playerId);
   }
   if (!validation.countOk) {

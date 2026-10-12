@@ -86,6 +86,9 @@ export const CONTROL_ACTIONS = [
   { id: 'zoomIn', label: 'Zoom in (trigger: tap one level, hold continuous)', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('RT(tap)') },
   { id: 'zoomOut', label: 'Zoom out (trigger: tap one level, hold continuous)', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LT(tap)') },
   { id: 'autoDirector', label: 'Auto Director on / off', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LB+DpadRight') },
+  // Owner 10-12: "a hot key to flip perspectives on the pitch" (north / south or east / west turned around; seats stay).
+  // Flips the Settings checkbox "Flip the pitch view". `game` covers setup and kick-off as well. No pad default.
+  { id: 'pitchFlip', label: 'Flip the pitch view', group: 'Camera', context: 'game', keyboard: pair('KeyF'), controller: pair() },
   { id: 'tackleZones', label: 'Tackle zones (cycle)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadUp') },
   { id: 'sprites', label: 'Sprites (cycle)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadDown') },
   { id: 'skillDisplay', label: 'Skill display (icons / markings)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadLeft') },
@@ -151,6 +154,8 @@ export function contextsOverlap(a: ControlContext, b: ControlContext): boolean {
  * loader) into their actions' keyboard primary — the user's existing keys are preserved, never reset. A legacy key
  * also wins over a NEW action's default (a roster key on P keeps P; Player card then starts unbound).
  */
+/** Actions added after coaches already had stored maps: their keyboard default yields to any key a coach stored. */
+const DEFAULT_YIELDS_TO_STORED: ReadonlySet<string> = new Set(['pitchFlip']);
 /** Bumped when defaults move; `migrateControlBindings` upgrades a stored map from an older revision. */
 export const CONTROL_BINDINGS_REVISION = 3;
 /** Revision → the defaults it retired: a stored cell from an older revision still equal to one takes the new default
@@ -200,6 +205,8 @@ export function migrateControlBindings(raw: unknown, legacy: Pick<ControlSetting
   const upgraded = new Set<string>();
   const hadStored = (id: string): boolean => !upgraded.has(id) && !!stored[id] && typeof stored[id] === 'object';
   const out = defaultControlBindings();
+  /** Keyboard cells whose value came from storage (the rest hold the table default). */
+  const storedCells = new Set<string>();
   for (const action of ACTIONS) {
     const entry = stored[action.id] as Partial<Record<BindingMethod, Partial<BindingPair>>> | undefined;
     const target = out[action.id as ControlActionId];
@@ -209,7 +216,10 @@ export function migrateControlBindings(raw: unknown, legacy: Pick<ControlSetting
       const valid = method === 'keyboard' ? isKeyboardInput : isControllerInput;
       for (const slot of ['primary', 'secondary'] as const) {
         const value = upgradeStoredCell(entry && typeof entry === 'object' ? entry[method]?.[slot] : undefined, storedRevision);
-        if (typeof value === 'string' && (value === '' || valid(value))) target[method][slot] = value;
+        if (typeof value === 'string' && (value === '' || valid(value))) {
+          target[method][slot] = value;
+          if (method === 'keyboard') storedCells.add(`${action.id}.${slot}`);
+        }
       }
     }
     if (action.keyboardAlias) target.keyboard.primary = legacy[action.keyboardAlias];
@@ -233,6 +243,20 @@ export function migrateControlBindings(raw: unknown, legacy: Pick<ControlSetting
   // first action in table order only.
   const claimed: { key: string; context: ControlContext }[] = ACTIONS.filter((a) => a.keyboardAlias)
     .map((a) => ({ key: legacy[a.keyboardAlias!], context: a.context }));
+  // Owner 10-12 (the Flip the pitch view default, F): the NEW action's table default never displaces a key the coach
+  // bound themselves, whatever the table order - the newcomer starts unbound instead. Only this action (Astra review):
+  // every other effective binding is exactly what the passes below gave it before the flip existed.
+  for (const action of ACTIONS) {
+    if (action.keyboardFixed || !DEFAULT_YIELDS_TO_STORED.has(action.id)) continue;
+    const kb = out[action.id as ControlActionId].keyboard;
+    for (const slot of ['primary', 'secondary'] as const) {
+      const key = kb[slot];
+      if (!key || storedCells.has(`${action.id}.${slot}`) || (slot === 'primary' && action.keyboardAlias)) continue;
+      const coachHasIt = ACTIONS.some((other) => other !== action && !other.keyboardFixed && contextsOverlap(other.context, action.context)
+        && (['primary', 'secondary'] as const).some((s) => storedCells.has(`${other.id}.${s}`) && out[other.id as ControlActionId].keyboard[s] === key));
+      if (coachHasIt) kb[slot] = '';
+    }
+  }
   for (const action of ACTIONS) {
     if (action.keyboardFixed) continue;
     const kb = out[action.id as ControlActionId].keyboard;

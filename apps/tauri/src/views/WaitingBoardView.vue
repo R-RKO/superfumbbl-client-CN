@@ -53,8 +53,10 @@ onMounted(async () => {
   const mounted = new PitchRenderer();
   renderer = mounted;
   try {
+    void mounted.setBackdrop(settings.backdrop, settings.backdropColor); // owner 10-12: before init, so init loads the chosen one
     if (!await initPitchRendererMount(mounted, host.value, () => active && renderer === mounted)) return;
     mounted.setPitchOrientation(settings.pitchOrientation);
+    mounted.setUserPitchFlip(settings.pitchFlipped); // owner 10-12: the backdrop matches the coach's flipped view
     mounted.setTurf(settings.turf);
     mounted.stadiumEnabled = settings.showStadium;
     paint();
@@ -63,6 +65,7 @@ onMounted(async () => {
   }
 });
 watch(() => gameStore.state.waitingForMatch, paint, { deep: true });
+watch(() => [settings.backdrop, settings.backdropColor] as const, ([kind, color]) => { void renderer?.setBackdrop(kind, color); }); // owner 10-12
 
 // ---- Owner 10-06: TEAM VS TEAM banner on every waiting board; FUMBBL lookups (team API, lobby list) only for an
 // official FUMBBL join — a fork/standalone server has no FUMBBL API, so its banner shows the join's names only ----

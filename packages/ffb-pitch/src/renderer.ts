@@ -36,6 +36,7 @@ import {
   isFieldFlip,
   isFlat,
   isOnPitch,
+  projectionInverse,
   type Orientation,
   setFieldFlip,
   setFlat,
@@ -127,6 +128,85 @@ import { broadcastCameraPlacements } from './stadiumProps';
 
 /** O4/O5: declared-action modes gating what clicks do for the selected player. */
 export type StadiumStandStyle = 'crowd' | 'classic';
+/** Owner 10-12: what sits behind the stadium. 'skybox' is the default (unchanged); 'color' is a plain fill. */
+export type BackdropKind = 'skybox' | 'space' | 'galaxy' | 'parking' | 'color';
+type BackdropImageKind = Exclude<BackdropKind, 'color'>;
+/** Literal `new URL(...)` calls so Vite emits each image (assets/backdrops/ = the `backdrops` app-patch group). */
+const BACKDROP_URLS: Record<BackdropImageKind, () => string> = {
+  skybox: () => new URL('../assets/backdrops/skybox.png', import.meta.url).href,
+  space: () => new URL('../assets/backdrops/space.jpg', import.meta.url).href,
+  // ESA/Hubble heic0506a (CC BY 4.0, unmodified): credited in Settings under the Backdrop select, Credits, ATTRIBUTION.md.
+  galaxy: () => new URL('../assets/backdrops/galaxy.jpg', import.meta.url).href,
+  parking: () => new URL('../assets/backdrops/parking.jpg', import.meta.url).href,
+};
+/** Renderers holding each non-default backdrop image (Assets caches by url, shared across renderer instances): the last
+ *  holder unloads it, so a 4K image is decoded only while someone shows it. The skybox is never unloaded (as before).
+ *  Astra 10-12: a renderer holds an image from BEFORE it awaits the load (a pending acquisition counts), so a renderer
+ *  cancelled mid-load can never unload a texture another renderer is about to draw. */
+const backdropHolders = new Map<BackdropImageKind, number>();
+/** In-flight Assets.load per image: an unload waits for it to settle, then re-checks that nobody acquired meanwhile. */
+const backdropLoads = new Map<BackdropImageKind, Promise<Texture>>();
+/** Astra 10-12: an unload in progress per image (Pixi keeps the old load promise until it finishes, so a new load must
+ *  wait for it), and the images with an unload already scheduled (one per image, re-checked once when it runs). */
+const backdropUnloads = new Map<BackdropImageKind, Promise<void>>();
+const backdropUnloadScheduled = new Set<BackdropImageKind>();
+function holdBackdrop(kind: BackdropImageKind): void {
+  if (kind !== 'skybox') backdropHolders.set(kind, (backdropHolders.get(kind) ?? 0) + 1);
+}
+function releaseBackdrop(kind: BackdropImageKind): void {
+  if (kind === 'skybox') return;
+  const left = (backdropHolders.get(kind) ?? 1) - 1;
+  if (left > 0) { backdropHolders.set(kind, left); return; }
+  backdropHolders.delete(kind);
+  if (backdropUnloadScheduled.has(kind)) return; // one scheduled unload per image
+  backdropUnloadScheduled.add(kind);
+  const unload = () => {
+    // Re-acquired: keep it (that holder's own release schedules the next unload). Already being unloaded: nothing to do.
+    if (backdropHolders.has(kind) || (backdropUnloads.has(kind) && !backdropLoads.has(kind))) {
+      backdropUnloadScheduled.delete(kind);
+      return;
+    }
+    // Astra 10-12: a NEWER load started meanwhile (and its release found this unload already scheduled): stay the one
+    // scheduled unload and re-arm on that load, until no holder and no load remain; then unload once.
+    const newer = backdropLoads.get(kind);
+    if (newer) { void newer.then(() => undefined, () => undefined).then(unload); return; }
+    backdropUnloadScheduled.delete(kind);
+    const done: Promise<void> = Assets.unload(BACKDROP_URLS[kind]())
+      .catch(() => undefined)
+      .then(() => { if (backdropUnloads.get(kind) === done) backdropUnloads.delete(kind); });
+    backdropUnloads.set(kind, done);
+  };
+  const inflight = backdropLoads.get(kind);
+  if (inflight) void inflight.then(() => undefined, () => undefined).then(unload);
+  else unload();
+}
+function loadBackdropImage(kind: BackdropImageKind): Promise<Texture> {
+  const existing = backdropLoads.get(kind);
+  if (existing) return existing;
+  // An unload of this image still running would hand a new Assets.load its (about to be destroyed) texture: wait first.
+  const unloading = backdropUnloads.get(kind);
+  const url = BACKDROP_URLS[kind]();
+  const load = unloading ? unloading.then(() => Assets.load<Texture>(url)) : Assets.load<Texture>(url);
+  backdropLoads.set(kind, load);
+  const settle = () => { if (backdropLoads.get(kind) === load) backdropLoads.delete(kind); };
+  load.then(settle, settle);
+  return load;
+}
+/** Test seam: drop every module-level backdrop hold (between tests). */
+/** Test seam: module-level backdrop bookkeeping sizes. */
+export function backdropBookkeepingForTests(): { holders: number; loads: number; unloads: number; scheduled: number } {
+  return { holders: backdropHolders.size, loads: backdropLoads.size, unloads: backdropUnloads.size, scheduled: backdropUnloadScheduled.size };
+}
+export function resetBackdropHoldsForTests(): void {
+  backdropHolders.clear();
+  backdropLoads.clear();
+  backdropUnloads.clear();
+  backdropUnloadScheduled.clear();
+}
+/** '#rrggbb' -> 0xRRGGBB; anything else -> the default clear colour. */
+export function backdropColorNumber(css: string): number {
+  return /^#[0-9a-fA-F]{6}$/.test(css) ? Number.parseInt(css.slice(1), 16) : 0x14161a;
+}
 /** Owner 10-01: a plain Shift+click just added a square mark / player arrow — the host may open a text field for its
  *  label at (screenX, screenY), canvas-relative CSS px. Client-local only: labels never reach the wire, chat or log. */
 export type MarkLabelRequest =
@@ -3556,6 +3636,14 @@ export class PitchRenderer {
   /** Owner 2026-07-06: painted night parking-lot/skyline backdrop image. When loaded
    *  it replaces the procedural night-sky gradient (cover-fitted, screen-space). */
   private backdropTexture: Texture | null = null;
+  /** Owner 10-12 (Settings -> Backdrop): the chosen backdrop, the plain colour, the loaded images this renderer holds,
+   *  and a generation so a slow load never lands after the coach picked something else. */
+  private backdropKind: BackdropKind = 'skybox';
+  private backdropColor = 0x14161a;
+  private backdropTextures = new Map<BackdropImageKind, Texture>();
+  /** Images this renderer holds a count on: loaded ones AND ones still loading (Astra 10-12). */
+  private backdropHeld = new Set<BackdropImageKind>();
+  private backdropLoadGeneration = 0;
   /** Settings→Markings toggle (owner 2026-07-02): position rings under players. */
   showPositionRings = true;
   /** Accessibility (owner 2026-07-03 r4): field-marker toggles + ring styling. */
@@ -4302,7 +4390,7 @@ export class PitchRenderer {
   onInspectPlayer: ((playerId: string) => void) | null = null;
   /** Owner 2026-07-14 (setup overhaul cond-b): fired on a pointerdown over a DUGOUT reserve token during setup
    *  (screen/client coords). The host begins the drag-to-pitch ghost and enforces reserve-only (KO/CAS inert). */
-  onDugoutSetupDragStart: ((playerId: string, clientX: number, clientY: number) => void) | null = null;
+  onDugoutSetupDragStart: ((playerId: string, clientX: number, clientY: number, pointerId?: number) => void) | null = null;
   private setupActive = false;
   /** Owner 09-09: the last legality zones handed to setSetup — a geometry toggle (orientation / flat / flip)
    *  re-shades them at the new square quads (the old shading stayed drawn at the previous orientation). */
@@ -4331,6 +4419,12 @@ export class PitchRenderer {
   private plannedPath: Square[] = [];
   /** Match11/O9: which side's tackle zones render while a player is selected. */
   private tackleZoneMode: 'off' | 'opposition' | 'friendly' | 'both' = 'opposition';
+  /** Owner 10-12: spectate / replay tackle zones, by absolute team, independent of turn and acting player. The host
+   *  keeps it 'none' in play (play draws only through drawO66TackleZones / the legacy planner). */
+  private spectatorTackleZoneMode: 'none' | 'home' | 'away' | 'all' = 'none';
+  /** Owner 10-12 (Astra P2): true in spectate / replay, where the spectator mode is the ONLY tackle-zone drawing and
+   *  the selection-based zones (inspection / pass mode) stay off. False in play, which keeps them exactly as before. */
+  private spectatorTackleZoneSurface = false;
   /** Fired when the selection changes (null = cleared). */
   onSelectionChange: ((playerId: string | null) => void) | null = null;
   /** Fired when the queued path changes (O8 confirm gate: the host shows Confirm). */
@@ -4555,9 +4649,28 @@ export class PitchRenderer {
    *  mirrored the board 180 degrees for the whole session — the "seat transform is not applying" P1 (g868).
    *  A fresh renderer owns the projection: adopt this instance's value at init instead of inheriting. */
   private fieldFlipMode = false;
+  /** Owner 10-12 ("a hot key to flip perspectives on the pitch ... Player seats should remain the same"): the COACH'S
+   *  own 180 degree view flip (settings.pitchFlipped), in play, spectate and replay, in both orientations. It is XORed
+   *  with the automatic drive-north flip above, so a press always turns the view the coach is looking at around. Pure
+   *  view state: the model, the seats and every command keep their coordinates (worldToSquare un-flips the click).
+   *  `userPitchFlip` is what the coach ASKED for (the setting); `userPitchFlipApplied` is what the projection carries:
+   *  they differ only while a press waits for the pitch to come to rest (requestProjectionChange). */
+  private userPitchFlip = false;
+  private userPitchFlipApplied = false;
+  /** An orientation the coach chose in Settings that is waiting for the pitch to come to rest; null = none. */
+  private pendingOrientation: Orientation | null = null;
+  /** The ticker callback that watches for the quiet moment. It exists ONLY while a view change is waiting. */
+  private projectionLatchTick: (() => void) | null = null;
+  /** Where the resting mouse last hovered (canvas pixels; null once it left the canvas). A view change moves a
+   *  different square under a pointer that did not move, so the hover is re-read there. */
+  private lastHoverOffset: { x: number; y: number } | null = null;
+  /** What the shared projection must carry for THIS renderer: the automatic flip XOR the coach's APPLIED flip. */
+  private effectiveFieldFlip(): boolean {
+    return this.fieldFlipMode !== this.userPitchFlipApplied;
+  }
   /** @internal init seam (also the unit-test hook): stamp THIS renderer's flip onto the shared projection. */
   private adoptFieldFlipState(): void {
-    setFieldFlip(this.fieldFlipMode);
+    setFieldFlip(this.effectiveFieldFlip());
   }
 
   init(host: HTMLElement): Promise<void> {
@@ -5298,17 +5411,9 @@ export class PitchRenderer {
         /* no bundled ball sprite — the drawn dot is used */
       }
       if (!this.initActive(generation, app)) return;
-      // Original fantasy-sports skybox behind the stadium bowl (replaces the
-      // procedural night sky when present).
-      try {
-        const bd = await Assets.load<Texture>(new URL(`../assets/fantasy-skybox.png`, import.meta.url).href);
-        if (!this.initActive(generation, app)) return;
-        bd.source.scaleMode = 'linear';
-        this.backdropTexture = bd;
-        this.drawBackdrop(); // redraw now that the image is available
-      } catch {
-        /* no bundled backdrop — the procedural night sky is used */
-      }
+      // Original fantasy-sports skybox behind the stadium bowl (replaces the procedural night sky when present). Owner
+      // 10-12: the chosen backdrop (the skybox by default, so the first frame is unchanged); a failed load keeps the sky.
+      await this.loadBackdrop();
       if (!this.initActive(generation, app)) return;
       // FUMBBL checker discs (upstream "abstract" icon mode — UI-5): team
       // counters with the player number, normal/large/small variants
@@ -5503,6 +5608,8 @@ export class PitchRenderer {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.dropProjectionLatch(); // a view change still waiting for a quiet pitch goes with the renderer
+    this.pageListenerCleanup?.(); // and the window / document listeners of the pressed-pointer tracker
     PitchRenderer.instances.delete(this);
     this.stopLetteringFontListener();
     this.pruneLettering();
@@ -5521,6 +5628,9 @@ export class PitchRenderer {
     this.classicIconLease?.release();
     this.classicIconLease = null;
     this.initGeneration++;
+    this.backdropLoadGeneration++;
+    this.backdropTexture = null;
+    this.releaseUnusedBackdrops(true);
     const app = this.app;
     this.clearCanvasInteractionState(app?.canvas ?? null);
     for (const cleanup of this.canvasListenerCleanup.splice(0)) cleanup();
@@ -5881,6 +5991,7 @@ export class PitchRenderer {
     this.clearActionDice();
     this.liveSkillAssets.clear();
     for (const c of this.effectsLayer.removeChildren()) c.destroy({ children: true });
+    this.effectAnchors.clear(); // the nodes and their projection wrappers went with the layer
     this.signTextNodes = []; // the persistent pre-game sign texts live in effectsLayer
     this.stadiumDrawKey = null; // P3: the memoised stadium output is now incomplete (signs gone) → next setGame redraws
     this.trailNumberNodes = []; // persistent trail numbers live in effectsLayer too
@@ -6548,7 +6659,8 @@ export class PitchRenderer {
         // B9-16 (owner): mirror the trapdoor on the AWAY half so its perspective
         // faces that end (like the 180° away logo). N-S mirrors horizontally,
         // E-W mirrors vertically. Home half keeps the native art.
-        if (tx >= PITCH_COLS / 2) {
+        // Owner 10-12 (pitch view flip): "that end" is a SCREEN end, so the mirror follows the 180 degree flip.
+        if ((tx >= PITCH_COLS / 2) !== isFieldFlip()) {
           if (ew) icon.scale.y = -Math.abs(icon.scale.y);
           else icon.scale.x = -Math.abs(icon.scale.x);
         }
@@ -7190,6 +7302,7 @@ export class PitchRenderer {
         sprite.zIndex = this.depthZ(x, y) + 3;
         sprite.label = 'blockResultStamp';
         this.effectsLayer.addChild(sprite);
+        this.anchorEffect(sprite, x, y, true, true);
         nodes.push(sprite);
       }
       if (nodes.length === 0) return;
@@ -7233,6 +7346,7 @@ export class PitchRenderer {
     ring.position.set(tp.x, anchor.y - 3);
     ring.label = 'placementPulse';
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, ax, ay, false, true, { x: 0, y: -3 }); // placed at (tp.x, anchor.y - 3)
     const start = performance.now();
     const dur = presentationMs(1100);
     const ticker = this.app.ticker;
@@ -7331,6 +7445,7 @@ export class PitchRenderer {
     ring.position.set(anchor.x, chestY);
     ring.zIndex = this.depthZ(x, y) + 4;
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, x, y, true);
     this.flashRings.push({ g: ring, x: anchor.x, y: chestY, scale, start: performance.now(), grow: 1.1, durationMs: presentationMs(650) });
   }
 
@@ -8614,6 +8729,7 @@ export class PitchRenderer {
     // once the move overlay is armed / a waypoint plotted. selectedIsHome from the ACTING player (server-absolute
     // teamHome, not viewer).
     this.drawO66TackleZones();
+    this.drawSpectatorTackleZones(); // owner 10-12: spectate / replay only (the host holds it at 'none' in play)
     // Owner 2026-07-13: BALL & CHAIN aim arrows (drawn on overlayLayer, cleared with it each redraw).
     this.drawBncAim();
     this.drawJumpCrosshairs();
@@ -8876,7 +8992,7 @@ export class PitchRenderer {
     if (this.actionMode === 'pass') {
       this.drawPassTemplate([px, py]);
       const selectedIsHomePass = this.selectedIsHome();
-      this.drawTackleZones(selectedIsHomePass);
+      if (!this.spectatorTackleZoneSurface) this.drawTackleZones(selectedIsHomePass); // spectate / replay: the mode owns zones
       this.drawArmedAction(); // owner 2026-07-04c: pass arrow + chips + interceptor tips
       return;
     }
@@ -8981,8 +9097,9 @@ export class PitchRenderer {
     // tackle zones (Match11/O9). Owner 2026-07-04e: MY player shows the zones
     // that threaten it (the setting, default opposition); an INSPECTED opposition
     // player shows its FRIENDLY zones (its own team's control).
+    // Owner 10-12 (Astra P2): in spectate / replay the quick-bar spectator mode is the only tackle-zone drawing.
     const selectedIsHome = this.game!.teamHome.playerArray.some((p) => p.playerId === this.selectedPlayerId);
-    this.drawTackleZones(selectedIsHome, isActor ? undefined : 'friendly');
+    if (!this.spectatorTackleZoneSurface) this.drawTackleZones(selectedIsHome, isActor ? undefined : 'friendly');
 
     // armed block preview (O2), drawn over everything
     this.drawBlockPreview();
@@ -9463,6 +9580,7 @@ export class PitchRenderer {
     explosion.height = size;
     explosion.zIndex = 100000;
     this.effectsLayer.addChild(explosion);
+    this.anchorEffect(explosion, centre[0], centre[1]);
 
     const finishEffect = this.beginVisualEffect();
     const start = performance.now();
@@ -9493,6 +9611,7 @@ export class PitchRenderer {
     const flash = new Graphics().circle(a.x, a.y - 4, TILE_W * 1.6 * depth).fill({ color: 0xffd08a, alpha: 0.9 });
     flash.zIndex = 100000;
     this.effectsLayer.addChild(flash);
+    this.anchorEffect(flash, centre[0], centre[1]);
     const start = performance.now();
     const life = presentationMs(480);
     const app = this.app;
@@ -9997,6 +10116,16 @@ export class PitchRenderer {
     this.redrawOverlays();
   }
 
+  /** Owner 10-12: `surface` = this view is spectate / replay (the spectator mode owns every tackle-zone drawing);
+   *  `mode` = 'none' | 'home' | 'away' | 'all'. An unknown mode is ignored; redraws only on a change. */
+  setSpectatorTackleZones(surface: boolean, mode: string): void {
+    if (mode !== 'none' && mode !== 'home' && mode !== 'away' && mode !== 'all') return;
+    if (this.spectatorTackleZoneMode === mode && this.spectatorTackleZoneSurface === surface) return;
+    this.spectatorTackleZoneMode = mode;
+    this.spectatorTackleZoneSurface = surface;
+    this.redrawOverlays();
+  }
+
   /**
    * Match11/O9: tackle-zone shading + stacked-malus markers ("−n") on
    * unoccupied squares, relative to the selected player's team. In 'both'
@@ -10090,6 +10219,17 @@ export class PitchRenderer {
     if (!actId) return;
     const selectedIsHome = this.game.teamHome.playerArray.some((player) => player.playerId === actId);
     this.drawTackleZones(selectedIsHome, this.tackleZoneMode);
+  }
+
+  /** Owner 10-12: spectate / replay tackle zones for every tackle-zone-exerting player of the chosen team(s), drawn
+   *  from the DISPLAYED model (this.game: the replay / review checkpoint when scrubbing), whoever's turn it is. Same
+   *  eligibility (tackleZoneCounts: on pitch + hasTackleZones) and shading as play: home is the reference team, so
+   *  home zones take the friendly blue and away zones the opposition amber/red ramp; 'all' keeps drawTackleZones'
+   *  'both' rule (the away shade wins a square both teams cover). */
+  private drawSpectatorTackleZones(): void {
+    const mode = this.spectatorTackleZoneMode;
+    if (mode === 'none' || !this.game) return;
+    this.drawTackleZones(true, mode === 'home' ? 'friendly' : mode === 'away' ? 'opposition' : 'both');
   }
 
   /**
@@ -10895,7 +11035,7 @@ export class PitchRenderer {
       const scale = apothecaryTokenScale(
         isHome,
         (TILE_W * APOTHECARY_STATION_LAYOUT.tokenSizeTiles * ds) / Math.max(this.apothecaryTexture.width, this.apothecaryTexture.height),
-        this.fieldFlipMode,
+        this.effectiveFieldFlip(),
       );
       apo.scale.set(scale.x, scale.y);
       apo.position.set(mid.x, mid.y);
@@ -10989,6 +11129,67 @@ export class PitchRenderer {
       home: { body: COLORS.homeBody, trim: COLORS.homeTrim },
       away: { body: COLORS.awayBody, trim: COLORS.awayTrim },
     };
+  }
+
+  /** Owner 10-12 (Settings -> Backdrop): switch what sits behind the stadium. One texture swap + one redraw, nothing
+   *  per frame. An image loads on first use (then cached); the previous non-default image is released. Safe before
+   *  init: the init load picks the chosen kind up. */
+  setBackdrop(kind: BackdropKind, color?: string): Promise<void> {
+    const nextKind: BackdropKind = kind === 'space' || kind === 'galaxy' || kind === 'parking' || kind === 'color' ? kind : 'skybox';
+    const nextColor = color === undefined ? this.backdropColor : backdropColorNumber(color);
+    if (nextKind === this.backdropKind && nextColor === this.backdropColor) return Promise.resolve();
+    const kindChanged = nextKind !== this.backdropKind;
+    this.backdropKind = nextKind;
+    this.backdropColor = nextColor;
+    if (!kindChanged) { this.drawBackdrop(); return Promise.resolve(); } // a colour tweak: redraw only
+    if (!this.app) return Promise.resolve(); // init loads it
+    return this.loadBackdrop();
+  }
+
+  /** Load (or reuse) the current backdrop image, draw it, release images no longer shown. Null texture = procedural sky. */
+  private async loadBackdrop(): Promise<void> {
+    const kind = this.backdropKind;
+    const generation = ++this.backdropLoadGeneration;
+    let tex: Texture | null = null;
+    if (kind !== 'color') {
+      tex = this.backdropTextures.get(kind) ?? null;
+      if (!tex) {
+        // Hold BEFORE awaiting (once per renderer): a pending acquisition keeps the image from being unloaded.
+        if (!this.backdropHeld.has(kind)) { this.backdropHeld.add(kind); holdBackdrop(kind); }
+        try {
+          tex = await loadBackdropImage(kind);
+          // Linear on purpose: a 4K image fitted to the screen must not be nearest-decimated.
+          tex.source.scaleMode = 'linear';
+        } catch {
+          tex = null; // no backdrop image: the procedural sky is drawn
+        }
+        if (this.destroyed) return; // destroy already dropped every hold, pending ones included
+        if (!this.backdropHeld.has(kind)) {
+          tex = null; // released while loading (the coach moved on): never keep or draw it
+        } else if (tex) {
+          this.backdropTextures.set(kind, tex);
+        } else {
+          this.backdropHeld.delete(kind); // a failed load holds nothing
+          releaseBackdrop(kind);
+        }
+        if (generation !== this.backdropLoadGeneration) { this.releaseUnusedBackdrops(); return; }
+      }
+    }
+    this.backdropTexture = tex;
+    this.drawBackdrop();
+    this.releaseUnusedBackdrops();
+  }
+
+  /** Drop every held image except the chosen one, the one still on screen and the skybox (the default stays decoded,
+   *  as before). `all` (destroy) drops everything. */
+  private releaseUnusedBackdrops(all = false): void {
+    for (const kind of [...this.backdropHeld]) {
+      const tex = this.backdropTextures.get(kind);
+      if (!all && (kind === 'skybox' || kind === this.backdropKind || (tex !== undefined && tex === this.backdropTexture))) continue;
+      this.backdropHeld.delete(kind);
+      this.backdropTextures.delete(kind);
+      releaseBackdrop(kind);
+    }
   }
 
   /** Switches the turf theme (tile theme or a FUMBBL pitch pack) and redraws. */
@@ -12587,9 +12788,11 @@ export class PitchRenderer {
     }
     bolt.zIndex = 100000;
     this.effectsLayer.addChild(bolt);
+    this.anchorEffect(bolt, x, y);
     const flash = new Graphics().circle(a.x, a.y, TILE_W * 0.7 * depth).fill({ color: 0xffffff, alpha: 0.85 });
     flash.zIndex = 99999;
     this.effectsLayer.addChild(flash);
+    this.anchorEffect(flash, x, y);
     const start = performance.now();
     const life = presentationMs(520);
     const app = this.app;
@@ -12851,6 +13054,7 @@ export class PitchRenderer {
     node.visible = false; // the flashRings ticker un-hides at t>=0
     node.zIndex = 60;
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, square[0], square[1]);
     this.flashRings.push({ g: node, x: anchor.x, y: anchor.y, scale, start: performance.now(), grow: 0.3 });
   }
 
@@ -13332,6 +13536,7 @@ export class PitchRenderer {
     g.position.set(tp.x, anchor.y - TILE_H * 0.55 * scale); // token body/centre
     g.zIndex = this.depthZ(x, y) + 70;
     this.effectsLayer.addChild(g);
+    this.anchorEffect(g, x, y, true, true);
     const t0 = performance.now();
     const tick = () => {
       if (g.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -13359,6 +13564,7 @@ export class PitchRenderer {
     node.position.set(tp.x, baseY);
     node.zIndex = this.depthZ(x, y) + 72;
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true, true);
     const t0 = performance.now();
     const tick = () => {
       if (node.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -13437,6 +13643,7 @@ export class PitchRenderer {
     ring.position.set(anchor.x, anchor.y);
     ring.zIndex = this.depthZ(x, y) + 3;
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, x, y, true);
     this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale, start: performance.now(), grow: 0.35, durationMs: pulseMs });
     // Reveal beat ②: THEN the bouncing ▼ arrow (existing bob/timeout lifecycle), armed after
     // the pulse. The record exists from call time so clear() can cancel the pending arrow.
@@ -13444,6 +13651,11 @@ export class PitchRenderer {
       const cue = this.rosterAttentionCue;
       if (!cue || cue.arm !== arm || !this.app) return; // superseded or cleared
       cue.arm = null;
+      // Owner 10-12: the arrow is built after the pulse; it takes the projection as it stands when it appears (the
+      // pitch may have turned in between), never the pixels computed when the cue was requested.
+      const tp = this.tokenPos(x, y);
+      const anchor = squareAnchor(x, y);
+      const scale = depthScale(x, y);
       const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       node.anchor.set(0.5);
       node.scale.set(scale);
@@ -13453,6 +13665,7 @@ export class PitchRenderer {
       node.position.set(tp.x, baseY);
       node.zIndex = this.depthZ(x, y) + 72;
       this.effectsLayer.addChild(node);
+      this.anchorEffect(node, x, y, true, true);
       const t0 = performance.now();
       const tick = () => {
         if (node.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -13509,6 +13722,7 @@ export class PitchRenderer {
       node.position.set(tp.x, baseY);
       node.zIndex = this.depthZ(x, y) + 72;
       this.effectsLayer.addChild(node);
+      this.anchorEffect(node, x, y, true, true);
       const t0 = performance.now();
       const tick = () => {
         if (node.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -13537,6 +13751,7 @@ export class PitchRenderer {
       ring.position.set(anchor.x, anchor.y);
       ring.zIndex = this.depthZ(x, y) + 3;
       this.effectsLayer.addChild(ring);
+      this.anchorEffect(ring, x, y, true);
       this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale: depthScale(x, y), start: performance.now(), grow: 0.35, durationMs: 600 });
     }
     cue.pulse = this.scheduleTimer(() => { if (this.unactivatedCues === cue) { cue.pulse = null; this.pulseUnactivatedCues(); } }, PitchRenderer.UNACTIVATED_PULSE_MS);
@@ -13817,6 +14032,7 @@ export class PitchRenderer {
     ring.position.set(anchor.x, anchor.y);
     ring.zIndex = this.depthZ(x, y) + 3;
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, x, y, true);
     this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale, start: performance.now() });
   }
 
@@ -13987,6 +14203,7 @@ export class PitchRenderer {
     ring.position.set(anchor.x, anchor.y);
     ring.zIndex = this.depthZ(x, y) + 3;
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, x, y, true);
     this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale, start: performance.now(), grow: 0.35, durationMs: 600 });
   }
 
@@ -14004,6 +14221,7 @@ export class PitchRenderer {
     ring.position.set(anchor.x, anchor.y);
     ring.zIndex = this.depthZ(x, y) + 3;
     this.effectsLayer.addChild(ring);
+    this.anchorEffect(ring, x, y, true);
     this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale, start: performance.now(), grow: 0.6 });
   }
 
@@ -14274,6 +14492,7 @@ export class PitchRenderer {
     die.alpha = 0;
     die.zIndex = this.depthZ(x, y) + 60; // above tokens + markers
     this.effectsLayer.addChild(die);
+    this.anchorEffect(die, x, y, true);
     const record: ActionDieRecord = {
       node: die,
       baseScale: scale,
@@ -14542,6 +14761,7 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 70; // above the action die
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true);
     this.rollModals.push({ node, start: performance.now(), baseY });
   }
 
@@ -14679,6 +14899,7 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 75; // owner 09-19: above the armour (+60/62) and injury (+70/72) plates — a Stand Firm icon was hidden behind the armour roll
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true, true);
     this.actionDice.push({ node, baseScale: scale * 0.67, start: performance.now() }); // owner 09-07: skill-use pop -33%
   }
 
@@ -14701,6 +14922,7 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 62;
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true, true);
     this.actionDice.push({ node, baseScale: scale, start: performance.now() });
   }
 
@@ -14757,6 +14979,7 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 60;
     this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true, true);
     this.actionDice.push({ node, baseScale: scale, start: performance.now(), armour: true });
   }
 
@@ -15105,6 +15328,7 @@ export class PitchRenderer {
           label.scale.set(scale);
           label.zIndex = 100001;
           this.effectsLayer.addChild(label);
+          this.rockMissLabelUntil = performance.now() + presentationMs(1000); // owner 10-12: a view change waits for the label
           this.scheduleTimer(() => { if (!label.destroyed) label.destroy(); }, presentationMs(1000));
         } else {
           this.spawnSmokePuff(target.x, target.y, scale); // impact dust
@@ -15509,7 +15733,8 @@ export class PitchRenderer {
         sprite.alpha = 0.35; // B9-4: 0.26 -> 0.41; owner 09-05: -15% -> 0.35, faded into the turf
         // B8-6: the away logo sits on the north end zone (upside-down from the
         // home-camera perspective) — rotate it 180° to match its side.
-        if (away) sprite.rotation = Math.PI;
+        // Owner 10-12 (pitch view flip): it is the FAR logo that is turned, whichever team's end is far on screen.
+        if (away !== isFieldFlip()) sprite.rotation = Math.PI;
         this.sweetSpotLayer.addChild(sprite);
       }
       // B8-4/B9-4: crosshair mark ON TOP of the logo at 90% opacity (drawn even
@@ -15641,26 +15866,22 @@ export class PitchRenderer {
 
   /** B8-8 (owner): switch the pitch between N-S and E-W orientation. */
   setPitchOrientation(o: Orientation): void {
-    if (getOrientation() === o) return;
-    setOrientation(o);
-    if (!this.app) return;
-    this.drawStadium();
-    this.drawPitch();
-    this.redrawSetupZones();
-    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
-    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
-    // sweet-spot logos + crosshairs are positioned via squareAnchor, so they go
-    // stale on a toggle — re-place them at the new orientation (B8-8)
-    void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
-    this.resetCamera();
-    this.rebaseKickFollowCamera();
-    refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    // Owner 10-12: a pure view change, turned when the pitch is at rest (see requestProjectionChange). Before the
+    // renderer has an app there is nothing on screen: it applies at once, exactly as it always did.
+    if (!this.app) {
+      this.pendingOrientation = null;
+      if (getOrientation() !== o) setOrientation(o);
+      return;
+    }
+    this.pendingOrientation = getOrientation() === o ? null : o;
+    this.requestProjectionChange();
   }
 
   /** Owner 2026-07-04f: toggle the FLAT (non-isometric) projection — far=1 (no
    *  perspective taper) + the off-centre token nudge is dropped (see tokenPos). */
   setFlatMode(flat: boolean): void {
     if (isFlat() === flat) return;
+    const settleStatic = this.app ? this.captureStaticProjection() : null; // owner 10-12: static things follow EVERY change
     setFlat(flat);
     if (!this.app) return;
     this.drawStadium();
@@ -15672,10 +15893,12 @@ export class PitchRenderer {
     this.resetCamera();
     this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    settleStatic?.();
   }
 
   /** Owner 09-09 ("option 3"): uniform figure scale + the softer N-S far edge; same redraw as a flat toggle. */
   setUniformFigures(on: boolean): void {
+    const settleStatic = this.app ? this.captureStaticProjection() : null; // owner 10-12: static things follow EVERY change
     setUniformFigures(on);
     if (!this.app) return;
     this.drawStadium();
@@ -15687,6 +15910,7 @@ export class PitchRenderer {
     this.resetCamera();
     this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    settleStatic?.();
   }
 
   /** Owner 2026-07-06: SPECTATOR drive-north side-swap. Mirrors the whole field
@@ -15695,8 +15919,13 @@ export class PitchRenderer {
    *  Same redraw path as the flat/orientation toggles. */
   setFieldFlipMode(flip: boolean): void {
     this.fieldFlipMode = flip;
-    if (isFieldFlip() === flip) return;
-    setFieldFlip(flip);
+    // Applied AT ONCE, exactly as before the coach's flip existed: the store and the replay / review snapshots feed
+    // it through setGame(), whose own refresh and kick-flight carry are built on the flip being in place when it
+    // returns. Only the value is new: the automatic flip XOR the coach's applied flip.
+    const effective = this.effectiveFieldFlip();
+    if (isFieldFlip() === effective) return;
+    const settleStatic = this.app ? this.captureStaticProjection() : null;
+    setFieldFlip(effective);
     if (!this.app) return;
     this.drawStadium();
     this.drawPitch();
@@ -15707,6 +15936,376 @@ export class PitchRenderer {
     this.resetCamera();
     this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    settleStatic?.();
+  }
+
+  /** Owner 10-12: the coach's own view flip (the `pitchFlip` key / the Settings checkbox). The request is recorded at
+   *  once; the view TURNS at the next quiet moment (requestProjectionChange). Unlike the automatic flip, which resets
+   *  the camera to the default view at a drive boundary, it keeps the coach's zoom and the square under the centre of
+   *  the screen, so the view turns around in place. */
+  setUserPitchFlip(on: boolean): void {
+    this.userPitchFlip = !!on;
+    if (!this.app) {
+      // Nothing is on screen yet (the mount seeds this before init): the projection takes it at once.
+      this.userPitchFlipApplied = this.userPitchFlip;
+      setFieldFlip(this.effectiveFieldFlip());
+      return;
+    }
+    this.requestProjectionChange();
+  }
+  /** What the coach asked for (the setting), applied or not yet. */
+  isUserPitchFlip(): boolean {
+    return this.userPitchFlip;
+  }
+  /** A view change (the coach's flip or an orientation switch) is waiting for the pitch to come to rest. */
+  projectionChangePending(): boolean {
+    return this.pendingOrientation !== null || this.userPitchFlip !== this.userPitchFlipApplied;
+  }
+
+  // ---- Turn the view when the pitch is at rest (owner 10-12; Astra's second review of the pitch view flip) ----------
+  // Re-expressing an animation in a new projection mid-flight is the wrong job: there are too many kinds and each owns
+  // its clock. So the coach's flip and an orientation switch are LATCHED and applied on the first frame nothing is in
+  // flight. No movement code knows about this: at that moment there is no movement. What is on screen then is static
+  // (held dice, trail numerals, rings, cues) and is carried to the new projection by its square.
+
+  /**
+   * Every source of in-flight motion that holds pixels of the current projection, by name; empty = quiet. A view
+   * change waits while any is listed. Static, long-lived things are deliberately NOT here (a held action die, trail
+   * numerals, rings, markers, stamps, a roll-pending step parked on its square, a kick-off ball hanging at its apex).
+   * Read-only: it never touches a clock, a timer or the model. Stamped maps are read by their own clocks, so an
+   * entry no refresh came back to clear cannot keep the pitch "busy" for ever.
+   */
+  projectionBusySources(now = performance.now()): string[] {
+    const busy: string[] = [];
+    // Every token / ball tween: walks, slides, hops, trails, first-stride previews (movementIntent), reconciliation
+    // and post-step corrections, presented steps, leaps and arcs, thrown players, scatters, bounces, pushes,
+    // follow-ups, tricksters, the kick fly-in / descent.
+    if (this.moveTweens.size > 0) busy.push('moveTween');
+    // A preview stride armed or awaiting confirmation / rollback (its rollback timer bounds it). NOT a confirmed
+    // FAILED intent: that is a hold (the token stands on the attempted square while the reroll is offered, redrawn
+    // from its squares by every refresh, see `failedSquare` in refresh()), and nothing in the renderer times it out.
+    if (this.movementIntent && !this.movementIntent.failureConfirmed) busy.push('movementIntent');
+    if (this.reconciliationTimers.size > 0) busy.push('reconciliation');
+    if (this.postStepConvergenceById.size > 0) busy.push('postStepConvergence');
+    if (this.boardReconciliationTimer != null) busy.push('boardReconciliation');
+    for (const path of this.o66MovePath.values()) {
+      if (now - path.start < Math.max(1, path.squares.length - 1) * this.moveStepMs) { busy.push('pathWalk'); break; }
+    }
+    for (const throwMate of this.pendingTtmThrow.values()) {
+      if (now - throwMate.start < presentationMs(TTM_THROW_MS)) { busy.push('thrownPlayer'); break; }
+    }
+    for (const scatter of this.pendingScatter.values()) {
+      if (now - scatter.start < Math.max(0, scatter.path.length - 1) * presentationMs(150)) { busy.push('scatter'); break; }
+    }
+    for (const trickster of this.pendingTrickster.values()) {
+      if (now - trickster.start < presentationMs(320)) { busy.push('trickster'); break; }
+    }
+    // pass / hail mary / punt / throw-in: the dedicated flight ball, or a throw accepted and not yet in the air
+    const pendingThrow = this.pendingBallThrow;
+    if (this.passBallFlight || (pendingThrow && now - pendingThrow.start < pendingThrow.durationMs)) busy.push('ballFlight');
+    if (this.ballOutFlight) busy.push('ballOut'); // the ball hopping into the stands + its stamp
+    // the kick-off ball in the air (not while it HANGS at the apex for a kick-off event: that is a hold, redrawn from its square)
+    if (this.kickFlightPending != null && this.kickApexAim == null) busy.push('kickFlight');
+    if (this.kickFollow) busy.push('kickFollowCamera');
+    // self-contained effects with moving parts on their own ticker: bomb / rock / keg projectiles, the crowd rock,
+    // the apothecary escort, the crowd surf, explosions and their delayed smoke, zap bolts, push-arrow fades,
+    // crowd overlays, block-result stamp pops
+    if (this.effectTickerCleanups.size > 0) busy.push('effectTicker');
+    if (this.activeVisualEffects > 0) busy.push('visualEffect');
+    if (this.groundBallHold) busy.push('groundBallHold'); // a picked-up ball waiting on the ground for its walker
+    if (this.rosterAttentionCue?.arm != null) busy.push('delayedLocateArrow'); // a cue arrow still to be built
+    // short-lived things that are neither redrawn nor carried, each by its own clock (it cannot block for ever):
+    const flashMs = presentationMs(600);
+    if (this.flashRings.some((flash) => !flash.square && !this.effectAnchors.has(flash.g) && !flash.g.destroyed
+      && now - flash.start < (flash.durationMs ?? flashMs))) busy.push('flashRing'); // knock-down / stun ring, rock impact ring
+    if (now < this.rockMissLabelUntil) busy.push('rockMissLabel');
+    const fadeMs = this.movementOverlayFadeMs();
+    for (const fade of this.movementOverlayFades.values()) {
+      if (!fade.entry.node.destroyed && now - fade.start < fadeMs) { busy.push('reachFade'); break; } // fading reach shading / dice
+    }
+    // a gesture in progress: its release must resolve in the projection it was pressed in
+    // any button of any pointer down on the pitch canvas (left, right, middle, pen barrel / eraser, touch), and the
+    // context menu a right release is about to open (see trackPressedPointers)
+    if (this.pressedPointers.size > 0 || now < this.contextMenuDueUntil) busy.push('pointerGesture');
+    const hostGesture = this.hostGestureActive?.() ?? null; // DOM drags that resolve to a pitch square
+    if (hostGesture) busy.push(`hostGesture:${hostGesture}`);
+    // the keys / stick glide, read where the camera is actually moved: its VELOCITY (the glide ticker zeroes a
+    // velocity under 0.05 px, so a stick resting just outside its deadzone moves nothing and blocks nothing)
+    if (this.panVel.x !== 0 || this.panVel.y !== 0) busy.push('cameraPan');
+    if (this.cinematic) busy.push('cinematic');
+    if (this.cameraFocus) busy.push('cameraFocus');
+    if (this.crosshairFollow) busy.push('crosshairFollow');
+    return busy;
+  }
+  /** The host's own gestures that end on a pitch square (a setup drag from the dugout, a telestrator stroke): the
+   *  name of the one in progress, or null. While one is, a view change waits for its release. */
+  hostGestureActive: (() => string | null) | null = null;
+  /**
+   * Which pointers hold a button down, for projectionBusySources only (taps, drags and pans keep their own bookkeeping
+   * in `pointers`). ONE RULE, driven by `buttons`: an entry for pointer X exists iff the most recent pointer event seen
+   * for X anywhere on the page reported a button down (`buttons !== 0`) or was a pointerdown. The page's listeners
+   * (window, capture phase) own it, so a release over a DOM overlay or outside the canvas is seen like any other:
+   * every event with `buttons === 0` for X removes X; pointercancel removes X; got / lostpointercapture change nothing
+   * by themselves (losing capture is not a release: the button may still be down); a mouse event with `buttons === 0`
+   * removes the mouse entries; window blur and the page being hidden remove all; destroy removes all. Value = pointer type.
+   */
+  private pressedPointers = new Map<number, string>();
+  /** When the last pointer event of any kind reached the page (the safety net in requestProjectionChange reads it). */
+  private lastPointerEventAt = 0;
+  /** A right release is followed by its `contextmenu` event in the same task; until it arrives (or 300 ms pass) the
+   *  press still counts, so the menu resolves in the projection the button went down in. */
+  private contextMenuDueUntil = 0;
+  private trackPressedPointers(canvas: HTMLCanvasElement): void {
+    // The page: the window, capture phase. (Without a DOM, as in the unit rigs, the canvas stands in for it.)
+    const page: EventTarget = typeof window !== 'undefined' ? window : canvas;
+    this.pageListenerCleanup?.();
+    const stamp = (): void => { this.lastPointerEventAt = performance.now(); };
+    const onPointer = (raw: Event): void => {
+      const event = raw as PointerEvent;
+      stamp();
+      if (event.type === 'gotpointercapture' || event.type === 'lostpointercapture') return; // not a press, not a release
+      if (event.type === 'pointercancel') { this.pressedPointers.delete(event.pointerId); return; }
+      if (event.type === 'pointerdown' || (event.buttons ?? 0) !== 0) {
+        this.pressedPointers.set(event.pointerId, event.pointerType || 'mouse');
+        return;
+      }
+      if (event.type === 'pointerup' && event.button === 2 && this.pressedPointers.has(event.pointerId)) {
+        this.contextMenuDueUntil = performance.now() + 300;
+      }
+      this.pressedPointers.delete(event.pointerId);
+    };
+    const onMouse = (raw: Event): void => {
+      if (((raw as MouseEvent).buttons ?? 0) !== 0) return;
+      for (const [id, kind] of [...this.pressedPointers]) if (kind === 'mouse') this.pressedPointers.delete(id);
+    };
+    const onContextMenu = (): void => { this.contextMenuDueUntil = 0; }; // the menu is resolving now
+    const lost = (): void => { this.pressedPointers.clear(); this.contextMenuDueUntil = 0; };
+    const hidden = (): void => { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') lost(); };
+    const pointerTypes = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerover', 'pointerout',
+      'pointerenter', 'pointerleave', 'gotpointercapture', 'lostpointercapture'] as const;
+    const mouseTypes = ['mousedown', 'mousemove', 'mouseup', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave'] as const;
+    for (const type of pointerTypes) page.addEventListener(type, onPointer, true);
+    for (const type of mouseTypes) page.addEventListener(type, onMouse, true);
+    page.addEventListener('contextmenu', onContextMenu, true);
+    page.addEventListener('blur', lost);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', hidden);
+    this.pageListenerCleanup = () => {
+      this.pageListenerCleanup = null;
+      for (const type of pointerTypes) page.removeEventListener(type, onPointer, true);
+      for (const type of mouseTypes) page.removeEventListener(type, onMouse, true);
+      page.removeEventListener('contextmenu', onContextMenu, true);
+      page.removeEventListener('blur', lost);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', hidden);
+      lost();
+    };
+  }
+  /** The window / document listeners of trackPressedPointers (removed on destroy and before a re-attach). */
+  private pageListenerCleanup: (() => void) | null = null;
+  /** The crowd rock's MISS label outlives the rock's ticker by a second on pixels of the projection it was built in. */
+  private rockMissLabelUntil = 0;
+  projectionQuiet(now = performance.now()): boolean {
+    return this.projectionBusySources(now).length === 0;
+  }
+
+  /** Apply the waiting view change now if the pitch is quiet; otherwise watch for the quiet moment from the app's
+   *  own ticker. The watcher is added only while something is waiting and removed the moment it is applied,
+   *  cancelled (the coach pressed again) or the renderer goes away: no timer, no interval, nothing when idle. */
+  private requestProjectionChange(): void {
+    if (!this.app || this.destroyed || !this.projectionChangePending()) { this.dropProjectionLatch(); return; }
+    const now = performance.now();
+    const busy = this.projectionBusySources(now);
+    if (busy.length === 0) {
+      this.dropProjectionLatch();
+      this.applyPendingProjection();
+      return;
+    }
+    // SAFETY NET for a gesture flag that got stuck (a release the page never saw and none of the exits caught): once
+    // the change has waited PROJECTION_STALE_GESTURE_WAIT_MS, if the ONLY things still busy are gestures and no
+    // pointer event of any kind has reached the page for PROJECTION_STALE_GESTURE_IDLE_MS, the gesture entries are
+    // treated as stale, cleared, and the change is applied. It never fires while any motion source is busy, nor
+    // while pointer events are still arriving. (A button really held perfectly still for those 2 s, more than 5 s
+    // after the request, is indistinguishable from a stuck flag: the view then turns under it.)
+    // IFRAMES (accepted residual, owner 10-12): the page cannot see pointer events inside a child frame, so a press
+    // carried into an iframe looks idle here and the net can fire under it. That cannot mis-target anything: a release
+    // inside the iframe is dispatched to the iframe's own document. The canvas listeners (attachCamera) and the host's
+    // setup-drag / telestrator listeners (window and SVG of THIS document) never receive it, so no tap, drop or stroke
+    // point is resolved from it. (A press the canvas has CAPTURED is not "in" the iframe: captured events keep coming
+    // to the canvas, so they keep the net from firing.) The stale entry heals on the next event the page sees.
+    if (this.projectionPendingSince !== null && now - this.projectionPendingSince > PitchRenderer.PROJECTION_STALE_GESTURE_WAIT_MS
+      && now - this.lastPointerEventAt > PitchRenderer.PROJECTION_STALE_GESTURE_IDLE_MS
+      && busy.every((source) => source === 'pointerGesture' || source.startsWith('hostGesture:'))) {
+      this.pressedPointers.clear();
+      this.contextMenuDueUntil = 0;
+      this.dropProjectionLatch();
+      this.applyPendingProjection();
+      return;
+    }
+    if (this.projectionLatchTick) return;
+    this.projectionPendingSince = now;
+    const app = this.app;
+    const tick = (): void => {
+      if (this.projectionLatchTick !== tick) { app.ticker.remove(tick); return; }
+      this.requestProjectionChange();
+    };
+    this.projectionLatchTick = tick;
+    app.ticker.add(tick);
+  }
+  static readonly PROJECTION_STALE_GESTURE_WAIT_MS = 5000;
+  static readonly PROJECTION_STALE_GESTURE_IDLE_MS = 2000;
+  /** When the waiting view change started waiting (null = nothing is waiting). */
+  private projectionPendingSince: number | null = null;
+  private dropProjectionLatch(): void {
+    const tick = this.projectionLatchTick;
+    this.projectionLatchTick = null;
+    this.projectionPendingSince = null;
+    if (tick) this.app?.ticker.remove(tick);
+  }
+
+  /** The latched change, at a quiet moment: the same redraw the projection setters always ran, once, for the
+   *  orientation and / or the coach's flip together. */
+  private applyPendingProjection(): void {
+    if (!this.app) return;
+    const orientation = this.pendingOrientation;
+    this.pendingOrientation = null;
+    const flipChanged = this.userPitchFlip !== this.userPitchFlipApplied;
+    this.userPitchFlipApplied = this.userPitchFlip;
+    const flip = this.effectiveFieldFlip();
+    if ((orientation === null || orientation === getOrientation()) && isFieldFlip() === flip) return;
+    // The coach's flip alone turns the view in place: keep the zoom and the square under the screen centre (read
+    // through the OLD projection; clamped when it lies off the pitch). An orientation switch resets the camera, as ever.
+    let keep: { square: [number, number]; scale: number } | null = null;
+    if (flipChanged && orientation === null) {
+      const scale = this.world.scale.x || 1;
+      const [sx, sy] = worldToSquare(
+        (this.app.screen.width / 2 - this.world.position.x) / scale,
+        (this.app.screen.height / 2 - this.world.position.y) / scale,
+      );
+      keep = { square: [Math.min(PITCH_COLS - 1, Math.max(0, sx)), Math.min(PITCH_ROWS - 1, Math.max(0, sy))], scale };
+    }
+    const settleStatic = this.captureStaticProjection();
+    if (orientation !== null) setOrientation(orientation);
+    setFieldFlip(flip);
+    this.drawStadium();
+    this.drawPitch();
+    this.redrawSetupZones();
+    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
+    this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
+    // sweet-spot logos + crosshairs are positioned via squareAnchor, so they go
+    // stale on a toggle — re-place them at the new orientation (B8-8)
+    void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
+    this.resetCamera();
+    if (keep) {
+      // resetCamera refreshed the fit reference and the clamp box; put the coach's zoom and square back.
+      const anchor = squareAnchor(keep.square[0], keep.square[1]);
+      this.world.scale.set(keep.scale);
+      this.updateOverlayScales();
+      this.world.position.set(this.app.screen.width / 2 - anchor.x * keep.scale, this.app.screen.height / 2 - anchor.y * keep.scale);
+      this.clampCamera();
+    }
+    this.rebaseKickFollowCamera();
+    refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    settleStatic();
+  }
+
+  // ---- static things that are on screen when the view turns ---------------------------------------------------------
+
+  /** Fired after a flip / orientation change with what the host needs to move world-space drawings it owns (the
+   *  telestrator): the projection keys before and after, the old projection's inverse (world pixel -> ground point in
+   *  game coordinates) and the new projection (ground point -> world pixel). */
+  onProjectionChange: ((change: {
+    fromKey: string; toKey: string;
+    toGround: (worldX: number, worldY: number) => { x: number; y: number };
+    fromGround: (gameX: number, gameY: number) => { x: number; y: number };
+  }) => void) | null = null;
+
+  /** Effects-layer nodes that belong to ONE square and are not redrawn by a refresh (held dice, roll tags, trail
+   *  numerals and echoes, rings, cues, stamps): the square, and where its anchor was drawn when the node was built.
+   *  When the view turns, the node is put inside a wrapper container that carries those pixels to where the square is
+   *  drawn now, so the node's own ticker / hold / fade keeps writing the pixels it always wrote. The wrapper takes
+   *  the node's place in the layer with the node's own zIndex (the trail band, the dice band ... are untouched) and
+   *  is destroyed with the node. */
+  private effectAnchors = new Map<Container, {
+    square: [number, number]; origin: { x: number; y: number }; scale: number;
+    /** How the node's zIndex was built: `depthZ(square) + band` (true) or a fixed band (false, e.g. the trail). */
+    depthOrdered: boolean; depthZ: number;
+    /** The node was placed from `tokenPos(square)` (a cue on a token: crosshair, arrows, stamps, armour roll), whose
+     *  sideways lean depends on the projection; false = from the square's own anchor. */
+    tokenMounted: boolean;
+    /** A constant pixel offset from the anchor that the builder does NOT scale with depth (a pulse 3 px above the
+     *  token's feet): it is part of the anchor, so the carry moves it but never scales it. */
+    fixed: { x: number; y: number }; wrapper: Container | null;
+  }>();
+  /** `depthOrdered`: the node's zIndex is `this.depthZ(x, y) + band`. After a turn its wrapper sorts at the square's
+   *  NEW depth + the same band, i.e. exactly where a freshly built effect on that square sorts; a fixed-band node
+   *  (the trail numerals, the over-everything flashes) keeps its band as it is. */
+  private anchorEffect<T extends Container>(node: T, x: number, y: number, depthOrdered = false, tokenMounted = false, fixed = { x: 0, y: 0 }): T {
+    // `tokenMounted`: the anchor is where tokenPos() puts a token on this square NOW, and after a change where it
+    // puts one THEN, so a carried cue sits exactly where a freshly built one would.
+    const base = tokenMounted ? this.tokenPos(x, y) : extPoint(x + 0.5, y + 0.5);
+    const origin = { x: base.x + fixed.x, y: base.y + fixed.y };
+    this.effectAnchors.set(node, { square: [x, y], origin, scale: depthScale(x, y) || 1, depthOrdered, depthZ: depthZKey(x, y), tokenMounted, fixed, wrapper: null });
+    node.once('destroyed', () => this.dropEffectAnchor(node));
+    return node;
+  }
+  private dropEffectAnchor(node: Container): void {
+    const wrapper = this.effectAnchors.get(node)?.wrapper;
+    this.effectAnchors.delete(node);
+    if (wrapper && !wrapper.destroyed && wrapper.children.length === 0) {
+      wrapper.parent?.removeChild(wrapper);
+      wrapper.destroy();
+    }
+  }
+  private reprojectAnchoredEffects(): void {
+    for (const [node, rec] of [...this.effectAnchors]) {
+      if (node.destroyed) { this.dropEffectAnchor(node); continue; }
+      const base = rec.tokenMounted ? this.tokenPos(rec.square[0], rec.square[1]) : extPoint(rec.square[0] + 0.5, rec.square[1] + 0.5);
+      const at = { x: base.x + rec.fixed.x, y: base.y + rec.fixed.y };
+      const s = (depthScale(rec.square[0], rec.square[1]) || 1) / rec.scale;
+      let wrapper = rec.wrapper;
+      if (!wrapper || wrapper.destroyed) {
+        const parent = node.parent;
+        const identity = Math.abs(at.x - rec.origin.x) < 1e-6 && Math.abs(at.y - rec.origin.y) < 1e-6 && Math.abs(s - 1) < 1e-9;
+        if (identity || !parent) continue;
+        wrapper = new Container();
+        wrapper.label = 'projectionAnchor';
+        parent.addChildAt(wrapper, parent.getChildIndex(node));
+        wrapper.addChild(node);
+        rec.wrapper = wrapper;
+      }
+      // A fixed band stays exactly as it is; a depth-ordered effect sorts as a fresh one on this square would.
+      wrapper.zIndex = rec.depthOrdered ? node.zIndex - rec.depthZ + depthZKey(rec.square[0], rec.square[1]) : node.zIndex;
+      wrapper.scale.set(s);
+      wrapper.position.set(at.x - s * rec.origin.x, at.y - s * rec.origin.y);
+    }
+  }
+
+  /** The view as it is DRAWN now (not what a waiting request asked for): the orientation, and whether the pitch is
+   *  turned around (the automatic flip XOR the coach's applied flip). */
+  appliedProjection(): { orientation: Orientation; flipped: boolean } {
+    return { orientation: getOrientation(), flipped: this.effectiveFieldFlip() };
+  }
+  /** Fired after every projection change that reached the screen, for DOM that depends on which way the pitch faces. */
+  onProjectionApplied: ((view: { orientation: Orientation; flipped: boolean }) => void) | null = null;
+
+  /** Call BEFORE the projection changes; the returned function, called after the redraw, carries the static things:
+   *  anchored effects, the host's world-space drawings, and the hover under a pointer that did not move. */
+  private captureStaticProjection(): () => void {
+    const fromKey = geometryStateKey();
+    const toGround = projectionInverse();
+    return () => {
+      this.reprojectAnchoredEffects();
+      this.onProjectionChange?.({ fromKey, toKey: geometryStateKey(), toGround, fromGround: (gameX, gameY) => extPoint(gameX, gameY) });
+      this.onProjectionApplied?.(this.appliedProjection());
+      // The pointer did not move but the pitch under it did: hover what is under it NOW (marker, tips, the square a
+      // hover-driven surface reads), exactly as a mouse nudge would. The pad crosshair re-hovers its own target.
+      const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
+      if (!canvas) return;
+      if (this.virtualPointerActive) {
+        if (this.crosshairTarget) this.rehoverVirtual(canvas, this.crosshairTarget);
+      } else if (this.lastHoverOffset && this.pointers.size === 0) {
+        this.hoverAt(canvas, this.lastHoverOffset.x, this.lastHoverOffset.y);
+      }
+    };
   }
 
   private facingGeometry(): FacingGeometry {
@@ -15903,6 +16502,14 @@ export class PitchRenderer {
     for (const child of this.backdropLayer.removeChildren()) child.destroy({ children: true });
     const w = this.app.screen.width;
     const h = this.app.screen.height;
+    // Owner 10-12: a plain colour is one full-screen rect on this layer (under the stands, apron and 3D stadium, like
+    // the images), so it also replaces the procedural-sky fallback; the clear colour is left alone.
+    if (this.backdropKind === 'color') {
+      const g = new Graphics();
+      g.rect(0, 0, w, h).fill(this.backdropColor);
+      this.backdropLayer.addChild(g);
+      return;
+    }
     // Original fantasy-sports skybox, cover-fitted to the
     // viewport (fills the screen, preserves aspect, centered) behind the stadium.
     if (this.backdropTexture) {
@@ -16710,7 +17317,9 @@ export class PitchRenderer {
         const bandH = Math.max(...by) - Math.min(...by);
         td.scale.set(Math.min((bandW * 0.95) / fit.width, (bandH * 0.85) / fit.height, bandH / fit.ink));
         // owner 2026-07-02: south text rotated 180° (reads from the far LOS).
-        if (endX === 0) td.angle = 180;
+        // Owner 10-12 (pitch view flip): the turned text is the NEAR (screen-bottom) end zone's, whichever team's it
+        // is, so a flipped view reads exactly like an unflipped one. (E-W follows the flip through extPoint above.)
+        if ((endX === 0) !== isFieldFlip()) td.angle = 180;
         const c = squareAnchor(endX, Math.floor(PITCH_ROWS / 2));
         td.position.set(c.x, c.y);
       }
@@ -17881,6 +18490,7 @@ export class PitchRenderer {
     echo.position.set(anchor.x, anchor.y);
     echo.zIndex = TRAIL_ECHO_Z; // item1 scope-add: strictly BELOW the trail number (see TRAIL_NUMBER_Z)
     this.effectsLayer.addChild(echo);
+    this.anchorEffect(echo, sx, sy);
     this.flashRings.push({ g: echo, x: anchor.x, y: anchor.y, scale: depthScale(sx, sy), start: performance.now(), grow: 0 });
   }
 
@@ -17899,6 +18509,7 @@ export class PitchRenderer {
     label.scale.set(depthScale(sx, sy));
     label.zIndex = TRAIL_NUMBER_Z; // item1 scope-add: the digit is never occluded by a later step's echo
     this.effectsLayer.addChild(label);
+    this.anchorEffect(label, sx, sy, false, false, { x: 0, y: -3 }); // placed at (anchor.x, anchor.y - 3)
     this.trailNumberNodes.push({ label, sq: [sx, sy] }); // persistent — NOT flashRings (no fade); sq drives the #194 toggle
   }
 
@@ -19965,6 +20576,7 @@ export class PitchRenderer {
   // --- camera: wheel zoom, drag pan, two-pointer pinch (App3) ---
 
   private attachCamera(canvas: HTMLCanvasElement): void {
+    this.trackPressedPointers(canvas); // owner 10-12: which pointers hold a button down (a view change waits for them)
     this.listenCanvas(canvas, 'wheel', (event) => {
       event.preventDefault();
       // Owner 09-25 (akindsir: "at 2x/4x it won't let me move the camera"): the director's cinematic zooms are
@@ -20013,11 +20625,11 @@ export class PitchRenderer {
         // Off-pitch reserve drags and every unmodified setup drag retain their existing callback path.
         if (!shiftAnnotation) {
           const dh = this.dugoutHits.find((h) => Math.hypot(h.x - wx, h.y - wy) <= h.r);
-          if (dh) { this.onDugoutSetupDragStart(dh.playerId, event.clientX, event.clientY); return; }
+          if (dh) { this.onDugoutSetupDragStart(dh.playerId, event.clientX, event.clientY, event.pointerId); return; }
           // Owner 2026-07-14 (setup overhaul #3): a pointerdown on a PLACED on-pitch player also starts a
           // drag-to-move (same callback); a stationary release is routed back to select/swap by the host.
           const pid = this.playersBySquare.get(`${sx},${sy}`);
-          if (pid) { this.onDugoutSetupDragStart(pid, event.clientX, event.clientY); return; }
+          if (pid) { this.onDugoutSetupDragStart(pid, event.clientX, event.clientY, event.pointerId); return; }
         }
       }
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -20039,6 +20651,7 @@ export class PitchRenderer {
       // Astra P3-5: a real move takes hover back BEFORE hovering, so the activeInput flip that follows
       // (endVirtualPointer) finds nothing to wipe.
       if (this.virtualPointerActive && !syntheticMove) this.virtualPointerActive = false;
+      if (this.pointers.size === 0 && !(this.virtualPointerActive && syntheticMove)) this.lastHoverOffset = { x: event.offsetX, y: event.offsetY };
       if (this.pointers.size === 0 && !(this.virtualPointerActive && syntheticMove)) this.hoverAt(canvas, event.offsetX, event.offsetY);
       if (!this.pointers.has(event.pointerId)) return;
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -20084,6 +20697,7 @@ export class PitchRenderer {
     // Owner 10-10: no browser autoscroll from a middle press on the pitch.
     this.listenCanvas(canvas, 'mousedown', (event) => { if (event.button === 1 && this.onMiddleClick) event.preventDefault(); }); // only with a host on the hook (Astra 10-10)
     const clearPointerHover = () => {
+      this.lastHoverOffset = null;
       if (this.virtualPointerActive) return; // the pad crosshair owns hover (a resting mouse leaving the canvas)
       this.lastHoverSquare = null;
       this.clearHoverSquareMarker();
@@ -20348,6 +20962,9 @@ export class PitchRenderer {
         return;
       }
       const [sx, sy] = worldToSquare(worldX, worldY);
+      // PRE-EXISTING, by design (pinned 10-12): a tap resolves through the OCCUPANCY MAP of the model, not through
+      // where a token is drawn. A token mid-slide that has not yet crossed into its destination square is drawn over
+      // the square it left; a tap on it there finds no player (the model already has it one square on). Unchanged.
       const playerId = this.playersBySquare.get(`${sx},${sy}`);
       if (!playerId) this.onInertTileClick?.(sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null);
       if (playerId) {

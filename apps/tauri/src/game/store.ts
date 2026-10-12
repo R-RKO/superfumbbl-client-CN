@@ -41,6 +41,7 @@ import { serverPassRollTruth, type PassReRollResult, type ServerPassRollTruth, c
 import { inferStandingRerollsFromReplay } from './standingRerollProjection';
 import { reduceEndGameHud } from './endGameHudProjection';
 import { reduceDriveProjection, type DriveProjection } from './driveProjection';
+import { spectatorFieldFlip, spectatorFixedFlip, viewerCoachName, viewerSide } from './spectatorView';
 import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, type BlitzProjection } from './blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
 import { computed, customRef, nextTick, reactive, shallowRef, triggerRef, watch } from 'vue';
@@ -1319,6 +1320,16 @@ const legacyState = reactive({
   apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned'; text: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
+/** Owner 10-11: the automatic (spectator / replay / review) field flip under Settings > Spectator and replay view.
+ *  'drive' = !offenseIsHome, exactly the value before the setting existed. Play mode never reaches here. */
+function automaticFieldFlip(offenseIsHome: boolean, teams: Pick<GameJson, 'teamHome' | 'teamAway'> | null | undefined): boolean {
+  return spectatorFieldFlip(settings.spectatorView, offenseIsHome, viewerSide(teams, viewerCoachName(settings)));
+}
+/** The automatic field flip of a published review / replay position. Read fresh on every access (never cached with
+ *  the position's HUD) so a change of the setting mid-review turns the view at once, like a drive change. */
+function publishedFieldFlip(position: SpectatorPublishedPosition): boolean {
+  return automaticFieldFlip(position.checkpoint.durableProjection.drive.offenseIsHome, position.checkpoint.model);
+}
 function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof legacyState> {
   const cached = spectatorHudCache.get(position);
   if (cached) return cached;
@@ -1331,7 +1342,6 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     // intentionally unused for this frozen variant; the view renders raw values.
     gameClock: position.checkpoint.clock ? { gameTime: position.checkpoint.clock.gameTime,
       turnTime: position.checkpoint.clock.turnTime, syncAt: 0, frozen: true } : null,
-    fieldFlip: { flip: !p.drive.offenseIsHome, seq },
     activePlayerId: p.board.activePlayerId, playingIsHome: p.board.playingIsHome ?? !!position.checkpoint.model.homePlaying,
     actedPlayers: p.board.actedPlayers, recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds,
     dodgySnackPlayers: p.dodgySnackPlayers, endGame: p.endGame, endGameSettled: passive.endGameSettled,
@@ -1418,6 +1428,8 @@ const state = new Proxy(legacyState, {
       if (key === 'blockPartial' && Object.prototype.hasOwnProperty.call(spectatorTransientState, key)) {
         return Reflect.get(spectatorTransientState, key);
       }
+      // Owner 10-11: the orientation follows Settings > Spectator and replay view, so it is not part of the cached HUD.
+      if (key === 'fieldFlip') return { flip: publishedFieldFlip(position), seq: position.epoch };
       const hud = spectatorHud(position);
       if (Object.prototype.hasOwnProperty.call(hud, key)) return Reflect.get(hud, key);
       if (spectatorTransientKeys.has(key)) {
@@ -17526,14 +17538,51 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
 }
 
 // Owner 2026-07-06: SPECTATOR drive-north flip helpers. Best-effort read of which team is on offense when JOIN mid-game (no kickoff observed): ball carrier's team if held, else first-offense/half rule (home receives first drive of first half iff homeFirstOffense; swaps at second half); half rule is first guess, self-corrects at next kickoff.
-/** Recompute state.fieldFlip from current drive offense + play mode. Flip is SPECTATOR-ONLY (play mode keeps active/home at bottom), true only when driving team is AWAY (attacks near/south natively, mirror to send drive north). seq bumps only on real change. */
+/** Recompute state.fieldFlip from current drive offense + play mode. Flip is SPECTATOR-ONLY (play mode keeps active/home at bottom), true only when the team to draw at the bottom is AWAY. Under the default 'drive' view that is the driving team being away (attacks near/south natively, mirror to send drive north); owner 10-11: 'home' / 'away' / 'mine' fix it for the game. seq bumps only on real change. */
 function updateFieldFlip(g: GameJson): void {
   visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, [], g);
-  const flip = !play.active && !visibleDriveProjection.offenseIsHome;
+  const flip = !play.active && automaticFieldFlip(visibleDriveProjection.offenseIsHome, g);
   if (flip !== state.fieldFlip.flip) {
     state.fieldFlip = { flip, seq: state.fieldFlip.seq + 1 };
   }
 }
+/** Owner 10-11 (Astra P2): a FIXED choice ('home' / 'away' / 'mine' with the viewer in the game) does not need the
+ *  drive, so it holds from the first render of a replay seed, a spectate join, a reconnect seed or a return from
+ *  play - before any frame has derived the drive. 'drive' (and an unmatched 'mine') returns without touching the
+ *  flip: their first render keeps exactly today's value. Spectator / replay only: never in play. */
+function applyFixedFieldFlip(g: GameJson | null): void {
+  if (play.active || !g) return;
+  const fixed = spectatorFixedFlip(settings.spectatorView, viewerSide(g, viewerCoachName(settings)));
+  if (fixed !== null && fixed !== state.fieldFlip.flip) state.fieldFlip = { flip: fixed, seq: state.fieldFlip.seq + 1 };
+}
+// Owner 10-11: a change of Settings > Spectator and replay view (or of the coach name 'mine' compares) turns a
+// spectator / replay view once, through the same seq bump a drive change makes; with the drive not yet known only a
+// fixed choice applies. A published review position reads the setting directly (publishedFieldFlip). Astra P3: the
+// callback never runs in play (play presents the local coach at the bottom and keeps the flip false).
+let spectatorViewRecomputes = 0; // @internal test probe (Astra P3): setting-watch recomputes past the play guard
+/** @internal test seam: how many times a Spectator and replay view / coach-name change recomputed the flip. */
+export function spectatorViewRecomputeCount(): number { return spectatorViewRecomputes; }
+watch(() => [settings.spectatorView, viewerCoachName(settings)] as const, () => {
+  if (play.active || !game.value) return;
+  spectatorViewRecomputes += 1;
+  if (visibleDriveProjection) updateFieldFlip(game.value);
+  else applyFixedFieldFlip(game.value);
+}, { flush: 'sync' });
+// Entry into a spectator / replay view (Astra P2, second pass). Each entry evaluates the INCOMING game only:
+//  - a replay file: installReplayBundle calls applyFixedFieldFlip on the rendered seed, after the replay reset;
+//  - a spectate join snapshot / reconnect seed / replay seek: the frame derivation (updateFieldFlip) already
+//    evaluates the incoming game, fixed choices included;
+//  - leaving play while the same game stays on screen: this watcher. Its only source is the primitive play.active,
+//    so it fires on a change of seat and never per model tick (Astra P3, second pass). A reset (disconnect, fresh
+//    game, reconnect seed) clears the drive projection first: then the outgoing game is never consulted and the
+//    incoming game's own entry above decides.
+let spectatorViewEntryRuns = 0; // @internal test probe: entry-watcher callbacks
+/** @internal test seam: how many times the leave-play entry watcher ran. */
+export function spectatorViewEntryRunCount(): number { return spectatorViewEntryRuns; }
+watch(() => play.active, (active) => {
+  spectatorViewEntryRuns += 1;
+  if (!active && visibleDriveProjection) applyFixedFieldFlip(game.value);
+}, { flush: 'sync' });
 
 /** Resolve my team by normalized coach name; player feeds are mirrored, while dialog team IDs remain raw. */
 function myPlayTeam(g: GameJson) {
@@ -22757,6 +22806,10 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
   });
   replayController = controller;
   controller.adoptPrepared(candidate.prepared);
+  // Owner 10-11 (Astra P2): the seed is on screen and the replay reset is done - a fixed Spectator and replay view
+  // holds from this first render. Evaluated against THIS replay's seed; 'drive' / unmatched 'mine' leave the reset's
+  // false exactly as before.
+  applyFixedFieldFlip(game.value);
   let autoPlayer!: ReplayAutoPlayer;
   autoPlayer = new ReplayAutoPlayer({
     step: async (present) => {
@@ -22789,6 +22842,8 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
 
 export const gameStore = {
   spectatorPublishedPosition: spectatorPublication.position,
+  /** Owner 10-11: a published position's automatic field flip under Settings > Spectator and replay view. */
+  publishedFieldFlip,
   spectatorReview: spectatorReviewState,
   /** Read-only retained-history accounting for mounted leak/limit diagnostics. */
   spectatorHistoryAccounting() {
@@ -27282,6 +27337,10 @@ export const gameStore = {
       game.value = null;
       triggerRef(game);
     }
+    // Astra P2: resetPlayback() above cleared the drive projection before play.active went false, so the leave-play
+    // watcher skipped. The same game stays on screen as a spectator view: apply the fixed choice to it now.
+    // Fixed modes only; drive returns inside applyFixedFieldFlip without touching the flip or its seq.
+    if (game.value && settings.spectatorView !== 'drive') applyFixedFieldFlip(game.value);
   },
   /** S44: an official rejoin starts from the menu — drop the frozen board a dropped game leaves behind after disconnect()
    *  (the fork rejoin gets this from connectAsPlayer, which runs at once; the official one runs after its lobby opens). */

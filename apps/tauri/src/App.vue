@@ -66,7 +66,7 @@ import { cornerNotice, hideControllerNotices, hideCornerNotice, showCornerNotice
 import PadOverlay from './components/PadOverlay.vue';
 import { browserHapticPads, hapticForSound } from './game/haptics';
 import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
-import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { SKILL_CONFIG_AS_SKILL, SKILL_CONFIG_NAMES, iconWriteKey, isStarPlayerTrait, skillConfigEntryFor } from './game/skillConfigRows';
@@ -2737,6 +2737,19 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <label class="row">
+              <input v-model="settings.pitchFlipped" type="checkbox" />
+              <span>Flip the pitch view</span>
+            </label>
+            <label class="row">
+              <span>Spectator and replay view</span>
+              <select v-model="settings.spectatorView">
+                <option value="drive">Follow the drive</option>
+                <option value="home">Home team at the bottom</option>
+                <option value="away">Away team at the bottom</option>
+                <option value="mine">My team at the bottom</option>
+              </select>
+            </label>
+            <label class="row">
               <input v-model="settings.flatRender" type="checkbox" />
               <span>Flat (non-isometric) pitch</span>
             </label>
@@ -2750,6 +2763,20 @@ onBeforeUnmount(() => {
                 <option value="classic">Classic seats + fans</option>
                 <option value="crowd">Baked crowd tiles</option>
               </select>
+            </label>
+            <label class="row">
+              <span>Backdrop</span>
+              <select v-model="settings.backdrop" data-testid="backdrop-select">
+                <option v-for="o in BACKDROP_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </label>
+            <!-- Owner 10-12: CC BY 4.0 - the Hubble credit stays visible and unaltered while the image is chosen. -->
+            <p v-if="settings.backdrop === 'galaxy'" class="hint" data-testid="backdrop-galaxy-credit">
+              <a :href="GALAXY_BACKDROP_URL" @click.prevent="openExternal(GALAXY_BACKDROP_URL)">{{ GALAXY_BACKDROP_CREDIT }}</a>
+            </p>
+            <label v-if="settings.backdrop === 'color'" class="row">
+              <span>Backdrop colour</span>
+              <input v-model="settings.backdropColor" type="color" data-testid="backdrop-color" />
             </label>
             <label class="row">
               <span>Tileset (turf)</span>
@@ -3393,8 +3420,18 @@ onBeforeUnmount(() => {
             <li><span>Pitch textures (grass, dugout stone) — Acasas and unTied, licensed via GameDev Market. Sign fans — licensed purchase.</span></li>
             <li><span>Sound effects — The Sound Guild, Gamemaster Audio and Khron Studio libraries (licensed purchases), plus owner recordings.</span></li>
             <li><span>Player sprites, star players, team crests and dugout cobble — original pixel art produced with PixelLab. Skill badges — Super FUMBBL originals; the illustrated set via Codex image generation.</span></li>
+            <li>
+              <span>Whirlpool Galaxy backdrop (the "Whirlpool Galaxy (Hubble)" backdrop option). Image: NASA, ESA, S. Beckwith (STScI), and The Hubble Heritage Team (STScI/AURA).
+                <a href="https://esahubble.org/images/heic0506a/"
+                  @click.prevent="openExternal('https://esahubble.org/images/heic0506a/')"
+                  title="ESA/Hubble heic0506a">ESA/Hubble heic0506a</a>,
+                <a href="https://esahubble.org/copyright/"
+                  @click.prevent="openExternal('https://esahubble.org/copyright/')"
+                  title="ESA/Hubble usage terms">CC BY 4.0</a>, unmodified.
+              </span>
+            </li>
             <li><span>KrisB block dice faces (the "Rick dice (built-in)" block dice option) — by Kristofer Bengtsson (KrisB), used with permission.</span></li>
-            <li><span>Kickoff banners, stadium skybox, crest and decoration art — generated with OpenAI, Codex and Gemini image models from Super FUMBBL prompts; no third-party source imagery.</span></li>
+            <li><span>Kickoff banners, stadium skybox, space backdrop, crest and decoration art — generated with OpenAI, Codex and Gemini image models from Super FUMBBL prompts; no third-party source imagery.</span></li>
             <li><span>FUMBBL logo — used under FUMBBL's branding guidelines (FUMBBL Branding page). FUMBBL is Christer Kaivo-oja's site; Super FUMBBL is an independent client.</span></li>
           </ul>
           <h3 class="credits-head license-head">License</h3>

@@ -114,6 +114,13 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
   this entry becomes: "Xbox controller button images © Microsoft, used per the Xbox 360 Controller Button Images
   licence" (licence text shipped beside the images).
 
+## Licensed imagery
+
+- **Whirlpool Galaxy backdrop** (`packages/ffb-pitch/assets/backdrops/galaxy.jpg`, the "Whirlpool Galaxy (Hubble)"
+  backdrop option): Image: NASA, ESA, S. Beckwith (STScI), and The Hubble Heritage Team (STScI/AURA).
+  ESA/Hubble heic0506a, https://esahubble.org/images/heic0506a/. Licence: CC BY 4.0, https://esahubble.org/copyright/.
+  Unmodified file (ESA's 3840 x 2160 wallpaper rendition). No endorsement by ESA/Hubble or NASA is implied.
+
 ## Fonts
 
 Typefaces bundled with Super FUMBBL (`apps/tauri/public/fonts/`), each under the SIL Open Font License 1.1 with its

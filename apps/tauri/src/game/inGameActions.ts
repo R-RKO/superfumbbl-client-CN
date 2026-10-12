@@ -39,6 +39,8 @@ export interface InGameActionDeps {
   zoom(direction: 1 | -1): boolean;
   /** Owner 10-10: flip the player-card mode (cards on / off); absent = not offered here. */
   togglePlayerCards?(): boolean;
+  /** Owner 10-12: turn the pitch view around (settings.pitchFlipped); absent = not offered here. */
+  togglePitchFlip?(): boolean;
   /** Controller support P2a: the pitch crosshair (absent = the pad's A / X / B / L3 / D-pad do nothing here). */
   crosshair?: CrosshairActionDeps;
   /** Controller support P2b: the setup shortcuts (absent / false = not in setup, the press goes on). */
@@ -96,6 +98,8 @@ export function createInGameActionRunner(deps: InGameActionDeps): (id: ControlAc
       case 'playerCard': requestPlayerCard(source); return true;
       // Owner 10-10: "Player portraits on / off" (default: the middle mouse button on the pitch).
       case 'playerCardsToggle': return deps.togglePlayerCards?.() ?? false;
+      // Owner 10-12: "Flip the pitch view" (a view change only: no command, no seat change).
+      case 'pitchFlip': return deps.togglePitchFlip?.() ?? false;
       // Owner round 2: LB / RB zoom in game (one wheel rung about the screen centre).
       case 'zoomIn': return deps.zoom(1);
       case 'zoomOut': return deps.zoom(-1);
