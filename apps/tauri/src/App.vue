@@ -530,6 +530,10 @@ import tabblLogoUrl from './assets/resources/tabbl-logo.png';
 // Owner 2026-07-11: rebrand to the working name "Super FUMBBL" (display only — server/identifier/
 // installer names stay Super FUMBBL). The processed logo (green plate keyed to transparency).
 import superFumbblLogoUrl from './assets/resources/super-fumbbl-logo.png';
+import { useSuperFumbblLogoMip } from './game/logoMips';
+// Owner 10-12: the ribbon's logo plate (the header strip is gone) binds a mip level, like the in-game quick bar.
+const ribbonLogo = ref<HTMLImageElement | null>(null);
+const ribbonLogoSrc = useSuperFumbblLogoMip(ribbonLogo);
 
 // Launch flow: optional intro, FUMBBL login, then tutorial. Twitch parent must match the host.
 onMounted(() => {
@@ -1974,27 +1978,15 @@ onBeforeUnmount(() => {
     <svg class="cb-filter-defs" aria-hidden="true" focusable="false" width="0" height="0">
       <filter v-for="mode in COLORBLIND_FILTER_MODES" :id="`cb-${mode}`" :key="mode" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" :values="COLORBLIND_MATRICES[mode]" /></filter>
     </svg>
-    <header v-if="!gameStore.game.value || settings.uiMode === 'classic'" class="shell-header"
-      :class="{ 'header-compact': !!gameStore.game.value }">
-      <!-- Owner 09-10: the ☰ hamburger + its dropdown are gone — Settings and Help live in the Esc menu (and the quick bar in-game). -->
-      <!-- Owner ruling (08-18): the header server plates are DEPRECATED as CONTROLS — the blades now own
-           target selection (Play blade cards, Spectate's own selector, TeamBuilder etc). The FUMBBL plate
-           is removed entirely; Super FUMBBL stays as pure INERT branding (a logo, not a button) — no click
-           handler, no data-active/aria-pressed, no hover affordance. The ALPHA RELEASE stamp stays. -->
+    <!-- Owner 10-12: the circuit-board header strip is gone from the console shell (the blade ribbon is the menu bar
+         now); the Super FUMBBL logo plate and the BETA stamp moved to the ribbon's right end (below). Only the Classic
+         in-game view keeps its compact header plate, unchanged (Classic is Pellaeon's lane). -->
+    <header v-if="gameStore.game.value && settings.uiMode === 'classic'" class="shell-header header-compact">
       <div class="server-switcher" role="group" aria-label="Server">
         <div class="server-plate server-plate-super server-plate-inert" aria-label="Super FUMBBL">
           <img :src="superFumbblLogoUrl" alt="Super FUMBBL" />
         </div>
       </div>
-      <!-- owner 2026-07-03 r5: stencil "ALPHA RELEASE" stamp -->
-      <span class="alpha-stamp" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
-      <!-- session state + Disconnect, moved off the removed connect bar (Option A) -->
-      <!-- Owner ruling (08-18): the "Signed in as" identity block and the "Alpha — spectate & play
-           vX" tagline both move OUT of the header — identity relocates to the bottom-right corner
-           stack (with the version stamp, below); the tagline text is dropped outright (the ALPHA
-           RELEASE stamp above already carries the alpha branding, and the version now lives only in
-           the corner stamp). With the FUMBBL plate gone too (ruling 4), the header's right side is
-           just the hamburger. -->
     </header>
 
     <!-- Fives integration (risk-b): the blade ribbon is the console shell nav — HIDE it during a live game so it
@@ -2023,6 +2015,15 @@ onBeforeUnmount(() => {
              entries removed 08-18 ("scope those back in later"): AppView values + mounts kept for the return; the
              scheduled-match notification can still route to the tournaments view. -->
       </template>
+      <!-- Owner 10-12: the Super FUMBBL logo plate + BETA stamp, moved here from the retired header strip. The plate
+           stays inert branding (owner 08-18: a logo, not a button). It binds a logo mip level so the "FANTASY
+           FOOTBALL" line stays crisp at any DPR. -->
+      <div class="ribbon-brand">
+        <div class="server-plate server-plate-super server-plate-inert ribbon-logo-plate" aria-label="Super FUMBBL">
+          <img ref="ribbonLogo" :src="ribbonLogoSrc" alt="Super FUMBBL" />
+        </div>
+        <span class="alpha-stamp" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
+      </div>
     </nav>
 
     <input ref="replayFileInput" type="file" hidden
@@ -3922,16 +3923,14 @@ input, textarea, [contenteditable="true"], .log-panel {
   user-select: text;
   -webkit-user-select: text;
 }
-/* Owner 2026-07-11: motherboard PCB texture behind the top bar. A dark gradient
-   overlay rides on top of the image so the Super FUMBBL logo + menu stay legible. */
+/* Owner 2026-07-11: motherboard PCB texture behind the top bar. Owner 10-12: the console shell no longer shows it
+   (the blade ribbon carries the logo + BETA now); only the Classic in-game compact header plate keeps it. */
 .shell-header {
   display: flex;
   align-items: center;
-  /* owner 2026-07-14: wrap as a safety net so the top-right hamburger can never be clipped off a narrow
-     window (it wraps to a new line instead of overflowing under .shell's overflow-x:hidden). */
   flex-wrap: wrap;
-  gap: 1rem;
-  padding: 0.6rem 1.25rem;
+  gap: 0.6rem;
+  padding: 0.25rem 1rem;
   background-color: #0c1408; /* PCB-dark fallback before the image paints */
   background-image:
     linear-gradient(90deg, rgba(10, 16, 8, 0.82) 0%, rgba(10, 16, 8, 0.5) 35%, rgba(10, 16, 8, 0.5) 65%, rgba(10, 16, 8, 0.82) 100%),
@@ -3942,36 +3941,10 @@ input, textarea, [contenteditable="true"], .log-panel {
   border-bottom: 1px solid #16391a;
 }
 /* owner 2026-07-14: once a game is loaded, the menu bar SHRINKS to give the pitch more room. */
-.shell-header.header-compact { padding: 0.25rem 1rem; gap: 0.6rem; }
-.shell-header.header-compact .build-credit,
-.shell-header.header-compact .alpha-stamp { display: none; }
 .shell-header.header-compact .server-plate { width: 92px; height: 32px; padding: 0 0.45rem; }
 .shell-header.header-compact .server-plate-super img { max-height: 25px; }
-.shell-header .hamburger {
-  background: transparent;
-  color: var(--ui-text);
-  border: 1px solid var(--ui-border);
-  border-radius: 4px;
-  padding: 0.25rem 0.55rem;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 1rem);
-  cursor: pointer;
-  order: 100; /* owner 2026-07-11: move the menu to the TOP-RIGHT (past the auto-margin group) */
-  margin-left: auto; /* owner 08-18: the retired session chip carried the auto-margin spacer — the
-                        hamburger now pins itself to the right edge */
-  flex-shrink: 0; /* owner 2026-07-14: the menu button never shrinks — always fully clickable */
-}
-/* Keep the top-right menu visible on narrower windows: shed the decorative build credit first,
-   then (tighter) the ALPHA RELEASE stamp — so the essential hamburger/nav never clip. */
-@media (max-width: 1400px) {
-  .shell-header .build-credit { display: none; }
-}
-@media (max-width: 1120px) {
-  .shell-header .alpha-stamp { display: none; }
-}
-/* owner 2026-07-14: on narrow windows shrink the server buttons so the whole header (incl. the
-   top-right hamburger) stays on one line instead of overflowing / clipping the menu. */
+/* owner 2026-07-14: narrow windows shrink the plate (kept for the Classic in-game header, its only remaining user). */
 @media (max-width: 720px) {
-  .shell-header { gap: 0.5rem; padding: 0.5rem 0.7rem; }
   .shell-header .server-plate { width: 86px; height: 36px; padding: 0 0.35rem; }
   .shell-header .server-plate-super img { max-height: 26px; max-width: 72px; }
 }
@@ -4036,11 +4009,13 @@ input, textarea, [contenteditable="true"], .log-panel {
 .server-plate.server-plate-inert:hover { opacity: 1; filter: none; }
 
 /* Console-UI S2 blade ribbon: the selected server owns the complete horizontal blade set. */
+/* Owner 10-12: 64px (was 42px) so the Super FUMBBL logo plate from the retired header strip fits at its right end at
+   a 48px logo; at 40px (56px ribbon) the "FANTASY FOOTBALL" line was marginal at DPR 1 ("increase further"). */
 .blade-ribbon {
   display: flex;
   flex-shrink: 0;
   align-items: stretch;
-  min-height: 42px;
+  min-height: 64px;
   padding: 0 1.25rem;
   overflow-x: auto;
   background: var(--ui-surface-2);
@@ -4075,6 +4050,27 @@ input, textarea, [contenteditable="true"], .log-panel {
   height: 1.4rem;
   margin: 0 0.35rem;
   background: var(--ui-border);
+}
+/* Owner 10-12: the logo plate + BETA stamp at the ribbon's right end (moved from the retired header strip). */
+.ribbon-brand {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 1rem;
+}
+.server-plate.ribbon-logo-plate {
+  width: auto;
+  height: auto;
+  padding: 1px 4px;
+}
+.server-plate.ribbon-logo-plate img { height: 48px; width: auto; max-width: none; max-height: none; object-fit: contain; }
+/* BETA sits beside the plate: tucked over its top-right corner it covered the end of "FUMBBL" (10-12 crops). */
+.ribbon-brand .alpha-stamp { margin-left: 14px; }
+@media (max-width: 640px) {
+  .ribbon-brand .alpha-stamp { display: none; }
+  .server-plate.ribbon-logo-plate img { height: 30px; }
 }
 /* owner 2026-07-12: the standalone Browse button was dropped — the FUMBBL / Super FUMBBL server
    buttons now open the browser (selectServer). Session state + Disconnect stay grouped on the right. */
@@ -4182,8 +4178,8 @@ input, textarea, [contenteditable="true"], .log-panel {
 .app-menu-panel {
   position: absolute;
   top: 52px;
-  /* Owner 2026-07-11: the hamburger lives top-RIGHT (.hamburger order:100), so the dropdown must
-     open on the right under it — not top-left where it used to be. */
+  /* Owner 2026-07-11: the dropdown opens top-RIGHT (where its menu button sat before the hamburger was
+     retired 09-10), never top-left where it used to be; kept right-aligned for any opener that reuses it. */
   right: 12px;
   display: flex;
   flex-direction: column;

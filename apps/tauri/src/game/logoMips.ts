@@ -121,7 +121,8 @@ export function useSuperFumbblLogoMip(el: Ref<HTMLImageElement | null>, retrigge
     schedule();
   });
   watch(el, (node, prev) => {
-    if (prev) ro?.unobserve(prev);
+    // ?.() too: App.vue mounts this now, and the mounted-App tests stub ResizeObserver with observe/disconnect only.
+    if (prev) ro?.unobserve?.(prev);
     if (node) { ro?.observe(node); schedule(); }
   }, { flush: 'post' });
   if (retrigger) watch(retrigger, schedule, { deep: true, flush: 'post' });
