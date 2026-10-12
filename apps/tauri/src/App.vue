@@ -69,6 +69,7 @@ import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/ga
 import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
+import { SKILL_CONFIG_AS_SKILL, SKILL_CONFIG_NAMES, iconWriteKey, isStarPlayerTrait, skillConfigEntryFor } from './game/skillConfigRows';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
 import { clearConfigWebToken } from './game/configWebAuth';
 import {
@@ -524,7 +525,6 @@ import {
   trapDialogFocus,
   type SettingsTab,
 } from './game/settingsDialog';
-import skillNames from './assets/skillNames.json'; // owner 09-10: skill NAMES only (the rules-text descriptions file is gone)
 import helmetIconUrl from './assets/resources/football-helmet.png';
 import tabblLogoUrl from './assets/resources/tabbl-logo.png';
 // Owner 2026-07-11: rebrand to the working name "Super FUMBBL" (display only — server/identifier/
@@ -1082,14 +1082,13 @@ function fillRange(el: HTMLInputElement): void {
 // Owner 10-09: the skill-markings flow (import, table, add, clear all) lives in components/SkillMarkingsSettings.vue.
 
 // --- Per-skill display config (owner 2026-07-03 r6f) ------------------------
-// A menu over EVERY skill in the game (skillNames.json), grouped
+// A menu over EVERY skill the client can display (game/skillConfigRows.ts), grouped
 // into "Skill Icons" and "Skill Markers". Each skill has a MY TEAM (home coach)
 // and OPPOSITION (away coach) behaviour dropdown; Markers add a per-skill glyph.
 // Owner 10-01 (S90): Team Captain (a BB2025 roster trait the server sends as a skill) is listed so its icon can be set
 // to Never; it sits in the SKILL list. Every other trait is listed under its own "Traits" subheading.
-const SKILL_CONFIG_EXTRA = ['Team Captain'];
-const SKILL_CONFIG_AS_SKILL = new Set(['Team Captain']);
-const allSkills = [...new Set([...(skillNames as string[]), ...SKILL_CONFIG_EXTRA])].sort((a, b) => a.localeCompare(b));
+// Kildash fix: Loner, Animosity, Bloodlust and the star-player traits were missing; the latter sit under "Star player traits".
+const allSkills = SKILL_CONFIG_NAMES;
 const skillConfigGroup = ref<'icons' | 'markers'>('icons');
 const skillFilter = ref('');
 const skillConfigStatus = ref('');
@@ -1099,7 +1098,8 @@ const filteredSkills = computed(() => {
 });
 const isConfigTrait = (skill: string): boolean => !SKILL_CONFIG_AS_SKILL.has(skill) && playerSkillCategory(skill) === 'trait';
 const filteredSkillRows = computed(() => filteredSkills.value.filter((skill) => !isConfigTrait(skill)));
-const filteredTraitRows = computed(() => filteredSkills.value.filter(isConfigTrait));
+const filteredTraitRows = computed(() => filteredSkills.value.filter((skill) => isConfigTrait(skill) && !isStarPlayerTrait(skill)));
+const filteredStarTraitRows = computed(() => filteredSkills.value.filter((skill) => isConfigTrait(skill) && isStarPlayerTrait(skill)));
 // Owner 10-02 (S94): an Injuries group - Niggling Injury and every stat bust - so they can be shown, hidden or marked.
 const filteredInjuryRows = computed(() => {
   const q = skillFilter.value.trim().toLowerCase();
@@ -1123,7 +1123,8 @@ const BEHAVIOUR_OPTIONS: { value: SkillBehaviour; label: string }[] = [
 type SkillCol = 'Mine' | 'Opp';
 /** Effective behaviour for a skill/kind/column (falls back to the group default). */
 function skillBehaviour(skill: string, kind: 'icon' | 'marker', col: SkillCol): SkillBehaviour {
-  const entry = settings.skillConfig[skill];
+  // icons read tolerantly (skillConfigRows.resolveSkillConfigKey); markers match the exact wire spelling, as the generator does
+  const entry = kind === 'icon' ? skillConfigEntryFor(settings.skillConfig, skill) : settings.skillConfig[skill];
   const v = entry?.[`${kind}${col}` as 'iconMine' | 'iconOpp' | 'markerMine' | 'markerOpp'];
   return v ?? (kind === 'icon' ? iconBehaviourDefault() : MARKER_BEHAVIOUR_DEFAULT);
 }
@@ -1133,9 +1134,11 @@ function setSkillBehaviour(skill: string, kind: 'icon' | 'marker', col: SkillCol
     commitMarkingStores(setTableMarker(currentMarkingStores(), skill, col === 'Mine' ? { markerMine: value } : { markerOpp: value }));
     return;
   }
-  const entry = { ...(settings.skillConfig[skill] ?? {}) };
+  // the change goes to the key this row's read resolves to (else the row's name): nothing is renamed, moved or duplicated
+  const key = iconWriteKey(settings.skillConfig, skill);
+  const entry = { ...(settings.skillConfig[key] ?? {}) };
   entry[`${kind}${col}` as 'iconMine' | 'iconOpp'] = value;
-  settings.skillConfig = { ...settings.skillConfig, [skill]: entry };
+  settings.skillConfig = { ...settings.skillConfig, [key]: entry };
 }
 function skillMarkerText(skill: string): string {
   return settings.skillConfig[skill]?.markerText ?? '';
@@ -3018,6 +3021,22 @@ onBeforeUnmount(() => {
                 <!-- Owner 10-01 (S90): traits under their own subheading (Team Captain stays in the skill list above). -->
                 <div v-if="filteredTraitRows.length" class="sc-subhead" role="heading" aria-level="4">Traits</div>
                 <div v-for="skill in filteredTraitRows" :key="skill" class="sc-trow sc-trow-trait">
+                  <span class="sc-skill" :title="skill">{{ skill }}</span>
+                  <input v-if="skillConfigGroup === 'markers'" class="sc-glyph"
+                    :value="skillMarkerText(skill)"
+                    @input="setSkillMarkerText(skill, ($event.target as HTMLInputElement).value)"
+                    maxlength="6" spellcheck="false" placeholder="glyph" />
+                  <select :value="skillBehaviour(skill, skillKind, 'Mine')"
+                    @change="setSkillBehaviour(skill, skillKind, 'Mine', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <select :value="skillBehaviour(skill, skillKind, 'Opp')"
+                    @change="setSkillBehaviour(skill, skillKind, 'Opp', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                </div>
+                <div v-if="filteredStarTraitRows.length" class="sc-subhead" role="heading" aria-level="4">Star player traits</div>
+                <div v-for="skill in filteredStarTraitRows" :key="skill" class="sc-trow sc-trow-trait">
                   <span class="sc-skill" :title="skill">{{ skill }}</span>
                   <input v-if="skillConfigGroup === 'markers'" class="sc-glyph"
                     :value="skillMarkerText(skill)"

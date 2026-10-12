@@ -442,3 +442,23 @@ export function markingRuleSubject(row: Pick<MarkingRuleRow, 'skills' | 'injurie
   const injuryLabel = (key: string): string => INJURY_CONFIG_KEYS.find((entry) => entry.key === key)?.label ?? key;
   return [...row.skills, ...row.injuries.map(injuryLabel)].join(' + ');
 }
+
+/** Split the typed text on commas, but first take any KNOWN name that itself contains a comma (longest first), so
+ *  "Excuse Me, Are You a Zoat?" is one skill, alone or in a combination. */
+export function splitTypedSkills(text: string, knownNames: ReadonlyMap<string, string>): string[] {
+  const commaNames = [...knownNames.keys()].filter((name) => name.includes(',')).sort((a, b) => b.length - a.length);
+  const out: string[] = [];
+  let rest = text;
+  while (rest.length) {
+    rest = rest.replace(/^[\s,]+/, '');
+    if (!rest) break;
+    const lower = rest.toLowerCase();
+    const hit = commaNames.find((name) => lower.startsWith(name) && /^\s*(,|$)/.test(rest.slice(name.length)));
+    if (hit) { out.push(rest.slice(0, hit.length)); rest = rest.slice(hit.length); continue; }
+    const at = rest.indexOf(',');
+    const piece = (at < 0 ? rest : rest.slice(0, at)).trim();
+    if (piece) out.push(piece);
+    rest = at < 0 ? '' : rest.slice(at + 1);
+  }
+  return out;
+}

@@ -9,6 +9,7 @@ import {
   type SkillConfigEntry,
   type AppSettings,
 } from './settings';
+import { skillConfigEntryFor } from './skillConfigRows';
 
 /**
  * Per-skill display config (owner 2026-07-03 r6f). Turns the sparse
@@ -47,8 +48,10 @@ function shows(behaviour: SkillBehaviour, isBaseline: boolean): boolean {
   return behaviour === 'always' ? true : behaviour === 'added' ? !isBaseline : false;
 }
 
+// Icons only: the saved entry is found by the exact wire name first, then by spelling-tolerant key (skillConfigRows.ts).
+// Markers keep matching the exact wire spelling, as the marking generator does.
 function iconBehaviour(skill: string, mine: boolean): SkillBehaviour {
-  const entry = settings.skillConfig[skill];
+  const entry = skillConfigEntryFor(settings.skillConfig, skill);
   const v = mine ? entry?.iconMine : entry?.iconOpp;
   return v ?? iconBehaviourDefault();
 }

@@ -5,7 +5,7 @@ import { importFumbblMarkingsDetailed } from '../game/fumbblMarkingsImport';
 import {
   addMarkingRule, clearAllMarkings, commitMarkingStores, currentMarkingStores, findMarkingConflicts, importedMarkingCount,
   invalidateMarkingsImports, listMarkingRules, markingRuleSubject, removeImportedMarkings, removeMarkingRule,
-  splitMarkingSubject, updateMarkingRule, type MarkingApplyTo, type MarkingRuleRow,
+  splitMarkingSubject, splitTypedSkills, updateMarkingRule, type MarkingApplyTo, type MarkingRuleRow,
 } from '../game/markingRules';
 
 /**
@@ -149,7 +149,7 @@ const known = computed(() => new Map([...props.skills, ...STAT_TOKENS].map((name
 function addRule(replaceExisting = false): void {
   if (busy.value) return;
   addError.value = '';
-  const typed = newRule.skills.split(',').map((name) => name.trim()).filter(Boolean);
+  const typed = splitTypedSkills(newRule.skills, known.value);
   const marking = newRule.marking.trim();
   if (!typed.length) { addConflict.value = null; addError.value = 'Enter the skill this marking is for (several skills, separated by commas, make a combination).'; return; }
   if (!marking) { addConflict.value = null; addError.value = 'Enter the marking text.'; return; }
