@@ -4059,10 +4059,11 @@ input, textarea, [contenteditable="true"], .log-panel {
   cursor: pointer;
 }
 .blade:hover { color: var(--ui-text); background: var(--ui-hover); }
+/* Owner 10-12: no bold on the selected blade. Nuffle has one weight, so 700 was synthesised and read as an
+   outline / glow around the lettering; the fill, the inset bar and the text colour carry the selection. */
 .blade[data-active='true'] {
   color: var(--ui-text);
   background: var(--ui-primary);
-  font-weight: 700;
   box-shadow: inset 0 3px 0 var(--ui-heading);
 }
 /* Owner ruling (console shell restructure): a hairline divider marks the merged tree's Super FUMBBL section
