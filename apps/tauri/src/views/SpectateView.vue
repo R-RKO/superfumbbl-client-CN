@@ -153,10 +153,10 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
-import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
+import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
@@ -211,10 +211,12 @@ const o66PendingBlitzTarget = ref<string | null>(null);
 const o66PendingLeftClickBlitzPlan = ref<{
   playerId: string; targetId: string; route: [number, number][];
 } | null>(null);
-// #34 (owner: blitz right-click specials): the special block-kind chosen for the in-progress blitz (Stab/Chainsaw/
-// Projectile Vomit/Breathe Fire/Chomp), picked from the right-click menu on the blitz target. null = a plain block.
-// Threaded into the blitz plan (startPlan blockKind) so the walk-then-block resolves with that special. Cleared
-// whenever the blitz target/aggro is cleared (byte-identical to the pre-#34 blitz when null).
+// The special block kind chosen for the declared Blitz's block (Stab / Chainsaw / Projectile Vomit / Breathe Fire /
+// Chomp); null = a plain block. It is picked once the blitzer stands next to the target: from the acting player's menu
+// in BLITZ, from the adjacent target's menu, or from the pad's "Block or special?" modal. confirmAggroStage sends it
+// as the clientBlock flag. A left-click Blitz carries no kind into its plan: for a blitzer who has one of these to
+// choose, the plan stops at contact and opens the target's menu (owner 10-12, store blitzContactChoice). Cleared with
+// the aggro arms and at the send.
 const o66PendingBlitzBlockKind = ref<BlockKind | null>(null);
 const chainsawBlitzConfirm = ref(false);
 const chainsawBlitzTarget = computed(() => {
@@ -254,7 +256,19 @@ watch(() => gameStore.state.blitzBlockChoice, (choice) => {
   chainsawBlitzConfirm.value = choice.offers.some((offer) => offer.kind === 'chainsaw');
 });
 /** Commit an explicitly menu-selected standalone block flavor through the existing chooser path without rendering that chooser. */
+/** Astra 10-12: a Chomp picked with no target chosen (the player's own rows) can still be aimed at an opponent this
+ *  player has already chomped. Upstream does nothing there (it performs Chomp only when isChompAvailable(player,
+ *  defender) holds); neither do we, and the coach is told why. Every other kind and a live Chomp pass through. */
+function chompRefusedAgainst(attackerId: string, defenderId: string, kind: BlockKind | null): boolean {
+  const g = gameStore.game.value;
+  if (kind !== 'chomp' || !g || chompAvailableAgainst(g, attackerId, defenderId)) return false;
+  const sq = playerSquareById(defenderId);
+  const p = sq ? renderer?.squareToCanvas(sq) : null;
+  showToast('Chomp cannot be used on that player again', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+  return true;
+}
 function o66SendStandaloneBlock(attackerId: string, defenderId: string, kind: BlockKind | null) {
+  if (chompRefusedAgainst(attackerId, defenderId, kind)) { o66ExplicitBlockChoice.value = null; return; }
   const explicit = o66ExplicitBlockChoice.value;
   o66ExplicitBlockChoice.value = null; // consumed at the send (a 0-offer direct send clears it too — harmless)
   gameStore.sendStandaloneBlockOrChoose(attackerId, defenderId, kind);
@@ -3099,6 +3113,7 @@ function o66SendBlastinTarget(targetId: string): boolean {
 }
 /** S28: the one seam for a vomit-kind block send: sends, and latches the marks off only if the send was accepted. */
 function o66SendBlock(attackerId: string, defenderId: string, kind: BlockKind | null): boolean {
+  if (chompRefusedAgainst(attackerId, defenderId, kind)) return false;
   const ok = gameStore.sendBlock(attackerId, defenderId, o66BlockFlags(kind));
   if (kind === 'vomit') vomitLatchedAt.value = vomitLatchAfterSend(ok, gameStore.state.appliedFrameSeq);
   return ok;
@@ -7865,8 +7880,96 @@ watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
   const routeDisposition = storedBlitzRouteDisposition(g, plan.targetId);
   if (routeDisposition === 'wait') return;
   if (routeDisposition === 'drop') { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
-  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) retireStoredBlitzRoute();
+  // Owner 10-12: contactChoice = this plan stops at contact when the blitzer has a context-menu special attack.
+  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId, contactChoice: true })) retireStoredBlitzRoute();
 }, { deep: true, flush: 'post' });
+// Owner 10-12 ("Players with projectile vomit are missing this action on a blitz" / "B works for this. This should
+// only occur on left click blitz."): the left-click Blitz plan walked to its target and stopped without sending the
+// block, because the blitzer has Stab / Projectile Vomit / Breathe Fire / Chomp to choose from. Arm the SAME stage a
+// first click on the adjacent target arms on a hand-walked blitz: Confirm Block on the bar, the target's right-click
+// menu (Block + each offered kind), the two-click confirmation card and confirmAggroStage's send. Nothing is sent here.
+watch(() => gameStore.state.blitzContactChoice, (stop) => {
+  const g = gameStore.game.value;
+  if (!stop || !g || !settings.order66 || !gameStore.isPlaying.value) return;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (actingId !== stop.blitzerId || !gameStore.iControl(actingId) || deriveClientState(g, o66Ctx()) !== 'BLITZ'
+      || !adjacentStandingEnemyIds(g, actingId).includes(stop.targetId)) return;
+  o66AggroStage.value = { kind: 'blitz', target: stop.targetId, stage: 2 };
+  openBlitzContactMenu(stop, performance.now() + BLITZ_CONTACT_MENU_WAIT_MS);
+}, { flush: 'sync' });
+// The stop must put the choice in front of the coach (a bare "Confirm Block" would hide that Vomit was available): open
+// the target's own attack menu through openO66Menu, anchored on the target token, once the blitzer's last step is off
+// screen. It only waits for our own animation and opens a menu; it never sends and never answers anything. Skipped
+// (stage left armed) when something else owns the screen or the pad is in use: see blitzContactMenuDisposition.
+const BLITZ_CONTACT_MENU_WAIT_MS = 3000; // a stalled token fails open, like the click gates
+let blitzContactMenuFrame = 0;
+function openBlitzContactMenu(stop: { blitzerId: string; targetId: string; seq: number }, waitUntil: number) {
+  cancelAnimationFrame(blitzContactMenuFrame);
+  blitzContactMenuFrame = 0;
+  const g = gameStore.game.value;
+  const stage = o66AggroStage.value;
+  if (!g || !renderer || gameStore.state.blitzContactChoice?.seq !== stop.seq) return;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const disposition = blitzContactMenuDisposition({
+    stageArmedForStop: stage?.kind === 'blitz' && stage.stage === 2 && stage.target === stop.targetId && blitzContactStopLive(stop),
+    sendUnanswered: gameStore.gameplaySendUnanswered(),
+    controller: activeInput.value === 'controller',
+    surfaceOpen: pitchHeldByConfirmation() || !!g.dialogParameter || gameStore.interactiveDecisionSurfaceOpenExceptKickEmPicker()
+      || !!wideRailActivationPrompt.value || ui.gameMenuOpen || reportOpen.value
+      || appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
+    contextMenuOpen: ctxMenu.visible,
+    tokenInFlight: renderer.movementOnScreen(actingId).inFlight && performance.now() < waitUntil,
+  });
+  if (disposition === 'wait') { blitzContactMenuFrame = requestAnimationFrame(() => openBlitzContactMenu(stop, waitUntil)); return; }
+  if (disposition !== 'open') return;
+  const square = playerSquareById(stop.targetId);
+  const at = square ? renderer.squareToCanvas(square) : null;
+  if (!square || !at) return;
+  openO66Menu({
+    playerId: stop.targetId, square, isOpposition: true, isHomeTeam: g.teamHome.playerArray.some((p) => p.playerId === stop.targetId),
+    isDown: false, activationSpent: false, isConfused: false, isHypnotized: false,
+  }, at.x, at.y);
+  if (!ctxMenu.visible || ctxMenu.playerId !== stop.targetId) return;
+  blitzContactMenuStop.value = stop;
+  // A right-click pick drops the stage and the next target click re-arms it. Here the stage was armed by the stop, so a
+  // pick keeps it: the kind's confirmation card (or, for Block, the dice preview and Confirm Block) follows at once.
+  // Astra 10-12: each row re-checks AT THE CLICK that the stop is still the live situation; a stale row does nothing.
+  ctxMenu.items = ctxMenu.items.map((item) => ({
+    ...item,
+    action: () => {
+      if (!blitzContactStopLive(stop) || gameStore.gameplaySendUnanswered()) return;
+      item.action?.();
+      o66AggroStage.value = { kind: 'blitz', target: stop.targetId, stage: 2 };
+    },
+  }));
+}
+/** The stop this view was signalled about is still current: our seat is playing and blitzContactStopCurrent holds. */
+function blitzContactStopLive(stop: { blitzerId: string; targetId: string; seq: number }): boolean {
+  const g = gameStore.game.value;
+  return !!g && gameStore.isPlaying.value && gameStore.state.blitzContactChoice?.seq === stop.seq
+    && blitzContactStopCurrent({ game: g, stop, clientState: deriveClientState(g, o66Ctx()), controlsBlitzer: gameStore.iControl(stop.blitzerId) });
+}
+// Astra 10-12: the menu this stop opened (never an ordinary right-click menu). It is retired with the stage it belongs
+// to: whenever an applied frame, the stage, the seat or the turn says the stop is no longer live (End Turn, turn change,
+// another acting player, the activation or the game ending, a reconnect), the pending opener is cancelled and this
+// menu is closed. Closed by the coach (pick, Esc, a press elsewhere) it simply stops being tracked.
+const blitzContactMenuStop = ref<{ blitzerId: string; targetId: string; seq: number } | null>(null);
+function retireBlitzContactMenu() {
+  cancelAnimationFrame(blitzContactMenuFrame);
+  blitzContactMenuFrame = 0;
+  if (blitzContactMenuStop.value && ctxMenu.visible && ctxMenu.playerId === blitzContactMenuStop.value.targetId) ctxMenu.visible = false;
+  blitzContactMenuStop.value = null;
+}
+watch(() => [gameStore.state.appliedFrameSeq, gameStore.state.blitzContactChoice?.seq, o66AggroStage.value, ctxMenu.visible,
+  gameStore.isPlaying.value, gameStore.myTurn.value, gameStore.game.value?.gameId], () => {
+  const opened = blitzContactMenuStop.value;
+  if (opened && !ctxMenu.visible) { blitzContactMenuStop.value = null; return; }
+  const pending = opened ?? (blitzContactMenuFrame ? gameStore.state.blitzContactChoice : null);
+  if (!pending) return;
+  const stage = o66AggroStage.value;
+  if (!(stage?.kind === 'blitz' && stage.stage === 2 && stage.target === pending.targetId) || !blitzContactStopLive(pending)) retireBlitzContactMenu();
+}, { flush: 'sync' });
+onBeforeUnmount(retireBlitzContactMenu);
 
 // Focus an owned off-turn prompt when it arms; never focus spectator/opponent prompts.
 const offTurnPromptActive = computed(() =>
@@ -8317,7 +8420,9 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
       && adjacentStandingEnemyIds(g, actingNow).includes(target.playerId);
     if ((attackState === 'BLOCK' || attackState === 'BLITZ') && targetIsAdjacentEnemy) {
       const kinds: BlockKind[] = blockAlternativeOffers(g, actingNow).map((offer) => offer.kind);
-      if (chompAvailable(g, actingNow)) kinds.push('chomp');
+      // Astra 10-12: this menu belongs to ONE target, so Chomp is offered only against a target this player has not
+      // chomped yet (upstream checks the chosen defender). The acting player's own rows keep the any-adjacent rule.
+      if (chompAvailableAgainst(g, actingNow, target.playerId)) kinds.push('chomp');
       const currentKind = attackState === 'BLITZ' ? o66PendingBlitzBlockKind.value : o66PendingBlockKind.value;
       const pick = (kind: BlockKind | null) => {
         if (attackState === 'BLITZ') o66PendingBlitzBlockKind.value = kind;
@@ -9568,7 +9673,7 @@ const padBlockDeclareWatch = createPadBlockDeclareWatch({
     if (!g || !st || !actingId || !settings.order66 || !gameStore.isPlaying.value) return null;
     // Exactly the specials the attack menu offers on this target (openO66Menu): every flavor + Chomp.
     const offers: string[] = blockAlternativeOffers(g, actingId).map((o) => o.kind);
-    if (chompAvailable(g, actingId)) offers.push('chomp');
+    if (chompAvailableAgainst(g, actingId, st.target)) offers.push('chomp'); // per target, like the menu (Astra 10-12)
     return {
       controller: activeInput.value === 'controller',
       stage: st,

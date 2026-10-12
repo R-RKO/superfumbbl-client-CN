@@ -1906,6 +1906,19 @@ export function chompAvailable(game: GameJson, playerId: string): boolean {
   return adjacentBlockableEnemyIds(game, playerId).some((targetId) => !chompedTargets.includes(targetId));
 }
 
+/** Chomp against ONE chosen defender. Upstream performs the Chomp only when `isChompAvailable(player, defender)`
+ * holds for the defender that was clicked (plugin/bb2025/BlockLogicExtensionPlugin.performAvailableAction:24-30;
+ * LogicModule.isChompAvailable(player, target):734-737 = canChomp && FieldModel.notChomped(player, target)). So a
+ * surface that already knows its target (the adjacent target's attack menu, the pad's block modal, the send) asks
+ * this; `chompAvailable` (any adjacent opponent not yet chomped) is for the rows with no target chosen yet. */
+export function chompAvailableAgainst(game: GameJson, playerId: string, targetId: string): boolean {
+  const base = baseState(findPlayer(game, playerId)?.playerState);
+  if (base !== BASE_STANDING && base !== BASE_MOVING) return false;
+  if (!CHOMP_GRANTORS.some((skill) => hasSkill(game, playerId, skill))) return false;
+  const chompedTargets = (game.fieldModel?.chomped?.[playerId] as string[] | undefined) ?? [];
+  return adjacentBlockableEnemyIds(game, playerId).includes(targetId) && !chompedTargets.includes(targetId);
+}
+
 /** Display-only armour target for the special-attack preview; it never mutates or predicts game state. Chainsaw
  * applies +3 unless Iron Hard Skin cancels skill armour modifiers; Stab/Vomit/Breathe Fire use the defender's
  * effective armour unchanged. Breathe Fire reaches that roll only on its server-owned natural-6 result. */

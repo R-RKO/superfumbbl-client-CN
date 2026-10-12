@@ -637,6 +637,40 @@ export function storedBlitzRouteDisposition(game: GameJson | null | undefined, t
   if (outcome.kind === 'pending') return 'wait';
   return outcome.kind === 'selected' && outcome.targetId === targetId ? 'start' : 'drop';
 }
+/** Owner 10-12: a left-click Blitz stopped at contact for a context-menu special attack (store blitzContactChoice) and
+ *  the view armed the Blitz confirm stage. Should the target's own attack menu (Block + each offered kind, the one a
+ *  right-click on the adjacent blitz target opens) now be put in front of the coach?
+ *   - 'skip': the stage is not (or no longer) this stop's, the pad is in use (its "Block or special?" modal is the
+ *     same choice), something else owns the screen (a server dialog, a reroll / chooser / confirmation card, the game
+ *     menu, a report), or another context menu is already open. Nothing opens and nothing is sent: the stage stays
+ *     armed, so Confirm Block and the target's right-click remain, exactly as on a hand-walked blitz.
+ *   - 'wait': the blitzer's last step is still on screen. The caller asks again on the next frame.
+ *   - 'open': open it. */
+export function blitzContactMenuDisposition(input: {
+  stageArmedForStop: boolean; controller: boolean; surfaceOpen: boolean; contextMenuOpen: boolean; tokenInFlight: boolean;
+  /** A gameplay command of ours (End Turn, End Activation, a step ...) is out and unanswered: the model may be about
+   *  to change under the menu, so it does not open (Astra 10-12). */
+  sendUnanswered?: boolean;
+}): 'open' | 'wait' | 'skip' {
+  if (!input.stageArmedForStop || input.controller || input.surfaceOpen || input.contextMenuOpen || input.sendUnanswered) return 'skip';
+  return input.tokenInFlight ? 'wait' : 'open';
+}
+/** Is a left-click Blitz's contact stop still the live situation on the APPLIED model? Our own turn's BLITZ state
+ *  (`clientState`), the same blitzer still acting under blitzMove and under our control, its block not yet on the
+ *  wire, and the same target still the server's SELECTED one and still an adjacent standing opponent. The pending
+ *  menu opener, the auto-opened menu and each of its rows ask this; false = they are retired / inert (Astra 10-12:
+ *  a row left open across an End Turn re-armed the Blitz stage on the opponent's turn). */
+export function blitzContactStopCurrent(input: {
+  game: GameJson | null | undefined; stop: { blitzerId: string; targetId: string } | null | undefined;
+  clientState: ClientStateId | '' | null | undefined; controlsBlitzer: boolean;
+}): boolean {
+  const { game, stop } = input;
+  if (!game || !stop || input.clientState !== 'BLITZ' || !input.controlsBlitzer) return false;
+  const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  if (String(acting?.playerId ?? '') !== stop.blitzerId || String(acting?.playerAction ?? '') !== 'blitzMove') return false;
+  if (actingHasBlocked(game) || !blitzTargetAcknowledged(game, stop.targetId)) return false;
+  return adjacentStandingEnemyIds(game, stop.blitzerId).includes(stop.targetId);
+}
 /** A stored quick-click route belongs to one activation of one player on our own turn. Every other exit (the turn
  *  passed, another player is acting, the seat stopped playing) retires it: nothing else would, and while it is held it
  *  short-circuits enemy clicks, tile clicks and Space. */

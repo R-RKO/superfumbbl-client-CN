@@ -796,6 +796,14 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to reroll ${d6(r.oldRoll)} into ${d6(r.roll)}`
     : `${pn(g, r.playerId)} uses Old Pro: rerolls ${d6(r.oldRoll)} into ${d6(r.roll)}`,
   pickMeUp: (r, g) => `${pn(g, r.playerId)} | Pick Me Up: ${hiddenTag('rolls ')}${d6(r.roll)}${outcomeSuffix(r.successful, r.reRolled)}`,
+  // Kildash fix ("Dodgey snack stats not showing"): the roll only decides WHO is affected. Upstream ReportDodgySnackRoll carries
+  // just {roll, playerId}; StepApplyKickoffResult.dodgySnackEffect sends a 1 to the reserves and applies -1 MA / -1 AV from a 2 up,
+  // and the Java DodgySnackRollMessage words it the same way. The rule exists in BB2025 only (no BB2020 report).
+  dodgySnackRoll: (r, g) => {
+    const roll = Number(r.roll);
+    const outcome = r.roll == null || !Number.isFinite(roll) ? '' : roll <= 1 ? ' | sent to the Reserves for this drive' : ' | -1 MA and -1 AV for this drive';
+    return `${pn(g, r.playerId)} | Dodgy Snack: ${hiddenTag('rolls ')}${d6(r.roll)}${outcome}`;
+  },
   raidingParty: (r, g) => `${pn(g, r.playerId)} uses Raiding Party`,
   thrownKeg: (r, g) =>
     `${pn(g, r.playerId)} throws a keg at ${pn(g, r.targetPlayerId)}: ${hiddenTag('rolls ')}${d6(r.roll)} | ${r.fumble ? 'fumbles' : r.successful ? 'hits' : 'misses'}`,

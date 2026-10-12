@@ -91,7 +91,7 @@ import {
 import { friendlySpectateError, spectateServerStatusError } from './spectateErrorMessage';
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
-import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
@@ -626,6 +626,11 @@ const legacyState = reactive({
   // at arm time — present only on a hold armed via holdBlitzBlockChoice; absent (undefined) on the standalone
   // Block chooser below, which blitzBlockChoiceOnModelApplied never reads (it only processes origin: 'blitz').
   blitzBlockChoice: null as { blitzerId: string; targetId: string; offers: { kind: string; label: string }[]; origin: 'blitz' | 'block'; armedAction?: string | null } | null,
+  /** Owner 10-12: a left-click Blitz plan reached its target and STOPPED instead of sending the block, because the
+   *  blitzer has a special attack that lives on the context menu (Stab, Projectile Vomit, Breathe Fire, Chomp). The
+   *  plan is gone; the view arms its ordinary Blitz confirm stage for this target (the hand-walked blitz's own). A
+   *  one-shot signal (seq), never a hold: nothing is sent until the coach confirms. */
+  blitzContactChoice: null as { blitzerId: string; targetId: string; seq: number } | null,
   /** S42: a Chainsaw carrier is in the Foul state with NO remembered Foul / Chainsaw choice (reconnect, activation
    *  declared by another path) and clicked a victim. Nothing is sent until the coach picks a kind on the block-kind chooser
    *  card; Esc / right-click dismisses it with no wire and the activation stays. Client-held, never rebuilt from a snapshot. */
@@ -12009,6 +12014,9 @@ interface PlannerPlan {
   targetPlayerId: string | null;               // foul (defender) / hand-off (catcher)
   blockKind: string | null;                    // #34: a BLITZ's optional special block-kind (stab/chainsaw/vomit/breatheFire/chomp) — rides sendBlock's flavor flags
   blockChoiceResolved: boolean;
+  /** Owner 10-12: set only by the left-click (stored route) Blitz. At contact the plan stops for the coach's own
+   *  choice when a context-menu special attack is available (see blitzContactChoiceKinds). */
+  contactChoice?: boolean;
   goredCommit: boolean;
   terminalSent: boolean;
   phase: 'declaring' | 'moving' | 'acting';
@@ -12053,6 +12061,21 @@ function blitzBlockCommitOffers(g: GameJson, blitzerId: string, targetId: string
   const offers: { kind: string; label: string }[] = blockChooserOffers(g, blitzerId);
   if (goredByTheBullAvailable(g, blitzerId, targetId)) offers.push({ kind: GORED_OFFER_KIND, label: 'Gored by the Bull' });
   return offers;
+}
+/** Owner 10-12 ("B works for this. This should only occur on left click blitz."): the special attacks a blitzer may
+ *  pick at the block point that the commit chooser does NOT carry (owner 08-05: Stab, Projectile Vomit / Putrid
+ *  Regurgitation, Breathe Fire and Chomp live on the context menu). Read on the APPLIED model at contact, with the
+ *  conditions the hand-walked blitz's own menu and confirm use: the server took THIS target (SELECTED), it is an
+ *  adjacent standing opponent, and the offer functions themselves (stance, unused skill) still offer the kind.
+ *  Chomp additionally needs this target not yet chomped by this player (FieldModel.notChomped): a Chomp that is
+ *  only left against another adjacent opponent is no reason to stop a blitz on this one. */
+function blitzContactChoiceKinds(g: GameJson, blitzerId: string, targetId: string): string[] {
+  const outcome = blitzTargetOutcome(g);
+  if (outcome.kind !== 'selected' || outcome.targetId !== targetId) return [];
+  if (!adjacentStandingEnemyIds(g, blitzerId).includes(targetId)) return [];
+  const kinds: string[] = blockAlternativeOffers(g, blitzerId).map((offer) => offer.kind).filter((kind) => !CHOOSER_FLAVORS.has(kind));
+  if (chompAvailableAgainst(g, blitzerId, targetId)) kinds.push('chomp');
+  return kinds;
 }
 /** Blitz-commit hold (planner act leg + test seam): arm the chooser card when there is anything to choose. */
 function holdBlitzBlockChoice(blitzerId: string, targetId: string): boolean {
@@ -12481,6 +12504,7 @@ function plannerStart(input: {
   playerId: string; actKind: PlanActKind; route: [number, number][];
   targetCoordinate?: [number, number] | null; targetPlayerId?: string | null;
   blockKind?: string | null;                   // #34: optional special block-kind for a blitz (rides sendBlock flags)
+  contactChoice?: boolean;                     // owner 10-12: left-click Blitz only, see blitzContactChoiceKinds
   declareOnly?: boolean; declareAction?: string;
 }): boolean {
   if (!play.active || !game.value) return false;
@@ -12586,6 +12610,7 @@ function plannerStart(input: {
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
+    contactChoice: input.contactChoice === true,
     goredCommit: false,
     terminalSent: false,
     phase: 'declaring', turnKey: currentTurnKey(game.value),
@@ -12640,6 +12665,19 @@ function plannerFireAct() {
   // followupChoice/reRollPrompt); the queue drives declare→target→walk then RELEASES here (Echo: don't template
   // the block sub-choices). Plain block (no flavor) — matches the retired o66BlitzExecute.
   else if (p.actKind === 'blitz' && p.targetPlayerId) {
+    // Owner 10-12: the left-click Blitz of a blitzer with a context-menu special attack STOPS AT CONTACT. Nothing is
+    // sent and nothing is held: the plan ends here exactly as a walk-only plan does, and the view arms the ordinary
+    // Blitz confirm stage on this target, so from this point it IS the hand-walked blitz (target menu, confirmation
+    // card, Chainsaw / Gored chooser on a plain confirm, cancel, End Turn). No plan = no watchdog, no sent-step state.
+    // An explicit kind, a resolved chooser or a Gored commit never reach this (they already are the coach's choice).
+    if (p.contactChoice && p.blockKind == null && !p.blockChoiceResolved && !p.goredCommit && !state.blitzBlockChoice
+        && blitzContactChoiceKinds(game.value!, p.playerId, p.targetPlayerId).length > 0) {
+      const stop = { blitzerId: p.playerId, targetId: p.targetPlayerId, seq: (state.blitzContactChoice?.seq ?? 0) + 1 };
+      plannerSet(null); plannerClearAbort();
+      state.blitzContactChoice = stop;
+      log('system', `plan: BLITZ ${playerName(game.value, stop.blitzerId)} stopped at contact (special attack available, your choice)`);
+      return;
+    }
     // #207 + owner 08-05: an explicit menu flavor is already decided and never needs this chooser. Otherwise HOLD
     // for a Chainsaw offer or a server-decorated Gored by the Bull offer (Star S5); a non-carrier falls through to
     // the same plain send as a flavorless blitzer. The hold participates in plannerPromptPending (watchdog pauses).
@@ -26875,7 +26913,7 @@ export const gameStore = {
   /** ORDER 66 (#6.4): start a PLANNER COMMAND-QUEUE plan — declare→move→act, sequenced ONLY on server model
    *  syncs (no timers), replacing the timer-macro playerPass/playerFoul/playerHandOff. `route` excludes the
    *  start square (empty = a 0-waypoint declare→act, e.g. a standing pass). See plannerStart. */
-  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null }): boolean {
+  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null; contactChoice?: boolean }): boolean {
     return plannerStart(input);
   },
   /** ORDER 66 (#6.4): is a planner command-queue plan currently in flight? (SpectateView suppresses re-entry
