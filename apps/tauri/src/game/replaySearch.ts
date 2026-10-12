@@ -163,6 +163,43 @@ export function rowFromRecent(match: FumbblRecentMatch, coach: string): ReplayRo
   };
 }
 
+/**
+ * Owner 10-12: the Replay blade's search results, newest first. FUMBBL reports "YYYY-MM-DD HH:MM:SS" (site time, from
+ * `date` + `time` on a match, or `modified` on a tournament schedule entry); a bare date or an ISO "T" / zone form is
+ * read too. Site time without a zone is taken as UTC so every row is compared on one clock; fractional seconds count as
+ * milliseconds; a shape not listed here is undated (never guessed in local time). Each row is parsed once;
+ * the sort is stable (equal dates keep their incoming order) and rows with no parseable date go last, in order.
+ */
+export function replayWhenMs(when: string): number {
+  const text = String(when ?? '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(text);
+  let ms: number;
+  if (m) {
+    ms = Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0), Math.round(Number(`0.${m[7] ?? '0'}`) * 1000));
+    const zone = m[8];
+    if (zone && zone !== 'Z') {
+      const sign = zone[0] === '-' ? -1 : 1;
+      const digits = zone.slice(1).replace(':', '');
+      ms -= sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2))) * 60_000;
+    }
+  } else {
+    // only a string that names its zone is safe to hand to Date.parse (a zone-less one would read as LOCAL time and
+    // break the one-clock rule); any other unmatched shape is undated
+    ms = text && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? Date.parse(text) : NaN;
+  }
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+export function sortRowsNewestFirst<T extends { when: string }>(rows: readonly T[]): T[] {
+  const keyed = rows.map((row, index) => ({ row, index, ms: replayWhenMs(row.when) }));
+  keyed.sort((a, b) => {
+    const aDated = !Number.isNaN(a.ms);
+    const bDated = !Number.isNaN(b.ms);
+    if (aDated !== bDated) return aDated ? -1 : 1;
+    return (aDated && a.ms !== b.ms ? b.ms - a.ms : 0) || a.index - b.index;
+  });
+  return keyed.map((k) => k.row);
+}
+
 /** The fallback for a number that is not a FUMBBL match id: a bare FFB replay id, teams unknown. */
 export function replayIdRow(id: number): ReplayRow {
   return { key: `replay-${id}`, replayId: id, when: '', left: { name: `Game ${id}`, coach: '' }, right: null, score: null };
@@ -484,8 +521,7 @@ export async function searchGroup(input: FumbblGroup, fetcher: FetchLike, query 
     try { return parseTournamentSchedule(await fetchJson(`${FUMBBL_SITE}/api/tournament/schedule/${t.id}`, fetcher), t.name); } catch { failed += 1; return []; }
   }));
   const seen = new Set<string>();
-  const rows = lists.flat()
-    .sort((x, y) => y.when.localeCompare(x.when) || (y.matchId ?? 0) - (x.matchId ?? 0))
+  const rows = sortRowsNewestFirst(lists.flat())
     .filter((row) => (seen.has(row.key) ? false : (seen.add(row.key), true)))
     .slice(0, LEAGUE_MATCH_CAP);
   const result: ReplaySearchResult = { kind: 'league', query, group, rows };
@@ -533,7 +569,7 @@ export const ownGamesResolver: ReplaySearchResolver = {
     const coach = ctx.ownCoach.trim();
     if (!coach) return { kind: 'own', query: '', coach, rows: [] };
     const { matches, teamCap } = await fetchRecentFumbblMatches(coach, ctx.fetcher, 30, ownPlayedTeamIds(ctx, coach));
-    return { kind: 'own', query: '', coach, rows: matches.map((m) => rowFromRecent(m, coach)), ...(teamCap ? { teamCap } : {}) };
+    return { kind: 'own', query: '', coach, rows: sortRowsNewestFirst(matches.map((m) => rowFromRecent(m, coach))), ...(teamCap ? { teamCap } : {}) };
   },
 };
 export const matchIdResolver: ReplaySearchResolver = {
@@ -592,7 +628,7 @@ export const coachResolver: ReplaySearchResolver = {
       const leagues = matchGroups(currentLeagueIndex(), q.coach);
       if (leagues.length) return leagueResultFor(leagues, q.coach, ctx, coachNoGamesNote(q.coach));
     }
-    return { kind: 'coach', query: q.coach, coach: q.coach, rows: matches.map((m) => rowFromRecent(m, q.coach)), ...(teamCap ? { teamCap } : {}) };
+    return { kind: 'coach', query: q.coach, coach: q.coach, rows: sortRowsNewestFirst(matches.map((m) => rowFromRecent(m, q.coach))), ...(teamCap ? { teamCap } : {}) };
   },
 };
 /**
