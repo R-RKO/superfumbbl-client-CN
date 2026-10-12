@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import DisplayCaps from '../../components/DisplayCaps.vue';
 import { FORK_EDITION } from '../../game/edition';
 import fumbblLogoUrl from '../../assets/resources/fumbbl-logo.png';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
@@ -329,7 +330,7 @@ onBeforeUnmount(() => {
                   <small class="row-meta row-coach">{{ match.awayCoach || '—' }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" @click="spectateFork(match.gameId)">Spectate</button>
+              <button class="bevel spectate-button" type="button" @click="spectateFork(match.gameId)"><DisplayCaps text="Spectate" /></button>
             </div>
           </article>
         </div>
@@ -370,7 +371,7 @@ onBeforeUnmount(() => {
                   <small v-if="formatTeamValue(team(match, 1)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 1)?.tv) }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)">Spectate</button>
+              <button class="bevel spectate-button" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)"><DisplayCaps text="Spectate" /></button>
             </div>
           </article>
           </template>
@@ -400,7 +401,7 @@ onBeforeUnmount(() => {
                   <small class="row-meta row-race">Orc</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" data-tour="spectate-button" disabled title="Example">Spectate</button>
+              <button class="bevel spectate-button" type="button" data-tour="spectate-button" disabled title="Example"><DisplayCaps text="Spectate" /></button>
             </div>
           </div>
         </div>
@@ -647,6 +648,9 @@ onBeforeUnmount(() => {
   line-height: 1;
   text-transform: uppercase;
   text-shadow: 2px 2px 0 #000;
+  /* Graduate C lettering (DisplayCaps): the small capitals are finer than Nuffle's, and the 2px shadow closes their
+     counters (an S reads as an 8). They take a 1px shadow; the Nuffle lead letter keeps the button's own. */
+  --display-caps-rest-shadow: 1px 1px 0 #000;
   cursor: pointer;
 }
 .bevel:hover:not(:disabled) { filter: brightness(1.25); }

@@ -16,6 +16,7 @@ import {
 } from '../game/replaySearch';
 import { relativeTime } from '../game/fumbblPlayBlade';
 import { CONSOLE_PALETTE, THEME_PRESETS, deriveTheme } from '../game/theme';
+import DisplayCaps from '../components/DisplayCaps.vue';
 import MatchRow from '../components/MatchRow.vue';
 import PostGamePanel from '../components/PostGamePanel.vue';
 import { loadPostGameSnapshot, postGameSnapshotKeys } from '../game/postGameCache';
@@ -323,7 +324,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
             aria-label="Coach, league or game ID"
           />
           <!-- enabled while a search runs: a new search supersedes (aborts) the running one -->
-          <button class="bevel search-button" type="submit" :aria-busy="search.loading">{{ search.loading ? 'Searching…' : 'Search' }}</button>
+          <button class="bevel search-button" type="submit" :aria-busy="search.loading"><DisplayCaps :text="search.loading ? 'Searching…' : 'Search'" /></button>
           <label class="hide-scores" data-tour="replay-hide-scores">
             <input v-model="settings.replaySearchHideScores" type="checkbox" />
             <span>Hide scores and outcomes</span>
@@ -373,9 +374,9 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
             <template #actions>
               <div class="row-actions">
                 <button v-if="hasDetails(row) && !hideScores" class="bevel resume-button details-button" type="button"
-                  :title="`End-of-game details for game ${row.replayId}`" @click="openDetails(row)">Details</button>
+                  :title="`End-of-game details for game ${row.replayId}`" @click="openDetails(row)"><DisplayCaps text="Details" /></button>
                 <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading || lookupRowKey === row.key || (!row.replayId && !row.replayLookup)"
-                  :title="row.replayId ? `Replay game ${row.replayId}` : row.replayLookup ? `Replay match ${row.matchId}` : 'FUMBBL has no replay for this match'" @click="replayRow(row)">Replay</button>
+                  :title="row.replayId ? `Replay game ${row.replayId}` : row.replayLookup ? `Replay match ${row.matchId}` : 'FUMBBL has no replay for this match'" @click="replayRow(row)"><DisplayCaps text="Replay" /></button>
                 <span v-if="row.when" class="row-when" :title="rowWhen(row).abs">{{ rowWhen(row).rel }}</span>
                 <span v-if="row.division" class="row-division">{{ row.division }}</span>
               </div>
@@ -394,7 +395,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           <button class="file-button fumbbl-open" type="button" :disabled="fileLoading || gameStore.replay.loading"
             :aria-busy="fileLoading" @click="openFilePicker">
             <span aria-hidden="true">▣</span>
-            <span>{{ fileLoading ? 'Reading…' : 'Open FUMBBL Replay' }}</span>
+            <span><DisplayCaps :text="fileLoading ? 'Reading…' : 'Open FUMBBL Replay'" /></span>
           </button>
         </div>
       </section>
@@ -420,7 +421,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           </div>
         </div>
         <footer class="details-foot">
-          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)">Replay</button>
+          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)"><DisplayCaps text="Replay" /></button>
         </footer>
       </div>
     </div>
@@ -510,6 +511,9 @@ h1 { margin-top: 3px; color: var(--pb-text); font-family: 'Nuffle', system-ui, s
   line-height: 1;
   text-transform: uppercase;
   text-shadow: 2px 2px 0 #000;
+  /* Graduate C lettering (DisplayCaps): the small capitals are finer than Nuffle's, and the 2px shadow closes their
+     counters (an S reads as an 8). They take a 1px shadow; the Nuffle lead letter keeps the button's own. */
+  --display-caps-rest-shadow: 1px 1px 0 #000;
   cursor: pointer;
 }
 .bevel:hover:not(:disabled) { filter: brightness(1.25); }

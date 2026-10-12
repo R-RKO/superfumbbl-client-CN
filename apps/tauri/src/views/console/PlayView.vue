@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
+import DisplayCaps from '../../components/DisplayCaps.vue';
 import MatchRow from '../../components/MatchRow.vue';
 import {
   clearFumbblLobby,
@@ -421,10 +422,10 @@ function crestFailed(url: string | null): void {
         <!-- Owner 09-25: Super FUMBBL games keep their own button (fork edition), as before. -->
         <button v-if="FORK_EDITION" class="bevel super-button" type="button" @click="createGameOpen = true">
           <img :src="superFumbblLogoUrl" alt="" />
-          <span>Play on Super FUMBBL</span>
+          <span><DisplayCaps text="Play on Super FUMBBL" /></span>
           <span class="test-environment-splash">TEST ENVIRONMENT</span>
         </button>
-        <button class="bevel" type="button" @click="fileInput?.click()">Open JNLP</button>
+        <button class="bevel" type="button" @click="fileInput?.click()"><DisplayCaps text="Open JNLP" /></button>
       </div>
     </header>
     <p v-if="loadError" class="load-error" role="alert">{{ loadError }}</p>
@@ -434,7 +435,7 @@ function crestFailed(url: string | null): void {
         <div class="card-head">
           <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
           <!-- Owner 09-25: Refresh sits top-right of the card, in line with the title. -->
-          <button v-if="coach" class="bevel small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
+          <button v-if="coach" class="bevel small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll"><DisplayCaps :text="activeLoading ? 'Refreshing…' : 'Refresh'" /></button>
         </div>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings to see your games here.</p>
 
@@ -467,7 +468,7 @@ function crestFailed(url: string | null): void {
                 <small v-if="formatTeamValue(opponentTeam?.teamValue)" class="team-tv">{{ formatTeamValue(opponentTeam?.teamValue) }}</small>
               </div>
               <button v-if="fumbblLobby.gameId" class="bevel play-button" type="button" :disabled="!lobbyReady" @click="fumbblJoinLoaded(fumbblLobby.gameId)">
-                {{ playGlyph }} Play
+                {{ playGlyph }} <DisplayCaps text="Play" />
               </button>
               <span v-else class="play-slot" aria-hidden="true"></span>
             </div>
@@ -475,11 +476,11 @@ function crestFailed(url: string | null): void {
               <label for="fumbbl-game-name">Game name</label>
               <div class="join-row">
                 <input id="fumbbl-game-name" v-model="fumbblLobbyGameName" type="text" autocomplete="off" placeholder="Both coaches enter the same name" />
-                <button class="bevel small" type="submit" :disabled="!lobbyReady || !fumbblLobbyGameName.trim()">{{ playGlyph }} Join</button>
+                <button class="bevel small" type="submit" :disabled="!lobbyReady || !fumbblLobbyGameName.trim()">{{ playGlyph }} <DisplayCaps text="Join" /></button>
               </div>
               <div class="lobby-actions">
-                <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames">List Games</button>
-                <button class="plain" type="button" @click="clearFumbblLobby">Cancel</button>
+                <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps text="List Games" /></button>
+                <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps text="Cancel" /></button>
                 <small v-if="lobbyStatus" role="status" aria-live="polite">{{ lobbyStatus }}</small>
               </div>
             </form>
@@ -487,8 +488,8 @@ function crestFailed(url: string | null): void {
           <article v-else class="lobby-card">
             <p class="loaded-line">{{ checkmark }} FUMBBL lobby as {{ fumbblLobby.coach }}</p>
             <div class="lobby-actions">
-              <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames">List Games</button>
-              <button class="plain" type="button" @click="clearFumbblLobby">Cancel</button>
+              <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps text="List Games" /></button>
+              <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps text="Cancel" /></button>
               <small v-if="lobbyStatus" role="status" aria-live="polite">{{ lobbyStatus }}</small>
               <small v-else-if="fumbblLobbyListRequested && !fumbblLobbyGames.length" class="lobby-note">No waiting games in the lobby.</small>
             </div>
@@ -541,7 +542,7 @@ function crestFailed(url: string | null): void {
                   :title="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}`"
                   :aria-label="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}${lr.opponent ? ` against ${lr.opponent.name || lr.opponent.coach}` : ''}`"
                   @click="launchListed(entry)"
-                >{{ lr.started ? 'Rejoin' : 'Join' }}</button>
+                ><DisplayCaps :text="lr.started ? 'Rejoin' : 'Join'" /></button>
               </div>
             </article>
           </div>
@@ -583,7 +584,7 @@ function crestFailed(url: string | null): void {
               :disabled="!canResume || (pendingResume?.id === game.id)"
               :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to rejoin from here'"
               @click="resumeGame(game)"
-            >{{ pendingResume?.id === game.id ? 'Connecting…' : 'Rejoin' }}</button>
+            ><DisplayCaps :text="pendingResume?.id === game.id ? 'Connecting…' : 'Rejoin'" /></button>
           </div>
         </article>
 
@@ -618,8 +619,8 @@ function crestFailed(url: string | null): void {
             <template #actions>
               <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
               <div class="row-actions">
-                <button class="bevel resume-button details-button" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
-                <button class="bevel resume-button row-replay-button" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+                <button class="bevel resume-button details-button" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)"><DisplayCaps text="Details" /></button>
+                <button class="bevel resume-button row-replay-button" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)"><DisplayCaps text="Replay" /></button>
                 <!-- Owner 10-01 (S78): when it was played sits under the buttons, not in the result box. -->
                 <span class="row-when">{{ relativeTime(row.when) }}</span>
               </div>
@@ -647,7 +648,7 @@ function crestFailed(url: string | null): void {
         </div>
         <footer class="details-foot">
           <!-- Owner 10-01 (S73): no Dice button here - the pane's own Dice tab opens it. -->
-          <button v-if="!detailsExample" class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)">Replay</button>
+          <button v-if="!detailsExample" class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)"><DisplayCaps text="Replay" /></button>
         </footer>
       </div>
     </div>
@@ -680,6 +681,9 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
   line-height: 1;
   text-transform: uppercase;
   text-shadow: 2px 2px 0 #000;
+  /* Graduate C lettering (DisplayCaps): the small capitals are finer than Nuffle's, and the 2px shadow closes their
+     counters (an S reads as an 8). They take a 1px shadow; the Nuffle lead letter keeps the button's own. */
+  --display-caps-rest-shadow: 1px 1px 0 #000;
   cursor: pointer;
 }
 .bevel:hover:not(:disabled) { filter: brightness(1.25); }
