@@ -1121,7 +1121,7 @@ const legacyState = reactive({
     coach?: string;
     injuries: {
       index: number;
-      playerId: string; player: string; side: 'home' | 'away';
+      playerId: string; player: string; side: 'home' | 'away'; spp?: { total: number; earned: number } | null;
       square: [number, number] | null; base: number;
       outcome: 'stay' | 'reserves' | 'building'; injury: string;
       offeredTypes: ApothecaryType[];
@@ -1131,7 +1131,7 @@ const legacyState = reactive({
   } | null,
   /** Apothecary re-roll CHOICE (r6f, FFB `apothecaryChoice`) — server rolled a d16; coach picks OLD vs NEW casualty. */
   apothecaryD16: null as {
-    playerId: string; player: string; side: 'home' | 'away';
+    playerId: string; player: string; side: 'home' | 'away'; spp?: { total: number; earned: number } | null;
     square: [number, number] | null;
     oldInjury: string; newInjury: string;
     /** #243 ③ (Fives): the raw D16 casualty roll behind each label, for the modal's "Original (n) | New (n)" display. null when uncaptured (older game / missing report) → the view shows the label alone. */
@@ -3705,6 +3705,180 @@ function releaseInjuryTokenHold(playerId: string): void {
 function clearInjuryTokenHolds(): void {
   if (state.injuryTokenHolds.length > 0) state.injuryTokenHolds = [];
   planInjuryTokenHoldTimer();
+  // Owner 10-12: every path that voids the injury pump (model replaced, snapshot / seek, catch-up, board reset, game
+  // end, pacing reset) also means no pill is coming for a deferred stun decoration / injury sound: resolve them now.
+  settleAllInjuryPillBeats();
+}
+
+/** Owner 10-12 ("Can we also wait to apply the Stunned player decoration until the stunned pill token pops?" and
+ *  "Sound event for casualty or injury type also should not apply until the pill token reveal.").
+ *  The server model is applied on arrival as always (the player IS stunned / KO'd in the model at once); only two
+ *  presentation effects wait for the moment his injury pill pops (pumpInjuries' presentInjury, `state.injurySplash`):
+ *   - STUN: the stunned DECORATION (the STUNNED banner / X + caption and the slate tint) of a player whose state
+ *     became STUNNED in a frame that queued his STUNNED injury event. The lying pose is the model's and draws at once.
+ *     The renderer reads `stunDecorationHolds` (pull-based, before the frame's setGame) and leaves the decoration off.
+ *   - SOUND: the wire's injury-type sound on that frame (upstream UtilServerInjury: 'ko' KO, 'injury' BH / SI, 'rip'
+ *     dead) when it matches the queued event's result. The frame's apply-time play skips it and the pill plays it. 'fall' (the knock-down / stun sound, also played for falls whose armour held) and the armour
+ *     sounds stay where they are. Classic keeps today's apply-time sound.
+ *  OCCURRENCE (Astra 10-12): a beat belongs to ONE injury occurrence - the player + the command that carried it (the
+ *  frame's command live, the history event's command on review). Only that occurrence's own pill / slot end resolves it,
+ *  so an older, delayed pill of the same player can never release a newer stun. A resolved review occurrence is
+ *  remembered by its HISTORY POSITION (consumedPillOccurrences): the spectator history cursor the event was committed at
+ *  - history session (a fresh id for every new history: game change, non-retained join), connection generation, segment
+ *  and sequence - plus the player. Ingress hands the live applier the ORIGINAL command and the history a clone, so the
+ *  route records original -> cursor (injuryOccurrenceIds) and review reads the event's own cursor: both derive the same
+ *  key, unique within a retained history (commandNr is not: it restarts on a server cache reload and the replay
+ *  backfill is renumbered 1..N). A command with no history position (play, file replay, synthetic) records NO key -
+ *  a rewind there may re-arm, it never aliases. A remembered occurrence is not armed again on a rewind +
+ *  re-presentation (it draws and sounds at once).
+ *  EXACTLY ONCE: a beat resolves once (pop, or any fallback below) and is then gone; the frame / review event that
+ *  handed its sound to the beat does not play it at apply time.
+ *  FALLBACKS (every hold needs a wake) - no beat is armed at all when no pill will pop: catch-up / collapsed replay /
+ *  fast-forward (the event is never queued), a snapshot / seek / reconnect publication (no played transition), a
+ *  multi-step review jump, a stunned state with no STUNNED injury event (rule-stun, kickoff, snapshot join), a player
+ *  who was stunned already. An armed beat resolves AT ONCE (decoration applied, sound played) when:
+ *   - his state is no longer STUNNED (the stun part simply drops - nothing to draw), reconcileInjuryPillBeats;
+ *   - a newer beat is armed for him;
+ *   - the pump is voided: clearInjuryTokenHolds (model replaced, review snap, catch-up, board reset, game end,
+ *     resetCasualtySppPacing), spectator presentation cancel (pause / seek / go live), the review event finishing
+ *     without his pill, his own injury slot ending without the pill;
+ *   - its own plain-timer cap (INJURY_PILL_BEAT_CAP_MS), which survives clearAllGameTimeouts.
+ *  SILENT resolutions (decoration applied, sound dropped on purpose): a hard game boundary (leave / game change /
+ *  disconnect - the old game's sound never plays on the way out) and a user-initiated spectator presentation cancel
+ *  (pause / seek / go live - stopPresentationSounds cuts presentation audio there anyway; Astra 10-12 item 1).
+ *  Presentation only: no wire, no model, no planner reads this. */
+export const INJURY_PILL_BEAT_CAP_MS = 15000;
+/** The live applier's frame handed its wire sound to a pill beat (set in its injury loop, read at its sound play). */
+let frameInjurySoundClaimed = false;
+type InjuryPillBeat = { base: number; stun: boolean; sound: string | null; command: object | null; occurrence: string | null; timer: ReturnType<typeof setTimeout> };
+const injuryPillBeats = new Map<string, InjuryPillBeat>();
+/** The occurrence (carrying command) of each queued injury event: its pill resolves only that occurrence's beat. */
+const injuryEventOccurrence = new WeakMap<InjuryEvent, object>();
+/** Review occurrences already resolved, per carrying command: never armed again (rewind + re-presentation). */
+const consumedPillOccurrences = new Set<string>();
+/** Bounded memory: the oldest keys go first (a game has a few dozen injuries; this is a ceiling, not a working size). */
+const CONSUMED_PILL_OCCURRENCES_MAX = 512;
+/** Spectator ingress: each routed ORIGINAL command -> the history position it was committed at (see OCCURRENCE). */
+const injuryOccurrenceIds = new WeakMap<object, string>();
+function spectatorCursorKey(cursor: { sessionId: string; connectionGeneration: number; segmentId: number; sequence: number }): string {
+  return `${cursor.sessionId}:${cursor.connectionGeneration}:${cursor.segmentId}:${cursor.sequence}`;
+}
+/** @internal The occurrence key of `playerId`'s injury carried by `command` (review passes the event's cursor). */
+export function injuryPillOccurrenceKey(command: object | null, playerId: string,
+  cursor?: { sessionId: string; connectionGeneration: number; segmentId: number; sequence: number } | null): string | null {
+  const position = cursor ? spectatorCursorKey(cursor) : command ? injuryOccurrenceIds.get(command) ?? null : null;
+  return position && playerId ? `${position}:${playerId}` : null;
+}
+function pillOccurrenceConsumed(key: string | null): boolean {
+  return !!key && consumedPillOccurrences.has(key);
+}
+function notePillOccurrenceConsumed(key: string | null): void {
+  if (!key) return;
+  consumedPillOccurrences.delete(key);
+  consumedPillOccurrences.add(key);
+  while (consumedPillOccurrences.size > CONSUMED_PILL_OCCURRENCES_MAX) {
+    const oldest = consumedPillOccurrences.values().next().value;
+    if (oldest === undefined) break;
+    consumedPillOccurrences.delete(oldest);
+  }
+}
+/** Does a pending beat hold `command`'s wire sound (review present(): skip the apply-time play)? */
+function injuryPillHoldsSoundOf(command: object): boolean {
+  for (const beat of injuryPillBeats.values()) if (beat.command === command && beat.sound) return true;
+  return false;
+}
+/** Players whose stunned decoration waits for their pill (the renderer's probe). Outside the spectator state proxy on purpose. */
+const stunDecorationHolds = shallowRef<readonly string[]>([]);
+const INJURY_PILL_SOUND_BASES: Readonly<Record<string, readonly number[]>> = {
+  ko: [PlayerStateBase.KNOCKED_OUT],
+  injury: [PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY],
+  rip: [PlayerStateBase.RIP],
+};
+/** @internal Does `sound` announce an injury result of `base` (the sound the pill takes over)? */
+export function injuryPillSoundMatches(sound: unknown, base: number): sound is string {
+  return typeof sound === 'string' && (INJURY_PILL_SOUND_BASES[sound]?.includes(base) ?? false);
+}
+function syncStunDecorationHolds(): void {
+  const ids = [...injuryPillBeats].filter(([, beat]) => beat.stun).map(([id]) => id);
+  const prior = stunDecorationHolds.value;
+  if (ids.length !== prior.length || ids.some((id, index) => id !== prior[index])) stunDecorationHolds.value = ids;
+}
+/** Arm a pill beat for `playerId`'s queued injury event of result `base`. Returns whether the sound was claimed. */
+function armInjuryPillBeat(playerId: string, base: number, stun: boolean, sound: string | null, command: object | null, occurrence: string | null = null): boolean {
+  if (!playerId || (!stun && !sound)) return false;
+  settleInjuryPillBeat(playerId); // a previous beat of his (an older occurrence) resolves first
+  const beat: InjuryPillBeat = { base, stun, sound, command, occurrence, timer: setTimeout(() => {
+    if (injuryPillBeats.get(playerId) === beat) settleInjuryPillBeat(playerId);
+  }, INJURY_PILL_BEAT_CAP_MS) };
+  injuryPillBeats.set(playerId, beat);
+  syncStunDecorationHolds();
+  return !!sound;
+}
+function settleInjuryPillBeat(playerId: string, withSound = true): void {
+  const beat = injuryPillBeats.get(playerId);
+  if (!beat) return;
+  injuryPillBeats.delete(playerId);
+  clearTimeout(beat.timer);
+  if (beat.command) {
+    notePillOccurrenceConsumed(beat.occurrence);
+  }
+  syncStunDecorationHolds();
+  if (beat.sound && withSound) playSound(beat.sound);
+}
+/** Resolve `event`'s own beat (its occurrence only - a newer beat of the same player is left alone). */
+function settleInjuryPillBeatOf(event: InjuryEvent): void {
+  const beat = injuryPillBeats.get(event.playerId);
+  const occurrence = injuryEventOccurrence.get(event);
+  if (beat && occurrence && beat.command === occurrence) settleInjuryPillBeat(event.playerId);
+}
+function settleAllInjuryPillBeats(withSound = true): void {
+  for (const playerId of [...injuryPillBeats.keys()]) settleInjuryPillBeat(playerId, withSound);
+}
+/** The pill of `event` popped: its beat resolves now (decoration on, sound played). */
+function popInjuryPillBeat(event: InjuryEvent): void {
+  const beat = injuryPillBeats.get(event.playerId);
+  if (beat && beat.base === event.injuryBase) settleInjuryPillBeatOf(event);
+}
+/** The model moved on: a player no longer STUNNED has no stunned decoration to wait for. */
+function reconcileInjuryPillBeats(model: GameJson | null): void {
+  if (injuryPillBeats.size === 0) return;
+  if (!model) { settleAllInjuryPillBeats(); return; }
+  for (const [playerId, beat] of [...injuryPillBeats]) {
+    if (!beat.stun) continue;
+    const data = model.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+    if (data && ((data.playerState ?? 0) & 0xff) === PlayerStateBase.STUNNED) continue;
+    beat.stun = false;
+    if (!beat.sound) settleInjuryPillBeat(playerId);
+  }
+  syncStunDecorationHolds();
+}
+/** @internal The one arming rule (live applier + review publication): which pill beats does this injury event take?
+ *  stun = he became STUNNED in this very transition by a STUNNED result; sound = the frame's wire sound announces
+ *  this result (and Classic is not the active surface). */
+export function injuryPillBeatFor(
+  event: Pick<InjuryEvent, 'playerId' | 'injuryBase' | 'square'>,
+  priorState: number | undefined,
+  model: GameJson,
+  wireSound: unknown,
+  soundFree: boolean,
+  classic: boolean,
+): { stun: boolean; sound: string | null } {
+  const data = model.fieldModel.playerDataArray.find((d) => d.playerId === event.playerId);
+  const stun = event.injuryBase === PlayerStateBase.STUNNED && !!event.square && !!data
+    && ((data.playerState ?? 0) & 0xff) === PlayerStateBase.STUNNED
+    && ((priorState ?? 0) & 0xff) !== PlayerStateBase.STUNNED;
+  const sound = !classic && soundFree && injuryPillSoundMatches(wireSound, event.injuryBase) ? wireSound : null;
+  return { stun, sound };
+}
+/** @internal Test seam for the pill beats. */
+export function installInjuryPillBeatTestHarness() {
+  return {
+    stunHolds: () => stunDecorationHolds.value,
+    pending: () => [...injuryPillBeats.keys()],
+    /** Arm a beat with no injury event behind it (its own cap must still resolve it). */
+    arm: (playerId: string, base: number, stun: boolean, sound: string | null) => armInjuryPillBeat(playerId, base, stun, sound, null),
+    reset: () => settleAllInjuryPillBeats(false),
+  };
 }
 function crowdPushedInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
   return reports.some((report) => String(report.reportId) === 'pushback' && String(report.defenderId ?? '') === playerId);
@@ -3918,6 +4092,7 @@ function pumpInjuries() {
   const presentInjury = () => {
     if (sppGeneration !== casualtySppGeneration) return;
     state.injurySplash = event;
+    popInjuryPillBeat(event); // owner 10-12: his pill is up - the stunned decoration and the injury sound land now
     noteInjuryTokenHoldProgress(event.playerId); // owner 10-10: his pill is up - his own slot has started
     // Owner 07-08: KO/casualty removal frame lands a frame later and yanked the token mid-toast — HOLD the spectator drain for the splash window (no-op in play).
     if (event.isCasualty || event.injuryBase === 0x05 || event.injuryBase === 0x09) holdPlayback(stepMs); // 0x09: crowd-surf -> reserves removal (owner 09-15)
@@ -3931,7 +4106,10 @@ function pumpInjuries() {
       injuryPlaying = false; injuryPresenting = null;
       injuryPresenting = null;
       // Owner 10-10: his armour roll and pill have been shown - the held token leaves for the dugout now.
-      if (!injuryQueue.some((queued) => queued.playerId === event.playerId)) releaseInjuryTokenHold(event.playerId);
+      if (!injuryQueue.some((queued) => queued.playerId === event.playerId)) {
+        releaseInjuryTokenHold(event.playerId);
+        settleInjuryPillBeatOf(event); // owner 10-12: his slot is over - this occurrence's beat, if his pill did not take it
+      }
       noteInjuryTokenHoldProgress(); // the queue moved on: progress for the holds still waiting in it
       if (event.isCasualty) {
         casualtyPresentationsOutstanding = Math.max(0, casualtyPresentationsOutstanding - 1);
@@ -4561,10 +4739,30 @@ async function pauseSpectatorView(): Promise<void> {
         const playedReports = played && played.cursor.sequence === position.cursor.sequence
           ? ((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []) : null;
         if (playedReports) {
-          armInjuryTokenHoldsForTransition(position.model, coordinates,
-            new Map(previous.model.fieldModel.playerDataArray.map((player) => [player.playerId, player.playerState ?? 0])), playedReports);
+          const priorStates = new Map(previous.model.fieldModel.playerDataArray.map((player) => [player.playerId, player.playerState ?? 0]));
+          armInjuryTokenHoldsForTransition(position.model, coordinates, priorStates, playedReports);
+          // Owner 10-12: the same played transition arms the pill beats (present() queues the event a little later and
+          // pops its pill; a seek / snapshot / multi-step jump arms none and draws + sounds at once).
+          // A beat of an EARLIER event is stale: present() runs one event at a time, so that event's presentation is over.
+          for (const [pid, beat] of [...injuryPillBeats]) if (beat.command !== played?.command) settleInjuryPillBeat(pid);
+          if (!playback.catchingUp && played) {
+            const armed = new Set<string>();
+            for (const report of playedReports) {
+              const pid = String(report.defenderId ?? report.playerId ?? '');
+              const event = pid && !armed.has(pid) ? injuryPresentation(report, position.model, coordinates.get(pid), false) : null;
+              if (!event) continue;
+              armed.add(pid);
+              // Astra 10-12: an occurrence resolved before (rewind, then forward again) is not armed a second time.
+              const occurrence = injuryPillOccurrenceKey(played.command, pid, played.cursor);
+              if (pillOccurrenceConsumed(occurrence)) continue;
+              const beat = injuryPillBeatFor(event, priorStates.get(pid), position.model, played.command.sound,
+                !injuryPillHoldsSoundOf(played.command), settings.uiMode === 'classic');
+              armInjuryPillBeat(pid, event.injuryBase, beat.stun, beat.sound, played.command, occurrence);
+            }
+          }
         }
         reconcileInjuryTokenHolds(position.model);
+        reconcileInjuryPillBeats(position.model);
       }
       // The publication now owns the visible model. Release the retired legacy
       // graph rather than retaining a fourth full match copy throughout review.
@@ -4815,7 +5013,8 @@ async function pauseSpectatorView(): Promise<void> {
         || (!!projectile.bomb && wireSound === projectile.bomb.sound)
         || (!!projectile.fireball && wireSound === projectile.fireball.sound)
       );
-      if (!projectileOwnsWireSound) playSound(wireSound);
+      // Owner 10-12: an injury-type sound the publication handed to a pill beat plays when the pill pops instead.
+      if (!projectileOwnsWireSound && !injuryPillHoldsSoundOf(event.command)) playSound(wireSound);
       // The pin was raised at publication (see transitionRerollPin). No rerolled result in this transition means
       // the offer was declined: drop the pin now so the die fades with the answer.
       const reviewRerollPin = transitionRerollPin;
@@ -5007,6 +5206,7 @@ async function pauseSpectatorView(): Promise<void> {
         if (!injury || injured.has(pid)) continue;
         injured.add(pid);
         if (injury.isCasualty) casualtyPresentationsOutstanding++;
+        injuryEventOccurrence.set(injury, event.command); // owner 10-12: its pill resolves this occurrence's beat only
         injuryQueue.push(injury);
       }
       pumpInjuries();
@@ -5019,6 +5219,8 @@ async function pauseSpectatorView(): Promise<void> {
         now: () => Date.now(), waitFrame: () => new Promise<void>((resolve) => setTimeout(resolve, 16)),
         timeoutMs: 30000, onTimeout: () => {},
       });
+      // Owner 10-12: the event's injury presentation is over - a beat of its own that no pill took resolves now.
+      for (const [pid, beat] of [...injuryPillBeats]) if (beat.command === event.command) settleInjuryPillBeat(pid);
       if (signal.aborted) return;
       if (apothecaryOutcome) {
         state.apothecaryAnim = {
@@ -7529,6 +7731,7 @@ function applyFrame(frame: QueuedFrame) {
 }
 
 function applyFrameContents(frame: QueuedFrame) {
+  frameInjurySoundClaimed = false; // owner 10-12: reset per frame (re-set in the injury loop below)
   if (!game.value) return;
   gameplaySendUnanswered = false;
   const cmd = frame.cmd;
@@ -8305,6 +8508,7 @@ function applyFrameContents(frame: QueuedFrame) {
   }
   visibleInjuryOutcomeProjection = reduceInjuryOutcomes(visibleInjuryOutcomeProjection, visibleCasualtyRollProjection, reports, game.value, injuryOutcomeCoordinates);
   const injuredThisFrame = new Set<string>();
+  frameInjurySoundClaimed = false; // owner 10-12: this frame's wire sound, once a pill beat takes it, is not played below
   for (const report of reports) {
     visibleCasualtyRollProjection = reduceCasualtyRollProjection(visibleCasualtyRollProjection, [report], game.value);
     if (String(report.reportId) !== 'injury') continue;
@@ -8315,11 +8519,17 @@ function applyFrameContents(frame: QueuedFrame) {
     if (!playback.catchingUp) {
       if (event.isCasualty) casualtyPresentationsOutstanding++;
       injuryQueue.push(event);
+      // Owner 10-12: his stunned decoration / the frame's injury sound wait for this event's pill (armed only for a
+      // queued event - a fast-forwarded frame draws and sounds as before).
+      injuryEventOccurrence.set(event, cmd);
+      const beat = injuryPillBeatFor(event, preStates.get(playerId), game.value, cmd.sound, !frameInjurySoundClaimed, settings.uiMode === 'classic');
+      if (armInjuryPillBeat(playerId, event.injuryBase, beat.stun, beat.sound, cmd, injuryPillOccurrenceKey(cmd, playerId))) frameInjurySoundClaimed = true;
     }
   }
   // Owner 10-10: whoever this frame took off the pitch with his injury still to be presented keeps his token there.
   armInjuryTokenHoldsForTransition(game.value, preCoords, preStates, reports, failedMovementDestination);
   reconcileInjuryTokenHolds(game.value);
+  reconcileInjuryPillBeats(game.value); // owner 10-12: a player no longer STUNNED has no decoration to wait for
   surfaceAutoAcceptedApothecaryReturn(
     reports,
     Number.isFinite(Number((cmd as { commandNr?: unknown }).commandNr))
@@ -9591,7 +9801,8 @@ function applyFrameContents(frame: QueuedFrame) {
     }
   }
   // Relocate block, footstep, and ball sounds to their presentation beats; suppress apply-time duplicates.
-  { const s = cmd.sound as string | null | undefined; if (s !== 'block' && !(relocatedStepSound && s === 'step' && soundCueActive) && !(!!s && relocatedBeatSounds.has(s))) playSound(s); }
+  // Owner 10-12: an injury-type sound a pill beat took over plays when the pill pops (or its fallback), never here too.
+  { const s = cmd.sound as string | null | undefined; if (s !== 'block' && !(relocatedStepSound && s === 'step' && soundCueActive) && !(!!s && relocatedBeatSounds.has(s)) && !frameInjurySoundClaimed) playSound(s); }
   updateFieldFlip(game.value); // owner 2026-07-06: spectator drive-north orientation
   playback.lastReceivedAt = frame.receivedAt;
   pendingReserveSlots.clear(); // g807: reserve-slot claims resolve at each applied frame (the echo carries the occupancy)
@@ -11065,6 +11276,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.watchOutToast = null; // Withergrasp's transient overhead announcement never crosses a game boundary
   if (hardGameBoundary) watchOutAnnouncedPlayers.clear();
   state.sppToasts = [];
+  settleAllInjuryPillBeats(!hardGameBoundary); // owner 10-12: a hard boundary does not sound the old game's injury
   resetCasualtySppPacing();
   state.inducementBuy = null; state.cardBuy = null;
   state.inducementOwnDialogPending = false; // re-derived on the next sync from inducementPhaseEvidence, which a rejoin keeps
@@ -11182,6 +11394,10 @@ function registerSpectatorRendererCancellation(cancel: () => void): () => void {
 }
 function cancelSpectatorPresentation(): void {
   if (play.active) throw new Error('Spectator presentation cancellation requires a spectator connection');
+  // Owner 10-12 / Astra item 1: the cancelled presentation (pause / seek / go live - user-initiated) pops no pill. Its
+  // deferred decoration resolves now and its sound is DROPPED on purpose, before any cleanup below could play it and
+  // stopPresentationSounds cut it a moment later.
+  settleAllInjuryPillBeats(false);
   playback.queue.length = 0;
   resetPresentation();
   clearCollapsedReplayPresentation(true);
@@ -22900,6 +23116,8 @@ export const gameStore = {
   appendSystemNotice(text: string): void { log('system', text); },
   state,
   game,
+  /** Owner 10-12: players whose stunned decoration waits for their injury pill (renderer.stunDecorationHoldsProbe). */
+  stunDecorationHolds,
   reportMovementPresentationRecoveryDiagnostic(message: string, error: unknown): void {
     log('system', `⚠ ${message}: ${error instanceof Error ? error.message : String(error)}`);
   },
@@ -24274,6 +24492,13 @@ export const gameStore = {
       : null;
     clearOfficialRejoinTarget(); // S44: spectating is another join — an earlier official game's rejoin target must not survive it
     if (retainedHistory) {
+      // Owner 10-12 / Astra: a retained-history reconnect does not go through disconnect(); its resetPlayback below must
+      // not sound a pending injury beat either - resolve them silently here (the decoration is drawn at once).
+      settleAllInjuryPillBeats(false);
+      // ...and no frame already admitted to the legacy playback queue may drain afterwards and arm a new beat into the
+      // snapshot that follows (that snapshot replaces the board anyway).
+      playback.queue = [];
+      if (playback.timer) { cancelGameTimeout(playback.timer); playback.timer = null; }
       const oldSession = session;
       session = null;
       spectatorIngress?.dispose();
@@ -24333,6 +24558,8 @@ export const gameStore = {
       receipt: () => ({ order: ++nextVisibleLogOrder, receivedWallAt: Date.now(), receivedMonotonicAt: performance.now() }),
       route: (cmd, receipt, result) => withLogReceipt(receipt, () => {
         spectatorReviewRevision.value++;
+        // Owner 10-12: the history position of this ORIGINAL command (its clone in the history carries the same cursor).
+        if (result.kind === 'committed' && result.event) injuryOccurrenceIds.set(cmd as object, spectatorCursorKey(result.event.cursor));
         // Astra 09-13 P2-1: EVERY packet class can mark the history stale (an unsupported netCommandId does), so the
         // stale hand-off sits above the class dispatch rather than inside the snapshot/match/clock branch.
         if (spectatorTransport && result.kind === 'stale') spectatorFeedWentStale(spectatorTransport, result.reason);
@@ -27316,6 +27543,7 @@ export const gameStore = {
   },
 
   disconnect() {
+    settleAllInjuryPillBeats(false); // owner 10-12 / Astra item 2: leaving (or a new join) never sounds the old game's injury
     clearOfficialRejoinTarget(); // S44: leaving on purpose (or any other join starting) drops the official rejoin target
     demoLoadGeneration++;
     settlePendingSpectatorGoLive(false);

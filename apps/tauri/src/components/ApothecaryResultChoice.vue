@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue';
+import type { PlayerSpp } from '../game/logic/playerSpp';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 
 export interface ApothecaryResultChoiceView {
   player: string;
   side: 'home' | 'away';
+  spp?: PlayerSpp | null;
   oldInjury: string;
   newInjury: string;
   oldRoll: number | null;
@@ -30,7 +32,7 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
     test-id="apothecary-result-choice" @drag-start="$emit('dragStart', $event)">
     <div class="apo-result-head">
       <span class="apo-result-icon"><img :src="iconUrl" alt="" /></span>
-      <span><span class="apo-result-kicker">{{ choice.mine ? 'Your apothecary reroll' : 'Opposition apothecary reroll' }}</span><strong>{{ choice.player }}</strong></span>
+      <span><span class="apo-result-kicker">{{ choice.mine ? 'Your apothecary reroll' : 'Opposition apothecary reroll' }}</span><strong>{{ choice.player }}</strong><span v-if="choice.spp" class="apo-result-spp" data-testid="apothecary-spp">SPP {{ choice.spp.total }}<span v-if="choice.spp.earned > 0" class="apo-result-spp-gain"> +{{ choice.spp.earned }}</span></span></span>
     </div>
     <div class="apo-results">
       <!-- Owner: the D16 roll values are gone (the injury names carry the choice); names render one-line. -->
@@ -58,6 +60,8 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
 .apo-result-head { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; }
 .apo-result-head > span:last-child { display: flex; min-width: 0; flex-direction: column; }
 .apo-result-head strong { overflow: hidden; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.94rem); text-overflow: ellipsis; white-space: nowrap; }
+.apo-result-spp { color: var(--ui-text); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 700; letter-spacing: 0.04em; }
+.apo-result-spp-gain { color: var(--ui-success); }
 .apo-result-icon { display: grid; width: 46px; height: 46px; flex: 0 0 46px; place-items: center; border: 1px solid #6d8c77; border-radius: 5px; background: linear-gradient(145deg, #26352c, #090d0a); }
 .apo-result-icon img { width: 40px; height: 40px; object-fit: contain; image-rendering: pixelated; }
 .apo-result-kicker { color: var(--seat-home-text, #4a86fe); font-size: max(var(--ui-min-text-size, 12px), 0.61rem); font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }

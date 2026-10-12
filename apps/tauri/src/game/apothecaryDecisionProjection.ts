@@ -5,6 +5,7 @@ import { playerName } from './reportFormatter';
 import { playerStateBase } from './logic/apothecaryOffer';
 import { casualtyRollFor, casualtyRollBase, casualtyRollLabel, type CasualtyRollProjection } from './casualtyRollProjection';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
+import { playerSppFor } from './logic/playerSpp';
 
 const COARSE_INJURY_LABELS: Record<number, string> = { 4: 'STUNNED', 5: 'KNOCKED OUT', 6: 'BADLY HURT', 7: 'SERIOUS INJURY', 8: 'DEAD' };
 
@@ -40,7 +41,7 @@ export function buildApothecaryResult(game: GameJson, dialog: Record<string, unk
   const data = game.fieldModel.playerDataArray.find((p) => p.playerId === playerId);
   const side: TeamSide = game.teamHome.playerArray.some((p) => p.playerId === playerId) ? 'home' : 'away';
   return {
-    playerId, player: playerName(game, playerId), side,
+    playerId, player: playerName(game, playerId), side, spp: playerSppFor(game, playerId),
     square: data?.playerCoordinate && data.playerCoordinate[0] >= 0 ? [...data.playerCoordinate] as [number, number] : null,
     oldInjury: apothecarySideLabel(oldBase, dialog.seriousInjuryOld, oldRaw, oldOk),
     newInjury: apothecarySideLabel(newBase, dialog.seriousInjuryNew, newRaw, newOk),
@@ -63,6 +64,7 @@ export function buildApothecaryDecision(g: GameJson, prompt: ApothecaryOffer) {
       playerId: offer.playerId,
       player: playerName(g, offer.playerId),
       side,
+      spp: playerSppFor(g, offer.playerId),
       square: data?.playerCoordinate && data.playerCoordinate[0] >= 0
         ? [data.playerCoordinate[0], data.playerCoordinate[1]] as [number, number]
         : null,

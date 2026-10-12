@@ -376,6 +376,13 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   assertJson(value);
   const object = (item: unknown): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item);
   const keys = (item: object, expected: string[]) => Object.keys(item).sort().join(',') === expected.sort().join(',');
+  // `spp` (apothecary cards) is optional so checkpoints written before it existed still validate; when present it is null or {total, earned}.
+  const withSpp = (item: object, expected: string[]) => keys(item, expected) || keys(item, [...expected, 'spp']);
+  const validSpp = (item: object) => {
+    const spp = (item as { spp?: unknown }).spp;
+    if (!('spp' in item) || spp === null) return true;
+    return object(spp) && keys(spp, ['total', 'earned']) && finite(spp.total) && finite(spp.earned) && (spp.earned as number) >= 0;
+  };
   const nullableString = (item: unknown) => item === null || typeof item === 'string';
   const finite = (item: unknown) => typeof item === 'number' && Number.isFinite(item);
   const strings = (item: unknown) => Array.isArray(item) && item.every((entry) => typeof entry === 'string');
@@ -527,17 +534,17 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
       || ('hmpScatter' in d && !scatterValid(d.hmpScatter))) fail(36);
   }
   const result = p.apothecaryResult;
-  if (result !== null && (!object(result) || !keys(result, ['playerId', 'player', 'side', 'square', 'oldInjury', 'newInjury', 'oldRoll', 'newRoll'])
+  if (result !== null && (!object(result) || !withSpp(result, ['playerId', 'player', 'side', 'square', 'oldInjury', 'newInjury', 'oldRoll', 'newRoll']) || !validSpp(result)
     || ![result.playerId, result.player, result.oldInjury, result.newInjury].every((v) => typeof v === 'string') || !oneOf(TEAM_SIDES, result.side)
     || !(result.square === null || (numbers(result.square) && result.square.length === 2)) || ![result.oldRoll, result.newRoll].every((v) => v === null || finite(v)))) fail(37);
   const apo = p.apothecaryCard;
   if (apo !== null) {
     const injuryKeys = ['index', 'playerId', 'player', 'side', 'square', 'base', 'outcome', 'injury', 'offeredTypes', 'options'];
-    if (!object(apo) || !keys(apo, ['kind', 'teamId', ...injuryKeys, 'noneLabel', 'coach', 'injuries'])
+    if (!object(apo) || !withSpp(apo, ['kind', 'teamId', ...injuryKeys, 'noneLabel', 'coach', 'injuries']) || !validSpp(apo)
       || !oneOf(APOTHECARY_OFFER_KINDS, apo.kind) || !nullableString(apo.teamId) || typeof apo.coach !== 'string'
       || !oneOf(APOTHECARY_NONE_LABELS, apo.noneLabel) || !Array.isArray(apo.injuries) || !apo.injuries.length) fail(38);
     for (const injury of [apo, ...apo.injuries]) {
-      if (!object(injury) || (injury !== apo && !keys(injury, injuryKeys)) || !Number.isInteger(injury.index) || injury.index < 0
+      if (!object(injury) || (injury !== apo && !withSpp(injury, injuryKeys)) || !validSpp(injury) || !Number.isInteger(injury.index) || injury.index < 0
         || ![injury.playerId, injury.player, injury.injury].every((v) => typeof v === 'string') || !oneOf(TEAM_SIDES, injury.side)
         || !Number.isInteger(injury.base) || !oneOf(APOTHECARY_OUTCOMES, injury.outcome)
         || !(injury.square === null || (numbers(injury.square) && injury.square.length === 2)) || !strings(injury.offeredTypes)

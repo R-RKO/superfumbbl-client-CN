@@ -3,6 +3,7 @@ import { computed, type CSSProperties } from 'vue';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import type { ApothecaryType } from '../game/logic/apothecaryOffer';
 import type { PlayerDetailSkill } from '../game/skillDisplay';
+import type { PlayerSpp } from '../game/logic/playerSpp';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
 
@@ -11,6 +12,8 @@ export interface ApothecaryPromptInjury {
   playerId: string;
   player: string;
   side: 'home' | 'away';
+  /** The player's current SPP and this game's gain; absent when the game carries no result for them. */
+  spp?: PlayerSpp | null;
   injury: string;
   base: number;
   options: readonly { type: ApothecaryType | null; label: string }[];
@@ -68,6 +71,7 @@ defineEmits<{
         <img v-if="portrait" class="apo-portrait" :src="portrait" :alt="`${subjectName} portrait`" />
         <span v-else class="apo-portrait apo-portrait-fallback" aria-hidden="true">👤</span>
         <strong class="apo-player-name">{{ subjectName }}</strong>
+        <span v-if="prompt.injuries[0]?.spp" class="apo-spp" data-testid="apothecary-spp">SPP {{ prompt.injuries[0].spp.total }}<span v-if="prompt.injuries[0].spp.earned > 0" class="apo-spp-gain"> +{{ prompt.injuries[0].spp.earned }}</span></span>
         <PlayerDetailSkillList v-if="skills?.length" list-class="apo-skills" :skills="skills"
           :mode="skillMode ?? 'markings'" :icon-style="skillIconStyle ?? 'bb3'"
           :position-id="positionId" :side="playerSide ?? prompt.side" mark-added />
@@ -77,7 +81,7 @@ defineEmits<{
         <div class="apo-injuries">
           <article v-for="injury in prompt.injuries" :key="injury.playerId" class="apo-injury" :class="{ ko: injury.base === 5 }">
             <div class="apo-injury-copy">
-              <span v-if="prompt.kind === 'multiple'" class="apo-player">{{ injury.player }}</span>
+              <span v-if="prompt.kind === 'multiple'" class="apo-player">{{ injury.player }}<span v-if="injury.spp" class="apo-row-spp" data-testid="apothecary-row-spp"> · SPP {{ injury.spp.total }}<span v-if="injury.spp.earned > 0" class="apo-spp-gain"> +{{ injury.spp.earned }}</span></span></span>
               <span class="apo-status">{{ injury.injury }}</span>
               <!-- Owner 09-05: the wait line lives INSIDE the result box, names the coach and the player, and wraps. -->
               <span v-if="!prompt.mine" class="apo-wait" aria-live="polite">Waiting for {{ prompt.coach || 'the coach' }}’s decision on {{ injury.player }}…</span>
@@ -115,6 +119,9 @@ defineEmits<{
 .apo-player-card { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border: 1px solid #39434f; border-radius: 5px; background: linear-gradient(180deg, #171d25, #080b0f); box-shadow: inset 0 1px 5px #000c; }
 .apo-portrait { width: 104px; height: 104px; flex: 0 0 104px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 4px 3px #000b); }
 .apo-portrait-fallback { display: grid; place-items: center; color: #7e8b99; font-size: max(var(--ui-min-primary-text-size, 16px), 2.2rem); }
+.apo-spp { color: var(--ui-text); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 700; letter-spacing: 0.04em; text-align: center; }
+.apo-row-spp { font-weight: 700; }
+.apo-spp-gain { color: var(--ui-success); font-weight: 700; }
 .apo-player-name { max-width: 100%; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.83rem); line-height: 1.14; overflow-wrap: anywhere; text-align: center; white-space: normal; }
 /* The skill list is a multi-root child: the class is handed to it as a prop and styled through :deep. */
 .apo-player-card :deep(.apo-skills) { width: 100%; max-width: 100%; justify-content: center; margin-top: 0; padding-top: 6px; }

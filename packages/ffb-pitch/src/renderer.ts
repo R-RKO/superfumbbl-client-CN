@@ -59,6 +59,8 @@ import { APOTHECARY_STATION_LAYOUT, apoBoxState, apothecaryTokenScale, projected
 import { budgetAfterPlannedSteps, pathRollCost, planPath, reachableSquares, routePreference, squareKey, type Square } from './movement';
 
 export type PassDestinationKind = 'ball' | 'bomb' | 'stunty';
+/** Owner 10-12: the shared empty stun-decoration hold list (no allocation per refresh when nothing is held). */
+const NO_STUN_DECORATION_HOLDS: ReadonlySet<string> = Object.freeze(new Set<string>());
 /** Owner 09-28 (S16): Hail Mary Pass scatter squares, derived by the host from received frames only. `decision.square`
  *  is null when the rolled direction leads off the pitch. */
 export interface HmpScatterMarksState {
@@ -5603,7 +5605,10 @@ export class PitchRenderer {
     this.drawPitch();
     this.attachCamera(app.canvas);
     this.resetCamera();
+    this.initComplete = true; // owner 10-12 (Astra): assets loaded, first draw done, camera at its fit
   }
+  /** Set at the very end of initRenderer (after every asset await and the camera reset); never before. */
+  private initComplete = false;
 
   destroy(): void {
     if (this.destroyed) return;
@@ -5733,6 +5738,7 @@ export class PitchRenderer {
       this.movementPresentationCursor = null;
       this.flushMovementOverlay();
       this.clearHoverSquareMarker();
+      this.focusArrow = null; // owner 10-12: the Intensive Training arrow never crosses a game change
       this.clearEffects();
       if (seededKickoffScatter && seededKickoffReveal) {
         this.pendingServerKickoffScatter = seededKickoffScatter;
@@ -6021,6 +6027,7 @@ export class PitchRenderer {
     this.kickEmTargetNominatedId = null; this.kickEmTargetMarkNode = null; // Owner 09-28 (Spec S3 v2): a stale kick-em nomination must not leak games
     this.clearFoulTargetCue(); // drop a pending foul-target boot on a game change
     this.clearRosterAttentionCue(); // drop a pending roster-panel attention arrow on a game change
+    this.removeFocusArrowNode(); // owner 10-12: the slot stays (a replay seek keeps the card up); the next paint rebuilds it
     this.clearUnactivatedCues(); // owner 09-08: End-Turn idle-player cues never survive a game change
     this.deferredMoves.clear(); // queue #1: a stale follow/stay defer must not leak games
     this.pendingScatter.clear(); // TTM: a stale scatter cue must not leak games
@@ -6185,6 +6192,7 @@ export class PitchRenderer {
   /** Re-renders tokens from the current game state (call after model sync). */
   refresh(): void {
     if (!this.app || this.destroyed) return;
+    this.stunDecorationDeferredDrawn = this.readStunDecorationHolds(); // owner 10-12: read before any token is built
     // 10-08 (Astra P2, third pass): the ball sprite + tween as they stand BEFORE this rebuild, so a kick flight that
     // is already in the air can be re-bound to the rebuilt sprite (see kickFlightInAir) instead of started again.
     const priorKickBall = this.renderedBall;
@@ -7250,6 +7258,7 @@ export class PitchRenderer {
       }
     }
     refreshCompleted = true;
+    this.syncFocusArrow();
     } catch (error) {
       if (preservedPresentationToken && !preservedPresentationToken.destroyed && preservedPresentationToken.parent == null) {
         preservedPresentationToken.destroy({ children: true });
@@ -7500,6 +7509,15 @@ export class PitchRenderer {
     const square = this.cueAnchorForPlayer(playerId);
     if (!square) return false;
     this.focusOnSquare(square);
+    return true;
+  }
+
+  /** Owner 10-12: an automatic camera move onto a player (pitch square or dugout box) for a card about that player.
+   *  Rides nudgeToSquare, so it obeys the Auto Director: off = the camera never moves. False = no anchor. */
+  nudgeToPlayer(playerId: string): boolean {
+    const square = this.cueAnchorForPlayer(playerId);
+    if (!square) return false;
+    this.nudgeToSquare(square);
     return true;
   }
 
@@ -8695,6 +8713,9 @@ export class PitchRenderer {
   }
 
   private redrawOverlays(): void {
+    // owner 10-12: a token-reuse setGame paints here instead of refresh(). Mid-refresh this runs BEFORE drawDugouts
+    // has re-registered the dugout tokens, so an unresolved anchor is left alone here (refresh syncs again at its end).
+    this.syncFocusArrow(true);
     this.beginMovementOverlayFrame();
     // Astra: the kick aim markers live on the overlay layer but are rebuilt only on pointer move — keep them across a
     // redraw (e.g. the late block-face apply) like the hover square, never destroy them here.
@@ -13604,7 +13625,7 @@ export class PitchRenderer {
   // PULSE at the square (flashRings one-shot) ② THEN the bouncing ▼ arrow. `node`/`tick` are
   // null until the arrow spawns; `arm` is the pending arrow timer. Roster-row and log-name
   // clicks share this one call, so the reveal is identical from both.
-  private rosterAttentionCue: { node: Text | null; tick: (() => void) | null; arm: ReturnType<typeof setTimeout> | null; clear: ReturnType<typeof setTimeout> } | null = null;
+  private rosterAttentionCue: { playerId?: string; node: Text | null; tick: (() => void) | null; arm: ReturnType<typeof setTimeout> | null; clear: ReturnType<typeof setTimeout> } | null = null;
   /** Owner 08-18: resolve a player's cue anchor — the pitch square when on-pitch, else the DUGOUT
    *  projected square (KO/CAS/reserves boxes register in playersBySquare for hit-testing, so the
    *  reverse lookup is authoritative for where the token actually rendered). */
@@ -13651,6 +13672,8 @@ export class PitchRenderer {
       const cue = this.rosterAttentionCue;
       if (!cue || cue.arm !== arm || !this.app) return; // superseded or cleared
       cue.arm = null;
+      // Owner 10-12: the Intensive Training arrow already marks this player; a second identical one would overlap it.
+      if (this.focusArrow?.playerId === playerId && this.focusArrow.node && !this.focusArrow.node.destroyed) return;
       // Owner 10-12: the arrow is built after the pulse; it takes the projection as it stands when it appears (the
       // pitch may have turned in between), never the pixels computed when the cue was requested.
       const tp = this.tokenPos(x, y);
@@ -13677,7 +13700,7 @@ export class PitchRenderer {
       cue.tick = tick;
     }, pulseMs);
     const clear = this.scheduleTimer(() => this.clearRosterAttentionCue(), lifeMs);
-    this.rosterAttentionCue = { node: null, tick: null, arm, clear };
+    this.rosterAttentionCue = { playerId, node: null, tick: null, arm, clear };
   }
   clearRosterAttentionCue(): void {
     if (!this.rosterAttentionCue) return;
@@ -13690,6 +13713,93 @@ export class PitchRenderer {
       node.destroy();
     }
     this.rosterAttentionCue = null;
+  }
+
+  // Owner 10-12: the Intensive Training arrow - the locate cue's look in its OWN slot, so a roster-row / log-name
+  // locate (which replaces the locate cue) never takes it away. It follows the player: rebuilt on the token's
+  // current anchor (pitch square or dugout box) whenever a paint finds it moved, cleared if the player leaves the
+  // pitch after standing on it, and carried through a projection change by anchorEffect like every static cue.
+  // No timer: the host holds it while the skill card is up. Cost per paint = one anchor lookup while it is set.
+  private focusArrow: {
+    playerId: string; square: [number, number] | null; onPitch: boolean; node: Text | null; tick: (() => void) | null;
+  } | null = null;
+  /** True when the arrow is drawn now (false = cleared, or the player has no anchor yet: the slot stays and the next
+   *  paint draws it). */
+  setFocusArrow(playerId: string | null): boolean {
+    this.removeFocusArrowNode();
+    this.focusArrow = playerId ? { playerId, square: null, onPitch: false, node: null, tick: null } : null;
+    if (playerId) this.retireLocateArrowOn(playerId);
+    this.syncFocusArrow();
+    return !!playerId && this.focusArrowSquare() !== null;
+  }
+  /** A locate arrow already on (or about to appear over) this player goes: one triangle, not two. Its pulse ring is a
+   *  separate self-fading flash and stays. */
+  private retireLocateArrowOn(playerId: string): void {
+    const cue = this.rosterAttentionCue;
+    if (!cue || cue.playerId !== playerId) return;
+    if (cue.arm) { this.cancelTimer(cue.arm); cue.arm = null; }
+    if (cue.tick) this.app?.ticker.remove(cue.tick);
+    if (cue.node && !cue.node.destroyed) { cue.node.parent?.removeChild(cue.node); cue.node.destroy(); }
+    cue.node = null;
+    cue.tick = null;
+  }
+  /** The square the arrow is drawn on, or null when none is drawn. */
+  focusArrowSquare(): [number, number] | null {
+    const fa = this.focusArrow;
+    return fa?.node && !fa.node.destroyed && fa.square ? [fa.square[0], fa.square[1]] : null;
+  }
+  private removeFocusArrowNode(): void {
+    const fa = this.focusArrow;
+    if (!fa) return;
+    if (fa.tick) this.app?.ticker.remove(fa.tick);
+    if (fa.node && !fa.node.destroyed) {
+      fa.node.parent?.removeChild(fa.node);
+      fa.node.destroy();
+    }
+    fa.node = null;
+    fa.tick = null;
+  }
+  /** Ready for presentation calls: an app (async init done) and a game installed. */
+  isReady(): boolean {
+    return this.initComplete && !!this.app && !!this.game && !this.destroyed;
+  }
+  /** `onlyIfResolved`: a partial paint (redrawOverlays) acts only on a player it can place; the full refresh decides
+   *  "gone" against the complete lookup. */
+  private syncFocusArrow(onlyIfResolved = false): void {
+    const fa = this.focusArrow;
+    if (!fa || !this.app) return;
+    const square = this.cueAnchorForPlayer(fa.playerId);
+    if (!square && onlyIfResolved) return;
+    const leftPitch = fa.onPitch && (!square || !isOnPitch(square));
+    if (!square || leftPitch) {
+      this.removeFocusArrowNode();
+      if (leftPitch) this.focusArrow = null;
+      return;
+    }
+    if (fa.node && !fa.node.destroyed && fa.square && fa.square[0] === square[0] && fa.square[1] === square[1]) return;
+    this.removeFocusArrowNode();
+    const [x, y] = square;
+    const tp = this.tokenPos(x, y);
+    const anchor = squareAnchor(x, y);
+    const scale = depthScale(x, y);
+    const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    node.anchor.set(0.5);
+    node.scale.set(scale);
+    const baseY = anchor.y - TILE_H * 0.5 * scale; // the locate cue's gap above the head
+    node.position.set(tp.x, baseY);
+    node.zIndex = this.depthZ(x, y) + 72;
+    this.effectsLayer.addChild(node);
+    this.anchorEffect(node, x, y, true, true);
+    const t0 = performance.now();
+    const tick = () => {
+      if (node.destroyed) { this.app?.ticker.remove(tick); return; }
+      node.y = baseY - 5 * scale * Math.max(0, Math.sin((performance.now() - t0) / 220)); // the locate cue's bounce
+    };
+    this.app.ticker.add(tick);
+    fa.square = [x, y];
+    fa.onPitch = fa.onPitch || isOnPitch(square);
+    fa.node = node;
+    fa.tick = tick;
   }
 
   // Owner 09-08: END TURN with idle players — a bouncing ▼ over EVERY unactivated own player plus a repeating gold
@@ -20227,8 +20337,36 @@ export class PitchRenderer {
    *  acted-then-WRESTLED player (also PRONE+inactive on their own turn) would be false-marked (owner clarifier).
    *  Display-only; the store maintains the latch (setRecoveringPlayers). */
   private showStunMark(data: PlayerDataJson): boolean {
+    // Owner 10-12: the store holds the decoration of a player just stunned until his injury pill pops.
+    if (this.stunDecorationDeferredDrawn.has(data.playerId)) return false;
     if (baseState(data.playerState) === PlayerStateBase.STUNNED) return true;
     return this.recoveringPlayers.has(data.playerId);
+  }
+  /** Owner 10-12 ("wait to apply the Stunned player decoration until the stunned pill token pops"): the players whose
+   *  stunned DECORATION (banner / X + caption, slate tint) the store is holding back until their injury pill pops. The
+   *  lying pose is the model's and is drawn as always. Pull-based like injuryTokenHoldsProbe: every refresh() reads
+   *  the list before it builds a token, so the frame that applies STUNNED is drawn without the decoration; a release
+   *  has no model change of its own, so the view calls syncStunDecorationHolds() and a refresh follows. */
+  stunDecorationHoldsProbe: (() => readonly string[]) | null = null;
+  /** The list as read by the last refresh() (what is on screen). */
+  private stunDecorationDeferredDrawn: ReadonlySet<string> = NO_STUN_DECORATION_HOLDS;
+  private readStunDecorationHolds(): ReadonlySet<string> {
+    if (!this.stunDecorationHoldsProbe) return NO_STUN_DECORATION_HOLDS;
+    try {
+      const ids = this.stunDecorationHoldsProbe();
+      return ids.length === 0 ? NO_STUN_DECORATION_HOLDS : new Set(ids);
+    } catch { return NO_STUN_DECORATION_HOLDS; }
+  }
+  /** The store's list changed: redraw when it no longer matches what the last refresh drew. */
+  syncStunDecorationHolds(): void {
+    if (!this.game) return;
+    const wanted = this.readStunDecorationHolds();
+    const drawn = this.stunDecorationDeferredDrawn;
+    if (wanted.size !== drawn.size || [...wanted].some((id) => !drawn.has(id))) this.refresh();
+  }
+  /** Test / rig inspection: the players drawn without their stunned decoration right now. */
+  stunDecorationHoldProbe(): string[] {
+    return [...this.stunDecorationDeferredDrawn];
   }
 
   /** `centreY`: token-local centre of the downed figure — classic icons lie about y=-10; a walker's prone sprite

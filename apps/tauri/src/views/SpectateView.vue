@@ -427,6 +427,7 @@ import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, reso
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import { decisionCardOpen, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
+import { createIntensiveTrainingFocus, intensiveCardAnchor, intensiveTrainingFocusTarget } from '../game/intensiveTrainingFocus';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
 // Owner 2026-07-06: supporter names for the crowd "I ♥ name" signs. The CSV is the
@@ -2827,6 +2828,13 @@ watch(
 watch(
   () => gameStore.state.injuryTokenHolds,
   () => { void nextTick(() => renderer?.syncInjuryTokenHolds()); },
+  { flush: 'post' },
+);
+// Owner 10-12: a just-stunned player's decoration waits for his injury pill (the store's stunDecorationHolds, read by
+// the renderer on every refresh). The release has no model change of its own: redraw after this flush.
+watch(
+  () => gameStore.stunDecorationHolds.value,
+  () => { void nextTick(() => renderer?.syncStunDecorationHolds()); },
   { flush: 'post' },
 );
 
@@ -7737,6 +7745,62 @@ function onLogNameDblClick(playerId?: string) {
 // another selection takes over the popup, same lifecycle the card itself already follows.
 watch(() => popup.visible, (visible) => { if (!visible) renderer?.clearRosterAttentionCue(); });
 
+// Owner 10-12: "For the intensive training prayer to nuffle, can we target the player with the camera, put an arrow
+// over their head on the pitch, and pop their portrait (if portraits are enabled) when the selection box pops?"
+// Presentation only (game/intensiveTrainingFocus.ts): Auto Director camera nudge, the renderer's focus arrow (its own
+// slot, not the locate cue), and the player card when "Player portraits" is on. Cleared when the card or the wait
+// goes, whatever removed it. A decision surface: the mount replays it once the renderer exists (cold join, reconnect).
+let intensiveFocusRendererMounted = false;
+const intensiveTrainingFocus = createIntensiveTrainingFocus({
+  renderer: () => (intensiveFocusRendererMounted ? renderer : null),
+  portraitsOn: () => settings.playerCardMode !== 'called',
+  openCard: (playerId) => showPopup(playerId),
+  cardPlayerId: () => (popup.visible ? popup.playerId : null),
+  closeCard: () => { popup.visible = false; },
+});
+// The card opens at the pitch centre, which is where the camera just put the player: it steps clear of the token and
+// the arrow (the shared occlusion dodge). Followed only through the camera glide (1.5 s), then left alone; a drag or
+// a press on the card wins.
+const intensiveCardPos = ref<{ x: number; y: number } | null>(null);
+let intensiveCardRaf = 0;
+function followIntensiveCardPlacement() {
+  cancelAnimationFrame(intensiveCardRaf);
+  intensiveCardPos.value = null;
+  const playerId = intensiveTrainingFocus.activePlayerId();
+  if (!playerId) return;
+  const until = performance.now() + 1500;
+  // The card's CSS spot (left 50% / top 38-40%, centred by its translate(-50%, -50%)): offsetLeft/offsetTop ARE its
+  // centre, read once while it still sits there.
+  let cssBase: { x: number; y: number } | null = null;
+  const step = () => {
+    const host = pitchHost.value;
+    const el = host?.querySelector<HTMLElement>('.select-skill-card, .prayer-choice-wait') ?? null;
+    if (intensiveTrainingFocus.activePlayerId() !== playerId || reactivePromptDragPos.selectSkill) {
+      intensiveCardPos.value = null;
+      return;
+    }
+    if (host && el && reactivePromptHeld.value !== 'selectSkill') {
+      cssBase ??= { x: el.offsetLeft, y: el.offsetTop };
+      intensiveCardPos.value = intensiveCardAnchor(reRollPromptScreenPosition, playerTokenAvoidRect(playerId),
+        { width: host.clientWidth, height: host.clientHeight }, { width: el.offsetWidth, height: el.offsetHeight }, cssBase);
+    }
+    if (performance.now() < until) intensiveCardRaf = requestAnimationFrame(step);
+  };
+  void nextTick(step);
+}
+watchDecisionSurface(
+  () => {
+    const target = intensiveTrainingFocusTarget(gameStore.state, gameStore.game.value);
+    return target ? `${target.key}\u0000${target.playerId}` : '';
+  },
+  () => {
+    intensiveTrainingFocus.sync(intensiveTrainingFocusTarget(gameStore.state, gameStore.game.value));
+    followIntensiveCardPlacement();
+  },
+  { immediate: true, flush: 'post' },
+);
+onBeforeUnmount(() => { cancelAnimationFrame(intensiveCardRaf); intensiveTrainingFocus.dispose(); });
+
 /**
  * O8 confirm gate: a queued path never executes on its own — the user
  * confirms via this button or its Enter hotkey. Execution is demo-only until
@@ -10169,6 +10233,7 @@ onMounted(async () => {
   renderer.movementPendingProbe = movementStepsPending; // owner 09-23: the planner swallows clicks while steps are still pending
   bindArmourDiceShowing(() => renderer?.armourDiceShowing() ?? false); // owner 09-15: the injury toast waits for 'ARMOR BREAKS!' to retire
   renderer.injuryTokenHoldsProbe = () => gameStore.state.injuryTokenHolds; // owner 10-10: the token waits for its armour roll + pill
+  renderer.stunDecorationHoldsProbe = () => gameStore.stunDecorationHolds.value; // owner 10-12: the stunned decoration waits for the pill
   turfCatalog.options = renderer.turfOptions();
   // if a persisted turf is no longer available, fall back to the first option
   if (!turfCatalog.options.includes(settings.turf)) settings.turf = turfCatalog.options[0] ?? 'grass1';
@@ -11208,6 +11273,10 @@ onMounted(async () => {
   // Owner 10-08 (cold join): every decision surface the store already holds - armed by the join snapshot, or by a
   // frame that landed while this renderer was starting - gets its on-pitch effects now (card follows its token, the
   // push fan is armed, the prompt die and camera are set). Their watchers saw no change, or had no renderer.
+  // Owner 10-12 (Astra): the Intensive Training surface sees the renderer only from here: init is complete, the Auto
+  // Director has been set (setAutoDirectorEnabled resets the director, which would wipe an earlier nudge) and the
+  // first paint has registered every token (dugout boxes included), so its one camera call lands and stays.
+  intensiveFocusRendererMounted = true;
   replayDecisionSurfaces();
   // Owner 09-28 (Spec S3 v2 #2): same "seed after the initial token render" reasoning as pushBlitzTokens — a
   // Classic->Modern switch (or reconnect) remounts this renderer while a Kick 'em Blitz nomination is already
@@ -11348,6 +11417,7 @@ onBeforeUnmount(() => {
   panelResizeObserver = null;
   if (panelReanchorHandler) { window.removeEventListener('resize', panelReanchorHandler); panelReanchorHandler = null; }
   if (panelMeasureHandler) { window.removeEventListener('resize', panelMeasureHandler); panelMeasureHandler = null; }
+  intensiveFocusRendererMounted = false;
   renderer?.destroy();
   renderer = null;
 });
@@ -14459,7 +14529,7 @@ function sendChat() {
         <!-- Generic selectSkill dialog. Skill icons (or plaintext when using markers). -->
         <div v-if="gameStore.state.selectSkill" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
           v-prompt-dodge="promptDodge('selectSkill', gameStore.state.selectSkill.seq)"
-          :style="reactivePromptStyle('selectSkill')" title="Drag to move"
+          :style="reactivePromptStyle('selectSkill', intensiveCardPos ?? undefined)" title="Drag to move"
           @pointerdown="startReactivePromptDrag('selectSkill', $event)">
           <IntensiveTrainingChoice v-if="intensiveTrainingSelect"
             :player-name="gameStore.state.selectSkill.playerName" :portrait="selectSkillPortrait"
@@ -15495,7 +15565,8 @@ function sendChat() {
           <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">Uphill block — use a reroll or decline; the chooser picks the die.</div>
         </div>
 
-        <PrayerPresentation :announcement="null" :wait="gameStore.state.prayerChoiceWait" />
+        <PrayerPresentation :announcement="null" :wait="gameStore.state.prayerChoiceWait"
+          :style="intensiveCardPos ? { left: `${intensiveCardPos.x}px`, top: `${intensiveCardPos.y}px` } : undefined" />
 
         <!-- #58 SYNCHRONOUS multi-block resolution: one dice row per target (state.multiBlockResolution.rolls, Tarkin
              cbd0f598). A click on a die for a coach-pickable target sends the plain choice → resolves that target
