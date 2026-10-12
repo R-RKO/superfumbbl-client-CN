@@ -2888,9 +2888,11 @@ onBeforeUnmount(() => {
   width: 100%;
   /* Owner 08-17 (viewport reflow): was a hard 1440px cap that read as fixed-width on wide monitors —
      let the panel keep growing with the window up to a generous ceiling instead of stalling early. */
-  max-width: 1800px;
+  /* Owner 10-12: this blade scrolls in its parent, so a scrollbar would shift an auto-centred column; pin the left
+     edge to the shared inset (the logo plate's edge) instead. */
+  max-width: min(var(--console-column-width, min(2200px, 94vw)), calc(100% - var(--console-column-inset, 0px)));
   min-height: 100%;
-  margin: 0 auto;
+  margin: 0 0 0 var(--console-column-inset, 0px);
   padding: 18px 20px;
   color: var(--ui-text);
   background: var(--ui-surface);

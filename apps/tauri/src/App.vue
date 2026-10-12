@@ -3896,6 +3896,9 @@ body {
 }
 .cb-filter-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .shell {
+  /* Owner 10-12: the console page column (Play blade field) and the ribbon's logo plate share one left edge. */
+  --console-column-width: min(2200px, 94vw);
+  --console-column-inset: max(0px, calc((100vw - var(--console-column-width)) / 2));
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -4015,7 +4018,7 @@ input, textarea, [contenteditable="true"], .log-panel {
   flex-shrink: 0;
   align-items: stretch;
   min-height: 64px;
-  padding: 0 1.25rem;
+  padding: 0 1.25rem 0 var(--console-column-inset);
   overflow-x: auto;
   background: var(--ui-surface-2);
   border-bottom: 3px solid var(--ui-primary);
@@ -4057,11 +4060,12 @@ input, textarea, [contenteditable="true"], .log-panel {
   width: auto;
   height: auto;
   margin-right: 1rem;
-  padding: 1px 4px;
+  padding: 1px 4px 1px 0;
 }
 .server-plate.ribbon-logo-plate img { height: 48px; width: auto; max-width: none; max-height: none; object-fit: contain; }
 .blade-ribbon .ribbon-beta { flex: 0 0 auto; align-self: center; margin-left: 0.6rem; }
 @media (max-width: 640px) {
+  .blade-ribbon { padding-left: 1.25rem; }
   .blade-ribbon .ribbon-beta { display: none; }
   .server-plate.ribbon-logo-plate img { height: 30px; }
 }

@@ -420,7 +420,7 @@ onBeforeUnmount(() => {
   width: 100%;
   /* Owner ruling (08-18, viewport reflow): was a hard 1440px cap, same idiom as TeamBuilder's
      08-17 reflow — relaxed to a generous ceiling so the blade keeps growing with the window. */
-  max-width: 1800px;
+  max-width: var(--console-column-width, min(2200px, 94vw));
   min-height: 0;
   margin: 0 auto;
   padding: clamp(18px, 1.4vw, 28px) clamp(20px, 1.6vw, 32px);

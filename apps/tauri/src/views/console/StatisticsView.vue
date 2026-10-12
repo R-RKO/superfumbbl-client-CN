@@ -137,7 +137,7 @@ onMounted(() => { void loadRecords(); });
 .statistics-view {
   box-sizing: border-box;
   width: 100%;
-  max-width: 1440px;
+  max-width: var(--console-column-width, min(2200px, 94vw));
   margin: 0 auto;
   padding: 18px 20px;
   color: var(--ui-text);

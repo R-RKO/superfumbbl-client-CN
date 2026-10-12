@@ -662,7 +662,7 @@ function crestFailed(url: string | null): void {
    uses (theme.ts --ui-eggshell / --ui-old-lace / --ui-forest; carmine #790004 stays the action accent). Cards stack:
    My Active Games, then My Recent Games in the same card/row design. Crests are the 128 px masters at 1:1. */
 .play-view { --pb-text: var(--ui-forest, #1A401C); --pb-muted: color-mix(in srgb, var(--ui-forest, #1A401C) 62%, transparent); --pb-line: color-mix(in srgb, var(--ui-forest, #1A401C) 28%, transparent); --pb-carmine: #790004;
-  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: min(2200px, 94vw); min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
+  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: var(--console-column-width, min(2200px, 94vw)); min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
 h1, h2, p { margin: 0; }
 .play-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .22); }

@@ -444,7 +444,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
 }
 .replay-console {
   box-sizing: border-box;
-  width: min(2200px, 94vw);
+  width: var(--console-column-width, min(2200px, 94vw));
   display: flex;
   flex-direction: column;
   gap: clamp(14px, 1.4vw, 22px);

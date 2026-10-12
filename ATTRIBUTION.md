@@ -123,11 +123,15 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
 
 ## Fonts
 
-Typefaces bundled with Super FUMBBL (`apps/tauri/public/fonts/`), each under the SIL Open Font License 1.1 with its
-licence text shipped beside the font file.
+Typefaces bundled with Super FUMBBL (`apps/tauri/public/fonts/`). Graduate and Nuffle are under the SIL Open Font
+License 1.1 with the licence text shipped beside the font file; SNES Italic is a free font (see its entry).
 
 - **Eduardo Tunni**: Graduate (`Graduate-Regular.ttf`: the Game Menu, end zone and dugout lettering). Copyright (c) 2012,
   Eduardo Tunni (http://www.tipo.net.ar), with Reserved Font Name "Graduate". SIL Open Font License 1.1, licence text
   in `OFL-Graduate.txt`. The font file is used unmodified.
 - **Neale Davidson (Pixel Sagas)**: Nuffle (`Nuffle.otf`: the display font). SIL Open Font License 1.1, licence text
   in `OFL-Nuffle.txt`.
+- **629Fonts**: SNES Italic (`SNES-Italic.ttf`: the "Super FUMBBL / Fantasy Football" wordmark, rendered by
+  `scripts/gen-logo.py` into the in-app plate and Super FUMBBL's own promotional images). Obtained from FamFonts
+  (https://famfonts.com/super-nintendo/), where it is published as a free font by 629Fonts; no separate licence text
+  is provided. Used on that basis (owner decision 2026-10-12). The font file is used unmodified.

@@ -974,7 +974,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tournaments-view { width: min(1500px, calc(100% - 40px)); margin: 0 auto; padding: 32px 0 64px; color: var(--ui-text); }
+.tournaments-view { width: var(--console-column-width, min(2200px, 94vw)); margin: 0 auto; padding: 32px 0 64px; color: var(--ui-text); }
 .view-heading, .detail-heading, .section-heading, .team-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .view-heading { margin-bottom: 24px; }
 h1, h2, h3, p { margin: 0; }
