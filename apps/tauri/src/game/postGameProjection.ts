@@ -47,6 +47,14 @@ export function pgDiceCoverage(snapshot: Pick<PostGameSnapshot, 'diceCoverage'>)
 
 // B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
 export type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
+/** One MVP AWARD (not one player): `key` = `${playerId}:${awardIndex}`, stable across re-renders. */
+export type PostGameMvpAward = PostGameMvp & { key: string; awardIndex: number };
+/** Owner 10-12: "In the event the server awards the same player the MVP, let's display that MVP twice in a concede
+ *  scenario. There's no need to dedupe this." Each award the server counted on `playerAwards` (a concession's two
+ *  random picks from one list, or EXTRA_MVP) is its own entry; one player's entries stay together, in `mvps` order. */
+export function mvpAwardEntries(mvps: readonly PostGameMvp[]): PostGameMvpAward[] {
+  return mvps.flatMap((m) => Array.from({ length: Math.max(0, Math.floor(m.awards)) }, (_, awardIndex) => ({ ...m, key: `${m.playerId}:${awardIndex}`, awardIndex })));
+}
 export type PostGamePlayer = {
   playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[];
   /** Owner 10-02: EVERY skill, sorted like the player portrait (base first, added last; `added` rings the icon gold). */
@@ -315,7 +323,7 @@ export interface PgMvpCard {
    *  card and the Roster tab can never disagree. Value in gold (null = position not on the roster); the injury badge and
    *  whether it was suffered this game; advancements taken (the LVL badge, shown when there is no injury). */
   value: number | null; injury: RosterInjuryBadge | null; injuryNew: boolean; advancements: number;
-  /** MVP awards this game (a concession can award one player twice: the card's "x2"). */
+  /** MVP awards this game (a concession can award one player twice; owner 10-12: the MVP tab then shows two cards). */
   awards: number;
 }
 export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrait: string | null): PgMvpCard | null {

@@ -11,7 +11,7 @@ import { createApp, h, reactive } from 'vue';
 import { applyTheme } from '../game/theme';
 import InducementsPhase, { type PanelView, type PickerCard, type SummaryCardView } from '../components/InducementsPhase.vue';
 import {
-  KIND_LABEL, bladeOf, ownedResources, phaseMoney, summaryCards,
+  KIND_LABEL, bladeOf, estimateInducementBudget, ownedResources, phaseMoney, summaryCards,
   type Blade, type InducementPhase, type InducementRole, type PhaseOption,
 } from '../game/inducementsPhase';
 import { crestDataUrl } from '../game/teamCrests';
@@ -142,6 +142,14 @@ const UNDER_MONEY = (spent: number) => phaseMoney({
   role: 'underdog', availableGold: 390_000, pettyCash: 340_000, scumPool: 50_000, teamTreasury: 150_000, spent,
 });
 
+/** Owner 10-12 gold estimate: the waiting underdog's own expected budget, as the mount derives it (TV gap 160k,
+ *  treasury 150k, BB2025 defaults). The overdog fixture then spends 180k, so the server's petty (340k) is 160k + 180k:
+ *  the hand-over from "Estimated" to the real figure is visible. */
+const UNDER_ESTIMATE = estimateInducementBudget({
+  rulesVersion: 'BB2025', role: 'underdog', treasury: 150_000, myTv: 1_000_000, oppTv: 1_160_000,
+  myPettyCashFromTvDiff: 160_000, oppPettyCashFromTvDiff: 0, options: {},
+});
+
 function panelFor(role: InducementRole): PanelView {
   const mine = state.viewer === 'play' && role === state.seat;
   const live = state.phase === role;
@@ -162,6 +170,7 @@ function panelFor(role: InducementRole): PanelView {
         : ownedResources(TEAMS[role]),
     status: confirmed ? 'confirmed' : live ? 'selecting' : 'waiting',
     money: mine && live ? (role === 'overdog' ? OVER_MONEY(spent) : UNDER_MONEY(spent)) : null,
+    estimate: mine && role === 'underdog' && state.phase === 'overdog' ? UNDER_ESTIMATE : null,
     cards: showCards && !(state.lockedIn && mine && confirmed) ? cardsOf(picks) : [],
     editable: mine && live,
     dimmed: role === 'underdog' && state.phase === 'overdog',

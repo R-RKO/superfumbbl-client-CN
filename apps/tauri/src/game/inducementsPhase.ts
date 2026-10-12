@@ -168,6 +168,176 @@ export function pettyCashFromTvGap(wirePettyCashFromTvDiff: unknown, tvHome: num
   return Number.isFinite(wire) && wire > 0 ? wire : Math.abs(tvHome - tvAway);
 }
 
+/** The money rows a panel can show. The underdog panel shape is petty / scum / treasury, the overdog's spent /
+ *  remaining (see InducementsPhase.vue `cashRows`). A row a ruleset does not have is left out of the list. */
+export type CashRowKey = 'petty' | 'scum' | 'treasury' | 'spent' | 'remaining';
+export type UnderdogCashRow = 'petty' | 'scum' | 'treasury';
+
+/** The underdog-panel rows that exist under each ruleset's REAL inducement dialog. BB2025 `buyPrayersAndInducements`
+ *  carries pettyCash + treasury (the scum pool), so all three. BB2016 `buyInducements` (DialogBuyInducementsParameter:
+ *  teamId + availableGold only) and BB2020 `buyCardsAndInducements` have no treasury allowance on the underdog leg, so
+ *  their pool is all petty cash and there is no scum row. */
+export function underdogCashRows(rulesVersion: unknown): UnderdogCashRow[] {
+  return dialogSplitsPettyCash(rulesVersion) ? ['petty', 'scum', 'treasury'] : ['petty', 'treasury'];
+}
+/** True when the ruleset's inducement dialog sends the petty / scum split (BB2025, the default when unknown). */
+export function dialogSplitsPettyCash(rulesVersion: unknown): boolean {
+  return !/^BB20(16|20)$/i.test(String(rulesVersion ?? '').trim());
+}
+
+/**
+ * Gold-estimate (owner 10-12: "Show the gold. Work it out client side. Update it when it comes back to the user if the
+ * other coach spent any additional gold."). The LOCAL coach's own expected budget while the OTHER coach holds the
+ * dialog, derived from data already in the game model, replaying the server's own formula for the rules in play:
+ *
+ *   BB2025 (bb2025 StepBuyInducements.getAvailableGold / init / swapTeam):
+ *     overdog leg: (allowOverdogSpending || sameTv) ? freeCash + treasury : 0                     one pool
+ *     underdog, parallel (sameTv) or inducementsAlwaysUseTreasury: freeCash + treasury           one pool
+ *     underdog otherwise: petty = max(overdogSpent - freeCash, 0) + pettyCashFromTvDiff + freeCash
+ *                         scum  = min(allowUnderdogSpending ? 50k : 0, treasury)
+ *   BB2020 (bb2020 StepBuyCardsAndInducements.getAvailableGold; freeCash = freeInducementCash + freeCardCash):
+ *     overdog leg / one pool: as BB2025;  underdog otherwise: petty = overdogSpent + pettyCashFromTvDiff, no scum
+ *   BB2016 (UtilInducementSequence.calculateInducementGold + bb2016 StepBuyCards: + freeCash):
+ *     max(pettyCashTransferred, max(0, oppTv - myTv)) - pettyCashUsed + freeCash, one pool shown as petty (the
+ *     ruleset's own name for inducement money). TVs are the team results' (they carry transferred petty cash when
+ *     pettyCashAffectsTv is on). Special play cards bought before inducements are NOT taken off.
+ *
+ * Options absent from the wire take the server default (GameOptionFactory: allowOverdogSpending and
+ * allowUnderdogSpending default TRUE, alwaysUseTreasury / equal-CTV spending FALSE, freeInducementCash 0).
+ *
+ * `overdogSpent` folds the overdog's spend into the underdog's petty cash ONLY when the caller has it. The server
+ * applies the overdog's purchase and opens the underdog's dialog in the same command (StepBuyInducements.handleCommand
+ * -> executeStep -> swapTeam), so the spend and `inducementBuy` arrive together and the mount passes null; the real
+ * dialog values then replace the estimate.
+ *
+ * DISPLAY ONLY. Nothing here feeds `canAdd`, the cap, or any send; the buy flow keys off `inducementBuy` alone.
+ */
+export interface BudgetEstimateInput {
+  rulesVersion: unknown;
+  /** The panel shape the local coach is shown in while waiting. */
+  role: InducementRole;
+  /** The local team's treasury off the team model; null when the model does not carry it. */
+  treasury: number | null;
+  myTv: number;
+  oppTv: number;
+  /** Each team's own team-result `pettyCashFromTvDiff` (set on the underdog only, by StepPettyCash). */
+  myPettyCashFromTvDiff: unknown;
+  oppPettyCashFromTvDiff: unknown;
+  /** BB2016 team-result fields of the local team. */
+  pettyCashTransferred?: unknown;
+  pettyCashUsed?: unknown;
+  /** Game options as `purchaseOptionsFromWire` maps them (absent = server default). */
+  options: Readonly<Record<string, string | number | boolean | undefined>>;
+  /** The overdog's spend when it is in state; null / absent = not known (the pre-spend figure is shown). */
+  overdogSpent?: number | null;
+}
+/** The inducement-money game options, read with the SERVER's defaults for any option absent from the wire
+ *  (GameOptionFactory: inducementsAllowOverdogSpending / inducementsAllowUnderdogSpending default TRUE,
+ *  inducementsAlwaysUseTreasury / inducementsAllowSpendingTreasuryOnEqualCTV default FALSE, freeInducementCash and
+ *  freeCardCash default 0; UtilGameOption reads through getOptionWithDefault). Shared by both panels' derivations. */
+export interface InducementMoneyOptions {
+  freeInducementCash: number;
+  freeCardCash: number;
+  allowOverdogSpending: boolean;
+  allowUnderdogSpending: boolean;
+  alwaysUseTreasury: boolean;
+  allowSpendingOnEqualTv: boolean;
+  /** BB2016 card phase: maxNrOfCards (default 5) and usePredefinedInducements (default false). */
+  maxNrOfCards: number;
+  usePredefinedInducements: boolean;
+}
+export function inducementMoneyOptions(options: Readonly<Record<string, string | number | boolean | undefined>>): InducementMoneyOptions {
+  const flag = (key: string, fallback: boolean): boolean => (typeof options[key] === 'boolean' ? options[key] as boolean : fallback);
+  const int = (key: string, fallback = 0): number => { const n = Number(options[key] ?? fallback); return Number.isFinite(n) ? n : fallback; };
+  return {
+    freeInducementCash: int('freeInducementCash'),
+    freeCardCash: int('freeCardCash'),
+    allowOverdogSpending: flag('inducementsAllowOverdogSpending', true),
+    allowUnderdogSpending: flag('inducementsAllowUnderdogSpending', true),
+    alwaysUseTreasury: flag('inducementsAlwaysUseTreasury', false),
+    allowSpendingOnEqualTv: flag('inducementsAllowSpendingTreasuryOnEqualCTV', false),
+    maxNrOfCards: int('maxNrOfCards', 5),
+    usePredefinedInducements: flag('usePredefinedInducements', false),
+  };
+}
+
+export interface BudgetEstimate {
+  /** The rows to show, in order, with their gold (null = not known; the row reads a dash). */
+  cells: { key: CashRowKey; gold: number | null }[];
+  /** The whole expected budget; null when a part of it is not known. 0 = the rules give this team nothing. */
+  total: number | null;
+}
+export function estimateInducementBudget(input: BudgetEstimateInput): BudgetEstimate | null {
+  const opts = inducementMoneyOptions(input.options);
+  const num = (value: unknown): number => { const n = Number(value); return Number.isFinite(n) ? n : 0; };
+  const rules = String(input.rulesVersion ?? '').trim().toUpperCase();
+  const treasury = input.treasury === null || !Number.isFinite(input.treasury) ? null : Math.max(0, input.treasury);
+  const plus = (a: number | null, b: number): number | null => (a === null ? null : a + b);
+
+  if (rules === 'BB2016') {
+    // Astra 10-12 (P1): bb2016 StepBuyCards takes card prices off the inducement gold (134 / 140) and publishes
+    // min(gold after cards, calculateInducementGold + freeCash). Bought cards reach the client only as drawn card
+    // names, and their price hangs on a per-deck cost option the client has no card-to-deck table for, so the
+    // deduction cannot be replayed: when cards could have been bought (maxNrOfCards > 0, the default 5, and no
+    // predefined inducements) there is no BB2016 estimate at all.
+    if (opts.maxNrOfCards > 0 && !opts.usePredefinedInducements) return null;
+    const transferred = num(input.pettyCashTransferred);
+    const gap = Math.max(0, input.oppTv - input.myTv);
+    const gold = Math.max(0, Math.max(transferred, gap) - num(input.pettyCashUsed)) + opts.freeInducementCash;
+    if (input.role === 'overdog') return { cells: [{ key: 'spent', gold: 0 }, { key: 'remaining', gold }], total: gold };
+    return { cells: [{ key: 'petty', gold }, { key: 'treasury', gold: treasury }], total: gold };
+  }
+
+  const bb2020 = rules === 'BB2020';
+  const freeCash = opts.freeInducementCash + (bb2020 ? opts.freeCardCash : 0);
+  const mine = num(input.myPettyCashFromTvDiff);
+  const opp = num(input.oppPettyCashFromTvDiff);
+  // The server orders the legs off the two pettyCashFromTvDiff marks; with neither on the model, fall back to the TV gap.
+  const tvPetty = mine > 0 ? mine : opp > 0 ? 0 : Math.max(0, input.oppTv - input.myTv);
+  const sameTv = mine <= 0 && opp <= 0 && input.myTv === input.oppTv;
+
+  if (input.role === 'overdog') {
+    const pool = opts.allowOverdogSpending || sameTv ? plus(treasury, freeCash) : 0;
+    return { cells: [{ key: 'spent', gold: 0 }, { key: 'remaining', gold: pool }], total: pool };
+  }
+  if (sameTv || opts.alwaysUseTreasury) {
+    // One pool (usesTreasury leg): the dialog's `treasury` field carries it, which the underdog panel shows as scum.
+    const allowed = !sameTv || opts.allowSpendingOnEqualTv || freeCash > 0;
+    const pool = allowed ? plus(treasury, freeCash) : 0;
+    return { cells: [{ key: 'scum', gold: pool }, { key: 'treasury', gold: treasury }], total: pool };
+  }
+  const spent = input.overdogSpent ?? null;
+  if (bb2020) {
+    const petty = tvPetty + (spent !== null ? Math.max(0, spent) : 0);
+    return { cells: [{ key: 'petty', gold: petty }, { key: 'treasury', gold: treasury }], total: petty };
+  }
+  const petty = (spent !== null ? Math.max(spent - freeCash, 0) : 0) + tvPetty + freeCash;
+  const allowance = opts.allowUnderdogSpending ? MAX_UNDERDOG_ALLOWANCE : 0;
+  const scum = allowance === 0 ? 0 : treasury === null ? null : Math.min(allowance, treasury);
+  return {
+    cells: [{ key: 'petty', gold: petty }, { key: 'scum', gold: scum }, { key: 'treasury', gold: treasury }],
+    total: scum === null ? null : petty + scum,
+  };
+}
+
+/**
+ * Astra 10-12 (P3): once the phase is over, the post-phase review must not wear the "Estimated" badge. A surviving
+ * estimate is only ever an exact zero (a coach the rules gave nothing, SpectateView `inducePanel`), so the review
+ * shows it as plain money; anything else (a non-zero or partly unknown estimate) is dropped back to the dash.
+ */
+export function settleEstimate<P extends { role: InducementRole; money: PhaseMoney | null; estimate?: BudgetEstimate | null; moneyRows?: readonly UnderdogCashRow[] }>(panel: P): P {
+  const estimate = panel.estimate;
+  if (!estimate) return panel;
+  if (panel.money || estimate.total !== 0 || estimate.cells.some((c) => c.gold === null)) return { ...panel, estimate: null };
+  const gold = (key: CashRowKey) => estimate.cells.find((c) => c.key === key)?.gold ?? 0;
+  const money: PhaseMoney = {
+    role: panel.role, cap: 0, spent: 0, remaining: 0,
+    pettyLeft: gold('petty'), scumLeft: gold('scum'), treasuryLeft: gold('treasury'),
+  };
+  const rows = estimate.cells.map((c) => c.key).filter((k): k is UnderdogCashRow => k === 'petty' || k === 'scum' || k === 'treasury');
+  return { ...panel, money, estimate: null, ...(panel.role === 'underdog' && rows.length ? { moneyRows: rows } : {}) };
+}
+
 export function phaseMoney(input: MoneyInput): PhaseMoney {
   const { role, availableGold, pettyCash, scumPool, teamTreasury, spent } = input;
   if (role === 'overdog') {

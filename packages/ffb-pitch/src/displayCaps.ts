@@ -201,3 +201,33 @@ export function displayCapsRuns(input: string): DisplayCapsRun[] {
   });
   return runs;
 }
+
+/**
+ * Sentence case for one display LINE (owner 10-12, the turnover / turn-start splashes and the coach-corner tags): the
+ * first letter of the line uppercase, everything else lowercase. Same fold as the lettering above (rule 0): the input
+ * is clipped to DISPLAY_CAPS_MAX_LENGTH, NFC-composed, each word lowercased whole with every sigma chosen by its place
+ * in the word; case only, content never altered (spaces are kept as written). The first LETTER of the line is then
+ * uppercased, after any leading punctuation or symbols ("'da boyz" gives "'Da boyz"); a line whose first letter or
+ * digit is a DIGIT is left lowercase ("3 stooges"), and so is one whose first letter belongs to a script without case.
+ * A capital of several letters ("ß" gives "SS") leads with its first; the others stay lowercase ("Ss"). A wrapped
+ * name is still one line: only its first letter is capitalised. Never throws; '' gives ''.
+ * `clip: false` skips the DISPLAY_CAPS_MAX_LENGTH cut, for a surface that never clipped the text before (the splash
+ * coach / team names): the caller composes its sentence from the cased name, so a suffix is never cut off.
+ */
+export function sentenceCaseLine(input: string, options?: { clip?: boolean }): string {
+  const text = options?.clip === false ? String(input ?? '') : clipDisplayText(input);
+  const folded = text.split(/(\s+)/u).map((piece) => (/^\s*$/u.test(piece) ? piece : foldWord(piece))).join('');
+  const clusters = displayGraphemes(folded);
+  for (let i = 0; i < clusters.length; i++) {
+    const cluster = clusters[i]!;
+    if (DIGIT.test(cluster)) break;
+    if (!LETTER.test(cluster)) continue;
+    const upper = cluster.toUpperCase();
+    if (upper !== cluster) {
+      const [first = upper, ...others] = displayGraphemes(upper);
+      clusters[i] = first + others.join('').toLowerCase();
+    }
+    break;
+  }
+  return clusters.join('');
+}

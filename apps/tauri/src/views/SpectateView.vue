@@ -31,7 +31,7 @@ import {
   bundledStadiumPacks,
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
-  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
+  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
@@ -85,7 +85,8 @@ import TurnToast from '../components/TurnToast.vue';
 import { visibleMatchLogEntries } from '../game/logVisibility';
 import {
   bladeOf, ownedResources, phaseMoney, phaseOf, roleFromWire, summaryCards, usesFanFactor,
-  type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption } from '../game/inducementsPhase';
+  type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption,
+  dialogSplitsPettyCash, estimateInducementBudget, inducementMoneyOptions, settleEstimate, underdogCashRows, type BudgetEstimate } from '../game/inducementsPhase';
 import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
 import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
 import { activeInducementSprite } from '../game/inducementPortrait';
@@ -5301,14 +5302,63 @@ const induceMyMoney = computed(() => {
   const b = gameStore.state.inducementBuy;
   const role = induceMyRole.value;
   if (!b || !role) return null;
+  // BB2016 `buyInducements` / BB2020 carry no petty / scum split: the whole availableGold is the underdog's petty cash
+  // (owner 10-12: the estimate's petty row must hand over to the server's own figure, not to 0k).
+  const split = dialogSplitsPettyCash(induceRulesVersion.value);
   return phaseMoney({
     role,
     availableGold: b.availableGold,
-    pettyCash: b.pettyCash,
+    pettyCash: split ? b.pettyCash : b.availableGold,
     // Dialog `treasury` is ALREADY min(50k, treasury) — the scum pool (StepBuyInducements.java:318/338).
-    scumPool: b.treasury,
+    scumPool: split ? b.treasury : 0,
     teamTreasury: induceMyTeam.value?.treasury ?? 0,
     spent: induceSpent.value,
+  });
+});
+
+const induceRulesVersion = computed(() => gameStore.game.value?.gameOptions?.gameOptionArray
+  ?.find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue);
+
+/**
+ * Owner 10-12 ("Show the gold. Work it out client side."): MY expected budget while the OTHER coach holds the dialog,
+ * replayed from the server's formula on the game model (game/inducementsPhase.ts `estimateInducementBudget`). Play
+ * mode only, and only while I hold no dialog: the moment `inducementBuy` arrives, `induceMyMoney` (the server's
+ * numbers) replaces it. DISPLAY ONLY: it never reaches the cap, `canAdd`, or any send.
+ *
+ * The overdog's spend is not folded in: the overdog's picks live on their client until they confirm, and the server
+ * applies that purchase and opens my dialog in the same command (StepBuyInducements.handleCommand -> swapTeam), so the
+ * spend never sits in my model before `inducementBuy` does.
+ */
+const induceMyEstimate = computed<BudgetEstimate | null>(() => {
+  const g = gameStore.game.value;
+  const me = induceMyTeam.value;
+  const opp = induceOppTeam.value;
+  const role = induceMyRole.value;
+  if (!g || !me || !opp || props.mode !== 'play' || !gameStore.isPlaying.value || !role || gameStore.state.inducementBuy) return null;
+  // Astra 10-12 (P2): only with positive evidence that my own dialog has not come up yet in this phase (store
+  // `inducementOwnDialogPending`); a mid-phase rejoin without that record keeps the dash.
+  if (!gameStore.state.inducementOwnDialogPending) return null;
+  const meIsHome = String(me.teamId) === String(g.teamHome.teamId);
+  type Result = { teamValue?: unknown; pettyCashFromTvDiff?: unknown; pettyCashTransferred?: unknown; pettyCashUsed?: unknown } | null | undefined;
+  const myResult = (meIsHome ? g.gameResult?.teamResultHome : g.gameResult?.teamResultAway) as Result;
+  const oppResult = (meIsHome ? g.gameResult?.teamResultAway : g.gameResult?.teamResultHome) as Result;
+  // Same TV reading as the opponent's derived budget: the larger of the team result's and the team's.
+  const tv = (team: unknown, result: Result) => Math.max(
+    Number(result?.teamValue ?? 0) || 0, Number((team as { teamValue?: unknown }).teamValue ?? 0) || 0);
+  const rawTreasury = (me as { treasury?: unknown }).treasury;
+  const treasury = rawTreasury === undefined || rawTreasury === null || rawTreasury === '' ? null : Number(rawTreasury);
+  return estimateInducementBudget({
+    rulesVersion: induceRulesVersion.value,
+    role,
+    treasury: treasury !== null && Number.isFinite(treasury) ? treasury : null,
+    myTv: tv(me, myResult),
+    oppTv: tv(opp, oppResult),
+    myPettyCashFromTvDiff: myResult?.pettyCashFromTvDiff,
+    oppPettyCashFromTvDiff: oppResult?.pettyCashFromTvDiff,
+    pettyCashTransferred: myResult?.pettyCashTransferred,
+    pettyCashUsed: myResult?.pettyCashUsed,
+    options: purchaseOptionsFromWire(g).options,
+    overdogSpent: null,
   });
 });
 
@@ -5334,14 +5384,16 @@ const induceOppMoney = computed(() => {
   // The reveal wire carries no costs (a guessed total would be a client invention), so these readouts are shown only
   // while the opponent is still choosing — spent is 0 by definition then.
   const spent = 0;
+  // Absent options take the server's defaults (overdog / underdog spending ON), the same reading as my own estimate.
+  const money = inducementMoneyOptions(options);
   return opponentBudget({
     role,
     treasury: Number((opp as { treasury?: unknown }).treasury ?? 0),
     pettyCashFromTvDiff: role === 'underdog' ? tvDiff : 0,
-    freeCash: Number(options['freeInducementCash'] ?? 0) || 0,
+    freeCash: money.freeInducementCash,
     overdogSpent: role === 'underdog' ? induceSpent.value : 0,
-    allowUnderdogSpending: options['inducementsAllowUnderdogSpending'] === true,
-    allowOverdogSpending: options['inducementsAllowOverdogSpending'] === true,
+    allowUnderdogSpending: money.allowUnderdogSpending,
+    allowOverdogSpending: money.allowOverdogSpending,
     sameTv: tvHome === tvAway,
     spent,
   });
@@ -5521,6 +5573,11 @@ function inducePanel(role: InducementRole): PanelView {
     ...inducePanelIdentity(team, seat),
     status: confirmed ? 'confirmed' : active ? 'selecting' : 'waiting',
     money: mine ? induceMyMoney.value : active ? induceOppMoney.value : null, // owner 09-21: the opponent's derived budget while they choose
+    // Owner 10-12: my own estimated budget while I wait. Once my leg is over it stays only when the rules gave me
+    // nothing (0 is then exact); a spent leg keeps the dashes, since what I spent is not on my model.
+    estimate: mine && !induceMyMoney.value && induceMyEstimate.value && (!confirmed || induceMyEstimate.value.total === 0)
+      ? induceMyEstimate.value : null,
+    moneyRows: mine ? underdogCashRows(induceRulesVersion.value) : undefined, // the other coach's rows stay as they were
     cards: mine
       ? (induceCanAct.value ? induceMyCards.value : induceRevealCards(reveal?.mine ?? null, induceMyTeam.value))
       : induceRevealCards(reveal?.opp ?? null, induceOppTeam.value),
@@ -5561,8 +5618,9 @@ watch(
       bothConfirmed: mineConfirmed && !!opponentConfirmed,
     })) return;
     induceRevealHold.present(gameKey, {
-      overdog: induceOverdogPanel.value,
-      underdog: induceUnderdogPanel.value,
+      // Astra 10-12 (P3): the review is after the phase, so no panel keeps the "Estimated" badge.
+      overdog: settleEstimate(induceOverdogPanel.value),
+      underdog: settleEstimate(induceUnderdogPanel.value),
       myRole,
     });
   },
@@ -11932,6 +11990,9 @@ function positionLabel(player: PlayerJson, team: { roster?: unknown }): string {
  */
 
 
+/** Owner 10-12: the splash coach / team name in sentence case, never clipped (the splashes never clipped it); the
+ *  turn-start line composes "'s turn" AFTER the cased name, so the suffix can never be cut off. */
+const SPLASH_NAME_CASE = { clip: false } as const;
 /** Owner 09-05: every match-level splash (turnover, turn start, injury, reroll, send-off) shows the SAME logo as
  *  the HUD panels — pack logo via the wire URL, else the bundled crest — instead of a bare FUMBBL lookup that
  *  rendered nothing when the pack owned the id under another spelling or the server sent none. */
@@ -13106,7 +13167,7 @@ function sendChat() {
         <!-- #25-v2 (owner ask #1): the CONCEDING coach gets the "no MVP" explanation; spectators + the opponent see the generic notice. -->
         <template v-if="iConceded">
           <h2>You conceded</h2>
-          <p>No MVP is awarded — conceding forfeits the MVP, winnings, and SPP.</p>
+          <p>No MVP is awarded. Conceding forfeits the MVP, winnings and SPP.</p>
         </template>
         <template v-else>
           <h2>Game conceded</h2>
@@ -13429,7 +13490,7 @@ function sendChat() {
           </div>
           <div v-if="homePrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in homePrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
-              <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ pr.label }}</span>
+              <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ sentenceCaseLine(pr.label) }}</span>
             </div>
           </div>
           <CoachCornerCounts side="home" :reserves="homeBoxCounts.reserves" :out="homeBoxCounts.out" :notify="pushReportToast" />
@@ -13463,7 +13524,7 @@ function sendChat() {
           </div>
           <div v-if="awayPrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in awayPrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
-              <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ pr.label }}</span>
+              <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ sentenceCaseLine(pr.label) }}</span>
             </div>
           </div>
           <CoachCornerCounts side="away" :reserves="awayBoxCounts.reserves" :out="awayBoxCounts.out" :notify="pushReportToast" />
@@ -15232,8 +15293,9 @@ function sendChat() {
               @pointerdown.stop @pointerup.stop @click.stop>
               <img class="turnover-logo" :src="splashTeamLogo(gameStore.state.turnover.side, gameStore.state.turnover.logo)" alt="" />
               <div class="turnover-text">
-                <span class="turnover-coach">{{ gameStore.state.turnover.coach || gameStore.state.turnover.teamName }}</span>
-                <span class="turnover-head">HAS TURNED OVER</span>
+                <!-- Owner 10-12: each line in sentence case (first letter capital, the rest lowercase), team names too. -->
+                <span class="turnover-coach">{{ sentenceCaseLine(gameStore.state.turnover.coach || gameStore.state.turnover.teamName, SPLASH_NAME_CASE) }}</span>
+                <span class="turnover-head">Has turned over</span>
               </div>
             </div>
 
@@ -15244,7 +15306,7 @@ function sendChat() {
               @pointerdown.stop @pointerup.stop @click.stop>
               <img class="turnover-logo" :src="splashTeamLogo(gameStore.state.turnStart.side, gameStore.state.turnStart.logo)" alt="" />
               <div class="turnover-text">
-                <span class="turnstart-head">{{ (gameStore.state.turnStart.coach || gameStore.state.turnStart.teamName) }}'s turn</span>
+                <span class="turnstart-head">{{ sentenceCaseLine(gameStore.state.turnStart.coach || gameStore.state.turnStart.teamName, SPLASH_NAME_CASE) }}'s turn</span>
               </div>
             </div>
           </div>
@@ -15906,7 +15968,7 @@ function sendChat() {
   font-weight: 900;
   letter-spacing: 0.02em;
   line-height: 1;
-  text-transform: uppercase;
+  text-transform: none; /* owner 10-12: sentence case, written into the text (sentenceCaseLine) */
   text-shadow: 0 1px 1px #000;
   white-space: nowrap;
 }
@@ -15920,7 +15982,7 @@ function sendChat() {
   font-weight: 900;
   letter-spacing: 0.01875em;
   line-height: 1.05;
-  text-transform: uppercase;
+  text-transform: none; /* owner 10-12: "Current" / "Player", sentence case as written */
   text-shadow: 0 1px 1px #000;
   white-space: nowrap;
   color: #fff;
@@ -18811,8 +18873,10 @@ function sendChat() {
 }
 
 /* Owner 2026-07-03: turnover splash — big centred banner, team logo left of a
-   coach line + "HAS TURNED OVER" in Nuffle. Side-tinted (home blue / away red)
-   like the injury splash but heavier + darker so it reads as a "drive lost". */
+   coach line + "Has turned over" in Nuffle. Side-tinted (home blue / away red)
+   like the injury splash but heavier + darker so it reads as a "drive lost".
+   Owner 10-12: every line (and the turn-start line) in sentence case, team names too, via sentenceCaseLine; Nuffle
+   draws its lowercase as small capitals, so each line reads as one capital + small capitals. */
 .turn-boundary-stack {
   --turn-boundary-banner-height: 138px; /* 84px crest + 48px block padding + 6px border */
   --turn-boundary-toast-height: 64px;
@@ -18876,6 +18940,7 @@ function sendChat() {
   transform: skewY(1.2deg);
 }
 .turnover-coach {
+  text-transform: none;
   font-family: 'Nuffle', system-ui, sans-serif;
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem);
   font-weight: 700;
@@ -18885,6 +18950,7 @@ function sendChat() {
   max-width: 320px;
 }
 .turnover-head {
+  text-transform: none;
   font-family: 'Nuffle', system-ui, sans-serif;
   font-size: max(var(--ui-min-primary-text-size, 16px), 3.2rem);
   font-weight: 900;
@@ -19031,6 +19097,7 @@ function sendChat() {
 .dodgy-snack-lines { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 80%; text-align: center; overflow-wrap: anywhere; }
 .dodgy-snack-sentoff { font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
 .turnstart-head {
+  text-transform: none;
   font-family: 'Nuffle', system-ui, sans-serif;
   font-size: max(var(--ui-min-primary-text-size, 16px), 3rem);
   font-weight: 900;

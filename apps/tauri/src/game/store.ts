@@ -953,6 +953,14 @@ const legacyState = reactive({
     decks: { cardType: string; nrOfCards: number }[];
     seq: number;
   } | null,
+  /**
+   * Owner 10-12 gold estimate (Astra 10-12 P2): true only while there is POSITIVE evidence that the local coach has not
+   * yet had their own inducement dialog in this game's phase: this client saw the game before any buy dialog, then saw
+   * the phase open, and has not seen `inducementBuy` since. A rejoin into the middle of the phase without that record
+   * reads false (the estimate is withheld), since a coach who already spent may be looking at a queued purchase.
+   * Display gate only; see `inducementPhaseEvidence`.
+   */
+  inducementOwnDialogPending: false,
   /** Owner 07-06 (CRITICAL for live play): INTERACTIVE inducement selector — costs/max from synced game options; `pettyCash` is server-computed (underdog); answered clientBuyInducements. */
   inducementBuy: null as {
     teamId: string;
@@ -11059,6 +11067,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.sppToasts = [];
   resetCasualtySppPacing();
   state.inducementBuy = null; state.cardBuy = null;
+  state.inducementOwnDialogPending = false; // re-derived on the next sync from inducementPhaseEvidence, which a rejoin keeps
   clearUnknownCall(); unknownDialogInstance = 0;
   state.weatherCine = null; state.kickoffCine = null; state.kickoffArcNeedsDecisionDwell = false;
   state.dodgySnackCine = null; state.dodgySnackAnnouncement = null; state.dodgySnackPlayers = [];
@@ -21449,6 +21458,27 @@ function setPregameWait(text: string): void {
   if (pregameCineBusy()) { pendingPregameWait = text; armPregameWaitWatchdog(); return; }
   state.pregameWait = { text, seq: (state.pregameWait?.seq ?? 0) + 1 };
 }
+/**
+ * Owner 10-12 gold estimate: per game id, what THIS client session has seen of the inducement phase. Deliberately not
+ * cleared by resetPlayback (a rejoin): `observedStart` = a sync with no buy dialog came first, then the phase opened;
+ * `mineSeen` = my own dialog (`inducementBuy`) has been up. A game first seen with a buy dialog already open gets
+ * `observedStart: false`, so a mid-phase rejoin with no record never shows the estimate.
+ */
+const INDUCEMENT_BUY_DLGS = new Set(['buyInducements', 'buyPrayersAndInducements']);
+const preInducementSeen = new Set<string>();
+const inducementPhaseEvidence = new Map<string, { observedStart: boolean; mineSeen: boolean }>();
+function noteInducementPhase(g: GameJson, dlg: string | undefined): void {
+  const gid = String((g as { gameId?: unknown }).gameId ?? '');
+  if (!gid) { state.inducementOwnDialogPending = false; return; }
+  const buyDialog = !!dlg && INDUCEMENT_BUY_DLGS.has(dlg);
+  let record = inducementPhaseEvidence.get(gid);
+  if (!record) {
+    if (!buyDialog) preInducementSeen.add(gid);
+    else { record = { observedStart: preInducementSeen.has(gid), mineSeen: false }; inducementPhaseEvidence.set(gid, record); }
+  }
+  if (record && state.inducementBuy) record.mineSeen = true;
+  state.inducementOwnDialogPending = !!record && record.observedStart && !record.mineSeen && buyDialog;
+}
 function drivePregameStep() {
   const g = game.value;
   if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; clearSendOffWaiting(); return; }
@@ -21499,6 +21529,9 @@ function drivePregameStep() {
     state.inducementReveal = null;
     state.inducementBuy = null;
   }
+  // Astra 10-12 (P3): AFTER the exit frame's final reveal above, so the review snapshot taken on that reveal still
+  // sees the gate open and keeps a known-zero estimate (settled to plain 0k); the gate closes on this same frame.
+  noteInducementPhase(g, dlg);
   // Clear both visible and held pregame waits when leaving the coin/receive family.
   if ((state.pregameWait || pendingPregameWait !== null)
       && dlg !== 'coinChoice' && dlg !== 'coinThrow' && dlg !== 'receiveChoice' && dlg !== 'kickReceive') {
@@ -21574,6 +21607,7 @@ function drivePregameStep() {
             selectorLimits: buildInducementSelectorLimits(purchaseOptionsFromWire(g).options),
             seq: 1,
           };
+          noteInducementPhase(g, dlg); // my dialog is up: no estimate for this game's phase from here on
           // Owner 2026-07-08: while I choose, mirror the OPPONENT panel as the still-to-choose UNDERDOG (both sides always show during inducements).
           if (!state.inducementReveal) {
             const oppTeam = myTeamId === (g.teamHome as { teamId?: string }).teamId ? g.teamAway : g.teamHome;

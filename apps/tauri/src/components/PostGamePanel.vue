@@ -16,7 +16,7 @@ import { settings } from '../game/settings';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 
@@ -80,25 +80,18 @@ function onBlockFaceImageError(value: number): void {
 }
 watch(() => props.showStats, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
 
-const pgMvpCards = computed<Record<Side, PgMvpCard | null>>(() => {
-  const out: Record<Side, PgMvpCard | null> = { home: null, away: null };
+/** Owner 09-14: a CONCESSION hands the winner two MVPs and every one shows. Owner 10-12: ONE CARD PER AWARD, not per
+ *  player ("display that MVP twice ... no need to dedupe"): a player the server awarded twice gets two identical cards,
+ *  side by side in the list. Different players stand in roster-number order. */
+type PgMvpAwardCard = PgMvpCard & { key: string };
+const pgMvpCardList = computed<Record<Side, PgMvpAwardCard[]>>(() => {
+  const out: Record<Side, PgMvpAwardCard[]> = { home: [], away: [] };
   for (const side of ['home', 'away'] as const) {
-    const playerId = pg.value[side].mvps[0]?.playerId;
-    if (playerId) out[side] = mvpCardFor(game.value, side, playerId, portrait(playerId));
-  }
-  return out;
-});
-/** Owner 09-14: a CONCESSION hands the winner two MVPs — both cards show, not one selected; a single MVP shows the
- *  selected card as before. */
-const pgMvpCardList = computed<Record<Side, PgMvpCard[]>>(() => {
-  const out: Record<Side, PgMvpCard[]> = { home: [], away: [] };
-  for (const side of ['home', 'away'] as const) {
-    if (pg.value[side].mvps.length > 1) {
-      out[side] = pg.value[side].mvps.map((m) => mvpCardFor(game.value, side, m.playerId, portrait(m.playerId))).filter((c): c is PgMvpCard => !!c);
-    } else {
-      const selected = pgMvpCards.value[side];
-      out[side] = selected ? [selected] : [];
-    }
+    const cards = new Map<string, PgMvpCard | null>();
+    for (const m of pg.value[side].mvps) if (!cards.has(m.playerId)) cards.set(m.playerId, mvpCardFor(game.value, side, m.playerId, portrait(m.playerId)));
+    out[side] = mvpAwardEntries(pg.value[side].mvps)
+      .flatMap((award) => { const card = cards.get(award.playerId); return card ? [{ ...card, key: award.key }] : []; })
+      .sort((a, b) => a.nr - b.nr); // stable: one player's cards keep their award order, together
   }
   return out;
 });
@@ -269,7 +262,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="PG_MVP_NO_ROWS" :innate-toggle="side.which === 'away'">
             <template #status>
               <template v-if="roll[side.which].phase === 'cycling' || side.mvps.length" />
-              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
+              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP (conceded)' : 'No MVP awarded' }}</p>
               <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
             </template>
             <template v-if="roll[side.which].phase === 'cycling' || pgMvpCardList[side.which].length" #footer>
@@ -283,7 +276,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
               </div>
               <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
                    hands the winner two MVPs and BOTH cards show. -->
-              <div v-for="card in pgMvpCardList[side.which]" :key="card.playerId" class="pg-mvp-card pg-bevel" :data-player="card.playerId"
+              <div v-for="card in pgMvpCardList[side.which]" :key="card.key" class="pg-mvp-card pg-bevel" :data-player="card.playerId"
                 :aria-hidden="roll[side.which].phase === 'cycling' ? 'true' : undefined">
                 <div class="pg-mvp-portrait card-portrait">
                   <img v-if="card.portrait" :src="card.portrait" alt="" />
@@ -296,7 +289,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                     <div class="pg-mvp-card-name" :data-side="side.which">#{{ card.nr }} {{ card.name }}</div>
                     <RosterBadge class="pg-mvp-card-badge" :injury="card.injury" :injury-new="card.injuryNew" :advancements="card.advancements" />
                   </div>
-                  <div class="pg-mvp-card-pos">{{ card.position }}<span v-if="card.awards > 1" class="pg-mvp-card-awards" data-testid="mvp-card-awards"><i aria-hidden="true">★</i> MVP ×{{ card.awards }}</span></div>
+                  <!-- Owner 10-12: a second award is a second card, so no card carries an "MVP xN" count. -->
+                  <div class="pg-mvp-card-pos">{{ card.position }}</div>
                   <!-- Owner 09-14: SPP on its own line under the position (the one-liner wrapped mid-tag). -->
                   <!-- Owner 10-10: the player's value at the line's right end, in the roster's value style. -->
                   <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span><span
@@ -796,8 +790,6 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-mvp-card-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .pg-mvp-card-head .pg-mvp-card-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .pg-mvp-card-badge { margin: 1px 1px 0 0; } /* clear of the card edge, so the gold "this game" outline is not clipped */
-.pg-mvp-card-awards { margin-left: 0.6em; white-space: nowrap; color: var(--ui-accent); font-weight: 800; }
-.pg-mvp-card-awards i { font-style: normal; }
 .pg-mvp-card-spp { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 0.3em; }
 /* the roster's value cell (PostGameRoster .pg-roster-value): text colour, tabular, 600 */
 .pg-mvp-card-value { margin-left: auto; padding-left: 0.6em; color: var(--ui-text); font-variant-numeric: tabular-nums; font-weight: 600; }

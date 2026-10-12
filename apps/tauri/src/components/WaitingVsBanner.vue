@@ -73,7 +73,8 @@ function initials(name: string): string {
 .vs-team {
   font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 1.25rem);
   letter-spacing: 0.04em; text-transform: uppercase; color: #fff; text-shadow: 0 2px 4px #000;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* Owner 10-12: wrap at word starts, whole name visible; only a token wider than the column breaks inside the word. */
+  white-space: normal; word-break: normal; overflow-wrap: anywhere; min-width: 0;
 }
 .vs-coach { font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem); color: #e8918c; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vs-meta { display: flex; gap: 8px; font-size: max(var(--ui-min-secondary-text-size, 13px), 0.82rem); color: var(--ui-text-muted, #b8bcc6); }

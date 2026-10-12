@@ -21,7 +21,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import type { Blade, InducementPhase, InducementRole, PhaseMoney, PhaseOption, PickMap } from '../game/inducementsPhase';
-import type { OwnedResources } from '../game/inducementsPhase';
+import type { BudgetEstimate, CashRowKey, OwnedResources, UnderdogCashRow } from '../game/inducementsPhase';
 import { canAdd, fmtGold, skillToken } from '../game/inducementsPhase';
 import { padFocusControllerMode, padFocusedControl, vPadFocus, type PadFocusOptions } from '../game/cardFocus';
 import { popUndo, reconcileUndoStack, seedUndoStack, undoTarget } from '../game/inducementUndo';
@@ -78,6 +78,12 @@ export interface PanelView {
   owned: OwnedResources | null;
   status: 'selecting' | 'confirmed' | 'waiting';
   money: PhaseMoney | null;
+  /** Owner 10-12 gold estimate: the local coach's own expected budget while the other coach holds the dialog,
+   *  derived client side (game/inducementsPhase.ts `estimateInducementBudget`). Shown only while `money` is null,
+   *  marked "Estimated"; the server's values replace it the moment they arrive. Display only. */
+  estimate?: BudgetEstimate | null;
+  /** The underdog rows the ruleset's real dialog has (`underdogCashRows`); default petty / scum / treasury. */
+  moneyRows?: readonly UnderdogCashRow[];
   /** Blade-ordered (Inducements → Star Players → Mercenaries) by the mount. */
   cards: SummaryCardView[];
   /** ✕ remove + Clear/Confirm are offered only while this coach is editable. */
@@ -233,20 +239,27 @@ const teamInitial = (panel: PanelView): string => (panel.teamName.trim().slice(0
 /**
  * Money rows. The shape follows the panel's role exactly as before this redesign: the underdog leg has petty, scum
  * and treasury; the overdog leg is one pool (the server sends pettyCash 0 and no scum allowance there), so it keeps
- * Spent / Remaining. A null `money` is hidden information: the same rows, each reading a dash.
+ * Spent / Remaining. A null `money` is hidden information: the same rows, each reading a dash, unless the mount
+ * supplies the local coach's own `estimate` (owner 10-12), which then fills the rows and is marked "Estimated".
  */
+const CASH_LABEL: Record<CashRowKey, string> = { petty: 'Petty', scum: 'Scum', treasury: 'Treasury', spent: 'Spent', remaining: 'Remaining' };
+/** True while the panel's money rows show the client-side estimate rather than server values. */
+const showsEstimate = (panel: PanelView): boolean => panel.money === null && !!panel.estimate;
 function cashRows(panel: PanelView): { label: string; value: string; tone: 'gold' | 'green' | 'unknown' }[] {
   const money = panel.money;
-  const cell = (label: string, gold: number | null, tone: 'gold' | 'green') => (
-    gold === null ? { label, value: '—', tone: 'unknown' as const } : { label, value: fmtGold(gold), tone });
+  const cell = (key: CashRowKey, gold: number | null) => {
+    const label = CASH_LABEL[key];
+    const tone = key === 'scum' || key === 'remaining' ? 'green' as const : 'gold' as const;
+    return gold === null ? { label, value: '—', tone: 'unknown' as const } : { label, value: fmtGold(gold), tone };
+  };
+  if (!money && panel.estimate) return panel.estimate.cells.map((c) => cell(c.key, c.gold));
   if (panel.role === 'overdog') {
-    return [cell('Spent', money ? money.spent : null, 'gold'), cell('Remaining', money ? money.remaining : null, 'green')];
+    return [cell('spent', money ? money.spent : null), cell('remaining', money ? money.remaining : null)];
   }
-  return [
-    cell('Petty', money ? money.pettyLeft : null, 'gold'),
-    cell('Scum', money ? money.scumLeft : null, 'green'),
-    cell('Treasury', money ? money.treasuryLeft : null, 'gold'),
-  ];
+  const gold: Record<UnderdogCashRow, number | null> = {
+    petty: money ? money.pettyLeft : null, scum: money ? money.scumLeft : null, treasury: money ? money.treasuryLeft : null,
+  };
+  return (panel.moneyRows ?? ['petty', 'scum', 'treasury']).map((key) => cell(key, gold[key]));
 }
 
 /**
@@ -328,7 +341,7 @@ function waitingBox(panel: PanelView): { testid: string; text: string } | null {
 /** Status + funds block. A preset / replay review has no purchase, so no funds; a coach who has CONFIRMED has no
  *  budget left to show (the mount sends none once the dialog is answered), so the rows give way to the selections
  *  instead of reading three dashes. While a coach is selecting or waiting the rows always show: values, or the dash. */
-const showFunds = (panel: PanelView): boolean => !props.presetMode && (panel.status !== 'confirmed' || panel.money !== null);
+const showFunds = (panel: PanelView): boolean => !props.presetMode && (panel.status !== 'confirmed' || panel.money !== null || !!panel.estimate);
 
 /** Owner 10-11: the panel of the coach who is selecting right now (the one that carries the SELECTING chip, local,
  *  opponent or spectated alike) wears a gold ring. Not while waiting, not once confirmed, not at 'done', not in a
@@ -535,10 +548,15 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
           <div v-if="showFunds(panel)" class="ind-funds">
             <span v-if="panel.status === 'selecting'" class="ind-status" data-status="selecting" :data-testid="`status-${panel.role}`"><span class="cap">S</span>ELECTING…</span>
             <!-- Underdog leg: petty, then scum, then treasury. Overdog leg: one pool (see cashRows). Hidden = dashes. -->
-            <div class="ind-cash" :data-testid="`cash-${panel.role}`">
+            <div class="ind-cash" :data-testid="`cash-${panel.role}`" :data-estimated="showsEstimate(panel)">
               <div v-for="row in cashRows(panel)" :key="row.label" class="ind-cash-line">
                 <span class="ind-cash-k"><span class="cap">{{ row.label.slice(0, 1) }}</span>{{ row.label.slice(1) }}</span>
                 <span :class="`ind-cash-${row.tone}`">{{ row.value }}</span>
+              </div>
+              <!-- Owner 10-12: worked out client side while the other coach chooses; the server's figures replace it. -->
+              <div v-if="showsEstimate(panel)" class="ind-cash-est" :data-testid="`cash-estimated-${panel.role}`"
+                title="Worked out from the team values and game options. The server's figures replace it when your turn comes.">
+                <span class="cap">E</span>stimated
               </div>
             </div>
           </div>
@@ -955,6 +973,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
 .ind-cash-gold { color: var(--ui-gold-bright); }
 .ind-cash-green { color: var(--ui-success); }
 .ind-cash-unknown { color: var(--ui-muted); }
+.ind-cash-est { margin-top: 3px; text-align: right; font-size: max(var(--ui-min-text-size, 12px), .85rem); letter-spacing: .04em; color: var(--ui-muted); }
 
 /* Selections. The enlarged inset box carries "Nothing selected yet." and the waiting text (reference 17px). */
 .ind-sum-picks { display: flex; flex-direction: column; flex: 1 1 0; min-height: 132px; }
