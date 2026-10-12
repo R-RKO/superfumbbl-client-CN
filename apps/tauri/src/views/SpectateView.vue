@@ -392,7 +392,7 @@ import type { PlayerDetailSkill } from '../game/skillDisplay';
 import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
-import superFumbblLogoUrl from '../assets/resources/super-fumbbl-logo.png';
+import { useSuperFumbblLogoMip } from '../game/logoMips';
 import { useDelayedPresence } from '../game/delayedPresence';
 import { activeServerTarget, applyServerTarget, botConfigBaseUrl, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
@@ -1179,6 +1179,9 @@ function customPanelStyle(id: string): Record<string, string> {
   return uiPanelStyle(id) ?? {};
 }
 const panelScaleResizeActive = reactive<Record<string, boolean>>({});
+// Owner 10-12: the quick-bar plate binds a wordmark mip level sized to its drawn device px (FANTASY FOOTBALL decimated).
+const quickSuperLogo = ref<HTMLImageElement | null>(null);
+const quickSuperLogoSrc = useSuperFumbblLogoMip(quickSuperLogo, () => [settings.uiLayout['config-bar'], panelScaleResizeActive['config-bar']]);
 const COACH_ACTIVE_SCALE_MULTIPLIER = 1.09;
 function coachPanelIsPlaying(id: string): boolean {
   if (id === 'coach-home') return gameStore.state.playingIsHome;
@@ -13731,7 +13734,7 @@ function sendChat() {
                 </div>
               </div>
             </Teleport>
-            <img class="quick-super-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
+            <img ref="quickSuperLogo" class="quick-super-logo" :src="quickSuperLogoSrc" alt="Super FUMBBL" />
             </div>
 
             <span v-if="gameStore.spectatorReview.value.active" class="sr-only" role="status">{{ gameStore.spectatorReview.value.feedStale ? 'Live feed unavailable — GO TO LIVE reconnects' : gameStore.spectatorReview.value.phase === 'pausing' ? 'Pausing…' : 'Reviewing recorded match position' }}</span>
