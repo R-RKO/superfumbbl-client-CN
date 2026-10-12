@@ -268,7 +268,7 @@ function bumpBlockDiceRevision(): void {
   void PitchRenderer.prepareBlockFaces().then(() => { assetMods.blockDiceRevision++; });
 }
 
-/** Owner 10-06: the bundled block-dice family (Settings > Asset packs > Block dice, "KrisB (built-in)") applies at
+/** Owner 10-06: the bundled block-dice family (Settings > Asset packs > Block dice, "Rick dice (built-in)") applies at
  *  startup through `publishBlockDiceBindings()` (boot's `refreshAssetPacks()`) and here on every change — the bump of
  *  `blockDiceRevision` re-feeds the 3D die and the DOM face surfaces. */
 watch(() => settings.blockDiceFamily, (family) => {

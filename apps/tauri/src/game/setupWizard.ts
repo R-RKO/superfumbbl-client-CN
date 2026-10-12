@@ -135,7 +135,7 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     lede: 'Choose the faces drawn on your block dice.',
     options: [
       { id: 'default', title: 'Super FUMBBL Default', images: DICE_FACES.map((f) => `dice-default-${f}`), writes: { blockDiceFamily: 'default' }, clearsAssignment: 'blockDice' },
-      { id: 'krisb', title: 'Kristofer B dice', images: DICE_FACES.map((f) => `dice-krisb-${f}`), writes: { blockDiceFamily: 'krisb' }, clearsAssignment: 'blockDice' },
+      { id: 'krisb', title: 'Rick dice', images: DICE_FACES.map((f) => `dice-krisb-${f}`), writes: { blockDiceFamily: 'krisb' }, clearsAssignment: 'blockDice' },
     ],
     // An installed block-dice pack wins over either family, so neither card is "current" while one is assigned.
     prefill: (s) => (s.assetPackAssignments.blockDice ? null : s.blockDiceFamily === 'krisb' ? 'krisb' : 'default'),

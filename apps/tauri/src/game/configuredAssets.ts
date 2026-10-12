@@ -232,7 +232,7 @@ export function buildConfiguredAssets(input: {
       face: face!, label: label!, url: user ?? packed ?? input.bundledBlockFaceUrls?.[face!] ?? null,
       source: user ? 'Your file' : packed && blockDicePack
         ? `${blockDicePack.name} ${blockDicePack.version}`
-        : input.blockDiceFamily === 'krisb' ? 'Built-in KrisB faces' : 'Built-in Super FUMBBL faces',
+        : input.blockDiceFamily === 'krisb' ? 'Built-in Rick dice faces' : 'Built-in Super FUMBBL faces',
       userOverride: !!user,
     };
   });

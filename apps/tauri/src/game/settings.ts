@@ -132,7 +132,7 @@ export interface AppSettings extends ConfirmationSettings {
    *  'default' = the flat badges ("Built-in default"), 'illustrated' = the illustrated set ("Illustrated - Default"). */
   skillBadgeFamily: 'default' | 'illustrated';
   /** Owner 10-06: which BUNDLED block-dice face family serves when no pack is assigned to the block-dice slot —
-   *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("KrisB (built-in)"). */
+   *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("Rick dice (built-in)"). */
   blockDiceFamily: 'default' | 'krisb';
   /** Owner 10-06: the plate the bundled block-die faces sit on — 'auto' (default) matches the face set (black for the
    *  Super FUMBBL faces, white for KrisB; resolveBlockDieSurface), or an explicit 'black' / 'white'. Pack-bound faces

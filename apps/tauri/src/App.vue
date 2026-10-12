@@ -3374,7 +3374,7 @@ onBeforeUnmount(() => {
             <li><span>Pitch textures (grass, dugout stone) — Acasas and unTied, licensed via GameDev Market. Sign fans — licensed purchase.</span></li>
             <li><span>Sound effects — The Sound Guild, Gamemaster Audio and Khron Studio libraries (licensed purchases), plus owner recordings.</span></li>
             <li><span>Player sprites, star players, team crests and dugout cobble — original pixel art produced with PixelLab. Skill badges — Super FUMBBL originals; the illustrated set via Codex image generation.</span></li>
-            <li><span>KrisB block dice faces (the "KrisB (built-in)" block dice option) — by Kristofer Bengtsson (KrisB), used with permission.</span></li>
+            <li><span>KrisB block dice faces (the "Rick dice (built-in)" block dice option) — by Kristofer Bengtsson (KrisB), used with permission.</span></li>
             <li><span>Kickoff banners, stadium skybox, crest and decoration art — generated with OpenAI, Codex and Gemini image models from Super FUMBBL prompts; no third-party source imagery.</span></li>
             <li><span>FUMBBL logo — used under FUMBBL's branding guidelines (FUMBBL Branding page). FUMBBL is Christer Kaivo-oja's site; Super FUMBBL is an independent client.</span></li>
           </ul>

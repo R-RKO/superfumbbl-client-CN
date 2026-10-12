@@ -106,7 +106,7 @@ marks).
 
 Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), used with the creator's permission.
 
-- **Kristofer Bengtsson (KrisB)** — Block dice faces (the "KrisB (built-in)" block dice option), used with
+- **Kristofer Bengtsson (KrisB)** — Block dice faces (the "Rick dice (built-in)" block dice option), used with
   permission.
 - **Controller button prompts** (`apps/tauri/src/assets/glyphs/`) — an original, generic SVG set drawn for Super FUMBBL
   (coloured-letter face buttons, bumper / trigger pills, D-pad, sticks, View / Menu; a ✕ ○ □ △ shape set for Sony
