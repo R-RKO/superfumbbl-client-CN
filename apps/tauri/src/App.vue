@@ -1996,6 +1996,12 @@ onBeforeUnmount(() => {
          the landing blade for both server plates), and the fork-only blades (Team/League/Players/Store) stay
          reachable alongside Play/Spectate/Replay rather than swapping out under a second parallel branch. -->
     <nav v-if="!gameStore.game.value" class="blade-ribbon" aria-label="Console views">
+      <!-- Owner 10-12: the Super FUMBBL logo plate sits first at the ribbon's left edge (moved from the retired header
+           strip). Inert branding (owner 08-18: a logo, not a button). It binds a logo mip level so the "FANTASY
+           FOOTBALL" line stays crisp at any DPR. -->
+        <div class="server-plate server-plate-super server-plate-inert ribbon-logo-plate" aria-label="Super FUMBBL">
+          <img ref="ribbonLogo" :src="ribbonLogoSrc" alt="Super FUMBBL" />
+        </div>
       <template v-if="view === 'console'">
         <button class="blade" type="button" :data-active="true" @click="view = 'console'">Protocol console</button>
       </template>
@@ -2015,15 +2021,8 @@ onBeforeUnmount(() => {
              entries removed 08-18 ("scope those back in later"): AppView values + mounts kept for the return; the
              scheduled-match notification can still route to the tournaments view. -->
       </template>
-      <!-- Owner 10-12: the Super FUMBBL logo plate + BETA stamp, moved here from the retired header strip. The plate
-           stays inert branding (owner 08-18: a logo, not a button). It binds a logo mip level so the "FANTASY
-           FOOTBALL" line stays crisp at any DPR. -->
-      <div class="ribbon-brand">
-        <div class="server-plate server-plate-super server-plate-inert ribbon-logo-plate" aria-label="Super FUMBBL">
-          <img ref="ribbonLogo" :src="ribbonLogoSrc" alt="Super FUMBBL" />
-        </div>
-        <span class="alpha-stamp" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
-      </div>
+      <!-- Owner 10-12: BETA stamp right after the last blade (Replay, or Team in the fork edition). -->
+      <span class="alpha-stamp ribbon-beta" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
     </nav>
 
     <input ref="replayFileInput" type="file" hidden
@@ -4051,25 +4050,19 @@ input, textarea, [contenteditable="true"], .log-panel {
   margin: 0 0.35rem;
   background: var(--ui-border);
 }
-/* Owner 10-12: the logo plate + BETA stamp at the ribbon's right end (moved from the retired header strip). */
-.ribbon-brand {
-  position: relative;
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  margin-left: auto;
-  padding-left: 1rem;
-}
+/* Owner 10-12: the logo plate leads the ribbon at its left edge; BETA follows the last blade. */
 .server-plate.ribbon-logo-plate {
+  flex: 0 0 auto;
+  align-self: center;
   width: auto;
   height: auto;
+  margin-right: 1rem;
   padding: 1px 4px;
 }
 .server-plate.ribbon-logo-plate img { height: 48px; width: auto; max-width: none; max-height: none; object-fit: contain; }
-/* BETA sits beside the plate: tucked over its top-right corner it covered the end of "FUMBBL" (10-12 crops). */
-.ribbon-brand .alpha-stamp { margin-left: 14px; }
+.blade-ribbon .ribbon-beta { flex: 0 0 auto; align-self: center; margin-left: 0.6rem; }
 @media (max-width: 640px) {
-  .ribbon-brand .alpha-stamp { display: none; }
+  .blade-ribbon .ribbon-beta { display: none; }
   .server-plate.ribbon-logo-plate img { height: 30px; }
 }
 /* owner 2026-07-12: the standalone Browse button was dropped — the FUMBBL / Super FUMBBL server
