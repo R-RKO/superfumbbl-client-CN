@@ -50,6 +50,7 @@ import BlockChooserCopy from '../components/BlockChooserCopy.vue';
 import EligibleRosterPicker from '../components/EligibleRosterPicker.vue';
 import ChatDock from '../components/ChatDock.vue';
 import { useChatOverInducements } from '../game/chatOverInducements';
+import { inducementCatcherActive, inducementGapsPassThrough, isPrayerBoardPickKey } from '../game/inducementCatcher';
 import ChatToast from '../components/ChatToast.vue';
 import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/ballOutView';
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
@@ -5246,6 +5247,16 @@ const inducePhaseOpen = computed(() => inducementsReadOnlyReview.value
   || !!induceRevealHoldSnapshot.value);
 /** True only while I hold the live dialog — the only state in which I may send. */
 const induceCanAct = computed(() => !!gameStore.state.inducementBuy);
+/** Coordinator 10-13 (game/inducementCatcher.ts): once no one can buy (the read-only review snapshot) or a Prayers to
+ * Nuffle pitch pick is open, presses between the panes reach the pitch; the catcher stays for the live buying phase. */
+const induceCatcherInput = () => ({
+  phaseOpen: inducePhaseOpen.value,
+  canBuy: induceCanAct.value,
+  reviewHold: !!induceRevealHoldSnapshot.value,
+  playerPickKey: gameStore.state.playerPick?.key,
+});
+const induceGapsPassThrough = computed(() => inducementGapsPassThrough(induceCatcherInput()));
+const induceCatcherActive = computed(() => inducementCatcherActive(induceCatcherInput()));
 
 /**
  * Owner 10-09: "During inducements, users should be able to select and click the chat/log box. That should bring the
@@ -12406,9 +12417,7 @@ const dwarfenWisdomPick = computed(() => {
 });
 const prayerBoardPick = computed(() => {
   const pick = gameStore.state.playerPick;
-  return pick && (pick.key.startsWith('pchoice:knuckleDusters:')
-    || pick.key.startsWith('pchoice:ironMan:')
-    || pick.key.startsWith('pchoice:blessedStatueOfNuffle:')) ? pick : null;
+  return pick && isPrayerBoardPickKey(pick.key) ? pick : null;
 });
 const prayerBoardTitle = computed(() => {
   const key = prayerBoardPick.value?.key ?? '';
@@ -13777,8 +13786,9 @@ function sendChat() {
         <!-- Owner 10-09: while the inducement phase is open, gaps between its panes land on this catcher (never the
              pitch or the HUD under it) or, where the dock shows through, on the dock itself: it sits just above the
              catcher (same layer, later in the tree). The phase container keeps its own hit area at 1020 px and
-             under, where it is one scrolling column. -->
-        <div v-if="inducePhaseOpen" class="induce-catcher" data-testid="induce-catcher" aria-hidden="true" />
+             under, where it is one scrolling column. Coordinator 10-13: absent in the read-only review and during a
+             Prayers to Nuffle pitch pick (induceCatcherActive), so the pitch takes those presses. -->
+        <div v-if="induceCatcherActive" class="induce-catcher" data-testid="induce-catcher" aria-hidden="true" />
         <div ref="panelEl" class="log-panel" :data-collapsed="panelCollapsed"
           :class="{ 'endgame-front': endGameFront, 'over-inducements': chatRaisedOverInducements }"
           :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :style="panelStyle"
@@ -13988,7 +13998,7 @@ function sendChat() {
         <!-- Owner 08-18: the inducements PHASE screen (design handoff) replaces the
              old split picker/reveal panels. Mounted off phase state so BOTH seats
              see it for the whole phase; only the active coach gets controls. -->
-        <InducementsPhase v-if="inducePhaseOpen" class="induce-phase"
+        <InducementsPhase v-if="inducePhaseOpen" class="induce-phase" :class="{ 'induce-passthrough': induceGapsPassThrough }"
           :phase="induceDisplayPhase"
           :overdog="induceDisplayOverdogPanel"
           :underdog="induceDisplayUnderdogPanel"
@@ -14531,6 +14541,7 @@ function sendChat() {
 
         <!-- Generic selectSkill dialog. Skill icons (or plaintext when using markers). -->
         <div v-if="gameStore.state.selectSkill" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
+          :class="{ 'intensive-training-card': intensiveTrainingSelect }"
           v-prompt-dodge="promptDodge('selectSkill', gameStore.state.selectSkill.seq)"
           :style="reactivePromptStyle('selectSkill', intensiveCardPos ?? undefined)" title="Drag to move"
           @pointerdown="startReactivePromptDrag('selectSkill', $event)">
@@ -16720,6 +16731,10 @@ function sendChat() {
 /* One scrolling column: the container must keep its scrollbar and wheel, so it keeps its gaps too. There a press on the
    bare container over the dock raises the dock (chatOverInduce.onPhaseGapPointerDown); the Chat button does as well. */
 @media (max-width: 1020px) { .pitch-host > .induce-phase.ind-grid { pointer-events: auto; } }
+/* Coordinator 10-13 (game/inducementCatcher.ts): in the read-only review and during a Prayers to Nuffle pitch pick the
+   container never takes the pointer, at any width, so presses between the panes reach the pitch (the catcher is gone
+   too). The panes keep their own pointer handling. */
+.pitch-host > .induce-phase.ind-grid.induce-passthrough { pointer-events: none; }
 /* The phase's old hit area (the middle 84% of the host) on the phase's own layer: a press in a gap between the panes
    stops here instead of reaching the pitch, the HUD, or a z-46 surface the old container used to cover
    (.penalty-shootout, .kick-election-target). Tree order does the rest at 47: catcher, then the lowered dock, then the
@@ -19163,6 +19178,18 @@ function sendChat() {
   box-shadow: 0 0 40px #000a inset; transform: skewY(-1.2deg); pointer-events: none;
   animation: turnover-in var(--p-400) cubic-bezier(0.2, 0.9, 0.3, 1.3);
 }
+/* Owner 10-13 (g1952884, "Prayers to Nuffle splashes are playing behind the inducement panes"): the prayer roll lands
+   while the inducement REVIEW snapshot (induceRevealHold) still holds the panes on screen until setup, so the prayer
+   layer sits above the whole inducement stack. Ladder on the pitch host (one stacking context):
+     42 .masterchef-splash (Master Chef, Riotous Rookies, Dodgy Snack)
+     44 .induce-shader · 45-46 coin toss, .induce-reveal · 47 .induce-phase, .induce-catcher, docked log/chat, .yesno-card
+     48 .induce-chat-btn, raised log/chat (.over-inducements)
+     49 PRAYER LAYER: the Prayers to Nuffle splash, the read-only prayer-choice wait card, the Intensive Training card
+     50 .postgame · 51 block panels · 52 .prompt-front, .reroll-toast · 57 end-game front · 60-61 modal dialogs
+   The splash and the wait card are informational and never take the pointer, so a pane under them stays pressable. */
+.masterchef-splash.prayer-announcement { z-index: 49; }
+.yesno-card.prayer-choice-wait { z-index: 49; pointer-events: none; }
+.yesno-card.select-skill-card.intensive-training-card { z-index: 49; }
 .masterchef-icon { font-size: max(var(--ui-min-primary-text-size, 16px), 2.6rem); line-height: 1; filter: drop-shadow(0 2px 4px #000c); }
 .masterchef-head {
   font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); font-weight: 900; letter-spacing: 0.04em;
