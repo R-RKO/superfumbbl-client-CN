@@ -79,7 +79,7 @@ export const DIALOG_REGISTRY = {
   selectBlitzTarget: d('existing-dialog', 'DialogSelectBlitzTargetHandler'),
   opponentBlockSelection: d('unhandled', 'DialogOpponentBlockSelectionHandler'),
   pileDriver: d('existing-dialog', 'DialogPileDriverHandler'),
-  useChainsaw: d('unhandled', 'DialogUseChainsawHandler'),
+  useChainsaw: d('existing-dialog', 'DialogUseChainsawHandler'),
   blockRollPartialReRoll: d('existing-dialog', 'DialogBlockRollPartialReRollHandler'),
   invalidSolidDefence: d('client-local-only', 'DialogInvalidSolidDefenceHandler / Solid Defence setup surface'), // OK-box only, no response command: surfaced as state.solidDefenceError, re-setup stays armed (store.ts)
   selectSkill: d('existing-dialog', 'DialogSelectSkillHandler'),
@@ -92,7 +92,8 @@ export const DIALOG_REGISTRY = {
   storePropertiesLocal: d('client-local-only', 'DialogManager client UI'),
   kickOffResult: d('existing-dialog', 'DialogKickOffResultHandler'),
   bloodlustAction: d('existing-dialog', 'DialogBloodlustActionHandler'),
-  penaltyShootout: d('unhandled', 'DialogPenaltyShootoutHandler'),
+  // Presented by the end-game surface: store.ts syncEndGame -> state.penaltyShootout (display-only summary), Confirm -> clientConfirm (StepPenaltyShootout waits for both coaches).
+  penaltyShootout: d('existing-state-driver', 'DialogPenaltyShootoutHandler / endGame penaltyShootout presentation'),
   replayModeChoice: d('client-local-only', 'DialogManager client UI'),
   credits: d('client-local-only', 'DialogManager client UI'),
   creditsLicense: d('client-local-only', 'DialogManager client UI'),
@@ -100,7 +101,7 @@ export const DIALOG_REGISTRY = {
   blockRollProperties: d('existing-dialog', 'DialogBlockRollPropertiesHandler'),
   reRollBlockForTargetsProperties: d('existing-dialog', 'DialogReRollBlockForTargetsPropertiesHandler'),
   opponentBlockSelectionProperties: d('unhandled', 'DialogOpponentBlockSelectionPropertiesHandler'),
-  pickUpChoice: d('unhandled', 'DialogPickUpChoiceHandler'),
+  pickUpChoice: d('existing-dialog', 'DialogPickUpChoiceHandler'),
   selectKeyword: d('existing-dialog', 'DialogSelectKeywordHandler'),
   selectPosition: d('existing-dialog', 'DialogSelectPositionHandler'), // owner 10-05 (g1950414): Raise the Dead position pick -> clientPositionSelection (store.ts)
   reRollRegenerationMultiple: d('existing-dialog', 'DialogReRollRegenerationMultipleHandler'),

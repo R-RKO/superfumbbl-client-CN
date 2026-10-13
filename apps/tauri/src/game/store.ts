@@ -7531,7 +7531,10 @@ export function targetPendingPill(action: string): string {
 function armServerCoordinatePicks(): void {
   if (!game.value) return;
   const defId = (game.value as { defenderId?: string }).defenderId ?? '';
-  const isTrickster = String(game.value.turnMode ?? '') === 'trickster';
+  // StepTrickster keeps turnMode TRICKSTER and its move squares while it asks pickUpChoice; upstream shows that
+  // dialog modally, so the relocation picker must not arm under it.
+  const isTrickster = String(game.value.turnMode ?? '') === 'trickster'
+    && String((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '') !== 'pickUpChoice';
   const isRaidingParty = String(game.value.turnMode ?? '') === 'raidingParty';
   // Star S3: StepPlaceCarriedPlayer.prepareClientData publishes the eligible squares as FieldModel move
   // squares and flips turnMode to placeCarriedPlayer (StepPlaceCarriedPlayer.java:193-207); the answer is
@@ -17246,6 +17249,8 @@ const DECLARE_COMMANDS = new Set<string>([
 ]);
 const OWN_DIALOG_ANSWER_COMMANDS = new Set<string>([
   NetCommandId.CLIENT_PUNT_TO_CROWD,
+  NetCommandId.CLIENT_PICK_UP_CHOICE,
+  NetCommandId.CLIENT_USE_CHAINSAW,
 ]);
 const seenUnclassifiedCommands = new Set<string>();
 /** The lock's view of ONE outbound command. Exported-by-use only (module-local): the view never calls this —
@@ -17312,18 +17317,33 @@ function ownedPlaceCarriedCoordinateCommandPermitted(g: GameJson, command: Recor
 }
 
 /** @internal Exact DialogPuntToCrowd yes/no occurrence seam. */
+/** @internal BB2025 Trickster pickUpChoice: the punt harness with the owner seat keyed off the DEFENDER (the asked player). */
+export function installPickUpChoiceTestHarness(
+  fixture: GameJson,
+  seat: 'owner' | 'opponent' | 'spectator',
+  send: (command: Record<string, unknown>) => boolean | void,
+  interactive = true,
+): ReturnType<typeof installPuntToCrowdTestHarness> {
+  return installPuntToCrowdTestHarness(fixture, seat, send, interactive, String(fixture.defenderId ?? ''));
+}
+
 export function installPuntToCrowdTestHarness(
   fixture: GameJson,
   seat: 'owner' | 'opponent' | 'spectator',
   send: (command: Record<string, unknown>) => boolean | void,
   interactive = true,
+  /** The player the dialog asks (owner seat = that player's coach). Defaults to the acting player. */
+  askedPlayerId?: string,
 ): {
   mount(): void;
   prompt(): typeof state.yesNo;
   unknown(): typeof state.unknownCall;
   answer(value: boolean): void;
   resync(): void;
-  replaceDialog(dialog: GameJson['dialogParameter']): void;
+  /** runDrive=false models a frame the dialog watcher ignores (its key has no object identity). */
+  replaceDialog(dialog: GameJson['dialogParameter'], runDrive?: boolean): void;
+  stuck(): void;
+  squarePick(): typeof state.squarePick;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -17345,7 +17365,7 @@ export function installPuntToCrowdTestHarness(
   clearUnknownCall(); unknownDialogInstance = 0;
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
   game.value = fixture;
-  const actingId = String(fixture.actingPlayer?.playerId ?? '');
+  const actingId = askedPlayerId ?? String(fixture.actingPlayer?.playerId ?? '');
   const actorHome = fixture.teamHome.playerArray.some((player) => player.playerId === actingId);
   const ownerTeam = actorHome ? fixture.teamHome : fixture.teamAway;
   const opponentTeam = actorHome ? fixture.teamAway : fixture.teamHome;
@@ -17354,7 +17374,7 @@ export function installPuntToCrowdTestHarness(
     ? String((ownerTeam as { coach?: string }).coach ?? '')
     : seat === 'opponent'
       ? String((opponentTeam as { coach?: string }).coach ?? '')
-      : 'punt-spectator';
+      : 'dialog-spectator';
   play.autoPregame = true;
   interactiveSetup = interactive;
   interactiveReRolls = interactive;
@@ -17364,19 +17384,24 @@ export function installPuntToCrowdTestHarness(
     },
   } as unknown as GameSession;
 
-  const drive = () => { drivePregameStep(); maybeSurfaceUnknownCall(game.value!); };
+  const priorSquarePick = state.squarePick;
+  state.squarePick = null;
+  const drive = () => { drivePregameStep(); armServerCoordinatePicks(); maybeSurfaceUnknownCall(game.value!); };
   return {
     mount: drive,
     prompt: () => state.yesNo,
     unknown: () => state.unknownCall,
     answer: (value) => gameStore.resolveYesNo(value),
     resync: drive,
-    replaceDialog(dialog) {
+    replaceDialog(dialog, runDrive = true) {
       if (game.value) game.value.dialogParameter = dialog;
-      drive();
+      if (runDrive) drive();
     },
+    stuck: () => gameStore.devCommand('stuck'),
+    squarePick: () => state.squarePick,
     dispose() {
       clearYesNo();
+      state.squarePick = priorSquarePick;
       state.yesNo = priorYesNo;
       yesNoResolver = priorYesNoResolver;
       clearUnknownCall(); unknownDialogInstance = 0;
@@ -19285,12 +19310,13 @@ const CATALOG_ARGS: Record<string, string> = {
   selectBlitzTarget: 'playerId',
   interception: 'interceptorId / none',
   pileDriver: 'playerId / decline',
-  pickUpChoice: 'use (bool)',
+  pickUpChoice: 'choicePickUp (boolean)',
   bloodlustAction: 'playerId / decline',
   swarming: 'coordinate (place extra players)',
   selectPosition: 'teamId, position[positionId]',
   selectKeyword: 'keyword',
   puntToCrowd: 'puntToCrowd (boolean)',
+  useChainsaw: 'usingChainsaw (boolean)',
 };
 /** S43: the server dialog OBJECT the current panel belongs to (the model replaces the object for every new dialog;
  *  the same object stays while it stands). A new instance of the same id therefore surfaces again. 0 = none. */
@@ -20858,6 +20884,49 @@ function forceAdvanceCurrentState(
     case 'puntToCrowd':
       attempt({ netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD, puntToCrowd: false });
       return finish('declined the crowd punt and continued normal targeting');
+    // BB2025 Trickster (StepTrickster -> StepPickUp): false = no pick-up attempt, the ball scatters. That is the
+    // server-safe decline: it never rolls a die on the coach's behalf. Only the coach who owns the Trickster
+    // (g.defenderId) may answer: StepTrickster accepts the command from any sender and the outbound gate is
+    // fail-open for this fieldless dialog. Routed through the occurrence latch so a later card click or a
+    // repeated /stuck cannot send a second answer for the same dialog.
+    case 'pickUpChoice': {
+      const pickUpDefenderId = String(g.defenderId ?? '');
+      if (!pickUpDefenderId || !myPlayIds(g).has(pickUpDefenderId)) {
+        return finish('sent nothing: the pick-up choice belongs to the other coach');
+      }
+      if (dialogAlreadyAnswered()) {
+        if (state.yesNo?.key.startsWith('pickUpChoice:')) clearYesNo();
+        return finish('sent nothing: the pick-up choice is already answered');
+      }
+      const accepted = sendAnsweredDialogCommand(
+        { netCommandId: NetCommandId.CLIENT_PICK_UP_CHOICE, choicePickUp: false },
+        dialogInstanceKey(g), g.dialogParameter as object | null,
+      );
+      sent = accepted || sent;
+      refused = !accepted || refused;
+      if (accepted && state.yesNo?.key.startsWith('pickUpChoice:')) clearYesNo();
+      return finish('declined the pick-up and let the ball scatter');
+    }
+    // Pile Driver foul by a Chainsaw player (StepPileDriver): false = foul normally. Never rolls on the coach's behalf.
+    // Only the asked (acting) team may answer: the other coach sends nothing. Routed through the answered-instance
+    // latch so a later card click cannot double-send, and the card is retired on a successful send.
+    case 'useChainsaw': {
+      const askedTeamId = String((g.dialogParameter as { teamId?: unknown } | null | undefined)?.teamId ?? '');
+      if (!askedTeamId || askedTeamId !== String(myTeamId ?? '')) {
+        return finish('left the chainsaw question to the acting coach (not my team, nothing sent)');
+      }
+      if (dialogAlreadyAnswered()) return finish('chainsaw question already answered');
+      const instanceKey = dialogInstanceKey(g);
+      const instanceRef = g.dialogParameter as object | null;
+      const accepted = sendAnsweredDialogCommand({
+        netCommandId: NetCommandId.CLIENT_USE_CHAINSAW,
+        usingChainsaw: false,
+      }, instanceKey, instanceRef);
+      sent = accepted || sent;
+      refused = !accepted || refused;
+      if (accepted && state.yesNo?.key.startsWith('useChainsaw:')) clearYesNo();
+      return finish('declined the chainsaw and fouled normally');
+    }
     default:
       break;
   }
@@ -21788,6 +21857,9 @@ function drivePregameStep() {
   if (!play.active || !play.autoPregame) return;
   const dialogParam = g.dialogParameter as { dialogId?: string; teamId?: string } | undefined;
   const dlg = dialogParam?.dialogId;
+  // Lifecycle clear FIRST: the recognised-dialog branches below return early, so a replacement dialog must not leave the card up.
+  if (state.yesNo?.key.startsWith('useChainsaw:')
+    && (dlg !== 'useChainsaw' || String(dialogParam?.teamId ?? '') !== String((myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? ''))) clearYesNo();
   if (!dlg && (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock')) {
     armOnTheBall(g, g.turnMode);
   }
@@ -21839,6 +21911,10 @@ function drivePregameStep() {
     state.pregameWait = null;
     pendingPregameWait = null;
   }
+  // Yes/No cards bound to one dialog leave with it. These run BEFORE the switch: its recognised-dialog branches
+  // return early (e.g. an opponent-addressed playerChoice), which would otherwise strand the card.
+  if (state.yesNo?.key.startsWith('puntToCrowd:') && dlg !== 'puntToCrowd') clearYesNo();
+  if (state.yesNo?.key.startsWith('pickUpChoice:') && dlg !== 'pickUpChoice') clearYesNo();
   // When turnMode is setup-shaped, ignore the stale playerChoice dialog and enter setup handling.
   if ((!SETUP_TURN_MODES.has(g.turnMode ?? '') && g.turnMode !== DWARFEN_WISDOM_TURN_MODE)
       || (wisdomPreMode && dlg === 'playerChoice'))
@@ -22385,18 +22461,107 @@ function drivePregameStep() {
         yesLabel: 'Punt to Crowd',
         noLabel: 'Choose a Square',
         onAnswer: (puntToCrowd) => {
-          if (game.value?.dialogParameter !== instanceRef || !dialogInstanceLive(instanceKey)) return;
+          // Bind to the LIVE dialog object, not the one captured at arm time: an identical resend/reconnect
+          // replaces the object with the same occurrence key, askYesNo keeps this resolver on a key match and
+          // the dialog watcher ignores object identity, so a frozen ref would drop the click silently.
+          const liveRef = game.value?.dialogParameter as object | null | undefined;
+          if (!liveRef || !dialogInstanceLive(instanceKey) || dialogAlreadyAnswered()) return;
           const sent = sendAnsweredDialogCommand({
             netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD,
             puntToCrowd,
-          }, instanceKey, instanceRef);
-          if (!sent && game.value?.dialogParameter === instanceRef) arm();
+          }, instanceKey, liveRef);
+          if (!sent && game.value?.dialogParameter === liveRef) arm();
         },
       });
       if (humanSetupSurface() || humanReRollSurface()) arm();
       else sendAnsweredDialogCommand({
         netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD,
         puntToCrowd: false,
+      }, instanceKey, instanceRef);
+      return;
+    }
+    case 'pickUpChoice': {
+      // BB2025 Trickster: StepTrickster places the Trickster (the block's DEFENDER) on a square holding the loose
+      // ball and asks whether to attempt the pick-up (DialogPickUpChoiceParameter carries no fields). Upstream
+      // DialogPickUpChoiceHandler shows it to the coach whose team holds game.getDefender(); the other seat only
+      // waits. StepPickUp reads ClientCommandPickUpChoice{choicePickUp}: true = roll the (optional, no turnover on
+      // failure) pick-up, false = the ball scatters. While it waits the server holds turnMode TRICKSTER with
+      // homePlaying flipped to the defender's side (StepTrickster.java:187-189, restored in leave()). Ownership is
+      // team membership of the defender, exactly as upstream; no acting-player fallback (that is the attacker).
+      const defenderId = String(g.defenderId ?? '');
+      if (!defenderId) {
+        console.warn('[pickUpChoice] dialog without a defenderId in the model; nobody is asked');
+        return;
+      }
+      if (!myPlayIds(g).has(defenderId)) return;
+      const instanceKey = dialogInstanceKey(g);
+      const instanceRef = g.dialogParameter as object | null;
+      if (dialogAlreadyAnswered()) {
+        if (state.yesNo?.key.startsWith('pickUpChoice:')) clearYesNo();
+        return;
+      }
+      const arm = () => askYesNo({
+        key: `pickUpChoice:${instanceKey}`,
+        text: 'Attempt to pick up the ball?',
+        yesLabel: 'Pick up the ball',
+        noLabel: 'Leave it',
+        onAnswer: (choicePickUp) => {
+          // Bind to the LIVE dialog object, not the one captured at arm time: an identical resend/reconnect
+          // replaces the object with the same occurrence key, askYesNo keeps this resolver on a key match and
+          // the dialog watcher ignores object identity, so a frozen ref would drop the click silently.
+          const liveRef = game.value?.dialogParameter as object | null | undefined;
+          if (!liveRef || !dialogInstanceLive(instanceKey) || dialogAlreadyAnswered()) return;
+          const sent = sendAnsweredDialogCommand({
+            netCommandId: NetCommandId.CLIENT_PICK_UP_CHOICE,
+            choicePickUp,
+          }, instanceKey, liveRef);
+          if (!sent && game.value?.dialogParameter === liveRef) arm();
+        },
+      });
+      if (humanSetupSurface() || humanReRollSurface()) arm();
+      // Headless/bot default: attempt the pick-up. It is optional (a failure does not end the turn) and is
+      // what a coach almost always wants with the ball under the Trickster.
+      else sendAnsweredDialogCommand({
+        netCommandId: NetCommandId.CLIENT_PICK_UP_CHOICE,
+        choicePickUp: true,
+      }, instanceKey, instanceRef);
+      return;
+    }
+    case 'useChainsaw': {
+      // Pile Driver foul (StepPileDriver, BB2020 + BB2025) by a player with Chainsaw: DialogUseChainsawParameter
+      // carries only teamId = the ACTING team. Upstream DialogUseChainsawHandler shows the question to the coach
+      // whose team id equals it; the other seat only waits. Team membership, not iControlPlayer.
+      const askedTeamId = String((g.dialogParameter as { teamId?: unknown } | null | undefined)?.teamId ?? '');
+      const myTeamId = String((myPlayTeam(g) as { teamId?: unknown } | undefined)?.teamId ?? '');
+      if (!askedTeamId || !play.active || askedTeamId !== myTeamId) return;
+      const instanceKey = dialogInstanceKey(g);
+      const instanceRef = g.dialogParameter as object | null;
+      if (dialogAlreadyAnswered()) {
+        if (state.yesNo?.key.startsWith('useChainsaw:')) clearYesNo();
+        return;
+      }
+      const arm = () => askYesNo({
+        key: `useChainsaw:${instanceKey}`,
+        text: 'Use the chainsaw for this foul?',
+        yesLabel: 'Use chainsaw',
+        noLabel: 'Foul normally',
+        onAnswer: (usingChainsaw) => {
+          // Bind to the LIVE dialog object, not the one captured at arm time: an identical resend/reconnect
+          // replaces the object with the same occurrence key, askYesNo keeps this resolver on a key match and
+          // the dialog watcher ignores object identity, so a frozen ref would drop the click silently.
+          const liveRef = game.value?.dialogParameter as object | null | undefined;
+          if (!liveRef || !dialogInstanceLive(instanceKey) || dialogAlreadyAnswered()) return;
+          const sent = sendAnsweredDialogCommand({
+            netCommandId: NetCommandId.CLIENT_USE_CHAINSAW,
+            usingChainsaw,
+          }, instanceKey, liveRef);
+          if (!sent && game.value?.dialogParameter === liveRef) arm();
+        },
+      });
+      if (humanSetupSurface() || humanReRollSurface()) arm();
+      else sendAnsweredDialogCommand({
+        netCommandId: NetCommandId.CLIENT_USE_CHAINSAW,
+        usingChainsaw: false,
       }, instanceKey, instanceRef);
       return;
     }
@@ -22423,7 +22588,6 @@ function drivePregameStep() {
     && (dlg == null || dlg === g.turnMode);
   if (state.playerPick?.key.startsWith('onTheBall:') && !onTheBallLive) clearPlayerPick();
   if (state.yesNo?.key === 'kickOffResult' && dlg !== 'kickOffResult') clearYesNo();
-  if (state.yesNo?.key.startsWith('puntToCrowd:') && dlg !== 'puntToCrowd') clearYesNo();
   if (state.onTheBallMover && g.turnMode !== 'kickoffReturn' && g.turnMode !== 'passBlock') state.onTheBallMover = null;
   if (g.turnMode !== 'kickoffReturn' && g.turnMode !== 'passBlock') state.onTheBallWaiting = null;
   // Clear kick-placement UI after leaving kickoff aim or once the ball is in play.
