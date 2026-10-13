@@ -41,6 +41,35 @@ export function isWideZoneSquare(x: number, y: number): boolean {
   return isOwnHalf(x) && (isLeftWideColumn(y) || isRightWideColumn(y));
 }
 
+/** The server's configurable setup limits (GameOptionId MAX_PLAYERS_ON_FIELD / MAX_PLAYERS_IN_WIDE_ZONE /
+ *  MIN_PLAYERS_ON_LOS, defaults 11 / 2 / 3 in GameOptionFactory). Field names = the wire gameOptionId. */
+export interface SetupLimits {
+  maxPlayersOnField: number;
+  maxPlayersInWideZone: number;
+  minPlayersOnLos: number;
+}
+export const DEFAULT_SETUP_LIMITS: Readonly<SetupLimits> = {
+  maxPlayersOnField: MAX_ON_PITCH,
+  maxPlayersInWideZone: MAX_PER_WIDE_ZONE,
+  minPlayersOnLos: MIN_ON_LOS,
+};
+/** Read the setup limits from the wire game options; a missing or malformed value keeps the server default. */
+export function setupLimitsFromGameOptions(
+  gameOptionArray: readonly { gameOptionId?: unknown; gameOptionValue?: unknown }[] | null | undefined,
+): SetupLimits {
+  const read = (id: keyof SetupLimits): number => {
+    const raw = (gameOptionArray ?? []).find((option) => option.gameOptionId === id)?.gameOptionValue;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return DEFAULT_SETUP_LIMITS[id];
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_SETUP_LIMITS[id];
+  };
+  return {
+    maxPlayersOnField: read('maxPlayersOnField'),
+    maxPlayersInWideZone: read('maxPlayersInWideZone'),
+    minPlayersOnLos: read('minPlayersOnLos'),
+  };
+}
+
 export interface SetupValidation {
   /** Players standing on the LOS row (own half). */
   onLos: number;
@@ -50,10 +79,19 @@ export interface SetupValidation {
   rightWide: number;
   /** Players placed on the own half. */
   placed: number;
-  /** Players available to place (on-pitch max is min(11, available)). */
+  /** Players available to place, Keen Players included (the setup list; the concession offer reads this). */
   available: number;
-  /** Number that must be placed = min(11, available). */
+  /** The server's `availablePlayers` (SetupMechanic bb2025:47): available minus Keen Players, who never have to be
+   *  fielded. The required counts below derive from this pool. */
+  requiredPool: number;
+  /** Minimum to place = min(maxPlayersOnField, requiredPool). Fielded Keen Players may take the count above it. */
   required: number;
+  /** Maximum on the pitch (game option maxPlayersOnField, default 11). */
+  maxOnPitch: number;
+  /** Minimum on the LOS centre = min(minPlayersOnLos, requiredPool). */
+  requiredOnLos: number;
+  /** Maximum per wide zone (game option maxPlayersInWideZone, default 2). */
+  maxPerWideZone: number;
   losOk: boolean;
   leftOk: boolean;
   rightOk: boolean;
@@ -67,8 +105,16 @@ export interface SetupValidation {
 /**
  * Validate a proposed setup: `placedCoords` are the home-relative squares of the
  * coach's placed players; `available` is how many players they have to place.
+ * Mirrors SetupMechanic(bb2025).checkSetup: `requiredPool` is its availablePlayers (Keen Players excluded, default =
+ * `available`), and `limits` its three game options (default 11 / 2 / 3).
  */
-export function validateSetup(placedCoords: readonly [number, number][], available: number): SetupValidation {
+export function validateSetup(
+  placedCoords: readonly [number, number][],
+  available: number,
+  opts: { limits?: SetupLimits; requiredPool?: number } = {},
+): SetupValidation {
+  const limits = opts.limits ?? DEFAULT_SETUP_LIMITS;
+  const requiredPool = Math.max(0, opts.requiredPool ?? available);
   const own = placedCoords.filter((c) => isOwnHalf(c[0]));
   // Owner 08-05 (rules): the 3 must be on the LoS in the CENTER field — wide-zone columns do NOT count.
   // Upstream-exact: FieldCoordinateBounds.LOS_HOME = (12,4)..(12,10) (center 7 columns only; SetupMechanic
@@ -78,18 +124,26 @@ export function validateSetup(placedCoords: readonly [number, number][], availab
   const leftWide = own.filter((c) => isLeftWideColumn(c[1])).length;
   const rightWide = own.filter((c) => isRightWideColumn(c[1])).length;
   const placed = own.length;
-  const required = Math.min(MAX_ON_PITCH, available);
-  const losOk = onLos >= Math.min(MIN_ON_LOS, available);
-  const leftOk = leftWide <= MAX_PER_WIDE_ZONE;
-  const rightOk = rightWide <= MAX_PER_WIDE_ZONE;
-  const countOk = placed === required;
+  // SetupMechanic bb2025:83-112: too many = placed > max; too few = placed < max while placed < min(max, pool); the
+  // LOS is short only below min(minLos, pool). A fielded Keen Player counts toward placed but never toward the pool.
+  const maxOnPitch = limits.maxPlayersOnField;
+  const required = Math.min(maxOnPitch, requiredPool);
+  const requiredOnLos = Math.min(limits.minPlayersOnLos, requiredPool);
+  const losOk = onLos >= requiredOnLos;
+  const leftOk = leftWide <= limits.maxPlayersInWideZone;
+  const rightOk = rightWide <= limits.maxPlayersInWideZone;
+  const countOk = placed >= required && placed <= maxOnPitch;
   return {
     onLos,
     leftWide,
     rightWide,
     placed,
     available,
+    requiredPool,
     required,
+    maxOnPitch,
+    requiredOnLos,
+    maxPerWideZone: limits.maxPlayersInWideZone,
     losOk,
     leftOk,
     rightOk,

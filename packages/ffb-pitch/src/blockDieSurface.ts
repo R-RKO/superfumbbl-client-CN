@@ -11,9 +11,13 @@
  * Classic/modern block dialogs, the Configured-assets rows, the setup wizard — shares. Pack-bound faces are complete
  * images and never pass through here.
  */
-export type BlockDieSurface = 'black' | 'white';
-/** The stored setting: 'auto' (default) = the face set's own surface (see resolveBlockDieSurface). */
-export type BlockDieSurfaceSetting = 'auto' | BlockDieSurface;
+export type BlockDieSurface = 'black' | 'white' | 'home' | 'away';
+/** Owner 10-13: the DISPLAYED side a die belongs to: 'home' = blue (the local coach in play, the server home team for
+ *  spectators and replays), 'away' = red. See diceSide.ts for the mapping. */
+export type BlockDieSide = 'home' | 'away';
+/** The stored setting: 'auto' (default) = the face set's own surface (see resolveBlockDieSurface); 'team' (owner 10-13,
+ *  "Brushed metal, home and away") = the blue blank for a die of the displayed home side, the red blank for away. */
+export type BlockDieSurfaceSetting = 'auto' | 'black' | 'white' | 'team';
 export type BlockDieGlyphFamily = 'default' | 'krisb';
 
 /** Face order everywhere: the renderer's tumble order. */
@@ -24,6 +28,9 @@ export const BLOCK_DIE_SURFACE_FACES = ['skull', 'bothdown', 'push', 'powpush', 
 export const BLOCK_DIE_SURFACE_COLOURS: Readonly<Record<BlockDieSurface, { fill: string; edge: string }>> = {
   black: { fill: '#000000', edge: '#a0a4a6' },
   white: { fill: '#f3efe6', edge: '#26221e' },
+  // Owner 10-13: the brushed-metal blanks' interior means (scripts/compose-brushed-dice.py inputs); black frame
+  home: { fill: '#1860c5', edge: '#a0a4a6' },
+  away: { fill: '#9a0f12', edge: '#a0a4a6' },
 };
 
 /** Where a family's glyph sits on the plate, as fractions of the plate edge [x, y, w, h]. Mirrors GLYPH_RECT in
@@ -38,19 +45,27 @@ export const BLOCK_GLYPH_RECT: Readonly<Record<BlockDieGlyphFamily, readonly [nu
 export const COMPOSED_FACE_PX = 512;
 
 export function normalizeBlockDieSurface(value: unknown): BlockDieSurface {
-  return value === 'white' ? 'white' : 'black';
+  return value === 'white' || value === 'home' || value === 'away' ? value : 'black';
 }
 
-/** The stored setting, tolerant: 'black' / 'white' kept, anything else 'auto'. */
+/** The stored setting, tolerant: 'black' / 'white' / 'team' kept, anything else 'auto'. */
 export function normalizeBlockDieSurfaceSetting(value: unknown): BlockDieSurfaceSetting {
-  return value === 'black' || value === 'white' ? value : 'auto';
+  return value === 'black' || value === 'white' || value === 'team' ? value : 'auto';
+}
+
+export function isTeamBlockDieSurface(surface: BlockDieSurface): surface is BlockDieSide {
+  return surface === 'home' || surface === 'away';
 }
 
 /** THE resolver (owner 10-06 follow-up): the surface a family is drawn on for a setting. 'auto' = per face set —
- *  black for the Super FUMBBL default faces, white for KrisB. Every surface reads through this. */
-export function resolveBlockDieSurface(family: BlockDieGlyphFamily | string, setting: unknown): BlockDieSurface {
+ *  black for the Super FUMBBL default faces, white for KrisB. Every surface reads through this.
+ *  Owner 10-13: 'team' resolves to the die's displayed side (blue home / red away); a die with NO known owner (and
+ *  every side-less reader: Classic, previews) keeps the face set's own 'auto' surface, so no die ever claims a side
+ *  it does not belong to. */
+export function resolveBlockDieSurface(family: BlockDieGlyphFamily | string, setting: unknown, side?: BlockDieSide | null): BlockDieSurface {
   const explicit = normalizeBlockDieSurfaceSetting(setting);
-  if (explicit !== 'auto') return explicit;
+  if (explicit === 'team' && (side === 'home' || side === 'away')) return side;
+  if (explicit === 'black' || explicit === 'white') return explicit;
   return family === 'krisb' ? 'white' : 'black';
 }
 
@@ -58,6 +73,47 @@ export function resolveBlockDieSurface(family: BlockDieGlyphFamily | string, set
  *  (alpha dilation of the glyph, drawn UNDER it). Never on white, never for the default family. Radius is in px of a
  *  COMPOSED_FACE_PX face. Mirrors KRISB_BLACK_OUTLINE in scripts/gen-block-die-glyphs.py (contact sheet). */
 export const KRISB_BLACK_OUTLINE = { rgb: [0xe8, 0xe4, 0xda] as const, radius: 2 };
+
+/** Owner 10-13 ("palette shift the blue arrow higher when the home/away is selected"): a per-surface glyph tint.
+ *  Glyph pixels whose colour sits near the blue home plate's hue (the Super FUMBBL Push arrow, the Defender Stumbles
+ *  "!") are pulled toward a cyan-white so they read on the blue blank. Only saturated, lit pixels move: the dark outline
+ *  (low value) and the yellow / white / black art keep their colour. The plate's own interior is H 0.60 S 0.91 V 0.75. */
+export interface BlockGlyphTint {
+  /** HSV hue band (0..1) that is shifted. */
+  hueMin: number;
+  hueMax: number;
+  /** Only pixels at least this saturated and this bright (HSV) move: the outline stays dark. */
+  minSaturation: number;
+  minValue: number;
+  /** The colour the band is pulled toward, and how far (0..1). */
+  toward: readonly [number, number, number];
+  amount: number;
+}
+export const HOME_BLUE_GLYPH_TINT: BlockGlyphTint = { hueMin: 0.5, hueMax: 0.72, minSaturation: 0.35, minValue: 0.3, toward: [200, 248, 255], amount: 0.62 };
+/** surface -> family -> tint. Only the blue (home) plate tints, and only the Super FUMBBL glyphs (Rick dice's light
+ *  blue Push arrow carries a heavy black outline and reads on the blue blank as it is). */
+export const BLOCK_GLYPH_TINTS: Readonly<Partial<Record<BlockDieSurface, Partial<Record<BlockDieGlyphFamily, BlockGlyphTint>>>>> = {
+  home: { default: HOME_BLUE_GLYPH_TINT },
+};
+export function blockGlyphTint(family: BlockDieGlyphFamily, surface: BlockDieSurface): BlockGlyphTint | null {
+  return BLOCK_GLYPH_TINTS[surface]?.[family] ?? null;
+}
+/** Pure: the glyph with the tint applied (RGBA, straight alpha; alpha untouched), in a new buffer. */
+export function tintGlyphPixels(glyph: Uint8ClampedArray, tint: BlockGlyphTint): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(glyph);
+  for (let i = 0; i < out.length; i += 4) {
+    if (!out[i + 3]) continue;
+    const r = out[i]! / 255, g = out[i + 1]! / 255, b = out[i + 2]! / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const value = max, saturation = max ? (max - min) / max : 0;
+    if (value < tint.minValue || saturation < tint.minSaturation || max === min) continue;
+    const d = max - min;
+    const hue = (max === r ? ((g - b) / d + (g < b ? 6 : 0)) : max === g ? (b - r) / d + 2 : (r - g) / d + 4) / 6;
+    if (hue < tint.hueMin || hue > tint.hueMax) continue;
+    for (let c = 0; c < 3; c++) out[i + c] = out[i + c]! + (tint.toward[c]! - out[i + c]!) * tint.amount;
+  }
+  return out;
+}
 
 export function blockGlyphOutline(family: BlockDieGlyphFamily, surface: BlockDieSurface): typeof KRISB_BLACK_OUTLINE | null {
   return family === 'krisb' && surface === 'black' ? KRISB_BLACK_OUTLINE : null;
@@ -100,9 +156,13 @@ export function blockGlyphUrls(family: BlockDieGlyphFamily): string[] {
 }
 
 export function blockPlateUrl(surface: BlockDieSurface): string {
-  return surface === 'white'
-    ? new URL('../assets/blockdice/plate/plate_white.png', import.meta.url).href
-    : new URL('../assets/blockdice/plate/plate_black.png', import.meta.url).href;
+  switch (surface) {
+    case 'white': return new URL('../assets/blockdice/plate/plate_white.png', import.meta.url).href;
+    // Owner 10-13: the brushed-metal home (blue) / away (red) blanks (scripts/compose-brushed-dice.py)
+    case 'home': return new URL('../assets/blockdice/plate/plate_home.png', import.meta.url).href;
+    case 'away': return new URL('../assets/blockdice/plate/plate_away.png', import.meta.url).href;
+    default: return new URL('../assets/blockdice/plate/plate_black.png', import.meta.url).href;
+  }
 }
 
 /** Pixel rectangle of the glyph on a `size` px plate. */
@@ -145,7 +205,7 @@ const key = (family: BlockDieGlyphFamily, surface: BlockDieSurface) => `${family
  * entries and checks their size before it counts as composed; a bad entry is evicted and the pair composed afresh.
  * Every storage call is guarded (F2): quota, private mode, disabled storage or a throwing getItem only cost a compose.
  */
-export const COMPOSE_VERSION = 2;
+export const COMPOSE_VERSION = 3; // 10-13: + the home-plate glyph tint (BLOCK_GLYPH_TINTS)
 export const COMPOSED_STORAGE_PREFIX = 'superfumbbl.blockDieFaces.';
 
 function hashString(text: string): string {
@@ -199,14 +259,16 @@ function readStoredCandidate(family: BlockDieGlyphFamily, surface: BlockDieSurfa
   try {
     const urls = JSON.parse(raw) as unknown;
     if (Array.isArray(urls) && urls.length === BLOCK_DIE_SURFACE_FACES.length
-      && urls.every((url) => typeof url === 'string' && url.startsWith('data:image/png;base64,'))) return urls as string[];
+      && urls.every((url) => typeof url === 'string' && (url.startsWith('data:image/png;base64,') || url.startsWith('data:image/webp;base64,')))) return urls as string[];
   } catch { /* unparseable */ }
   return null;
 }
 
 function writeStored(family: BlockDieGlyphFamily, surface: BlockDieSurface, urls: string[]): void {
   const storageKey = composedStorageKey(family, surface);
-  for (const k of storedKeys()) if (k !== storageKey) safeRemove(k);
+  // Owner 10-13: the home/away surfaces are ONE active setting drawn as two sets - the sibling set is kept.
+  const sibling = surface === 'home' ? composedStorageKey(family, 'away') : surface === 'away' ? composedStorageKey(family, 'home') : null;
+  for (const k of storedKeys()) if (k !== storageKey && k !== sibling) safeRemove(k);
   if (safeSet(storageKey, JSON.stringify(urls))) persistedKey = storageKey; // OVERWRITES a stale / truncated entry
 }
 
@@ -214,7 +276,10 @@ function writeStored(family: BlockDieGlyphFamily, surface: BlockDieSurface, urls
 export function persistComposedBlockFaces(family: BlockDieGlyphFamily, surface: BlockDieSurface): boolean {
   const urls = composed.get(key(family, surface));
   if (!urls) return false;
-  if (persistedKey !== composedStorageKey(family, surface)) writeStored(family, surface, urls);
+  const storageKey = composedStorageKey(family, surface);
+  // a home/away set is checked against storage itself (persistedKey only remembers the LAST key written of the two)
+  const stale = isTeamBlockDieSurface(surface) ? safeGet(storageKey) === null : persistedKey !== storageKey;
+  if (stale) writeStored(family, surface, urls);
   return true;
 }
 
@@ -295,7 +360,9 @@ async function composeWithCanvas(family: BlockDieGlyphFamily, surface: BlockDieS
   const rect = blockGlyphRectPx(family, size);
   const outline = blockGlyphOutline(family, surface);
   return glyphImgs.map((img) => {
-    const glyph = pixelsOf(img, size, rect);
+    const raw = pixelsOf(img, size, rect);
+    const tint = blockGlyphTint(family, surface);
+    const glyph = tint ? tintGlyphPixels(raw, tint) : raw;
     const base = outline ? composeBlockFacePixels(plate, glyphOutlinePixels(glyph, size, outline.rgb, outline.radius)) : plate;
     const pixels = composeBlockFacePixels(base, glyph);
     const canvas = document.createElement('canvas');
@@ -304,7 +371,9 @@ async function composeWithCanvas(family: BlockDieGlyphFamily, surface: BlockDieS
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('block die surface: no 2D canvas');
     ctx.putImageData(new ImageData(pixels as unknown as Uint8ClampedArray<ArrayBuffer>, size, size), 0, 0);
-    return canvas.toDataURL('image/png');
+    // Owner 10-13: the brushed-metal team faces are textured (~0.5 MB of PNG data URL each) and two sets persist
+    // together: WebP keeps the pair inside the localStorage quota. An engine that cannot encode WebP returns PNG.
+    return isTeamBlockDieSurface(surface) ? canvas.toDataURL('image/webp', 0.92) : canvas.toDataURL('image/png');
   });
 }
 

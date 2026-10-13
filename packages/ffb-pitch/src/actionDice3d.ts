@@ -41,7 +41,12 @@ export interface ActionDieSlot {
   alpha: number;
   /** The die's result: a cube adopted without a tumble (layer enabled mid-life, pool re-admission) settles on it. */
   value: number;
+  /** Owner 10-13: the side face set this die wears (home blue / away red); absent = the plain set. */
+  faceSet?: ActionDieFaceSet;
 }
+
+/** Owner 10-13: the extra face sets a cube may wear besides the plain one. */
+export type ActionDieFaceSet = 'home' | 'away';
 
 /** A decoded d6 face image — the SAME bitmap Pixi already holds for the PNG die (owner UAT 09-14: a second URL
  *  loader never delivered in the built app and the GLB's embedded block faces showed through). */
@@ -58,8 +63,9 @@ export interface ActionDiceRuntime {
   /** Advance every mixer by `deltaSeconds`; dice in `freshIds` (clip started this frame) by at most ACTION_DICE_MAX_STEP_S. */
   update(deltaSeconds: number, freshIds?: ReadonlySet<number>): void;
   render(): void;
-  /** Six decoded faces, face k on material k; throws when any is missing (the layer then falls back to PNG dice). */
-  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[]): Promise<void>;
+  /** Six decoded faces, face k on material k; throws when any is missing (the layer then falls back to PNG dice).
+   *  Owner 10-13: with `set`, the faces of that side set (dice placed with that `faceSet` wear them). */
+  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[], set?: ActionDieFaceSet): Promise<void>;
   dispose(): void;
 }
 
@@ -76,7 +82,7 @@ export interface ActionDiceLayer {
    *  Returns the ids the overlay is actually drawing — a die past the pool cap, or every die until the faces have
    *  been applied, keeps its PNG face instead. */
   sync(slots: readonly ActionDieSlot[], deltaSeconds: number, now?: number): ReadonlySet<number>;
-  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[]): Promise<void>;
+  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[], set?: ActionDieFaceSet): Promise<void>;
   dispose(): void;
 }
 
@@ -158,8 +164,13 @@ class ActionDiceLayerController implements ActionDiceLayer {
     return live;
   }
 
-  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[]): Promise<void> {
+  updateFaceTextures(sources: readonly (ActionDieFaceSource | null | undefined)[], set?: ActionDieFaceSet): Promise<void> {
     if (this.disposed) return Promise.resolve();
+    if (set) { // a side set never gates drawing: a die without it wears the plain faces
+      return this.runtime.updateFaceTextures(sources, set).then(() => {
+        if (!this.disposed && this.drewSomething) this.runtime.render();
+      }).catch((error) => console.warn(`ffb-pitch: 3D ${set} d6 faces unavailable, those dice wear the plain faces`, error));
+    }
     return this.runtime.updateFaceTextures(sources).then(() => {
       if (this.disposed) return;
       this.facesReady = true;
@@ -234,9 +245,11 @@ async function createThreeActionDiceRuntime(host: HTMLElement, onFailure: (error
   const cubeEdge = Math.max(1e-6, Math.max(edgeBox.max.x - edgeBox.min.x, edgeBox.max.y - edgeBox.min.y, edgeBox.max.z - edgeBox.min.z));
   const clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
 
-  interface Die { holder: import('three').Group; object: import('three').Object3D; mixer: import('three').AnimationMixer; materials: MeshMaterial[] }
+  interface Die { holder: import('three').Group; object: import('three').Object3D; mixer: import('three').AnimationMixer; materials: MeshMaterial[]; faceSet?: ActionDieFaceSet }
   const dice = new Map<number, Die>();
   const faceTextures: (import('three').Texture | null)[] = ACTION_D6_FACE_MATERIALS.map(() => null);
+  // Owner 10-13: the home / away face sets (a die whose set is missing wears the plain faces)
+  const sideFaceTextures: Partial<Record<ActionDieFaceSet, (import('three').Texture | null)[]>> = {};
   const externalTextures = new Set<import('three').Texture>();
   let disposed = false;
   let textureGeneration = 0;
@@ -245,7 +258,7 @@ async function createThreeActionDiceRuntime(host: HTMLElement, onFailure: (error
     for (const material of die.materials) {
       const index = ACTION_D6_FACE_MATERIALS.indexOf(material.name);
       if (index < 0) continue;
-      const texture = faceTextures[index];
+      const texture = (die.faceSet ? sideFaceTextures[die.faceSet]?.[index] : null) ?? faceTextures[index];
       if (!texture) continue;
       // Owner UAT 09-14 ("all number faces carry their block die equivalent"): the GLB face materials hold the block
       // symbol TWICE — base map AND an emissive map (factor 0.18, alpha-masked). Swapping the base map alone left the
@@ -309,6 +322,7 @@ async function createThreeActionDiceRuntime(host: HTMLElement, onFailure: (error
         dice.set(slot.id, die);
         created = true;
       }
+      if (die.faceSet !== slot.faceSet) { die.faceSet = slot.faceSet; applyFaces(die); }
       die.holder.visible = slot.alpha > 0.01;
       die.holder.position.set(slot.cx, -slot.cy, 0);
       die.holder.scale.setScalar(Math.max(1e-3, slot.size) / cubeEdge);
@@ -357,12 +371,13 @@ async function createThreeActionDiceRuntime(host: HTMLElement, onFailure: (error
     render() {
       if (!disposed) renderer.render(scene, camera);
     },
-    async updateFaceTextures(sources) {
+    async updateFaceTextures(sources, set) {
       if (sources.length !== ACTION_D6_FACE_MATERIALS.length) throw new Error(`Expected six d6 faces, got ${sources.length}`);
       const missing = sources.findIndex((source) => !source);
       if (missing >= 0) throw new Error(`d6 face ${missing + 1} is not decoded yet`);
       if (disposed) return;
       ++textureGeneration;
+      const target = set ? (sideFaceTextures[set] ??= ACTION_D6_FACE_MATERIALS.map(() => null)) : faceTextures;
       // Wrap the bitmaps Pixi already decoded: no second loader, no protocol/CSP difference between dev and the
       // built app, and never the GLB's embedded block faces.
       sources.forEach((source, index) => {
@@ -370,8 +385,8 @@ async function createThreeActionDiceRuntime(host: HTMLElement, onFailure: (error
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.flipY = false;
         texture.needsUpdate = true;
-        const previous = faceTextures[index];
-        faceTextures[index] = texture;
+        const previous = target[index];
+        target[index] = texture;
         externalTextures.add(texture);
         if (previous) { externalTextures.delete(previous); previous.dispose(); }
       });

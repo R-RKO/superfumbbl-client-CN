@@ -136,6 +136,12 @@ export const POSITION_TYPE_BY_NAME: Record<string, RingType> = {
   renegadedarkelf: 'catcher',
   renegadegoblin: 'lineman',
   renegadeorc: 'lineman',
+  // Owner 10-13: Chaos Renegades humans ring as linemen (fork 'Renegade Human', live 'Human Renegade');
+  // the human thrower keeps the thrower ring under both spellings.
+  renegadehuman: 'lineman',
+  humanrenegade: 'lineman',
+  renegadehumanthrower: 'thrower',
+  humanrenegadethrower: 'thrower',
   renegadeskaven: 'lineman',
   rotspawn: 'bigguy',
   rotter: 'lineman',

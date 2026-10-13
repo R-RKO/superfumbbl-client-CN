@@ -112,6 +112,8 @@ export function buildBlockDecision(game: GameJson | null, dp: Record<string, unk
   const hasAnyReroll = srcTeam || srcPro || srcBrawler || srcConsummate || !!singleBlockDieSrc || !!multiBlockDiceSrc || !!singleSkullSrc;
   return {
     dice: Array.isArray(dp.blockRoll) ? (dp.blockRoll as unknown[]).map(Number) : [],
+    // Owner 10-13: the server-declared chooser owns these dice (home/away dice colour); null when not declared
+    choosingTeamId: typeof dp.choosingTeamId === 'string' && dp.choosingTeamId.length > 0 ? dp.choosingTeamId : null,
     nrOfDice,
     // readOnly (non-chooser #5): FORCE pickable off — the `nrOfDice>0` shortcut would otherwise make a downhill watcher pickable. The chooser path is unchanged.
     pickable: readOnly ? false : (nrOfDice > 0 || !hasAnyReroll),

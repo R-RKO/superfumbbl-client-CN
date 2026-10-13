@@ -51,6 +51,9 @@ import DisplayCaps from './components/DisplayCaps.vue';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
+import BugReportModal from './components/BugReportModal.vue';
+import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/bugReportHost';
+import { onReportOwnedKey } from './game/reportModalKeys';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { fetchLatestRelease, inAppUpdaterEnabled, MENU_RETURN_UPDATE_CHECK_DELAY_MS, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, updateAvailable } from './game/updateCheck';
@@ -939,6 +942,7 @@ function openConsole() {
 // Help / Field Manual) so the console keeps a keyboard route to them; in-game SpectateView owns the Esc binding.
 function escConsoleMenu(e: KeyboardEvent): void {
   if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || ui.setupWizardRerunOpen || guideOpen.value || credsMenuOpen.value) return;
+  if (shellReportOpen.value) return; // owner 10-13: the open Report dialog owns Escape (it closes itself)
   if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
   ui.gameMenuOpen = !ui.gameMenuOpen;
 }
@@ -1805,6 +1809,9 @@ function focusOwnsTyping(): boolean {
 }
 function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'): boolean {
   if (id === 'fullscreen') { void toggleFullscreen(); return true; }
+  // Owner 10-13: nothing on the shell acts under the open Report dialog (Start would open Settings over it, a blade key
+  // would switch the blade it is reporting from).
+  if (shellReportOpen.value && (id === 'gameMenu' || id === 'bladePrev' || id === 'bladeNext')) return false;
   if (id === 'gameMenu') {
     if (settingsEscape()) return true; // Settings (or a modal over it) is open: the same Esc step
     if (gameStore.game.value || ui.setupWizardRerunOpen) return false;
@@ -1821,7 +1828,40 @@ function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'):
   return false;
 }
 /** Rebindable keyboard bindings on the main screen (in a game SpectateView's own keydown owns them). */
+// ---- Owner 10-13: Report on the blade ribbon ("The Bug report button should be visible on the FUMBBL.Com / Play /
+// Spectate / Replay blade menus as well") ----
+// The same dialog as in a game (components/BugReportModal.vue): automatic window screenshot (no pitch here), the
+// description, the attachments list, Send. No game is loaded on the shell, so the report carries gameId null and the
+// MOST RECENT wire log (remembered from the last game, game/bugReportHost.ts), and context.blade says which blade.
+const shellReportOpen = ref(false);
+const shellReportBusy = ref(false);
+const shellReportModal = ref<InstanceType<typeof BugReportModal> | null>(null);
+// The store clears its wire-log path when a game is left: remember the last one for a report filed from the shell.
+watch(() => gameStore.state.wireLogFile, (path) => { if (path) rememberWireLogFile(path); }, { immediate: true });
+// A game taking over the window closes the shell's dialog (the in-game view has its own), and a capture still in flight
+// is dropped: it must never open the shell's dialog over the game (Astra P2; closing alone does not reach a capture
+// that has not opened the dialog yet).
+watch(() => !!gameStore.game.value, (inGame) => {
+  if (!inGame) return;
+  shellReportModal.value?.cancelPending();
+  shellReportOpen.value = false;
+});
+// ui.reportOpen: the fork dev console stands down under the report (the same mirror SpectateView keeps in a game).
+watch(shellReportOpen, (open) => { ui.reportOpen = open; });
+const shellReportHost = createShellReportHost({ blade: () => view.value, settings, state: gameStore.state });
+const shellReportTitle = computed(() => `Report an issue (from the ${bladeLabel(view.value)} blade)`);
+function openShellReport(): void {
+  shellReportModal.value?.openReport();
+}
+function onShellReportSent(info: { wireLogAttached: boolean }): void {
+  showCornerNotice('report', `🐞 Report sent, thanks!${info.wireLogAttached ? ' Your most recent game log went with it.' : ''}`, 4000);
+}
+
 function onShellActionKey(event: KeyboardEvent): void {
+  // Owner 10-13 (Astra P1): the open Report dialog owns the keyboard. Keys typed inside it never get here (its root
+  // stops them); a key whose target is outside it (body, or a blade button tabbed to) gets no native Enter / Space
+  // activation (no selectBlade under the dialog), and Tab comes back into the report.
+  if (shellReportOpen.value) { onReportOwnedKey(event, shellReportModal.value?.root ?? null); return; }
   if (gameStore.game.value || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || capturingKey.value || capturingBinding.value) return;
   if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -2023,7 +2063,12 @@ onBeforeUnmount(() => {
       </template>
       <!-- Owner 10-12: BETA stamp right after the last blade (Replay, or Team in the fork edition). -->
       <span class="alpha-stamp ribbon-beta" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
+      <!-- Owner 10-13: Report on every blade, both editions, at the ribbon's right edge (the blades stay left). -->
+      <button class="ribbon-report" type="button" data-testid="ribbon-report" :title="shellReportTitle"
+        :disabled="shellReportOpen" @click="openShellReport"><span class="ribbon-report-bug" aria-hidden="true">🐞</span> Report</button>
     </nav>
+    <BugReportModal ref="shellReportModal" v-model:open="shellReportOpen" v-model:busy="shellReportBusy"
+      :host="shellReportHost" @sent="onShellReportSent" />
 
     <input ref="replayFileInput" type="file" hidden
       accept="application/json,application/x-java-jnlp-file,text/xml,.json,.ffbreplay,.jnlp"
@@ -2315,7 +2360,9 @@ onBeforeUnmount(() => {
               <select v-model="settings.tackleZoneMode">
                 <option value="opposition">Opposition</option>
                 <option value="friendly">Friendly</option>
-                <option value="both">Both</option>
+                <!-- Owner 10-13: Classic (fork only) still draws both teams for 'both', so it keeps the old wording. -->
+                <option v-if="ClassicView && settings.uiMode === 'classic'" value="both">Both</option>
+                <option v-else value="both" title="Selecting an opposing player shows your tackle zones; selecting your own player shows the opponent's">Relevant to the selected player</option>
               </select>
             </label>
           </fieldset>
@@ -2900,6 +2947,7 @@ onBeforeUnmount(() => {
               <select v-model="settings.d6FaceVariant">
                 <option value="brushed-metal">Black (default)</option>
                 <option value="black">White</option>
+                <option value="team">Brushed metal, home and away</option>
               </select>
             </label>
             <label class="row">
@@ -2908,6 +2956,7 @@ onBeforeUnmount(() => {
                 <option value="auto">Match the face set (default)</option>
                 <option value="black">Black</option>
                 <option value="white">White</option>
+                <option value="team">Brushed metal, home and away</option>
               </select>
             </label>
             <label class="row">
@@ -3236,6 +3285,14 @@ onBeforeUnmount(() => {
               corners, the scoreboard, and the quick bar. Press <b>Confirm Layout</b> in the middle of the screen when done.</p>
           </fieldset>
 
+          <!-- Owner 10-13: the three setup-phase aids, each separately switchable -->
+          <fieldset class="settings-group">
+            <legend>Setup</legend>
+            <label class="row"><input v-model="settings.setupRulesCard" type="checkbox" /> <span>Setup rules card at setup</span></label>
+            <label class="row"><input v-model="settings.setupFormationsPanel" type="checkbox" /> <span>Formations panel at setup</span></label>
+            <label class="row"><input v-model="settings.setupZoneHelpers" type="checkbox" /> <span>Zone helpers at setup</span></label>
+          </fieldset>
+
           <fieldset class="settings-group">
             <legend>UI theme</legend>
             <div class="theme-presets">
@@ -3432,6 +3489,7 @@ onBeforeUnmount(() => {
             </li>
             <li><span>KrisB block dice faces (the "Rick dice (built-in)" block dice option) — by Kristofer Bengtsson (KrisB), used with permission.</span></li>
             <li><span>Kickoff banners, stadium skybox, space backdrop, crest and decoration art — generated with OpenAI, Codex and Gemini image models from Super FUMBBL prompts; no third-party source imagery.</span></li>
+            <li><span>Home and away brushed-metal dice (the "Brushed metal, home and away" dice option): Super FUMBBL originals made with Codex image generation.</span></li>
             <li><span>FUMBBL logo — used under FUMBBL's branding guidelines (FUMBBL Branding page). FUMBBL is Christer Kaivo-oja's site; Super FUMBBL is an independent client.</span></li>
           </ul>
           <h3 class="credits-head license-head">License</h3>
@@ -4064,6 +4122,27 @@ input, textarea, [contenteditable="true"], .log-panel {
 }
 .server-plate.ribbon-logo-plate img { height: 48px; width: auto; max-width: none; max-height: none; object-fit: contain; }
 .blade-ribbon .ribbon-beta { flex: 0 0 auto; align-self: center; margin-left: 0.6rem; }
+/* Owner 10-13: Report sits at the ribbon's right edge (margin-left: auto pushes it past the blades and the stamp),
+   amber like the in-game REPORT button, on the one ribbon row. */
+.blade-ribbon .ribbon-report {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--ui-accent);
+  border-radius: 6px;
+  color: var(--ui-accent);
+  background: transparent;
+  font-family: inherit;
+  font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem);
+  line-height: 1;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.blade-ribbon .ribbon-report:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-hover); }
+.blade-ribbon .ribbon-report:disabled { opacity: 0.6; cursor: default; }
+.blade-ribbon .ribbon-report-bug { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
 @media (max-width: 640px) {
   .blade-ribbon { padding-left: 1.25rem; }
   .blade-ribbon .ribbon-beta { display: none; }

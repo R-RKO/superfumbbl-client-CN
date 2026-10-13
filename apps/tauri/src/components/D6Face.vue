@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { d6FaceUrl, d6FaceVisualScale, isD6FaceValue, type D6FaceVariant } from '@fumbbl40k/ffb-pitch';
+import { d6FaceUrl, d6FaceVisualScale, isD6FaceValue, type BlockDieSide, type D6FaceVariant } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
 
 const props = withDefaults(defineProps<{
@@ -8,15 +8,19 @@ const props = withDefaults(defineProps<{
   label?: string;
   showValue?: boolean;
   variant?: D6FaceVariant;
+  /** Owner 10-13: the DISPLAYED side of the team that rolled this die (home = blue, away = red). Under the 'team' D6
+   *  style it wins over `variant`; null / absent = no known owner (the neutral face). */
+  side?: BlockDieSide | null;
 }>(), {
   label: '',
   showValue: false,
 });
 
 const valid = computed(() => isD6FaceValue(props.value));
-const effectiveVariant = computed(() => props.variant ?? settings.d6FaceVariant);
+const teamSide = computed(() => settings.d6FaceVariant === 'team' && (props.side === 'home' || props.side === 'away') ? props.side : null);
+const effectiveVariant = computed<D6FaceVariant>(() => teamSide.value ? 'team' : props.variant ?? settings.d6FaceVariant);
 const url = computed(() => valid.value
-  ? d6FaceUrl(props.value as 1 | 2 | 3 | 4 | 5 | 6, effectiveVariant.value)
+  ? d6FaceUrl(props.value as 1 | 2 | 3 | 4 | 5 | 6, effectiveVariant.value, teamSide.value)
   : '');
 const imageStyle = computed(() => {
   const scale = d6FaceVisualScale(effectiveVariant.value);
@@ -25,7 +29,7 @@ const imageStyle = computed(() => {
 });
 const alt = computed(() => props.label || `D6 showing ${props.value}`);
 const failed = ref(false);
-watch(() => [props.value, effectiveVariant.value], () => { failed.value = false; });
+watch(() => [props.value, effectiveVariant.value, teamSide.value], () => { failed.value = false; });
 </script>
 
 <template>

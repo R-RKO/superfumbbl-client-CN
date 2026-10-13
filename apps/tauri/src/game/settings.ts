@@ -142,8 +142,10 @@ export interface AppSettings extends ConfirmationSettings {
   blockDiceFamily: 'default' | 'krisb';
   /** Owner 10-06: the plate the bundled block-die faces sit on — 'auto' (default) matches the face set (black for the
    *  Super FUMBBL faces, white for KrisB; resolveBlockDieSurface), or an explicit 'black' / 'white'. Pack-bound faces
-   *  are complete images and are drawn as they are. */
-  blockDiceSurface: 'auto' | 'black' | 'white';
+   *  are complete images and are drawn as they are. Owner 10-13: 'team' = "Brushed metal, home and away" - the dice
+   *  of the displayed home side (the local coach in play, the server home team for spectators) on the blue blank, the
+   *  away side's on the red one; dice with no known owner keep the 'auto' surface. */
+  blockDiceSurface: 'auto' | 'black' | 'white' | 'team';
   /** Immutable native installation identity for the selected skill-icon mod pack.
    *  Never a filesystem path; empty uses generated initials. */
   skillIconPackInstallId: string | null;
@@ -388,6 +390,12 @@ export interface AppSettings extends ConfirmationSettings {
   showFieldLogos: boolean;
   /** Owner 10-06: prefix dugout band labels with the box's player count ("2 RESERVES"). Default OFF. */
   dugoutCounts: boolean;
+  /** Owner 10-13: show the Setup rules card when a setup phase starts. Default ON; off = starts closed, the reopen tab stays. */
+  setupRulesCard: boolean;
+  /** Owner 10-13: show the Formations panel when a setup phase starts. Default ON; off = starts closed, the reopen tab stays. */
+  setupFormationsPanel: boolean;
+  /** Owner 10-13: draw the green/red setup zone shading on the pitch during setup. Default ON. */
+  setupZoneHelpers: boolean;
   /** Owner 10-06: the "N RES / N OUT" tab hanging off each coach corner panel. Default ON; right-click on it hides it. */
   coachCornerCounts: boolean;
   /** Owner 10-10: the roster panes (H pop-out, post-game Roster / MVP tabs, MVP nomination, Assign Touchdown) list only
@@ -438,7 +446,7 @@ export interface AppSettings extends ConfirmationSettings {
   dieTagPosition: DieTagPosition;
   /** Visual treatment for every D6 surface. Brushed metal is the install default;
    *  the original black set remains available as a local presentation choice. */
-  d6FaceVariant: 'brushed-metal' | 'black';
+  d6FaceVariant: 'brushed-metal' | 'black' | 'team'; // owner 10-13: 'team' = blue home / red away D6s (d6.ts)
   /** Owner 2026-07-06: PER-AURA shading, each surfaced independently —
    *  'always' every emitter, 'selected' only the selected player, 'off' none.
    *  Colours are friendly/opposition (home = friendly): Disturbing Presence =
@@ -738,6 +746,9 @@ const DEFAULTS: AppSettings = {
   showSweetSpot: true,
   showFieldLogos: true,
   dugoutCounts: false,
+  setupRulesCard: true,
+  setupFormationsPanel: true,
+  setupZoneHelpers: true,
   coachCornerCounts: true,
   rosterHideInnateSkills: true,
   endZoneLabel: 'team',
@@ -1090,9 +1101,12 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.spectatorTackleZoneMode = typeof raw.spectatorTackleZoneMode === 'string' && (SPECTATOR_TACKLE_ZONE_MODES as readonly string[]).includes(raw.spectatorTackleZoneMode)
       ? raw.spectatorTackleZoneMode as SpectatorTackleZoneMode
       : DEFAULTS.spectatorTackleZoneMode;
-    merged.d6FaceVariant = raw.d6FaceVariant === 'black' ? 'black' : 'brushed-metal';
+    merged.d6FaceVariant = raw.d6FaceVariant === 'black' || raw.d6FaceVariant === 'team' ? raw.d6FaceVariant : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
+    merged.setupRulesCard = raw.setupRulesCard !== false; // owner 10-13: on unless the user turned it off
+    merged.setupFormationsPanel = raw.setupFormationsPanel !== false; // owner 10-13: on unless the user turned it off
+    merged.setupZoneHelpers = raw.setupZoneHelpers !== false; // owner 10-13: on unless the user turned it off
     merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
     merged.rosterHideInnateSkills = raw.rosterHideInnateSkills !== false; // owner 10-10: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
@@ -1169,7 +1183,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     };
     merged.skillBadgeFamily = raw.skillBadgeFamily === 'default' ? 'default' : 'illustrated'; // owner 09-10: illustrated unless the flat set was chosen
     merged.blockDiceFamily = raw.blockDiceFamily === 'krisb' ? 'krisb' : 'default'; // owner 10-06: default unless KrisB was chosen
-    merged.blockDiceSurface = raw.blockDiceSurface === 'black' || raw.blockDiceSurface === 'white' ? raw.blockDiceSurface : 'auto'; // owner 10-06: explicit picks kept, else per face set
+    merged.blockDiceSurface = raw.blockDiceSurface === 'black' || raw.blockDiceSurface === 'white' || raw.blockDiceSurface === 'team' ? raw.blockDiceSurface : 'auto'; // owner 10-06: explicit picks kept, else per face set (10-13: + team)
     // Owner 2026-07-05 migration: FORCE the new defaults onto pre-v2 installs (whose
     // persisted settings still carry the old walk / 60% values). Runs once — after
     // it stamps settingsVersion, future user changes to these keys stick.

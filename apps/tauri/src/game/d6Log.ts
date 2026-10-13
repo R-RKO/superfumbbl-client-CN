@@ -5,11 +5,14 @@ export interface D6LogToken {
   index: number;
   value: D6FaceValue;
   kind: (typeof D6_LOG_TOKEN_KINDS)[number];
+  /** Owner 10-13: the SERVER side of the team that rolled the die (format-time truth, see reportDiceOwner); the view
+   *  maps it seat-relatively for the home/away dice colour. Absent = no single owning team. */
+  team?: 'home' | 'away';
 }
 
 export type D6LogPart =
-  | { text: string; face?: never; kind?: never }
-  | { text?: never; face: D6FaceValue; kind: D6LogToken['kind'] };
+  | { text: string; face?: never; kind?: never; team?: never }
+  | { text?: never; face: D6FaceValue; kind: D6LogToken['kind']; team?: 'home' | 'away' };
 
 export type D6RequirementPart =
   | { text: string; face?: never; label?: never }
@@ -58,7 +61,7 @@ export function d6LogParts(entry: { text: string; d6?: readonly D6LogToken[] }):
   for (const token of tokens) {
     if (token.index < cursor || entry.text[token.index] !== String(token.value)) continue;
     if (token.index > cursor) parts.push({ text: entry.text.slice(cursor, token.index) });
-    parts.push({ face: token.value, kind: token.kind });
+    parts.push(token.team ? { face: token.value, kind: token.kind, team: token.team } : { face: token.value, kind: token.kind });
     cursor = token.index + 1;
   }
   if (cursor < entry.text.length) parts.push({ text: entry.text.slice(cursor) });

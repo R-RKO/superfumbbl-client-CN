@@ -9,6 +9,8 @@ export interface ActionTargetModalView {
   mode: 'foul' | 'handoff' | 'pass';
   targetId: string;
   rollText: string;
+  /** Owner 10-13: "Pass from <square> after moving" when the pass is thrown from a planned destination. */
+  note?: string;
 }
 
 defineProps<{
@@ -36,6 +38,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
     :position-style="positionStyle" draggable resizable compact :data-seq="modal.seq"
     :data-target-id="modal.targetId" @drag-start="$emit('dragStart', $event)">
     <div class="yesno-text">
+      <span v-if="modal.note" class="action-modal-note">{{ modal.note }}</span>
       <span class="action-modal-roll">
         <img v-if="modal.mode === 'foul'" :src="foulSkullUrl" class="action-roll-die" alt="skull" />
         <template v-if="modal.mode === 'foul'">{{ foulRollNumber(modal.rollText) }}</template>
@@ -71,6 +74,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
 }
 .sendoff-btn.argue { background: #2f5aa8; border-color: #6f9fe0; }
 .action-modal-roll { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 4px; font-weight: 800; font-size: max(var(--ui-min-text-size, 12px), 12px); color: var(--ui-heading); }
+.action-modal-note { display: block; font-weight: 600; }
 .action-target-d6 { --d6-size: 1.5em; margin: -0.12em 0.08em; }
 .action-roll-die { width: 16px; height: 16px; image-rendering: pixelated; vertical-align: middle; margin-right: 3px; }
 </style>

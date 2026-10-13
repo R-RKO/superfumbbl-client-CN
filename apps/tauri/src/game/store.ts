@@ -59,7 +59,7 @@ import {
   type ServerCommand,
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
-import { SETUP_TEMPLATES, validateSetup, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, TTM_THROW_MS, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
+import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createReportLogContext, formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
@@ -94,6 +94,7 @@ import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
+import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
 import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
@@ -114,7 +115,7 @@ import { dialogDescriptor, dialogRuntimeHandler, resolveDialogIntent, resolveDia
 import { describeUnknownDialog, type UnknownDialogLookup, type UnknownDialogView } from './unknownDialogView';
 import { playerActionClientState, playerActionDescriptor, playerActionFallbackState, resolvePlayerActionSelection } from './playerActionRegistry';
 import type { RailDiagnosticSink } from './railDiagnostics';
-import { connectionLogFileName, connectionWireRecord, pongOverdueStage, railDiagnosticWireRecord, type ConnectionWireEvent } from './wireLogRecord';
+import { connectionLogFileName, connectionWireRecord, pongOverdueStage, railDiagnosticWireRecord, type ConnectionWireEvent, createIntervalGate, createLongFrameDetector, serverJoinDetail, GAME_TIME_LOG_INTERVAL_MS } from './wireLogRecord';
 import {
   actionStateShadowInScope,
   createRefusalDivergenceCounts,
@@ -126,7 +127,7 @@ import {
   type ShadowFrameInput,
 } from './rails/shadowRunner';
 // #173: the action-surface lock's wire-boundary consult (Meero SR-95 — one gate at sendCommand, not N view sites).
-import { actionAllowed, canFreeSelectPass, canSwitchMoveActingPlayer, friendlyActivationSwitchDisposition, throwTeamMateTerminalReason, blitzBlockChoiceStale, blitzPlanGate, blitzTargetOutcome, actingHasBlocked, type ActionClass, type FriendlyActivationSwitchDisposition, type ThrowTeamMateTerminalReason } from './logic/order66Interaction';
+import { actionAllowed, canFreeSelectPass, passTargetInTemplate, canSwitchMoveActingPlayer, friendlyActivationSwitchDisposition, throwTeamMateTerminalReason, blitzBlockChoiceStale, blitzPlanGate, blitzTargetOutcome, actingHasBlocked, type ActionClass, type FriendlyActivationSwitchDisposition, type ThrowTeamMateTerminalReason } from './logic/order66Interaction';
 import {
   KickElectionController,
   projectAuthoritativeKick,
@@ -677,6 +678,10 @@ const legacyState = reactive({
    *  legality; it only keeps the destination bridge alive between accepted CLIENT_PASS and the canonical
    *  passCoordinate echo. Plan cancellation/replacement cannot manufacture it. */
   acceptedPassSubmission: null as { seq: number; playerId: string; square: [number, number] } | null,
+  /** Owner 10-13 (pass at destination): a walk-then-pass plan reached its destination but the throw was no longer
+   *  legal from there (out of range, receiver moved, ball not held). Nothing was sent; the view re-surfaces the
+   *  normal pass targeting from the passer's actual square. */
+  plannedPassRetired: null as { seq: number; playerId: string; reason: string } | null,
   /** #236: model-constrained Fumblerooski election identity. The server's dedicated command sets
    *  `fieldModel.ballMoving=true` and emits `ReportFumblerooskie(used=true)` while retaining the acting action
    *  (`bb2025/move/StepInitMoving.java:270-278`; shared/StepInitSelecting.java:337-345). The report identifies WHY
@@ -687,7 +692,9 @@ const legacyState = reactive({
   /** #51: ReportStallerDetected one-shot — deduped per report INSTANCE via the frame's `commandNr` (a playerId key would suppress a legit re-detection — Meero C-51). */
   stallerDetected: null as { playerId: string; player: string; seq: number } | null,
   /** Owner 07-13 (B&C ph-2): Ball & Chain SCATTER — throw-in d6 + server squares (scatterPlayer report while acting movesRandomly); cleared on next aim / activation end. */
-  bncScatter: null as { roll: number; from: [number, number]; dest: [number, number]; seq: number } | null,
+  // Owner 10-13: `playerId` = the Ball & Chain player (the die's owner for the home/away dice colour; the die is shown
+  // at the destination, whose occupant may be an opposing victim).
+  bncScatter: null as { roll: number; from: [number, number]; dest: [number, number]; seq: number; playerId?: string } | null,
   /** Owner 07-05: ARMOUR rolls this frame — 2d6 + breastplate at each fallen square (from the injury report's `armorRoll`; there is NO standalone armour report). `broken` tints. */
   armorDice: null as { rolls: { square: [number, number]; rolls: [number, number]; broken: boolean }[]; seq: number } | null,
   /** Preliminary kickoff-scatter dice/candidates. Display-only: this report never arms or queues a flight. */
@@ -723,6 +730,30 @@ const legacyState = reactive({
              multiBlockDice: string | null; multiBlockDiceLabel: string | null;
              singleSkull: string | null; singleSkullLabel: string | null }[];
     seq: number;
+  } | null,
+  /** BB2025 Multiple Block, uphill target: the server's `opponentBlockSelectionProperties` dialog asks MY team (the
+   *  defenders, dialog `playerId` = team id) to pick the attacker's result for each target the attacker could not choose
+   *  (StepBlockRollMultiple:321-326). One click answers one target; the server re-raises for the rest. Cleared when the
+   *  dialog leaves, once answered (until the server's next raise) and on resetPlayback. Never armed for the other seat. */
+  opponentBlockSelection: null as {
+    teamId: string;
+    attackerId: string;
+    attacker: string;
+    rows: { targetId: string; target: string; dice: number[]; nrOfDice: number }[];
+    seq: number;
+    instanceKey: string | null;
+  } | null,
+  /** BB2025 Foul Appearance during a Multiple Block: the server's `reRollForTargets` dialog asks the ATTACKING coach which
+   *  failed target to reroll and with which source, or to decline (AbstractStepModifierMultipleBlock:117-137). */
+  reRollForTargets: null as {
+    playerId: string;
+    player: string;
+    reRolledAction: string;
+    targets: { targetId: string; target: string; minimumRoll: number | null }[];
+    options: { label: string; source: string }[];
+    loner: boolean;
+    seq: number;
+    instanceKey: string | null;
   } | null,
   /** #39 (Meero SR-59): SERVER game clock — RAW mirror of the 1000ms SERVER_GAME_TIME tick (no modelChanges). Display smooths gameTime but RAW-SNAPS turnTime (server stops it during dialogs, no running flag on wire — GC-1). ⚖ GC-2: timeout/WHISTLE are the SERVER's via syncGameModel, NEVER derived from this clock. Presentation-only. */
   gameClock: null as { gameTime: number; turnTime: number; syncAt: number; frozen?: boolean } | null,
@@ -843,6 +874,9 @@ const legacyState = reactive({
   /** Owner 07-05: INTERACTIVE BB2025 block PARTIAL re-roll (`blockRollPartialReRoll`) — click a die to ACCEPT or use an offered source (TRR=all · Brawler=Both-Down · Pro/Consummate=one). Headless keeps auto-decline. */
   blockPartial: null as {
     dice: number[];
+    /** Owner 10-13: the server-declared chooser (dialogParameter.choosingTeamId) - the team these dice belong to for
+     *  the home/away dice colour. Null when the dialog did not declare one. */
+    choosingTeamId?: string | null;
     /** Owner 09-05: changes whenever NEW dice land for this block (the roll, then each re-roll) — the surface
      *  tumbles the faces on every change. Stable across the uphill phase flip (same dice re-armed). */
     tumbleKey: string;
@@ -1519,7 +1553,7 @@ function ttmLandingHoldApplies(): boolean {
 }
 // Astra 10-13 (confirmation): the gate is read when a hold starts, so a Modern -> Classic switch while a card is held
 // presents it at once (the arms still check their dialog instance). Classic -> Modern starts nothing retroactively.
-watch(() => settings.uiMode, (mode) => { if (mode === 'classic') ttmLandingHold.release(); }, { flush: 'sync' });
+watch(() => settings.uiMode, (mode) => { if (mode === 'classic') { ttmLandingHold.release(); releaseTtmPresentationHold(); } }, { flush: 'sync' });
 /** Start the landing hold of `playerId` for a published failed landing die `batch` (its show report is the wake). */
 function beginTtmLandingHold(playerId: string, batch: ActionDiceBatchState | null): void {
   if (!batch || playback.catchingUp || !ttmLandingHoldApplies()) return;
@@ -2097,8 +2131,16 @@ function moveRollHoldQueued(): boolean {
  *  resetPlayback). No accessor mutates them and no planner has to be running. */
 function syncMoveRollHeldBacklog(): void {
   if (playback.queue.length === 0) moveRollHeldBacklog = false;
-  else if (moveRollHoldActive()) moveRollHeldBacklog = true;
-  if (state.moveRollHoldBusy !== moveRollHeldBacklog) state.moveRollHoldBusy = moveRollHeldBacklog;
+  // Astra confirmation of 37aec0877 (MAJOR): a frame queued behind a TTM flight / bounce latches the backlog too, so the
+  // lock stays closed after the hold expires until the held frames have DRAINED (pumpPlayback applies one per step).
+  else if (moveRollHoldActive() || (ttmPresentationHoldUntil !== 0 && Date.now() < ttmPresentationHoldUntil)) moveRollHeldBacklog = true;
+  // Owner 10-13 (Astra MAJOR 1): a thrown team-mate in the air holds the End Turn button too (its wake re-syncs).
+  const busy = moveRollHeldBacklog || ttmHoldActive();
+  if (state.moveRollHoldBusy !== busy) state.moveRollHoldBusy = busy;
+}
+/** Every command producer stands down while frames wait behind a movement-roll hold or a TTM flight / bounce. */
+function presentationHoldBlocksActions(): boolean {
+  return moveRollHoldQueued() || ttmHoldActive();
 }
 function rescuedMoveHoldWaitMs(): number {
   if (rescuedMoveHoldUntil === 0) return 0;
@@ -3926,6 +3968,10 @@ export function installInjuryPillBeatTestHarness() {
     /** Arm a beat with no injury event behind it (its own cap must still resolve it). */
     arm: (playerId: string, base: number, stun: boolean, sound: string | null) => armInjuryPillBeat(playerId, base, stun, sound, null),
     reset: () => settleAllInjuryPillBeats(false),
+    /** Astra 10-13: the apothecary first-result release and its armour-dice marker. */
+    releaseForApothecaryOffer: (playerIds: readonly string[]) => releaseInjurySoundsForApothecaryOffer(playerIds),
+    markArmourPending: () => { armourRevealPendingSince = Date.now(); },
+    armourPending: () => armourRevealPendingSince !== 0,
   };
 }
 function crowdPushedInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
@@ -4054,6 +4100,52 @@ const FOLLOWUP_DECISION_HOLD_MS = 900;
 const FOLLOWUP_ARMOUR_GAP_MS = 450;
 const FOLLOWUP_ARMOUR_BACKSTOP_MS = 3000;
 let armourAfterFollow: (() => void) | null = null;
+/** Owner 10-13: a frame's armour dice are scheduled but not yet on screen (a stab / foul cue, a follow/stay
+ *  indicator or a fireball still ahead of them) since this time; 0 = none pending. */
+let armourRevealPendingSince = 0;
+/** Owner 10-13 ("When a player has an apothecary, the audio cue for the injury result is happening after the user
+ *  selects the apothecary result. That's too late. It should happen on the first result."): the apothecary offer card
+ *  (useApothecary / useApothecaries, every seat that shows it, spectators included) is where the FIRST injury result
+ *  is shown, at the injury frame, while the injury pill waits out the armour dice (~1.7 s) - a coach who answered
+ *  quickly heard the result only after his choice. So raising the card resolves the offered players' pill beats at
+ *  once (the result sound plays once: the pill that follows finds no beat and stays silent, and the event's apply-time
+ *  wire sound is skipped - the live applier through frameInjurySoundClaimed, the published present() through
+ *  apothecarySoundTakenBy), but never ahead
+ *  of the armour roll that broke: while that frame's dice are still scheduled the sound waits for them (polled, capped
+ *  at APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS; the beat's own INJURY_PILL_BEAT_CAP_MS stays the last wake). The pill
+ *  itself keeps its timing. Two routes raise the card: armApothecaryPrompt (live seats, legacy spectator playback) and
+ *  the published spectator publication (position.durableProjection.apothecaryCard); both release here. A resolved
+ *  review occurrence is recorded as for a popped pill (settleInjuryPillBeat), so a rewind does not ARM it again; the
+ *  rewind's present() still plays the event's wire sound at apply time, as it does for any injury today (unchanged
+ *  base behaviour). The apothecary's own result (the apothecaryChoice card / the final frame) is unchanged: it is no
+ *  injury report, so it arms no beat; whatever sound the server puts on that frame plays when it applies. No beat
+ *  length changes. */
+const APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS = 4000;
+/** Astra 10-13: the commands whose wire sound an apothecary offer took early. The published present() checks (and
+ *  clears) this before its apply-time wire sound, so an offer released before present() ran (no armour dice to wait
+ *  for) does not sound twice. The claim lives for ONE presentation pass: the publication of the event clears any old
+ *  claim, a release after present() already passed its wire-sound check claims nothing (apothecaryWireSoundChecked),
+ *  and the event end clears it - so a rewind through the event behaves exactly as without the claim. */
+const apothecarySoundTakenBy = new WeakSet<object>();
+/** Commands whose published present() has already passed its apply-time wire-sound check in the current pass. */
+const apothecaryWireSoundChecked = new WeakSet<object>();
+function releaseInjurySoundsForApothecaryOffer(playerIds: readonly string[]): void {
+  if (!playerIds.some((id) => injuryPillBeats.get(id)?.sound)) return;
+  const started = Date.now();
+  const release = () => {
+    if (armourRevealPendingSince) {
+      if (Date.now() - started < APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS) { scheduleGameTimeout(release, 50); return; }
+      armourRevealPendingSince = 0; // the dice never came (no on-pitch square, a dropped cue): a stale marker would hold the next offer
+    }
+    for (const id of playerIds) {
+      const beat = injuryPillBeats.get(id);
+      if (!beat?.sound) continue;
+      if (beat.command && !apothecaryWireSoundChecked.has(beat.command)) apothecarySoundTakenBy.add(beat.command);
+      settleInjuryPillBeat(id);
+    }
+  };
+  release();
+}
 /** Release the withheld armour dice `afterMs` from now (idempotent; no-op when none). */
 function releaseArmourAfterFollow(afterMs: number): void {
   const show = armourAfterFollow;
@@ -4812,6 +4904,8 @@ async function pauseSpectatorView(): Promise<void> {
           // pops its pill; a seek / snapshot / multi-step jump arms none and draws + sounds at once).
           // A beat of an EARLIER event is stale: present() runs one event at a time, so that event's presentation is over.
           for (const [pid, beat] of [...injuryPillBeats]) if (beat.command !== played?.command) settleInjuryPillBeat(pid);
+          // Astra 10-13: a new presentation pass of this event (first play or a rewind) starts with no apothecary claim.
+          if (played) { apothecarySoundTakenBy.delete(played.command); apothecaryWireSoundChecked.delete(played.command); }
           if (!playback.catchingUp && played) {
             const armed = new Set<string>();
             for (const report of playedReports) {
@@ -4825,6 +4919,19 @@ async function pauseSpectatorView(): Promise<void> {
               const beat = injuryPillBeatFor(event, priorStates.get(pid), position.model, played.command.sound,
                 !injuryPillHoldsSoundOf(played.command), settings.uiMode === 'classic');
               armInjuryPillBeat(pid, event.injuryBase, beat.stun, beat.sound, played.command, occurrence);
+            }
+            // Owner 10-13 (Astra 10-13 item 1): a PUBLISHED spectator builds the apothecary card from the position
+            // (spectatorHud's apothecaryChoice), never through armApothecaryPrompt, so the first-result sound is released
+            // here, when the card first appears for these players. This event's armour dice are put up by present() a
+            // little later: while they are still to come the release waits for them (the same marker, wait and cap).
+            const card = position.durableProjection.apothecaryCard;
+            const shownBefore = new Set((previous.durableProjection.apothecaryCard?.injuries ?? []).map((injury) => injury.playerId));
+            const offered = (card?.injuries ?? []).map((injury) => injury.playerId).filter((id) => !shownBefore.has(id));
+            if (offered.length) {
+              const armourComing = playedReports.some((report) => String(report.reportId) === 'injury' && Array.isArray(report.armorRoll)
+                && report.armorRoll.length === 2 && offered.includes(String(report.defenderId ?? report.playerId ?? '')));
+              if (armourComing) armourRevealPendingSince = Date.now(); // cleared where present() puts the dice up
+              releaseInjurySoundsForApothecaryOffer(offered);
             }
           }
         }
@@ -4881,6 +4988,7 @@ async function pauseSpectatorView(): Promise<void> {
       try {
         projectile = ballProjectilePresentation(event.command as Record<string, unknown>, reports, position.model, {
           playback: 'pacedReplay', previous: transitionBallProjectile, priorCoordinates, priorBall: transitionBallBefore, ballOut: reviewBallOutContext,
+          ttmBounceHop: settings.uiMode !== 'classic', // owner 10-13: the landing bounce is a hop after the flight
           fallbackThrownPlayerId: (position.model as { defenderId?: string }).defenderId,
         });
       } catch (error) {
@@ -5084,7 +5192,10 @@ async function pauseSpectatorView(): Promise<void> {
         || (!!projectile.fireball && wireSound === projectile.fireball.sound)
       );
       // Owner 10-12: an injury-type sound the publication handed to a pill beat plays when the pill pops instead.
-      if (!projectileOwnsWireSound && !injuryPillHoldsSoundOf(event.command)) playSound(wireSound);
+      // Astra 10-13: an apothecary offer that already played this event's result sound (no dice to wait for) owns it.
+      apothecaryWireSoundChecked.add(event.command);
+      const apothecaryTookSound = apothecarySoundTakenBy.delete(event.command);
+      if (!projectileOwnsWireSound && !apothecaryTookSound && !injuryPillHoldsSoundOf(event.command)) playSound(wireSound);
       // The pin was raised at publication (see transitionRerollPin). No rerolled result in this transition means
       // the offer was declined: drop the pin now so the die fades with the answer.
       const reviewRerollPin = transitionRerollPin;
@@ -5179,11 +5290,14 @@ async function pauseSpectatorView(): Promise<void> {
           roll: projectile.ballAndChainScatter.roll,
           from: projectile.ballAndChainScatter.from,
           dest: projectile.ballAndChainScatter.dest,
+          playerId: projectile.ballAndChainScatter.playerId,
           seq: (state.bncScatter?.seq ?? 0) + 1,
         };
         if (projectile.playerScatter) state.scatterAnim = {
           playerId: projectile.playerScatter.playerId, path: projectile.playerScatter.path,
           seq: (state.scatterAnim?.seq ?? 0) + 1,
+          // owner 10-13: a TTM bounce hop has no model change of its own on this event - redraw after arming it
+          ...(projectile.playerScatter.ttmBounce ? { refreshAfterArm: true } : {}),
         };
         if (projectile.ballScatter) state.scatterAnim = {
           playerId: '__ball__', path: projectile.ballScatter.path,
@@ -5265,6 +5379,7 @@ async function pauseSpectatorView(): Promise<void> {
       });
       if (armour.length) {
         state.armorDice = { rolls: armour, seq: (state.armorDice?.seq ?? 0) + 1 };
+        armourRevealPendingSince = 0; // owner 10-13: a published apothecary first-result sound waits for these dice
         if (armour.some((roll) => roll.broken) && !await presentStages([{ delayBefore: armourReadMs(), present: () => {} }], signal)) return;
       }
       const injured = new Set<string>();
@@ -5291,6 +5406,8 @@ async function pauseSpectatorView(): Promise<void> {
       });
       // Owner 10-12: the event's injury presentation is over - a beat of its own that no pill took resolves now.
       for (const [pid, beat] of [...injuryPillBeats]) if (beat.command === event.command) settleInjuryPillBeat(pid);
+      armourRevealPendingSince = 0; // Astra 10-13: this event's armour, shown or not, is no longer pending
+      apothecarySoundTakenBy.delete(event.command); // Astra 10-13: the claim expires with this presentation pass
       if (signal.aborted) return;
       if (apothecaryOutcome) {
         state.apothecaryAnim = {
@@ -7416,6 +7533,12 @@ let liveWizardSpell: WizardSpell | null = null;
 let liveWizardSpellAwaitingServer = false;
 /** Command-scoped multi-Regeneration election and its exact display-value lookup. */
 let liveRegenerationOffer: RegenerationElectionOffer | null = null;
+/** The exact server dialog objects the opponent-block / reroll-for-targets surfaces were armed from (instance refs for
+ *  sendAnsweredDialogCommand). A re-raise is a new object and re-arms. */
+let liveOpponentBlockDialog: object | null = null;
+let liveReRollForTargetsDialog: object | null = null;
+/** Headless only: dialog objects already answered by the bot default (one answer per server raise). */
+const headlessMultiTargetAnswered = new WeakSet<object>();
 let liveRegenerationChoices = new Map<string, RegenerationElectionChoice>();
 
 const MAXIMUM_CARNAGE_NOTICE = 'MAXIMUM CARNAGE — Max may make a second chainsaw attack: pick another victim, or click him / End Move to decline.';
@@ -8462,7 +8585,8 @@ function applyFrameContents(frame: QueuedFrame) {
     // Astra 09-14: a DELAYED reveal (stab / foul beat) must not publish against a REPLACED model — a reconnect snapshot
     // inside the beat swaps game.value; the old roll/square then belongs to nothing on screen.
     const modelAtSchedule = game.value;
-    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
+    const showArmour = () => { armourRevealPendingSince = 0; if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
+    armourRevealPendingSince = Date.now(); // owner 10-13: cleared by showArmour (at once below, or after its cue)
     const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
       && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
     if (fireballInjury && pendingFireballBeats > 0) {
@@ -8819,6 +8943,16 @@ function applyFrameContents(frame: QueuedFrame) {
     const coveredByTtmFlight = (sc as { isScatter?: unknown } | undefined)?.isScatter === true
       && String(anim?.animationType ?? '') === 'throwTeamMate'
       && String(anim?.thrownPlayerId ?? '') === thrownId;
+    // Owner 10-13 ("Bounce should occur after the flight"): the server's second throwTeamMate animation of the SAME
+    // throw (scatterPlayer isScatter=false: the bounce off a player he landed on) is the landing BOUNCE. Modern plays it
+    // as its own hop after the flight (the flight itself already landed: the frame waited behind it, see
+    // ttmPresentationWaitMs), with the loose-ball hop timing, and holds the frames behind it for the hop.
+    // the flight belongs to ONE activation: once nobody is acting, a later animation of the same player is a new throw
+    if (!String((game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '')) ttmFlightThrownId = '';
+    const ttmBounce = !coveredByTtmFlight && !!sc && ttmBounceModern()
+      && String(anim?.animationType ?? '') === 'throwTeamMate' && String(anim?.thrownPlayerId ?? '') === thrownId
+      && !!thrownId && thrownId === ttmFlightThrownId;
+    ttmBounceThisFrame = ttmBounce;
     if (Array.isArray(start) && Array.isArray(dirs) && dirs.length && thrownId && !coveredByTtmFlight) {
       const path: [number, number][] = [[start[0], start[1]]];
       let cx = start[0], cy = start[1];
@@ -8827,8 +8961,11 @@ function applyFrameContents(frame: QueuedFrame) {
         cx += dx; cy += dy;
         path.push([cx, cy]);
       }
-      state.scatterAnim = { playerId: thrownId, path, seq: (state.scatterAnim?.seq ?? 0) + 1 };
-      ttmLandingHold.noteFlight(thrownId, (path.length - 1) * presentationMs(150)); // owner 10-13: the hop is part of the landing
+      const hopsMs = (path.length - 1) * ttmScatterHopMs();
+      // A bounce hop starts with no model change of its own (the coordinate frame follows it): redraw after arming.
+      state.scatterAnim = { playerId: thrownId, path, seq: (state.scatterAnim?.seq ?? 0) + 1, ...(ttmBounce ? { refreshAfterArm: true } : {}) };
+      ttmLandingHold.noteFlight(thrownId, hopsMs); // owner 10-13: the hop is part of the landing
+      if (ttmBounce && ttmPresentationHoldApplies()) armTtmPresentationHold(hopsMs);
     }
   }
   // B&C ph-2 (07-13): scatterPlayer while the ACTING player movesRandomly = the B&C throw-in scatter (the scattered player is the ACTOR here, not defenderId). ⚖ dest = the server square.
@@ -8841,7 +8978,7 @@ function applyFrameContents(frame: QueuedFrame) {
       const from = sc.startCoordinate as [number, number] | undefined;
       const dest = sc.endCoordinate as [number, number] | undefined;
       if (Number.isFinite(roll) && Array.isArray(from) && Array.isArray(dest)) {
-        state.bncScatter = { roll, from: [from[0], from[1]], dest: [dest[0], dest[1]], seq: (state.bncScatter?.seq ?? 0) + 1 };
+        state.bncScatter = { roll, from: [from[0], from[1]], dest: [dest[0], dest[1]], playerId: actingId, seq: (state.bncScatter?.seq ?? 0) + 1 };
       }
     } else if (state.bncScatter && g && !(actingId && movesRandomly(g, actingId))) {
       // g868 (owner 08-18): the scatter marker belongs to ONE B&C activation. The renderer only drops its crosshair
@@ -8997,7 +9134,8 @@ function applyFrameContents(frame: QueuedFrame) {
     {
       const a = anim as { animationType?: unknown; thrownPlayerId?: unknown; startCoordinate?: unknown; endCoordinate?: unknown; interceptorCoordinate?: unknown } | null;
       const kind = a ? throwPresentationKind(a.animationType, reports, (game.value?.actingPlayer as { playerAction?: string } | undefined)?.playerAction) : undefined;
-      if (a && kind && Array.isArray(a.startCoordinate) && Array.isArray(a.endCoordinate)) {
+      // Owner 10-13: a landing bounce is the scatter hop armed above, not a second flight (Modern).
+      if (a && kind && Array.isArray(a.startCoordinate) && Array.isArray(a.endCoordinate) && !(kind === 'throwTeamMate' && ttmBounceThisFrame)) {
         const from = a.startCoordinate as [number, number];
         // A picked-off pass terminates at the interceptor; every other throw ends at endCoordinate.
         const end = (kind === 'pass' && Array.isArray(a.interceptorCoordinate) ? a.interceptorCoordinate : a.endCoordinate) as [number, number];
@@ -9050,7 +9188,15 @@ function applyFrameContents(frame: QueuedFrame) {
             const seq = (state.throwAnim?.seq ?? 0) + 1;
             state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound };
             // Owner 10-13: the landing reroll card waits for this flight (ttmLandingHold).
-            if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, presentationMs(TTM_THROW_MS));
+            if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, ttmThrowMs(settings.uiMode === 'classic'));
+            // Owner 10-13 ("Players knocked down should resolve at the point of impact"): like a thrown bomb, nothing
+            // behind the flight (the landing coordinate, the player he hits going down with his armour roll, the bounce,
+            // the landing roll) applies until the thrown player has come down. Modern, every seat (file replay's next
+            // command queues behind it too).
+            if (kind === 'throwTeamMate' && thrownId && ttmBounceModern()) {
+              ttmFlightThrownId = thrownId;
+              if (ttmPresentationHoldApplies()) armTtmPresentationHold(ttmThrowMs());
+            }
             // Owner 10-03: nothing behind a bomb throw (its explosion, the knockdowns, the server's destination clear)
             // applies until the bomb has landed - see bombFlightWaitMs.
             if (kind === 'throwBomb' && play.active) bombFlightHoldUntil = Date.now() + presentationMs(BOMB_FLIGHT_MS);
@@ -9064,7 +9210,7 @@ function applyFrameContents(frame: QueuedFrame) {
           // omission). Fail-OPEN: release as soon as no anim for THIS seq is actually still in flight.
           const CLEAR_MS: Record<ThrowPresentationKind, number> = {
             pass: ballThrowArcMs('pass'), punt: ballThrowArcMs('punt'),
-            throwTeamMate: presentationMs(TTM_THROW_MS),
+            throwTeamMate: ttmThrowMs(settings.uiMode === 'classic'),
             throwBomb: presentationMs(700), throwKeg: presentationMs(700),
             throwARock: PIPELINE_TIMINGS.rockThrow.flightMs,
           };
@@ -10666,6 +10812,12 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, bombFlightWait);
     return;
   }
+  // Owner 10-13: a thrown team-mate lands (and a landing bounce hops) before what follows is applied.
+  const ttmWait = ttmPresentationWaitMs();
+  if (ttmWait > 0) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, ttmWait);
+    return;
+  }
   // Owner 10-09: a movement roll rescued by a reroll is shown before the rest of the path is applied (every seat).
   const rescuedMoveWait = rescuedMoveHoldWaitMs();
   if (rescuedMoveWait > 0) {
@@ -10884,6 +11036,84 @@ let ballChainNextApplyAt = 0;
  *  follows the explosion frame - retires the marker then. Live seats only: spectate / replay serialise projectiles
  *  in their own presentation chain. */
 const BOMB_FLIGHT_MS = 700;
+/** Owner 10-13 (Doglobro g1953046): "Let's increase the length of time for the throw animation then. We can go to a
+ *  1.2s flight time. Bounce should occur after the flight. Players knocked down should resolve at the point of impact."
+ *  The Throw Team-Mate twin of the bomb-flight hold: the frames behind a thrown player's flight wait in the playback
+ *  queue until he has landed on screen (ttmThrowMs), and the frames behind a landing bounce wait out the hop
+ *  (ttmBounceHopMs per square), so the player he hits goes down, with his armour roll, pill and sound, at the moment of
+ *  impact, the bounce follows the flight, and the landing roll / card / injury follow the last hop. The frame that
+ *  starts the flight is applied on arrival as always. Wakes: the hold's own end (it is a duration, never open-ended),
+ *  resetPlayback (reset / seek / snapshot / reconnect / game change) and catch-up (never held). Modern only (Classic keeps
+ *  its timing). File replay is held the same way (its next command queues behind the hold); spectator review waits
+ *  on the renderer's flight + hop (the busy probe) before its next event. */
+let ttmPresentationHoldUntil = 0;
+/** The thrown player of the current activation's flight (a second throwTeamMate animation of his is the bounce). */
+let ttmFlightThrownId = '';
+/** Set by the scatter block of applyFrame when this frame's throwTeamMate animation is a landing bounce. */
+let ttmBounceThisFrame = false;
+function ttmBounceModern(): boolean {
+  return settings.uiMode !== 'classic' && !playback.catchingUp;
+}
+function ttmPresentationHoldApplies(): boolean {
+  // Astra (MAJOR 3): file replay too - its next command is queued behind the hold, and waitForReplayPresentation
+  // waits for the queue to drain, so the impact and the bounce stay in order there as live.
+  return ttmBounceModern();
+}
+/** One thrown-player scatter / bounce hop on screen (the renderer's ttmScatterSegMs, from the same settings). */
+function ttmScatterHopMs(): number {
+  return settings.uiMode === 'classic' ? presentationMs(150) : ttmBounceHopMs(settings.moveSpeedMs);
+}
+/** Astra review of 8d4d939b0 (MAJOR 1): the hold is also a TRANSPORT hold, like the movement-roll holds - while the
+ *  thrown player is in the air (or bouncing) the applied board is older than the server's, so End Turn, the planner,
+ *  pitch clicks and every declare-class command stand down (presentationHoldBlocksActions). Its wake is a timer at the
+ *  hold's end: the End Turn button's busy mirror is re-derived, the drain resumes and a parked plan advances. */
+let ttmHoldWakeTimer: ReturnType<typeof setTimeout> | null = null;
+function armTtmPresentationHold(ms: number): void {
+  if (!(ms > 0)) return;
+  ttmPresentationHoldUntil = Math.max(ttmPresentationHoldUntil, Date.now() + ms);
+  if (ttmHoldWakeTimer) cancelGameTimeout(ttmHoldWakeTimer);
+  ttmHoldWakeTimer = scheduleGameTimeout(wakeTtmPresentationHold, Math.max(0, ttmPresentationHoldUntil - Date.now()));
+  syncMoveRollHeldBacklog();
+}
+/** The wake at the hold's end. Not the only pump: the playback queue's own timer may pump at the same moment; both are
+ *  idempotent (pumpPlayback re-derives every wait; plannerAdvance re-checks every gate), so a double wake is harmless.
+ *  With frames queued behind the hold the lock stays closed past this point (the backlog latch) until the last one has
+ *  applied - that application is the planner's wake, as for the movement-roll holds. */
+function wakeTtmPresentationHold(): void {
+  ttmHoldWakeTimer = null;
+  const left = ttmPresentationWaitMs();
+  if (left > 0) { ttmHoldWakeTimer = scheduleGameTimeout(wakeTtmPresentationHold, left); return; }
+  syncMoveRollHeldBacklog();
+  pumpPlayback();
+  if (plannerPlan && !presentationHoldBlocksActions()) plannerAdvance();
+}
+function clearTtmPresentationHold(): void {
+  ttmPresentationHoldUntil = 0;
+  if (ttmHoldWakeTimer) { cancelGameTimeout(ttmHoldWakeTimer); ttmHoldWakeTimer = null; }
+}
+/** A thrown team-mate is still in the air / bouncing on screen (the frames behind him wait). */
+function ttmHoldActive(): boolean {
+  return ttmPresentationWaitMs() > 0;
+}
+/** A switch to Classic (which never holds a throw) applies what waits behind the flight at once. */
+function releaseTtmPresentationHold(): void {
+  if (ttmPresentationHoldUntil === 0) return;
+  clearTtmPresentationHold();
+  syncMoveRollHeldBacklog();
+  if (playback.timer) {
+    if (ballChainTimer === playback.timer) ballChainTimer = null;
+    cancelGameTimeout(playback.timer);
+    playback.timer = null;
+  }
+  pumpPlayback();
+}
+function ttmPresentationWaitMs(): number {
+  if (ttmPresentationHoldUntil === 0) return 0;
+  const remaining = playback.catchingUp ? 0 : ttmPresentationHoldUntil - Date.now();
+  if (remaining > 0) return remaining;
+  ttmPresentationHoldUntil = 0;
+  return 0;
+}
 let bombFlightHoldUntil = 0;
 function bombFlightWaitMs(): number {
   if (bombFlightHoldUntil === 0) return 0;
@@ -10981,20 +11211,22 @@ function spectatorPresentationBackpressured(): boolean {
 
 // In Tauri, append per-game JSONL wire frames with monotonic sequence; logging failures never affect play.
 const wireLog = { gameId: null as number | string | null, file: '', seq: 0 };
-let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
-let tauriInvokeResolved = false;
-async function getTauriInvoke() {
-  if (tauriInvokeResolved) return tauriInvoke;
-  tauriInvokeResolved = true;
-  const w = globalThis as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
-  if (!w.__TAURI_INTERNALS__ && !w.__TAURI__) return null; // browser / preview — no backend
-  try {
-    const core = await import('@tauri-apps/api/core');
-    tauriInvoke = core.invoke as typeof tauriInvoke;
-  } catch {
-    tauriInvoke = null;
-  }
-  return tauriInvoke;
+type TauriInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+// 10-13: one shared lookup. A resolved flag set before the import finished handed null to every write made while the
+// import was loading, so the first connection records of a session (join-start's neighbours) were dropped.
+let tauriInvokeLookup: Promise<TauriInvoke | null> | null = null;
+function getTauriInvoke(): Promise<TauriInvoke | null> {
+  tauriInvokeLookup ??= (async () => {
+    const w = globalThis as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+    if (!w.__TAURI_INTERNALS__ && !w.__TAURI__) return null; // browser / preview, no backend
+    try {
+      const core = await import('@tauri-apps/api/core');
+      return core.invoke as TauriInvoke;
+    } catch {
+      return null;
+    }
+  })();
+  return tauriInvokeLookup;
 }
 async function writeWireLine(line: string) {
   const invoke = await getTauriInvoke();
@@ -11040,8 +11272,49 @@ async function writeConnectionLogLine(line: string): Promise<void> {
 function hostForLog(url: string): string { try { return new URL(url).host; } catch { return ''; } }
 // A join failure (timeout, refusal, close before the game) lands in state.joinError — record it with the trail.
 watch(() => state.joinError, (message) => { if (message) wireConnection('join-error', { message: String(message) }); });
+// 10-13: per connection (fresh in attachConnectionWireLog), so a new connection's first clock sample is always written.
+let gameTimeLogGate = createIntervalGate(GAME_TIME_LOG_INTERVAL_MS);
+// 10-13: main-thread long-frame detector, running only while the LIVE session is being logged and the wire log is on.
+const longFrameDetector = createLongFrameDetector();
+let frameSamplerRunning = false;
+let frameSamplerListening = false;
+function frameSamplerWanted(): boolean {
+  return connectionLogSession != null && connectionLogSession === session && settings.wireLog;
+}
+function startFrameSampler(): void {
+  if (frameSamplerRunning || !frameSamplerWanted() || typeof requestAnimationFrame !== 'function' || typeof document === 'undefined') return;
+  frameSamplerRunning = true;
+  longFrameDetector.reset();
+  if (!frameSamplerListening) { frameSamplerListening = true; try { document.addEventListener('visibilitychange', () => longFrameDetector.reset()); } catch { /* ignore */ } }
+  const tick = (now: number) => {
+    if (!frameSamplerWanted()) { frameSamplerRunning = false; return; }
+    const rec = longFrameDetector.sample(now, document.hidden === true);
+    if (rec) wireConnection('long-frame', rec);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+// Turning the wire log on mid-connection restarts the sampler (the loop exits while logging is off).
+watch(() => settings.wireLog, (on) => { if (on) startFrameSampler(); }, { flush: 'sync' });
+/** Drops logging ownership of `target` (no-op when another session owns it): stops the pong-overdue ladder and, on
+ *  its next frame, the long-frame sampler. */
+function detachConnectionWireLog(target: GameSession): void {
+  if (connectionLogSession !== target) return;
+  if (connectionOverdueTimer) { clearInterval(connectionOverdueTimer); connectionOverdueTimer = null; }
+  connectionLogSession = null;
+}
+/** Closes a session being torn down. A session that was already closed (its socket never opened) emits no `close`
+ *  event, so its logging ownership is dropped here instead of by the close listener. */
+function closeLoggedSession(target: GameSession | null): void {
+  if (!target) return;
+  const closedAlready = target.state === 'closed';
+  target.close();
+  if (closedAlready) detachConnectionWireLog(target);
+}
 function attachConnectionWireLog(target: GameSession): void {
   connectionLogSession = target;
+  gameTimeLogGate = createIntervalGate(GAME_TIME_LOG_INTERVAL_MS);
+  startFrameSampler();
   connectionLastPongAt = Date.now();
   connectionOverdueStage = 0;
   if (connectionOverdueTimer) clearInterval(connectionOverdueTimer);
@@ -11056,8 +11329,11 @@ function attachConnectionWireLog(target: GameSession): void {
   target.on('close', (code, reason) => {
     if (connectionLogSession !== target) return;
     wireConnection('close', { code: Number(code), reason: String(reason ?? ''), sinceLastPongMs: Date.now() - connectionLastPongAt });
-    if (connectionOverdueTimer) { clearInterval(connectionOverdueTimer); connectionOverdueTimer = null; }
-    connectionLogSession = null;
+    detachConnectionWireLog(target);
+  });
+  // 10-13: every serverJoin on this connection (player and spectator routes alike): coach + player/spectator counts.
+  target.on('join', (cmd) => {
+    if (connectionLogSession === target) wireConnection('server-join', serverJoinDetail(cmd as { coach?: unknown; playerNames?: unknown; spectators?: unknown }));
   });
   target.on('command', (cmd) => {
     if (connectionLogSession !== target || (cmd as { netCommandId?: string }).netCommandId !== NetCommandId.SERVER_PONG) return;
@@ -11159,7 +11435,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
-      && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
+      && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && ttmPresentationWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
       && failedMoveHoldWaitMs() === 0) {
     applyFrame(frame);
     return;
@@ -11201,6 +11477,8 @@ function forceSnapshotTick() {
 function resetPlayback() {
   rockThrowResolveStartedAt = null;
   bombFlightHoldUntil = 0;
+  clearTtmPresentationHold(); // owner 10-13: the TTM flight / bounce hold never crosses a reset / seek / snapshot
+  ttmFlightThrownId = '';
   rescuedMoveHoldUntil = 0;
   rescuedMoveFloorUntil = 0;
   failedMoveHold = null;
@@ -11283,6 +11561,7 @@ function resetPlayback() {
   state.blitzBlockChoice = null; // #111: drop a held block-choice on fresh game / disconnect (fail-safe)
   state.multiBlockSel = null; // #58: no stale multi-block target selection across games / reconnects (ML-7 hygiene)
   state.multiBlockResolution = null; // #58: no stale multi-block resolution surface across games / reconnects
+  clearMultiBlockTargetDialogs(); // no stale opponent-block / reroll-for-targets surface across games / reconnects
   state.gameClock = null; // #39: fresh game / disconnect — drop the server clock mirror (re-syncs on the next tick)
   state.kickoffVictimSplash = null; // #131: no stale kickoff victim-splash across games / reconnects
   state.negatraitCue = null; // #132: no stale negatrait cue across games / reconnects
@@ -11399,6 +11678,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.onTheBallMover = null;
   state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
+  armourRevealPendingSince = 0; // owner 10-13: no armour reveal is pending past a reset
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
   turnoverTimer = turnoverClearTimer = weatherTimer = kickoffTimer = fanFactorTimer = null;
@@ -12692,7 +12972,7 @@ function plannerArmAbort(silenceRearm = false) {
     // HAS answered, this client is still showing it. The last queued frame's apply restarts the silence window.
     // Confirmation (ii): it pauses the SILENCE window only (silenceRearm keeps the 30 s origin of the plan's last own
     // send): a backlog that never empties cannot keep a dead plan alive past the absolute cap.
-    if (plannerPlan && moveRollHoldQueued() && Date.now() < plannerAbortSince + PLANNER_ABORT_CAP_MS) { plannerArmAbort(true); return; }
+    if (plannerPlan && presentationHoldBlocksActions() && Date.now() < plannerAbortSince + PLANNER_ABORT_CAP_MS) { plannerArmAbort(true); return; }
     if (plannerPlan && plannerBlitzAwaitingTarget(plannerPlan, game.value)) { plannerFlush('no blitz target was selected'); return; }
     if (plannerPlan && plannerPromptPending()) { plannerArmAbort(); return; }
     if (plannerPlan?.failedGate) { plannerRetireQuietly(`the ${plannerPlan.failedGate} roll failed`); return; }
@@ -12814,7 +13094,8 @@ function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): bool
   if (((g?.fieldModel?.pushbackSquareArray ?? []) as unknown[]).length > 0) return true;
   const pick = opts.ignoreKickEmPicker && state.playerPick?.key.startsWith('kickEmTarget:') ? null : state.playerPick;
   return !!(state.reRollPrompt || state.skillChoice || state.followupChoice || pick
-    || state.pushChoice || state.blockPartial || state.multiBlockResolution || state.injuryInteraction || state.yesNo
+    || state.pushChoice || state.blockPartial || state.multiBlockResolution || state.opponentBlockSelection || state.reRollForTargets
+    || state.injuryInteraction || state.yesNo
     || state.blitzBlockChoice || state.foulChoiceHold); // S42 + #111: a held blitz block-commit flavor choice pauses the queue + exempts the watchdog
 }
 /** Start a declare→move→act plan. `route` excludes the start square (may be empty = 0-waypoint declare→act). */
@@ -12944,6 +13225,24 @@ function plannerStart(input: {
   return true;
 }
 
+/** Owner 10-13: why a walk-then-pass plan must NOT throw from the square it actually reached (null = throw).
+ *  Only plans with a walk are checked; a standing plan keeps sendPassTarget's own gates unchanged. */
+function plannedPassRefusal(p: NonNullable<typeof plannerPlan>): string | null {
+  const g = game.value;
+  const target = p.targetCoordinate;
+  if (!g || !target || p.route.length === 0) return null;
+  const at = plannerCoord(p.playerId);
+  const dest = p.route[p.route.length - 1]!;
+  if (!at || at[0] !== dest[0] || at[1] !== dest[1]) return 'the passer did not reach the planned square';
+  if (!holdsBall(g.fieldModel as unknown as HoldsBallFieldModel, p.playerId)) return 'the passer is not holding the ball';
+  if (p.targetPlayerId) {
+    const rc = plannerCoord(p.targetPlayerId);
+    if (!rc || rc[0] !== target[0] || rc[1] !== target[1]) return 'the receiver moved';
+  }
+  if (!passTargetInTemplate(g, p.playerId, target)) return 'the target is out of range from the new square';
+  return null;
+}
+
 /** Send the trailing act command (leg 3) and retire the plan — the derived act state / server resolution is the ack; we never hang on full resolution (opponent-side interception resolves independently). */
 function plannerFireAct() {
   const p = plannerPlan; if (!p) return;
@@ -12951,6 +13250,17 @@ function plannerFireAct() {
   if (p.actKind === 'move' || p.actKind === 'blitzWalk') { plannerSet(null); plannerClearAbort(); return; }
   if (p.actKind === 'pass' && p.targetCoordinate) {
     if (!p.terminalSent) {
+      // Owner 10-13: a walk-then-pass plan throws from where the walk ENDED. Re-check the throw against the server's
+      // state at that square before the one CLIENT_PASS; an illegal throw is never sent, the plan retires.
+      const refusal = plannedPassRefusal(p);
+      if (refusal) {
+        const text = `Pass not thrown: ${refusal}. Pick a new target.`;
+        log('system', `plan: PASS ${playerName(game.value!, p.playerId)} retired at the destination (${refusal})`);
+        state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+        state.plannedPassRetired = { seq: (state.plannedPassRetired?.seq ?? 0) + 1, playerId: p.playerId, reason: refusal };
+        plannerSet(null); plannerClearAbort();
+        return;
+      }
       const accepted = gameStore.sendPassTarget(p.targetCoordinate);
       if (accepted) {
         state.acceptedPassSubmission = {
@@ -13040,7 +13350,8 @@ function plannerAdvance() {
   if (plannerPromptPending()) return;
   // Astra 10-09 (P2): frames are queued behind a movement-roll presentation hold - the applied model is older than
   // the server's, and one of those frames may be a prompt. Nothing is sent from it; the last queued frame's apply wakes us.
-  if (moveRollHoldQueued()) return;
+  // Owner 10-13: likewise while a thrown team-mate is in the air / bouncing (wakeTtmPresentationHold wakes us).
+  if (presentationHoldBlocksActions()) return;
   const actingId = plannerActingId();
   switch (p.phase) {
     case 'declaring': {
@@ -14670,6 +14981,80 @@ export function installBlockPartialTestHarness(
       interactiveReRolls = priorInteractive;
       state.blockPartial = priorBlockPartial;
       state.multiBlockResolution = priorMulti;
+    },
+  };
+}
+
+/** @internal BB2025 Multiple Block per-target dialogs (opponentBlockSelectionProperties, reRollForTargets) through
+ *  resolvePlayFollowups, the unknown-dialog watcher and /stuck. `seat` = which team's coach this client is. */
+export function installMultiBlockTargetDialogTestHarness(
+  fixture: GameJson,
+  seat: 'home' | 'away' | 'spectator',
+  send: (command: Record<string, unknown>) => boolean | void,
+  interactive = true,
+): {
+  apply(dialog: Record<string, unknown> | null): void;
+  /** The live dialog object (re-applying it models a later frame over the same server raise). */
+  live(): Record<string, unknown> | null;
+  opponent(): typeof state.opponentBlockSelection;
+  reroll(): typeof state.reRollForTargets;
+  unknown(): typeof state.unknownCall;
+  pickOpponent(targetId: string, diceIndex: number): boolean;
+  answerReroll(source: string | null, targetId?: string | null): boolean;
+  forceAdvance(): ForceAdvanceOutcome;
+  dispose(): void;
+} {
+  const priorGame = game.value;
+  const priorSession = session;
+  const priorPlay = { ...play };
+  const priorInteractive = interactiveReRolls;
+  const priorHandled = [...followupHandled];
+  const priorAnsweredKey = answeredDialogInstanceKey;
+  const priorAnsweredRef = answeredDialogInstanceRef;
+  const priorUnknown = state.unknownCall;
+
+  followupHandled.clear();
+  clearAnsweredDialogInstance();
+  clearMultiBlockTargetDialogs();
+  clearUnknownCall(); unknownDialogInstance = 0;
+  game.value = fixture;
+  play.active = seat !== 'spectator';
+  play.coach = seat === 'home' ? String((fixture.teamHome as { coach?: string }).coach ?? '')
+    : seat === 'away' ? String((fixture.teamAway as { coach?: string }).coach ?? '') : 'multi-target-spectator';
+  interactiveReRolls = interactive;
+  session = {
+    send(command: Record<string, unknown>) {
+      if (send(command) === false) throw new Error('test transport refusal');
+    },
+  } as unknown as GameSession;
+
+  return {
+    apply(dialog) {
+      if (game.value) game.value.dialogParameter = dialog as GameJson['dialogParameter'];
+      resolvePlayFollowups();
+      if (game.value) maybeSurfaceUnknownCall(game.value);
+    },
+    live: () => (game.value?.dialogParameter ?? null) as Record<string, unknown> | null,
+    opponent: () => state.opponentBlockSelection,
+    reroll: () => state.reRollForTargets,
+    unknown: () => state.unknownCall,
+    pickOpponent: (targetId, diceIndex) => gameStore.resolveOpponentBlockSelection(targetId, diceIndex),
+    answerReroll: (source, targetId = null) => gameStore.resolveReRollForTargets(source, targetId),
+    forceAdvance: () => forceAdvanceCurrentState(game.value!),
+    dispose() {
+      clearMultiBlockTargetDialogs();
+      clearUnknownCall(); unknownDialogInstance = 0;
+      state.unknownCall = priorUnknown;
+      endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
+      followupHandled.clear();
+      for (const key of priorHandled) followupHandled.add(key);
+      clearAnsweredDialogInstance();
+      if (priorAnsweredKey) latchAnsweredDialogInstance(priorAnsweredKey, priorAnsweredRef);
+      session = priorSession;
+      game.value = priorGame;
+      play.active = priorPlay.active;
+      play.coach = priorPlay.coach;
+      interactiveReRolls = priorInteractive;
     },
   };
 }
@@ -17251,6 +17636,10 @@ const OWN_DIALOG_ANSWER_COMMANDS = new Set<string>([
   NetCommandId.CLIENT_PUNT_TO_CROWD,
   NetCommandId.CLIENT_PICK_UP_CHOICE,
   NetCommandId.CLIENT_USE_CHAINSAW,
+  // BB2025 Multiple Block per-target answers (reRollBlockForTargetsProperties / opponentBlockSelectionProperties /
+  // reRollForTargets / reRollRegenerationMultiple): answers to an owned live dialog, never declarations.
+  NetCommandId.CLIENT_BLOCK_OR_RE_ROLL_CHOICE_FOR_TARGET,
+  NetCommandId.CLIENT_USE_RE_ROLL_FOR_TARGET,
 ]);
 const seenUnclassifiedCommands = new Set<string>();
 /** The lock's view of ONE outbound command. Exported-by-use only (module-local): the view never calls this —
@@ -17785,7 +18174,7 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
   // surface makes its own answer command exempt, never an End Turn in the regular / blitz turn.
   const heldVetoLifted = id === NetCommandId.CLIENT_END_TURN
     ? !FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? '')) : serverAwaitsThisSeatPerAppliedState(g);
-  if (commandActionClass(id) === 'declare' && moveRollHoldQueued() && !heldVetoLifted) return false;
+  if (commandActionClass(id) === 'declare' && presentationHoldBlocksActions() && !heldVetoLifted) return false;
   const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
   return actionAllowed(g, ctx, commandActionClass(id));
 }
@@ -18272,7 +18661,7 @@ function armApothecaryPrompt(g: GameJson, dialog: Record<string, unknown>): void
   if (state.apothecaryChoice?.key === prompt.key && state.apothecaryChoice.mine === prompt.mine) return;
 
   state.apothecaryChoice = { ...buildApothecaryDecision(g, prompt), key: prompt.key, mine: prompt.mine, seq: (state.apothecaryChoice?.seq ?? 0) + 1 };
-
+  releaseInjurySoundsForApothecaryOffer(prompt.injuries.map((injury) => injury.playerId)); // owner 10-13: the first result sounds with its card
 }
 /** Owner 2026-07-10 (g350 #1, Foul Appearance): wire sometimes carries skill as FULLY-QUALIFIED Java class (e.g. com.fumbbl.ffb.skill.bb2025.FoulAppearance) which leaked RAW into reroll/skill modal; strip class path to leaf+space CamelCase→human label. #214 prettySkillName extracted to ./logic/prettySkillName.ts (Echo item-①ruling 08-03—pure display-label seam, imported above so ffb-protocol rig can pin no-com.fumbbl/Title-Case invariant without store reach). */
 /** Owner 2026-07-14: map RAW skillUse skill (leaf class name or plain name—e.g. com.fumbbl.ffb.skill.bb2025.StandFirm, SideStep, Fend) to AUTOMATIC SKILL USAGE toggle key; returns null for any skill without auto-use toggle (those always surface interactively). */
@@ -18953,6 +19342,49 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>) {
     };
   });
   state.multiBlockResolution = { blockerId, rolls, seq: (state.multiBlockResolution?.seq ?? 0) + 1 };
+}
+function clearMultiBlockTargetDialogs(): void {
+  state.opponentBlockSelection = null;
+  state.reRollForTargets = null;
+  liveOpponentBlockDialog = null;
+  liveReRollForTargetsDialog = null;
+}
+/** Arm the defending coach's pick for an uphill Multiple Block target. Caller has checked the dialog is MY team's. */
+function surfaceOpponentBlockSelection(g: GameJson, dp: Record<string, unknown>): void {
+  if (dialogAlreadyAnswered()) { state.opponentBlockSelection = null; return; } // answered; wait for the server's next raise
+  if (state.opponentBlockSelection && liveOpponentBlockDialog === dp) return; // already armed for this exact raise
+  const rows = opponentBlockSelectionRows(dp);
+  if (rows.length === 0) { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; return; }
+  const attackerId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  liveOpponentBlockDialog = dp;
+  state.opponentBlockSelection = {
+    teamId: opponentBlockSelectionTeamId(dp),
+    attackerId,
+    attacker: attackerId ? playerName(g, attackerId) : 'The attacker',
+    rows: rows.map((r) => ({ ...r, target: playerName(g, r.targetId) })),
+    seq: (state.opponentBlockSelection?.seq ?? 0) + 1,
+    instanceKey: dialogInstanceKey(g),
+  };
+}
+/** Arm the attacking coach's Foul Appearance reroll-for-targets card. Caller has checked the acting player is mine. */
+function surfaceReRollForTargets(g: GameJson, dp: Record<string, unknown>): void {
+  if (dialogAlreadyAnswered()) { state.reRollForTargets = null; return; }
+  if (state.reRollForTargets && liveReRollForTargetsDialog === dp) return;
+  const playerId = String(dp.playerId ?? '');
+  const player = playerById(g, playerId);
+  const targets = reRollForTargetsTargets(dp);
+  const options = reRollForTargetsOptions(dp, (skill) => !!player && playerHasSkill(player, skill));
+  liveReRollForTargetsDialog = dp;
+  state.reRollForTargets = {
+    playerId,
+    player: playerName(g, playerId),
+    reRolledAction: String(dp.reRolledAction ?? ''),
+    targets: targets.map((t) => ({ ...t, target: playerName(g, t.targetId) })),
+    options,
+    loner: !!player && playerHasSkill(player, 'Loner'),
+    seq: (state.reRollForTargets?.seq ?? 0) + 1,
+    instanceKey: dialogInstanceKey(g),
+  };
 }
 // --- Generic interaction rails (owner 2026-07-04, interaction catalog wave 0) ---
 // 0.1 player-pick: crosshairs over eligible players, click to answer, optional
@@ -19670,6 +20102,8 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
   if (initialDialogId !== 'reRollRegenerationMultiple') clearRegenerationElection();
+  if (initialDialogId !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
+  if (initialDialogId !== 'reRollForTargets') { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
   // C8: the server's concedeGame CONFIRM dialog (the reply to our request) can arrive
   // in ANY turn mode — mid-drive from the Game Menu, turnMode 'setup' from the setup
   // panel's Concede, or a kickoff mini-turn — so handle it BEFORE the regular-mode
@@ -20210,6 +20644,30 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     if (tid && !followupHandled.has(key)) {
       followupHandled.add(key);
       sendCommand({ netCommandId: NetCommandId.CLIENT_BLOCK_OR_RE_ROLL_CHOICE_FOR_TARGET, playerId: tid, diceIndex: 0, proIndex: 0, reRollSource: null });
+    }
+    return;
+  }
+  // BB2025 Multiple Block, uphill target(s): the DEFENDING team picks the attacker's result (dialog playerId = team id,
+  // DialogOpponentBlockSelectionPropertiesHandler:26-44). The other seat surfaces nothing. Headless picks die 0 for the
+  // first open target (the attacker-side headless default above); the server re-raises for the rest.
+  if (dlg === 'opponentBlockSelectionProperties') {
+    const teamId = opponentBlockSelectionTeamId(dp);
+    if (!teamId || teamId !== myTeamId) return; // not my team's choice
+    if (humanReRollSurface()) { surfaceOpponentBlockSelection(g, dp as Record<string, unknown>); return; }
+    const next = opponentBlockSelectionRows(dp)[0];
+    if (next && dp && !headlessMultiTargetAnswered.has(dp) && sendCommand(buildOpponentBlockSelectionCommand(next.targetId, 0))) {
+      headlessMultiTargetAnswered.add(dp);
+    }
+    return;
+  }
+  // BB2025 Foul Appearance in a Multiple Block: the ATTACKING coach (dialog playerId = acting player) picks a failed
+  // target + source, or declines (DialogReRollForTargetsHandler:26-30). Headless declines (No Reroll: source + target null).
+  if (dlg === 'reRollForTargets') {
+    if (!dpPlayer || !mine.has(dpPlayer)) return; // not my player
+    if (humanReRollSurface()) { surfaceReRollForTargets(g, dp as Record<string, unknown>); return; }
+    if (dp && !headlessMultiTargetAnswered.has(dp)
+      && sendCommand(buildReRollForTargetsCommand(String(dp.reRolledAction ?? ''), null, null))) {
+      headlessMultiTargetAnswered.add(dp);
     }
     return;
   }
@@ -20881,9 +21339,27 @@ function forceAdvanceCurrentState(
     case 'interception':
       attempt({ netCommandId: NetCommandId.CLIENT_INTERCEPTOR_CHOICE, interceptorId: null });
       return finish('declined the interception');
-    case 'puntToCrowd':
-      attempt({ netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD, puntToCrowd: false });
+    // Punt to Crowd election: asked of the acting coach on their own turn, so only the coach who controls the acting
+    // player may answer. Routed through the answered-instance latch so a later card click or a repeated /stuck
+    // cannot send a second answer for the same dialog; the card is retired on a successful send.
+    case 'puntToCrowd': {
+      const puntActingId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+      if (!puntActingId || !iControlPlayer(puntActingId)) {
+        return finish('sent nothing: the punt question belongs to the other coach');
+      }
+      if (dialogAlreadyAnswered()) {
+        if (state.yesNo?.key.startsWith('puntToCrowd:')) clearYesNo();
+        return finish('sent nothing: the crowd punt is already answered');
+      }
+      const accepted = sendAnsweredDialogCommand(
+        { netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD, puntToCrowd: false },
+        dialogInstanceKey(g), g.dialogParameter as object | null,
+      );
+      sent = accepted || sent;
+      refused = !accepted || refused;
+      if (accepted && state.yesNo?.key.startsWith('puntToCrowd:')) clearYesNo();
       return finish('declined the crowd punt and continued normal targeting');
+    }
     // BB2025 Trickster (StepTrickster -> StepPickUp): false = no pick-up attempt, the ball scatters. That is the
     // server-safe decline: it never rolls a die on the coach's behalf. Only the coach who owns the Trickster
     // (g.defenderId) may answer: StepTrickster accepts the command from any sender and the outbound gate is
@@ -20927,6 +21403,27 @@ function forceAdvanceCurrentState(
       if (accepted && state.yesNo?.key.startsWith('useChainsaw:')) clearYesNo();
       return finish('declined the chainsaw and fouled normally');
     }
+    // reRollForTargets (BB2025 Foul Appearance in a Multiple Block): the No Reroll close sends source + target null
+    // (AbstractDialogForTargets.java:28-37); the step then moves on without a reroll (AbstractStepModifierMultipleBlock:67-68).
+    // Same guards as resolveReRollForTargets: my player, the exact live raise, not already answered (a Pro answer the
+    // server has not acked yet must not be followed by a second command); clear the card only after an accepted send.
+    case 'reRollForTargets': {
+      const live = g.dialogParameter as object | null | undefined;
+      const rrPlayer = String((dp as { playerId?: unknown } | undefined)?.playerId ?? '');
+      if (!rrPlayer || !myPlayIds(g).has(rrPlayer)) return finish('the reroll belongs to the other seat');
+      if (!live || game.value?.dialogParameter !== live || dialogAlreadyAnswered()) return finish('the reroll was already answered');
+      const accepted = sendAnsweredDialogCommand(
+        buildReRollForTargetsCommand(String((dp as { reRolledAction?: unknown } | undefined)?.reRolledAction ?? ''), null, null),
+        dialogInstanceKey(g), live);
+      sent = accepted || sent;
+      refused = !accepted || refused;
+      if (!accepted) return finish('the reroll decline was refused');
+      state.reRollForTargets = null;
+      return finish('declined the reroll');
+    }
+    // opponentBlockSelectionProperties has NO server-safe decline: StepBlockRollMultiple only accepts a die index per
+    // target (handleCommand:157-171) and re-raises until every uphill target is picked. Choosing a die for the coach
+    // would be an auto-answer, so /stuck sends nothing for it and falls through to the phase advance below.
     default:
       break;
   }
@@ -21335,7 +21832,14 @@ function computeSetupPhase(g: GameJson) {
       };
     });
   const placed = players.map((p) => p.coord).filter((c): c is [number, number] => !!c);
-  const validation = validateSetup(placed, players.length);
+  // Astra review 10-13 (parity): SetupMechanic bb2025:47 leaves Keen Players (canJoinTeamIfLessThanEleven) out of
+  // availablePlayers, so they never raise the required LOS / field counts; they stay in the list and may be fielded.
+  const keenPlayers = (team.playerArray ?? []).filter((p) => players.some((q) => q.playerId === p.playerId)
+    && playerHasSkill(p as Parameters<typeof playerHasSkill>[0], 'Keen Player')).length;
+  const validation = validateSetup(placed, players.length, {
+    limits: setupLimitsFromGameOptions(g.gameOptions?.gameOptionArray),
+    requiredPool: players.length - keenPlayers,
+  });
   state.setupPhase = {
     side,
     players,
@@ -22857,6 +23361,7 @@ function handleServerPush(cmd: Record<string, unknown>) {
   }
   if (id === NetCommandId.SERVER_GAME_TIME) {
     // Mirror raw SERVER_GAME_TIME into presentation clock state; never derive timeout flags from it.
+    if (settings.wireLog && gameTimeLogGate(Date.now())) wireConnection('game-time', { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0) });
     state.gameClock = { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0), syncAt: Date.now() };
     return;
   }
@@ -23142,6 +23647,8 @@ function clearStaleReplayBlockSurfaces(): void {
     state.multiBlockResolution = null;
     blockChoiceEpoch++;
   }
+  if (dlg !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
+  if (dlg !== 'reRollForTargets') { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
 }
 
 function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedReplayBundle): void {
@@ -23401,7 +23908,7 @@ export const gameStore = {
   /** Owner 10-09: the view reports that it is showing published action-dice batch `seq` in `msUntilShown` ms. */
   actionDiceShown(seq: number, msUntilShown: number): void { noteActionDiceShown(seq, msUntilShown); },
   /** Astra 10-09: server frames wait behind a rescued / failed movement roll's presentation - the board is stale. */
-  moveRollHoldQueued: (): boolean => moveRollHoldQueued(),
+  moveRollHoldQueued: (): boolean => presentationHoldBlocksActions(), // owner 10-13: a TTM flight / bounce counts too
   /** Owner 09-28 (Spec S3 v2 #3a): the SAME predicate, except the Kick 'em Blitz candidate picker never counts
    *  as blocking — consumed ONLY by the Kick 'em right-click gate; every other caller keeps the default above. */
   interactiveDecisionSurfaceOpenExceptKickEmPicker: () => plannerPromptPending({ ignoreKickEmPicker: true }),
@@ -24607,7 +25114,7 @@ export const gameStore = {
     // lock's - a phase the server is waiting on this seat to end (kick-off return, pass block, setup, ...) is not held.
     // Round 7: End Turn itself is never an awaited ANSWER - a live dialog or a requested pick does not let it out
     // mid-hold. Only a phase end in a non-free turn mode (the server is waiting for exactly that) passes.
-    if (moveRollHoldQueued() && FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? ''))) return;
+    if (presentationHoldBlocksActions() && FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? ''))) return;
     if (playback.queue.length > 0 && bombFlightWaitMs() > 0) return; // owner 10-03: the bomb's resolution is still queued
     if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);
@@ -24752,7 +25259,7 @@ export const gameStore = {
       session = null;
       spectatorIngress?.dispose();
       spectatorIngress = null;
-      oldSession?.close();
+      closeLoggedSession(oldSession);
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
     } else this.disconnect();
     lastConnect = { mode: 'spectator', params }; // remember for a Reconnect after a drop
@@ -25209,6 +25716,7 @@ export const gameStore = {
       resetPlayback();
       clearPendingRailCommands();
       game.value = structuredClone(cmd.game) as GameJson;
+      verboseTee('in', cmd as unknown as Record<string, unknown>); // 10-13: the connect/reconnect snapshot opens the per-game wire log (once per gameState)
       noteChatGame(params.url, params.coach, game.value.gameId);
       normalizeZappedPlayerSnapshots(game.value);
       seedMoveOfferSnapshot();
@@ -25263,13 +25771,18 @@ export const gameStore = {
     // that the other coach is not connected (a scheduled game starts only when both are: upstream joinGameAsPlayerAndCheckIfReadyToStart).
     let playersJoined: number | null = null;
     let statusSeenThisConnect = false;
+    let ownJoinSeen = false; // per connection: only the FIRST serverJoin is this client's own; later ones are other coaches/spectators
     session.on('join', (cmd) => {
       if (thisSession !== session) return;
       playersJoined = Array.isArray(cmd.playerNames) ? cmd.playerNames.length : null;
       wireConnection('join-accepted', { players: playersJoined });
       joinAckedThisConnect = true;
       if (state.waitingForMatch && playersJoined != null) state.waitingForMatch.playersJoined = playersJoined;
-      if (officialFumbbl) prepared?.onJoinAccepted?.();
+      // 10-13: onJoinAccepted belongs to this client's own join, the first serverJoin of the connection; later joins
+      // are other coaches and spectators. The routing normally clears its prepared target after the accepted
+      // snapshot, so a repeat would be a no-op; the gate keeps that from depending on ordering.
+      if (officialFumbbl && !ownJoinSeen) prepared?.onJoinAccepted?.();
+      ownJoinSeen = true;
       handleServerJoin(cmd as { spectators?: number });
     });
     session.on('command', (cmd) => { if (thisSession === session) handleServerPush(cmd as Record<string, unknown>); });
@@ -26837,6 +27350,50 @@ export const gameStore = {
     log('system', `play: multi-block choice → ${playerName(game.value, targetId)} die #${diceIndex}${reRollSource ? ' (reroll)' : ''} (server resolves)`);
   },
 
+  /** BB2025 uphill Multiple Block: the DEFENDING coach picks the attacker's result for ONE target
+   *  (opponentBlockSelectionProperties; DialogOpponentBlockSelectionPropertiesHandler.dialogClosed sends
+   *  sendBlockOrReRollChoiceForTarget(target, index, null, 0)). Only for the exact armed raise, my team, an offered
+   *  target and one of its dice. The surface hides until the server's next raise (it re-raises for the other targets). */
+  resolveOpponentBlockSelection(targetId: string, diceIndex: number): boolean {
+    const sel = state.opponentBlockSelection;
+    const g = game.value;
+    if (!sel || !play.active || !g || !liveOpponentBlockDialog) return false;
+    const dp = g.dialogParameter as object | null | undefined;
+    if (!dp || dp !== liveOpponentBlockDialog || !dialogInstanceLive(sel.instanceKey) || dialogAlreadyAnswered()) return false;
+    if (sel.teamId !== (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId) return false;
+    const row = sel.rows.find((r) => r.targetId === targetId);
+    if (!row || !Number.isInteger(diceIndex) || diceIndex < 0 || diceIndex >= row.dice.length) return false;
+    const sent = sendAnsweredDialogCommand(buildOpponentBlockSelectionCommand(targetId, diceIndex), sel.instanceKey, dp);
+    if (sent) {
+      state.opponentBlockSelection = null;
+      log('system', `play: picked the block result for ${sel.attacker} on ${row.target} (die #${diceIndex})`);
+    }
+    return sent;
+  },
+
+  /** BB2025 Foul Appearance in a Multiple Block (reRollForTargets): reroll ONE failed target with an offered source, or
+   *  decline with source null (the No Reroll close sends target and source null, AbstractDialogForTargets.java:28-37). */
+  resolveReRollForTargets(source: string | null, targetId: string | null = null): boolean {
+    const offer = state.reRollForTargets;
+    const g = game.value;
+    if (!offer || !play.active || !g || !liveReRollForTargetsDialog) return false;
+    const dp = g.dialogParameter as object | null | undefined;
+    if (!dp || dp !== liveReRollForTargetsDialog || !dialogInstanceLive(offer.instanceKey) || dialogAlreadyAnswered()) return false;
+    if (!myPlayIds(g).has(offer.playerId)) return false;
+    if (source !== null) {
+      if (!offer.options.some((o) => o.source === source)) return false;
+      if (!targetId || !offer.targets.some((t) => t.targetId === targetId)) return false;
+    }
+    const sent = sendAnsweredDialogCommand(buildReRollForTargetsCommand(offer.reRolledAction, source, targetId), offer.instanceKey, dp);
+    if (sent) {
+      state.reRollForTargets = null;
+      log('system', source === null
+        ? `play: no reroll for ${offer.player}'s ${offer.reRolledAction}`
+        : `play: ${source} reroll for ${offer.player}'s ${offer.reRolledAction} against ${playerName(g, targetId)}`);
+    }
+    return sent;
+  },
+
   /** Owner 10-10: Pro with a fallback for ONE multiple-block target - upstream sendBlockOrReRollChoiceForTarget(target,
    *  selectedIndex, source, proIndex 0) (DialogReRollBlockForTargetsProperties.handleReRollUse:368-372 -> proAction
    *  :316-321; handler :66-69). Sent only for a source that target's row offers (one-die rolls, blockProCompositeOptions). */
@@ -27746,7 +28303,7 @@ export const gameStore = {
     session = null;
     spectatorIngress?.dispose();
     spectatorIngress = null;
-    cancelledSession?.close();
+    closeLoggedSession(cancelledSession);
     state.sessionState = 'idle';
     if (state.connectionClosed) state.connectionClosed = { ...state.connectionClosed, reconnecting: false };
   },
@@ -27836,7 +28393,7 @@ export const gameStore = {
       cancelGameTimeout(joinTimer);
       joinTimer = null;
     }
-    session?.close();
+    closeLoggedSession(session); // 10-13: drops logging ownership even when no close event will follow
     session = null;
     state.sessionState = 'idle';
     // owner 2026-07-03 r6f: disconnecting a DEMO clears it (the demo has no live

@@ -6,8 +6,9 @@ import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZ
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { PIPELINE_TIMINGS } from './blockPipeline';
-import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
+import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSide, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 import { RING_TYPE_COLORS, ringTypeForName } from './positionTypes';
+import { displayDiceSide, playerServerSide, type ServerSide } from './diceSide';
 import { SETUP_LOS_X, SETUP_OWN_HALF_MAX_X, WIDE_ZONE_WIDTH } from './setup';
 import { loadSprites, spriteFor } from './sprites';
 import {
@@ -603,8 +604,25 @@ export function ballThrowArcMs(kind: 'pass' | 'punt'): number {
 }
 /** BB2025 TTM: the thrown player's single flight-arc duration (kick fly-in style). Shared by
  *  playThrow's arm-time merge and the consumption tween in setGame's per-token loop so the two
- *  stay in lockstep (item row29-ttm-anim). */
-export const TTM_THROW_MS = 640;
+ *  stay in lockstep (item row29-ttm-anim). Owner 10-13 (Doglobro g1953046, "the ttm throw goes too quick"):
+ *  "We can go to a 1.2s flight time" - a FIXED 1.2 s flight in Modern. Classic keeps its 640 ms flight. */
+export const TTM_THROW_MS = 1200;
+export const TTM_THROW_CLASSIC_MS = 640;
+/** The thrown player's flight on screen, presentation-scaled (Classic keeps the 640 ms flight). */
+export function ttmThrowMs(classic = false): number {
+  return presentationMs(classic ? TTM_THROW_CLASSIC_MS : TTM_THROW_MS);
+}
+/** Owner 10-13: "Bounce should occur after the flight ... look at the ball bounce behavior and copy timings here." One
+ *  landing-bounce hop of a thrown player (Modern) = one loose-ball bounce hop: the per-square move pace plus the
+ *  loose-ball extra (startMoveTween's `__ball__` slide), `moveStepBaseMs` being settings.moveSpeedMs. */
+export function ttmBounceHopMs(moveStepBaseMs: number): number {
+  return presentationMs(Math.max(1, moveStepBaseMs)) + presentationMs(BALL_BOUNCE_EXTRA_MS);
+}
+/** Classic's thrown-player scatter hop (unchanged). */
+const TTM_SCATTER_CLASSIC_SEG_MS = 150;
+/** A thrown player whose flight / bounce has ended on screen keeps being drawn on its landing square until the model
+ *  catches up with it (the coordinate frame waits behind the flight / hop in the store), for at most this long. */
+const TTM_LANDING_HOLD_CAP_MS = 2000;
 
 /** Shared server-derived active-player signal; intentionally independent of seat. */
 export function activePlayerAuraVisible(activePlayerId: string | null): boolean {
@@ -1016,6 +1034,12 @@ interface ActionDieRecord {
   tumbleUntil?: number;
   nextFaceAt?: number;
   lastTumbleFace?: number;
+  /** Owner 10-13: the SERVER side of the team that rolled this die; null = not known (neutral faces). The displayed
+   *  side (blue home / red away under the 'team' D6 variant) is resolved from the CURRENT seat at draw time
+   *  (actionDieRecordSide), so a held die follows a seat change. */
+  owner?: ServerSide | null;
+  /** The displayed side the face sprite was last textured for (the frame loop re-textures when the seat flips). */
+  faceSide?: BlockDieSide | null;
 }
 /** Accepted local movement gets a visible first stride promptly while its authoritative echo is in flight.
  * It may approach, but never complete, the destination square before confirmation. */
@@ -1846,13 +1870,16 @@ export class PitchRenderer {
   private static readonly BLOCK_FACE_LABELS = ['Player Down!', 'Both Down', 'Push Back', 'Stumble!', 'POW!'];
   /** FUMBBL block-die FACE-ART url for a die value (1..6) — for DOM surfaces (the
    *  classic Block Roll dialog). Same art the on-pitch dice tumble through. */
-  static blockFaceUrl(value: number): string {
+  static blockFaceUrl(value: number, side?: BlockDieSide | null): string {
     const idx = PitchRenderer.BLOCK_VALUE_TO_FACE[Math.max(1, Math.min(6, value | 0))]!;
-    return PitchRenderer.blockFaceUrls()[idx]!;
+    return PitchRenderer.blockFaceUrls(side)[idx]!;
   }
-  /** All five face-art urls in tumble order (skull→bothdown→push→powpush→pow). */
-  static blockFaceUrls(): string[] {
-    const bundled = PitchRenderer.bundledBlockFaceUrls();
+  /** All five face-art urls in tumble order (skull→bothdown→push→powpush→pow). Owner 10-13: `side` = the displayed
+   *  side the dice belong to (the chooser's); under the 'team' surface it picks the blue / red blank, otherwise (and
+   *  without a side) it changes nothing. */
+  static blockFaceUrls(side?: BlockDieSide | null): string[] {
+    const family = PitchRenderer.blockFaceFamily;
+    const bundled = PitchRenderer.bundledBlockFaceUrls(family, PitchRenderer.activeBlockDieSurface(side));
     return PitchRenderer.BLOCK_FACE_IDS.map((_face, index) => PitchRenderer.packBlockFaceUrl(index) ?? bundled[index]!);
   }
   /** The PACK-bound face art for a tumble index (0 skull .. 4 pow), null when no pack binds that face. The one read
@@ -1879,9 +1906,18 @@ export class PitchRenderer {
       ? new URL(`../assets/blockdice-krisb/${name}.png`, import.meta.url).href
       : new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
   }
-  /** The resolved surface of the active family under the active setting. */
-  static activeBlockDieSurface(): BlockDieSurface {
-    return resolveBlockDieSurface(PitchRenderer.blockFaceFamily, PitchRenderer.blockDieSurfaceSetting);
+  /** The resolved surface of the active family under the active setting (owner 10-13: for a die of `side`). */
+  static activeBlockDieSurface(side?: BlockDieSide | null): BlockDieSurface {
+    return resolveBlockDieSurface(PitchRenderer.blockFaceFamily, PitchRenderer.blockDieSurfaceSetting, side);
+  }
+  /** Owner 10-13: true under the 'team' setting (blue home / red away dice). */
+  static teamBlockDieSurface(): boolean {
+    return PitchRenderer.blockDieSurfaceSetting === 'team';
+  }
+  /** Every surface the active setting draws: the side-less one, plus home and away under 'team'. */
+  private static activeBlockDieSurfaces(): BlockDieSurface[] {
+    const neutral = PitchRenderer.activeBlockDieSurface();
+    return PitchRenderer.teamBlockDieSurface() ? [neutral, 'home', 'away'] : [neutral];
   }
   /** Owner 10-06: compose (cached) the faces of a family x surface (default: the active pair) so the synchronous
    *  readers (`blockFaceUrls`, `bundledBlockFaceUrls`) return them. Resolves true when composed art is available (or
@@ -1890,7 +1926,11 @@ export class PitchRenderer {
     surface: BlockDieSurface = resolveBlockDieSurface(family, PitchRenderer.blockDieSurfaceSetting)): Promise<boolean> {
     // Only the ACTIVE pair is persisted for the next launch (wizard previews are not); a native active pair needs none.
     // Astra F3: "active" is re-read when the set is in hand, so a superseded compose never rewrites the cache.
-    const isActive = () => family === PitchRenderer.blockFaceFamily && surface === PitchRenderer.activeBlockDieSurface();
+    // Owner 10-13: under 'team' the two side sets are the persisted pair (the side-less set is rarely drawn there and
+    // would evict them: storage holds one setting's sets only).
+    const isActive = () => family === PitchRenderer.blockFaceFamily && (PitchRenderer.teamBlockDieSurface()
+      ? surface === 'home' || surface === 'away'
+      : surface === PitchRenderer.activeBlockDieSurface());
     if (nativeBlockDieSurface(family) === surface) {
       if (isActive()) clearStoredBlockFaces();
       return true;
@@ -1912,9 +1952,9 @@ export class PitchRenderer {
   static setBlockDieSurface(setting: BlockDieSurfaceSetting): Promise<unknown> {
     const next = normalizeBlockDieSurfaceSetting(setting);
     if (next === PitchRenderer.blockDieSurfaceSetting) return Promise.resolve();
-    const before = PitchRenderer.activeBlockDieSurface();
+    const before = PitchRenderer.activeBlockDieSurfaces().join('|');
     PitchRenderer.blockDieSurfaceSetting = next;
-    if (PitchRenderer.activeBlockDieSurface() === before) return Promise.resolve(); // e.g. auto -> its own resolution
+    if (PitchRenderer.activeBlockDieSurfaces().join('|') === before) return Promise.resolve(); // e.g. auto -> its own resolution
     return PitchRenderer.reloadBlockFacesWhenReady();
   }
   /** Resolves true when this call's pair reloaded the live renderers, false when a newer family / surface change
@@ -1922,8 +1962,7 @@ export class PitchRenderer {
   private static async reloadBlockFacesWhenReady(): Promise<boolean> {
     const pairGeneration = ++PitchRenderer.blockFacePairGeneration;
     const family = PitchRenderer.blockFaceFamily;
-    const surface = PitchRenderer.activeBlockDieSurface();
-    await PitchRenderer.prepareBlockFaces(family, surface);
+    await Promise.all(PitchRenderer.activeBlockDieSurfaces().map((surface) => PitchRenderer.prepareBlockFaces(family, surface)));
     if (pairGeneration !== PitchRenderer.blockFacePairGeneration) return false; // superseded
     if (typeof document === 'undefined') return true;
     for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
@@ -2112,8 +2151,26 @@ export class PitchRenderer {
     }
     const wasEmpty = this.blockFaceTextures.length === 0;
     const loadedTextures = textures as Texture[];
+    // Owner 10-13: the home / away sets under the 'team' surface (same pack-first rule; a set with a face that fails
+    // to load is dropped whole, so its dice draw the side-less faces rather than a mixed set).
+    const sideSets: Partial<Record<BlockDieSide, Texture[]>> = {};
+    if (PitchRenderer.teamBlockDieSurface()) {
+      for (const side of ['home', 'away'] as const) {
+        await PitchRenderer.prepareBlockFaces(family, side);
+        if (!live()) return;
+        const urls = PitchRenderer.bundledBlockFaceUrls(family, side);
+        const set = await Promise.all(ids.map(async (face, index) => {
+          const pack = PitchRenderer.blockFaceSources[face];
+          return (pack ? await tryLoad(pack, true) : null) ?? tryLoad(urls[index]!);
+        }));
+        if (!live()) return;
+        if (set.every((t): t is Texture => !!t)) sideSets[side] = set;
+        else console.warn(`ffb-pitch: ${side} block die faces failed to load; those dice keep the plain faces`);
+      }
+    }
     this.blockFaceTextures = loadedTextures;
-    for (const sprite of this.blockDiceSprites) this.setBlockFaceTexture(sprite, loadedTextures[0]!);
+    this.blockFaceSideTextures = sideSets;
+    for (const sprite of this.blockDiceSprites) this.setBlockFaceTexture(sprite, this.blockFaceSetFor(this.blockDiceSpriteSides.get(sprite) ?? null)[0]!);
     for (const sprite of this.blockFaceStaticSprites) {
       if (sprite.destroyed) this.blockFaceStaticSprites.delete(sprite);
       else this.setBlockFaceTexture(sprite, loadedTextures[0]!);
@@ -2496,6 +2553,11 @@ export class PitchRenderer {
   private spritesReady = false;
   /** Owner-supplied block-result cards (skull/bothdown/push/powpush/pow). */
   private blockFaceTextures: Texture[] = [];
+  /** Owner 10-13: under the 'team' surface, the five faces on the blue (home) and red (away) blanks; absent otherwise
+   *  (and while loading / after a failure: those dice then draw the side-less faces). */
+  private blockFaceSideTextures: Partial<Record<BlockDieSide, Texture[]>> = {};
+  /** The displayed side each live preview die belongs to (null: side-less faces). */
+  private blockDiceSpriteSides = new WeakMap<Sprite, BlockDieSide | null>();
   private blockFaceLoadGeneration = 0;
   /** Owner-supplied skull used only for the RIP/casualty marker. */
   private casualtySkullTexture: Texture | null = null;
@@ -2504,6 +2566,8 @@ export class PitchRenderer {
   /** Owner 10-03: the Sweltering Heat marker over an EXHAUSTED player sitting the drive out in the dugout. */
   private heatExhaustedDecoTexture: Texture | null = null;
   private d6FaceTextures: Array<Texture | undefined> = [];
+  /** Owner 10-13: the blue (home) and red (away) D6 sets under the 'team' variant ({} otherwise). */
+  private d6FaceSideTextures: Partial<Record<BlockDieSide, Array<Texture | undefined>>> = {};
   private d6FaceVariant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT;
   private d6FaceLoadGeneration = 0;
   /** Dedicated Go For It roll marker. An installed GFI icon pack target may override it. */
@@ -2788,11 +2852,11 @@ export class PitchRenderer {
    *  next move should HOP square-to-square along these squares (random directions), not
    *  glide straight to the end. Set by the store's scatterPlayer report; consumed once by
    *  the next startMoveTween for that player. */
-  private pendingScatter = new Map<string, { path: [number, number][]; start: number }>();
+  private pendingScatter = new Map<string, { path: [number, number][]; start: number; armedAt?: [number, number] | null }>();
   /** Owner 2026-07-07 (LIVE TTM): the thrown player's FLIGHT — arc its token from→to (kick-arc
    *  style) over one clock, re-armed each setGame so it survives token rebuilds. Set by markTtmThrow
    *  from the wire's `throwTeamMate` animation; consumed when the flight duration elapses. */
-  private pendingTtmThrow = new Map<string, { from: [number, number]; to: [number, number]; start: number }>();
+  private pendingTtmThrow = new Map<string, { from: [number, number]; to: [number, number]; start: number; armedAt?: [number, number] | null }>();
   /** Owner 2026-07-08 (case 419): TRICKSTER relocate — slide the token from→to as a LOW step (no
    *  throw-arc), the FFB built-in Trickster animation. Set by markTrickster from the wire's
    *  `trickster` animation; re-armed each setGame like the TTM flight. */
@@ -3217,6 +3281,8 @@ export class PitchRenderer {
     // Owner 09-06: a zoom change wakes the walkers BEFORE the idle early-return, so the integer snap and the
     // decoration scale land on the same frame the camera moved (they used to wait for the next wake-up).
     if (Math.abs(app.renderer.resolution * this.world.scale.x - this.lastWalkerDeviceScale) > 1e-4) markWalkersDirty();
+    // Owner 10-13 / Astra (MAJOR 2): the thrown player's landing hold is woken here, every frame, not only by refresh().
+    if (this.modernPitchPresentation) this.tickTtmLandingWake(performance.now());
     if (this.moveTweens.size === 0 && !walkersNeedTick(this.walkerOwnerId)) return;
     const now = performance.now();
     for (const [id, tween] of this.moveTweens) {
@@ -3829,7 +3895,31 @@ export class PitchRenderer {
   setO66Path(squares: [number, number][], moverId?: string | null): void {
     this.o66PathSquares = squares.slice();
     this.o66PathMover = squares.length > 1 ? (moverId ?? null) : null;
+    // Owner 10-13 (pass at destination): an armed Pass card was computed from the throw origin of the moment it was
+    // armed (the planned destination, or the thrower's square with no plan). A re-plan, truncation or right-click
+    // clear moves that origin, so the card's numbers no longer describe the throw: retire it (the coach re-clicks).
+    const a = this.armedAction;
+    if (a && a.mode === 'pass') {
+      const origin = this.plannedPassOrigin();
+      if ((origin?.[0] ?? null) !== (a.plannedOrigin?.[0] ?? null) || (origin?.[1] ?? null) !== (a.plannedOrigin?.[1] ?? null)) {
+        this.armedAction = null;
+        this.onActionTarget?.(null);
+      }
+    }
     this.redrawOverlays();
+  }
+  /** Owner 10-13: the planned DESTINATION of the selected player's plotted Order-66 route (null = no route). A Pass
+   *  armed while a route is plotted is thrown from here after the walk, so its card, arrow, Pass/Catch chips and
+   *  interceptor tips are computed from this square instead of the thrower's current square. */
+  plannedPassOrigin(): Square | null {
+    if (!this.order66 || this.o66PathSquares.length < 2 || !this.selectedPlayerId) return null;
+    if (this.o66PathMover !== this.selectedPlayerId) return null;
+    const [x, y] = this.o66PathSquares[this.o66PathSquares.length - 1]!;
+    return [x, y];
+  }
+  /** The square a Pass from the selected player is thrown from: the planned destination, else the path end. */
+  private passOrigin(): Square | null {
+    return this.plannedPassOrigin() ?? this.getPathEnd();
   }
   /** #77 (owner batch §N): the authoritative bb2025 pickup difficulty for the ACTING mover's ball
    *  square, supplied by the view from availableActions.pickupTargetAtBall (the cited minimumRollPickup
@@ -4585,7 +4675,7 @@ export class PitchRenderer {
   /** The armed action was CONFIRMED (second click on the target / modal button /
    *  the movement confirm bar) — the host commits the path + wire command. */
   onActionConfirm: ((req: { mode: 'foul' | 'handoff' | 'pass'; actorId: string; targetId: string; targetSquare: Square; path: Square[] }) => void) | null = null;
-  private armedAction: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; square: Square; rollText: string } | null = null;
+  private armedAction: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; square: Square; rollText: string; plannedOrigin?: Square | null } | null = null;
   /** Monotonic DOM occurrence for the host confirmation card. A cancelled target selected again is a new card. */
   private armedActionSeq = 0;
   private actionHoverActive = false;
@@ -5200,15 +5290,19 @@ export class PitchRenderer {
             if (now >= (die.nextFaceAt ?? 0)) {
               const face = nextTumbleFace(die.lastTumbleFace ?? die.value ?? 1);
               die.lastTumbleFace = face;
-              const texture = this.d6FaceTextures[face - 1];
+              const texture = this.d6FaceTexture(face, this.actionDieRecordSide(die));
               if (texture) die.face.texture = texture;
               die.nextFaceAt = now + 40;
             }
           } else {
-            const texture = this.d6FaceTextures[(die.value ?? 1) - 1];
+            const side = this.actionDieRecordSide(die);
+            const texture = this.d6FaceTexture(die.value ?? 1, side);
             if (texture) die.face.texture = texture;
+            die.faceSide = side;
             die.tumbleUntil = undefined;
           }
+        } else {
+          this.refreshHeldActionDieFace(die);
         }
         return true;
       });
@@ -5220,7 +5314,7 @@ export class PitchRenderer {
           if (die.id === undefined) continue;
           const g = die.node.getGlobalPosition();
           const s = Math.abs(die.node.worldTransform.a);
-          slots.push({ id: die.id, cx: g.x, cy: g.y, size: ACTION_DIE_SIZE * s, alpha: die.node.alpha, value: die.value ?? 1 });
+          slots.push({ id: die.id, cx: g.x, cy: g.y, size: ACTION_DIE_SIZE * s, alpha: die.node.alpha, value: die.value ?? 1, ...this.actionDieFaceSet(die) });
         }
         const drawn = this.actionDice3d.sync(slots, dt, now);
         for (const die of this.actionDice) if (die.id !== undefined) this.applyActionDieFaceMode(die, drawn.has(die.id));
@@ -5361,7 +5455,12 @@ export class PitchRenderer {
       if (this.blockDiceSprites.length === 0 || this.blockFaceTextures.length === 0) return;
       const face =
         this.blockFaceTextures[Math.floor(performance.now() / presentationMs(PitchRenderer.DICE_FACE_MS)) % this.blockFaceTextures.length]!;
-      for (const sprite of this.blockDiceSprites) this.setBlockFaceTexture(sprite, face);
+      const index = Math.floor(performance.now() / presentationMs(PitchRenderer.DICE_FACE_MS));
+      for (const sprite of this.blockDiceSprites) {
+        const side = this.blockDiceSpriteSides.get(sprite) ?? null;
+        const set = side ? this.blockFaceSetFor(side) : null;
+        this.setBlockFaceTexture(sprite, set ? set[index % set.length]! : face);
+      }
     });
     try {
       // Turf themes: grass1 = Acasas 64px leafy tile (uniform);
@@ -6549,6 +6648,7 @@ export class PitchRenderer {
       // clock (like the kick fly-in), so the hop progresses smoothly across the per-frame
       // token rebuilds instead of orphaning; cleared when the hop duration elapses.
       const sc = this.pendingScatter.get(data.playerId);
+      const atModel = (sq: [number, number]) => sq[0] === nx && sq[1] === ny;
       // Owner 2026-07-07 (LIVE TTM), reordered 2026-08-17 (row29-ttm-anim, owner sighting g866
       // "thrown player teleports"): the ARC now runs FIRST and wins over a same-frame scatter for
       // the SAME player, not the other way round. playThrow's arm-time merge (above) extends an
@@ -6560,27 +6660,48 @@ export class PitchRenderer {
       const tt = this.pendingTtmThrow.get(data.playerId);
       let ttConsumedScatter = false;
       if (tt) {
-        const THROW_MS = presentationMs(TTM_THROW_MS);
-        if (performance.now() - tt.start >= THROW_MS) {
-          this.pendingTtmThrow.delete(data.playerId);
+        const THROW_MS = this.ttmFlightMs();
+        const elapsed = performance.now() - tt.start;
+        let landedTo: [number, number] = [tt.to[0], tt.to[1]];
+        if (elapsed >= THROW_MS) {
+          // Owner 10-13: the landing coordinate waits behind the flight in the store; until it applies, the thrown
+          // player stays drawn where he came down (bounded), never walked back to the origin square. Astra (MAJOR 2):
+          // any OTHER authoritative coordinate wins at once (eased from the landing square), and so does the cap.
+          if (this.ttmLandingHeld(tt.armedAt, tt.to, [nx, ny], elapsed - THROW_MS)) {
+            const p = this.tokenPos(tt.to[0], tt.to[1]); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+          } else {
+            this.pendingTtmThrow.delete(data.playerId);
+            if (this.modernPitchPresentation && !atModel(tt.to)) { this.startMoveTween(data.playerId, token, tt.to, [nx, ny]); landedTo = [nx, ny]; }
+          }
         } else {
           const p0 = this.tokenPos(tt.from[0], tt.from[1]);
           const p1 = this.tokenPos(tt.to[0], tt.to[1]);
           this.moveTweens.set(data.playerId, { token, waypoints: [p0, p1], style: 'slide', start: tt.start, segmentMs: THROW_MS, arc: KICK_ARC_PX });
           if (sc) { this.pendingScatter.delete(data.playerId); ttConsumedScatter = true; }
         }
-        this.lastSquares.set(data.playerId, [tt.to[0], tt.to[1]]);
+        this.lastSquares.set(data.playerId, landedTo);
       }
       if (sc && sc.path.length > 1 && !ttConsumedScatter) {
-        const SCATTER_SEG = presentationMs(150);
+        const SCATTER_SEG = this.ttmScatterSegMs();
         const total = (sc.path.length - 1) * SCATTER_SEG;
-        if (performance.now() - sc.start >= total) {
-          this.pendingScatter.delete(data.playerId);
+        const elapsed = performance.now() - sc.start;
+        const end = sc.path[sc.path.length - 1]!;
+        let landedOn: [number, number] = [end[0], end[1]];
+        if (elapsed >= total) {
+          // Owner 10-13 (Modern): like the flight, the bounce's landing square is held until the model reaches it.
+          if (this.ttmLandingHeld(sc.armedAt, end, [nx, ny], elapsed - total)) {
+            const p = this.tokenPos(end[0], end[1]); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+          } else {
+            this.pendingScatter.delete(data.playerId);
+            if (this.modernPitchPresentation && !atModel(end)) { this.startMoveTween(data.playerId, token, end, [nx, ny]); landedOn = [nx, ny]; }
+          }
         } else {
           const pts = sc.path.map(([sx, sy]) => this.tokenPos(sx, sy));
-          this.moveTweens.set(data.playerId, { token, waypoints: pts, style: 'hop', start: sc.start, segmentMs: SCATTER_SEG });
+          // Owner 10-13: Modern bounces a thrown player exactly like the loose ball (slide ease, one hop per square at
+          // the ball's per-hop pace); Classic keeps its quick hop.
+          this.moveTweens.set(data.playerId, { token, waypoints: pts, style: this.modernPitchPresentation ? 'slide' : 'hop', start: sc.start, segmentMs: SCATTER_SEG });
         }
-        this.lastSquares.set(data.playerId, sc.path[sc.path.length - 1]!);
+        this.lastSquares.set(data.playerId, landedOn);
       }
       // Owner 2026-07-08 (case 419): TRICKSTER — a LOW step-slide from→to (no arc), quicker than a
       // throw. Same one-clock/moveTweens mechanism as the TTM flight above, arc:0.
@@ -8325,8 +8446,9 @@ export class PitchRenderer {
     if (targetIsHome !== selIsHome || !hasTackleZones(data.playerState)) return null;
     const c = catchTarget(g, targetId);
     if (mode === 'handoff') return c == null ? null : `HAND ${c}+`;
-    // pass: rolled from the path END (the thrower throws after moving)
-    const from = this.getPathEnd();
+    // pass: rolled from the path END (the thrower throws after moving); owner 10-13: a plotted Order-66 route's
+    // destination is that end too
+    const from = this.passOrigin();
     if (!from) return null;
     const passRoll = this.resolvedPassRoll(this.selectedPlayerId, from, [data.playerCoordinate![0], data.playerCoordinate![1]]);
     if (passRoll == null) return null;
@@ -8351,7 +8473,7 @@ export class PitchRenderer {
       }
     }
     const seq = ++this.armedActionSeq;
-    this.armedAction = { seq, mode, targetId, square: [square[0], square[1]], rollText };
+    this.armedAction = { seq, mode, targetId, square: [square[0], square[1]], rollText, plannedOrigin: mode === 'pass' ? this.plannedPassOrigin() : null };
     this.redrawOverlays();
     this.onActionTarget?.({ seq, mode, targetId, targetSquare: [square[0], square[1]], path: this.getPlannedPath(), rollText });
     return true;
@@ -9038,7 +9160,7 @@ export class PitchRenderer {
     if (this.actionMode === 'pass') {
       this.drawPassTemplate([px, py]);
       const selectedIsHomePass = this.selectedIsHome();
-      if (!this.spectatorTackleZoneSurface) this.drawTackleZones(selectedIsHomePass); // spectate / replay: the mode owns zones
+      if (!this.spectatorTackleZoneSurface) this.drawTackleZones(selectedIsHomePass, this.selectionTackleZoneMode(true)); // spectate / replay: the mode owns zones
       this.drawArmedAction(); // owner 2026-07-04c: pass arrow + chips + interceptor tips
       return;
     }
@@ -9144,8 +9266,9 @@ export class PitchRenderer {
     // that threaten it (the setting, default opposition); an INSPECTED opposition
     // player shows its FRIENDLY zones (its own team's control).
     // Owner 10-12 (Astra P2): in spectate / replay the quick-bar spectator mode is the only tackle-zone drawing.
+    // Owner 10-13: 'both' in play = the zones relevant to the selection (selectionTackleZoneMode).
     const selectedIsHome = this.game!.teamHome.playerArray.some((p) => p.playerId === this.selectedPlayerId);
-    if (!this.spectatorTackleZoneSurface) this.drawTackleZones(selectedIsHome, isActor ? undefined : 'friendly');
+    if (!this.spectatorTackleZoneSurface && this.o66BothZoneOwner() !== 'actor') this.drawTackleZones(selectedIsHome, this.selectionTackleZoneMode(isActor));
 
     // armed block preview (O2), drawn over everything
     this.drawBlockPreview();
@@ -9394,7 +9517,7 @@ export class PitchRenderer {
   private drawArmedAction(): void {
     const a = this.armedAction;
     if (!a || !this.game || !this.selectedPlayerId) return;
-    const from = this.getPathEnd();
+    const from = a.mode === 'pass' ? this.passOrigin() : this.getPathEnd();
     if (!from) return;
     const chip = (text: string, sq: Square, dy: number) => {
       const p = squareAnchor(sq[0], sq[1]);
@@ -9956,8 +10079,10 @@ export class PitchRenderer {
     const y = this.blockPreviewY(square, anchor.y - TILE_H * 1.85 * scale, dieH / 2, scale);
     const spacing = 30 * scale;
     if (this.blockFaceTextures.length > 0) {
+      const side = this.blockPreviewSide(opponentChoice);
       for (let i = 0; i < dice; i++) {
-        const sprite = new Sprite(this.blockFaceTextures[0]);
+        const sprite = new Sprite(this.blockFaceSetFor(side)[0]);
+        this.blockDiceSpriteSides.set(sprite, side);
         sprite.anchor.set(0.5, 0.5);
         this.fitBlockFaceSprite(sprite, 27 * scale);
         sprite.position.set(anchor.x + (i - (dice - 1) / 2) * spacing, y);
@@ -9978,6 +10103,19 @@ export class PitchRenderer {
       warning.position.set(anchor.x, y - 17 * scale);
       this.pathLayer.addChild(warning);
     }
+  }
+
+  /** Owner 10-13: the displayed side of the armed preview's dice - the chooser's: the acting (blocking) player's
+   *  team, the defender's under an uphill block (opponentChoice). Null when unknown (side-less faces). */
+  private blockPreviewSide(opponentChoice: boolean): BlockDieSide | null {
+    const attacker = (this.game?.actingPlayer as { playerId?: unknown } | undefined)?.playerId;
+    const owner = playerServerSide(this.game, attacker);
+    const chooser = owner && opponentChoice ? (owner === 'home' ? 'away' : 'home') : owner;
+    return displayDiceSide(chooser, this.friendlyIsHome ? 'home' : 'away');
+  }
+  /** The five block-face textures for a displayed side (the side set under 'team', else the side-less set). */
+  private blockFaceSetFor(side: BlockDieSide | null): Texture[] {
+    return (side && this.blockFaceSideTextures[side]) || this.blockFaceTextures;
   }
 
   /** A block die: white face, red-shaded for Uphill Blocks (O2.4/O2.5). */
@@ -10264,7 +10402,40 @@ export class PitchRenderer {
     const actId = String((this.game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!actId) return;
     const selectedIsHome = this.game.teamHome.playerArray.some((player) => player.playerId === actId);
-    this.drawTackleZones(selectedIsHome, this.tackleZoneMode);
+    // Owner 10-13: in 'both' (relevant zones) an opposing selection made BEFORE the actor moves (an inspection or a
+    // target choice) owns the read: the inspection site draws MY zones on it and the actor's opponent zones stand down.
+    if (this.o66BothZoneOwner() === 'selection') return;
+    this.drawTackleZones(selectedIsHome, this.selectionTackleZoneMode(true));
+  }
+
+  /** Owner 10-13 (Astra review): who owns the 'both' (relevant zones) read when an OPPOSING player is selected while
+   *  my actor is active. 'selection' = an inspection / target choice before the actor moves (my zones on the enemy);
+   *  'actor' = the nomination has proceeded into movement (the selection is the acknowledged blitz target, a route is
+   *  plotted, or the actor has already moved), so the actor's opponent zones return for judging dodges and the
+   *  inspection read stands down. 'none' = any other case (other modes, no actor, own-team or no selection). */
+  private o66BothZoneOwner(): 'none' | 'selection' | 'actor' {
+    if (!this.order66 || this.tackleZoneMode !== 'both' || !this.o66OppTzActive || !this.game || !this.selectedPlayerId) return 'none';
+    const acting = this.game.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
+    const actId = String(acting?.playerId ?? '');
+    if (!actId || this.selectedPlayerId === actId) return 'none';
+    const actorIsHome = this.game.teamHome.playerArray.some((player) => player.playerId === actId);
+    if (this.selectedIsHome() === actorIsHome) return 'none';
+    if (!isOnPitch(this.game.fieldModel.playerDataArray.find((d) => d.playerId === this.selectedPlayerId)?.playerCoordinate)) return 'none';
+    const target = this.game.fieldModel.targetSelectionState as { playerId?: unknown; targetSelectionStatus?: unknown } | null | undefined;
+    const acknowledgedTarget = !!target && String(target.playerId ?? '') === this.selectedPlayerId
+      && String(target.targetSelectionStatus ?? '') === 'SELECTED';
+    const moving = acknowledgedTarget || this.o66PathSquares.length > 1 || Number(acting?.currentMove) > 0;
+    return moving ? 'actor' : 'selection';
+  }
+
+  /** Owner 10-13 (coach JLeav, 1.0.198): "When clicking on an opposing player, I want to see my TZs, when clicking on
+   *  my player I want to see opponent TZs." In play (order66) 'both' means the zones RELEVANT to the selected / acting
+   *  player: always the other team's ('opposition' relative to that player), so an enemy shows mine and mine shows
+   *  the enemy's. The other modes keep their meaning: the actor gets the configured side, and an inspected non-actor
+   *  keeps its own team's zones ('friendly'). Classic (order66 off) keeps 'both' = both teams. */
+  private selectionTackleZoneMode(isActor: boolean): 'off' | 'opposition' | 'friendly' | 'both' {
+    if (this.order66 && this.tackleZoneMode === 'both') return 'opposition';
+    return isActor ? this.tackleZoneMode : 'friendly';
   }
 
   /** Owner 10-12: spectate / replay tackle zones for every tackle-zone-exerting player of the chosen team(s), drawn
@@ -11429,18 +11600,66 @@ export class PitchRenderer {
 
   private async loadD6FaceTextures(variant: D6FaceVariant): Promise<void> {
     const generation = ++this.d6FaceLoadGeneration;
-    const textures = await Promise.all(D6_FACE_VALUES.map(async (value) => {
-      try { return await Assets.load<Texture>(d6FaceUrl(value, variant)); }
+    const loadSet = (side?: BlockDieSide) => Promise.all(D6_FACE_VALUES.map(async (value) => {
+      try { return await Assets.load<Texture>(d6FaceUrl(value, variant, side)); }
       catch { return undefined; }
     }));
+    // Owner 10-13: 'team' = the neutral brushed-metal set (dice with no known owner) plus the home and away sets.
+    const [textures, home, away] = await Promise.all([loadSet(), variant === 'team' ? loadSet('home') : null, variant === 'team' ? loadSet('away') : null]);
     if (generation !== this.d6FaceLoadGeneration || variant !== this.d6FaceVariant) return;
     this.d6FaceTextures = textures;
+    this.d6FaceSideTextures = { ...(home ? { home } : {}), ...(away ? { away } : {}) };
     this.applyActionDiceFaces(); // the cube follows the PNG set (variant change or first load)
+  }
+  /** Owner 10-13: the D6 texture for a face of a die of `side` (the side set under 'team', else the plain set). */
+  private d6FaceTexture(value: number, side?: BlockDieSide | null): Texture | undefined {
+    return (side ? this.d6FaceSideTextures[side]?.[value - 1] : undefined) ?? this.d6FaceTextures[value - 1];
+  }
+  /** Owner 10-13: the displayed side of the team that rolled an action die shown over `square`: the player standing
+   *  there (the roller: dice are placed on the rolling player's square), else the acting player. Ownership comes from
+   *  the game model's teams, never from where the square sits on screen. */
+  private actionDieSide(square: readonly [number, number]): BlockDieSide | null {
+    return displayDiceSide(this.actionDieOwner(square), this.viewerDiceSeat());
+  }
+  /** The SERVER side behind actionDieSide. `ownerPlayerId` (when the caller knows who rolled, e.g. Ball & Chain, whose
+   *  die sits on the destination square) wins over the square's occupant. */
+  private actionDieOwner(square: readonly [number, number], ownerPlayerId?: string | null): ServerSide | null {
+    const game = this.game;
+    if (!game) return null;
+    if (ownerPlayerId) return playerServerSide(game, ownerPlayerId);
+    const occupant = game.fieldModel?.playerDataArray?.find((d) => d.playerCoordinate?.[0] === square[0] && d.playerCoordinate?.[1] === square[1])?.playerId;
+    const acting = (game.actingPlayer as { playerId?: unknown } | undefined)?.playerId;
+    return playerServerSide(game, occupant) ?? playerServerSide(game, acting);
+  }
+  private viewerDiceSeat(): ServerSide {
+    return this.friendlyIsHome ? 'home' : 'away';
+  }
+  /** Owner 10-13: the displayed side of a held action die, from its owner and the CURRENT seat (never cached). */
+  private actionDieRecordSide(die: ActionDieRecord): BlockDieSide | null {
+    return displayDiceSide(die.owner ?? null, this.viewerDiceSeat());
+  }
+  private actionDieFaceSet(die: ActionDieRecord): { faceSet?: BlockDieSide } {
+    const side = this.actionDieRecordSide(die);
+    return side && this.d6FaceSideTextures[side] ? { faceSet: side } : {};
+  }
+  /** Owner 10-13: a settled action die whose seat-relative colour changed (the local seat flipped while it was held)
+   *  is re-textured for the current seat. Called from the frame loop; a no-op while the side is unchanged. */
+  private refreshHeldActionDieFace(die: ActionDieRecord): void {
+    if (!die.face || die.id === undefined || die.tumbleUntil !== undefined) return;
+    const side = this.actionDieRecordSide(die);
+    if (side === (die.faceSide ?? null)) return;
+    const texture = this.d6FaceTexture(die.value ?? 1, side);
+    if (texture) die.face.texture = texture;
+    die.faceSide = side;
   }
 
   /** Owner 2026-07-04: enter/leave interactive setup. When active, taps route to
    *  onSetupClick and the LOS + wide zones shade green (legal) / red (illegal).
-   *  Home-relative: own half x 0..12, LOS x=12, wide columns y 0..3 & 11..14. */
+   *  Home-relative: own half x 0..12, LOS x=12, wide columns y 0..3 & 11..14.
+   *  Owner 10-13: each zone shades exactly the squares its verdict counts (upstream FieldCoordinateBounds): the LOS is
+   *  the 7 CENTRE squares (12,4)..(12,10) only, as validateSetup counts it. The LOS strip used to run the full 15 rows
+   *  and was drawn last, so a short line painted the x=12 squares of BOTH wide zones red (a legal wide zone read red),
+   *  and a full line painted an over-full wide zone's x=12 squares green. */
   setSetup(active: boolean, zones: { losOk: boolean; leftOk: boolean; rightOk: boolean } | null): void {
     this.setupActive = active;
     this.lastSetupZones = active ? zones : null;
@@ -11451,8 +11670,9 @@ export class PitchRenderer {
       return;
     }
     if (!zones || !this.app) return;
-    const shade = (squares: [number, number][], ok: boolean) => {
+    const shade = (zone: 'los' | 'left' | 'right', squares: [number, number][], ok: boolean) => {
       const g = new Graphics();
+      g.label = `setup-zone:${zone}:${ok ? 'ok' : 'bad'}`; // tests and the dev tools read the zone + verdict
       const color = ok ? 0x22c04a : 0xd83a3a;
       for (const [x, y] of squares) {
         const q = squareQuad(x, y);
@@ -11468,16 +11688,16 @@ export class PitchRenderer {
     const ownX: number[] = [];
     for (let x = 0; x <= SETUP_OWN_HALF_MAX_X; x++) ownX.push(x);
     const losSquares: [number, number][] = [];
-    for (let y = 0; y < PITCH_ROWS; y++) losSquares.push([SETUP_LOS_X, y]);
+    for (let y = WIDE_ZONE_WIDTH; y < PITCH_ROWS - WIDE_ZONE_WIDTH; y++) losSquares.push([SETUP_LOS_X, y]);
     const leftSquares: [number, number][] = [];
     const rightSquares: [number, number][] = [];
     for (const x of ownX) {
       for (let y = 0; y < WIDE_ZONE_WIDTH; y++) leftSquares.push([x, y]);
       for (let y = PITCH_ROWS - WIDE_ZONE_WIDTH; y < PITCH_ROWS; y++) rightSquares.push([x, y]);
     }
-    shade(leftSquares, zones.leftOk);
-    shade(rightSquares, zones.rightOk);
-    shade(losSquares, zones.losOk); // LOS drawn last so its row reads over the wide overlap
+    shade('left', leftSquares, zones.leftOk);
+    shade('right', rightSquares, zones.rightOk);
+    shade('los', losSquares, zones.losOk); // disjoint from the wide zones: no square carries two verdicts
   }
 
   /** Owner 09-09: re-shade the setup legality zones at the CURRENT geometry (after an orientation / flat / flip
@@ -14524,6 +14744,14 @@ export class PitchRenderer {
    *  NEXT TO the given square (upper-right corner), animated in/hold/out. Driven
    *  from the report stream on skill/agility rolls (pickup, dodge, GFI, catch…). */
   showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void {
+    this.showActionDieImpl(null, square, value, cause, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, rerollOfferPending, rerollOfferNotFailed, breatheFireReroll);
+  }
+  /** Owner 10-13: an action die whose roller is known and may not be the player on `square` (Ball & Chain shows its
+   *  direction die at the destination, which can hold an opposing victim). The die wears `ownerPlayerId`'s colour. */
+  showActionDieOwnedBy(ownerPlayerId: string | null, square: [number, number], value: number, cause?: string): void {
+    this.showActionDieImpl(ownerPlayerId, square, value, cause);
+  }
+  private showActionDieImpl(ownerPlayerId: string | null, square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void {
     // Owner 10-05: a reroll OFFER is open for this failed roll - the die and its cause marker stay until the offer
     // is answered (accepted: the die re-rolls in place and keeps its marker; declined / cleared: both fade together).
     // `opponentRerollPending` (the watching seat) additionally hides the needed roll on the FAILED plate, as before.
@@ -14548,7 +14776,8 @@ export class PitchRenderer {
     if (persisted) {
       // Rebuild the die body for the new value (textured face OR the vector fallback body) and re-caption it.
       for (const child of persisted.node.removeChildren()) child.destroy({ children: true });
-      const rebuilt = this.buildActionDieFace(value, persisted.cause);
+      persisted.faceSide = this.actionDieRecordSide(persisted);
+      const rebuilt = this.buildActionDieFace(value, persisted.cause, persisted.faceSide);
       for (const child of [...rebuilt.node.children]) persisted.node.addChild(child);
       rebuilt.node.destroy();
       persisted.face = rebuilt.face;
@@ -14614,7 +14843,9 @@ export class PitchRenderer {
         && now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS) && d.square && d.square[0] === x && d.square[1] === y);
       if (copy) { copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer; return; }
     }
-    const built = this.buildActionDieFace(value, cause);
+    const owner = this.actionDieOwner(square, ownerPlayerId);
+    const side = displayDiceSide(owner, this.viewerDiceSeat());
+    const built = this.buildActionDieFace(value, cause, side);
     const die = built.node;
     this.decorateActionDie(die, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
     // sit at the square's upper-right so it reads "next to" the action, not on it
@@ -14640,6 +14871,8 @@ export class PitchRenderer {
       face: built.face,
       causeTag: built.causeTag,
       causeTagHome: built.causeTag ? { x: built.causeTag.position.x, y: built.causeTag.position.y } : undefined,
+      owner,
+      faceSide: side,
     };
     this.actionDice.push(record);
     this.applyActionDieFaceMode(record);
@@ -14647,8 +14880,8 @@ export class PitchRenderer {
   }
 
   /** The d6 container plus handles to its face sprite (tumbled / hidden under the cube) and its cause badge. */
-  private buildActionDieFace(value: number, cause?: string): { node: Container; face: Sprite | null; causeTag: Container | null } {
-    const node = this.buildD6(value, cause);
+  private buildActionDieFace(value: number, cause?: string, side?: BlockDieSide | null): { node: Container; face: Sprite | null; causeTag: Container | null } {
+    const node = this.buildD6(value, cause, side);
     const first = node.children[0];
     const face = first instanceof Sprite ? first : null;
     const causeTag = cause && this.dieTagPosition !== 'off' && node.children.length > 1 ? (node.children[node.children.length - 1] as Container) : null;
@@ -14730,6 +14963,12 @@ export class PitchRenderer {
     const layer = this.actionDice3d;
     if (!layer || this.d6FaceSources().some((source) => !source)) return;
     void layer.updateFaceTextures(this.d6FaceSources());
+    // Owner 10-13: the home / away sets ride the cube too (a die whose set is missing keeps the plain faces)
+    for (const side of ['home', 'away'] as const) {
+      const set = this.d6FaceSideTextures[side];
+      const sources = set ? D6_FACE_VALUES.map((value) => (set[value - 1]?.source?.resource as ActionDieFaceSource | undefined) ?? null) : null;
+      if (sources && sources.every((source) => !!source)) void layer.updateFaceTextures(sources, side);
+    }
   }
 
   /** The PNG face hides under the cube while the 3D layer draws this die (Astra: a die past the pool cap keeps
@@ -14850,8 +15089,9 @@ export class PitchRenderer {
       content.addChild(text);
       cursor += text.width + 4;
     };
+    const side = this.actionDieSide(square); // owner 10-13: the passer's / catcher's team colour
     const addFace = (value: number) => {
-      const face = this.buildD6(value);
+      const face = this.buildD6(value, undefined, side);
       face.scale.set(0.64);
       face.position.set(cursor + 9, 0);
       content.addChild(face);
@@ -15094,8 +15334,12 @@ export class PitchRenderer {
     plate.anchor.set(0.5, 0.5);
     plate.position.set(-18, 0);
     node.addChild(plate);
-    const d1 = this.buildD6(rolls[0]); d1.scale.set(0.6); d1.position.set(2, 0);
-    const d2 = this.buildD6(rolls[1]); d2.scale.set(0.6); d2.position.set(18, 0);
+    // Owner 10-13: armour dice belong to the acting team (the blocker / fouler, or the faller's own team) - the same
+    // attribution as the dice statistics (diceStats.ts: injury -> attacker).
+    const acting = (this.game?.actingPlayer as { playerId?: unknown } | undefined)?.playerId;
+    const side = displayDiceSide(playerServerSide(this.game, acting), this.friendlyIsHome ? 'home' : 'away');
+    const d1 = this.buildD6(rolls[0], undefined, side); d1.scale.set(0.6); d1.position.set(2, 0);
+    const d2 = this.buildD6(rolls[1], undefined, side); d2.scale.set(0.6); d2.position.set(18, 0);
     node.addChild(d1, d2);
     if (broken) {
       node.addChild(new Graphics().roundRect(-27, 12, 54, 3, 1.5).fill({ color: 0xff5555, alpha: 0.95 }));
@@ -15633,11 +15877,11 @@ export class PitchRenderer {
   }
 
   /** Supplied D6 art, with a vector fallback while assets load. */
-  private buildD6(value: number, cause?: string): Container {
+  private buildD6(value: number, cause?: string, side?: BlockDieSide | null): Container {
     const c = new Container();
     const S = 28; // die size
     const r = S * 0.18;
-    const texture = this.d6FaceTextures[value - 1];
+    const texture = this.d6FaceTexture(value, side);
     if (texture) {
       const face = new Sprite(texture);
       face.anchor.set(0.5);
@@ -16123,10 +16367,11 @@ export class PitchRenderer {
       if (now - path.start < Math.max(1, path.squares.length - 1) * this.moveStepMs) { busy.push('pathWalk'); break; }
     }
     for (const throwMate of this.pendingTtmThrow.values()) {
-      if (now - throwMate.start < presentationMs(TTM_THROW_MS)) { busy.push('thrownPlayer'); break; }
+      if (now - throwMate.start < this.ttmFlightMs()) { busy.push('thrownPlayer'); break; }
     }
-    for (const scatter of this.pendingScatter.values()) {
-      if (now - scatter.start < Math.max(0, scatter.path.length - 1) * presentationMs(150)) { busy.push('scatter'); break; }
+    for (const [scatterId, scatter] of this.pendingScatter) {
+      const seg = scatterId === '__ball__' ? presentationMs(150) : this.ttmScatterSegMs();
+      if (now - scatter.start < Math.max(0, scatter.path.length - 1) * seg) { busy.push('scatter'); break; }
     }
     for (const trickster of this.pendingTrickster.values()) {
       if (now - trickster.start < presentationMs(320)) { busy.push('trickster'); break; }
@@ -18740,8 +18985,56 @@ export class PitchRenderer {
   }
   /** Owner 2026-07-07 (TTM): flag a thrown/kicked player's next move to HOP along this
    *  explicit scatter path (square list incl. start + end). Consumed once. */
+  /** The thrown player's flight on screen (Modern 1.2 s, Classic 640 ms). */
+  private ttmFlightMs(): number { return ttmThrowMs(!this.modernPitchPresentation); }
+  /** The model square of `playerId` right now (null off the pitch / unknown). */
+  private modelSquareOf(playerId: string): [number, number] | null {
+    const c = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
+    return isOnPitch(c ?? null) ? [c![0], c![1]] : null;
+  }
+  /** Owner 10-13 / Astra (MAJOR 2): after a thrown player's flight / bounce has ended on screen, is he still held on its
+   *  landing square? Only while the model has NOT moved him since the cue was armed (his landing coordinate waits behind
+   *  the flight in the store) and for at most TTM_LANDING_HOLD_CAP_MS past the end; Modern only. Any other model square
+   *  (the landing itself, or a newer authoritative coordinate) ends it at once. */
+  private ttmLandingHeld(armedAt: [number, number] | null | undefined, landing: [number, number], model: [number, number] | null, pastEndMs: number): boolean {
+    if (!this.modernPitchPresentation || pastEndMs >= TTM_LANDING_HOLD_CAP_MS) return false;
+    if (!model || (model[0] === landing[0] && model[1] === landing[1])) return false;
+    return !!armedAt && armedAt[0] === model[0] && armedAt[1] === model[1];
+  }
+  /** Astra (MAJOR 2): the landing hold's WAKE. refresh() is the only place that draws the hold, and nothing guarantees
+   *  another refresh (token reuse can skip it), so the movement ticker retires an ended flight / bounce whose hold no
+   *  longer applies (cap reached, or the model moved him) and redraws once: he then eases to his model square. */
+  private tickTtmLandingWake(now: number): void {
+    if (this.pendingTtmThrow.size === 0 && this.pendingScatter.size === 0) return;
+    let retired = false;
+    for (const [id, tt] of this.pendingTtmThrow) {
+      const pastEnd = now - tt.start - this.ttmFlightMs();
+      if (pastEnd < 0) continue;
+      if (this.ttmLandingHeld(tt.armedAt, tt.to, this.modelSquareOf(id), pastEnd)) continue;
+      const model = this.modelSquareOf(id);
+      if (model && model[0] === tt.to[0] && model[1] === tt.to[1] && pastEnd < TTM_LANDING_HOLD_CAP_MS) { this.pendingTtmThrow.delete(id); continue; }
+      this.pendingTtmThrow.delete(id);
+      retired = true;
+    }
+    for (const [id, sc] of this.pendingScatter) {
+      if (id === '__ball__' || sc.path.length < 2) continue;
+      const end = sc.path[sc.path.length - 1]!;
+      const pastEnd = now - sc.start - (sc.path.length - 1) * this.ttmScatterSegMs();
+      if (pastEnd < 0) continue;
+      if (this.ttmLandingHeld(sc.armedAt, end, this.modelSquareOf(id), pastEnd)) continue;
+      const model = this.modelSquareOf(id);
+      if (model && model[0] === end[0] && model[1] === end[1] && pastEnd < TTM_LANDING_HOLD_CAP_MS) { this.pendingScatter.delete(id); continue; }
+      this.pendingScatter.delete(id);
+      retired = true;
+    }
+    if (retired) this.refresh();
+  }
+  /** One thrown-player scatter / bounce hop (Modern: the loose-ball hop; Classic: its quick hop). */
+  private ttmScatterSegMs(): number {
+    return this.modernPitchPresentation ? ttmBounceHopMs(this.moveStepBaseMs) : presentationMs(TTM_SCATTER_CLASSIC_SEG_MS);
+  }
   markScatter(playerId: string, path: [number, number][]): void {
-    this.pendingScatter.set(playerId, { path, start: performance.now() }); // re-armed each setGame
+    this.pendingScatter.set(playerId, { path, start: performance.now(), armedAt: this.modelSquareOf(playerId) }); // re-armed each setGame
   }
 
   /** Single projectile-throw entry (owner 2026-07-14 — folds the pass / Throw-Team-Mate / bomb rails into
@@ -18785,10 +19078,10 @@ export class PitchRenderer {
           // true final landing square.
           const now = performance.now();
           const active = this.pendingTtmThrow.get(thrownId);
-          if (active && now - active.start < presentationMs(TTM_THROW_MS)) {
-            this.pendingTtmThrow.set(thrownId, { from: active.from, to, start: active.start });
+          if (active && now - active.start < this.ttmFlightMs()) {
+            this.pendingTtmThrow.set(thrownId, { from: active.from, to, start: active.start, armedAt: active.armedAt ?? null });
           } else {
-            this.pendingTtmThrow.set(thrownId, { from, to, start: now });
+            this.pendingTtmThrow.set(thrownId, { from, to, start: now, armedAt: this.modelSquareOf(thrownId) });
           }
         }
         break;

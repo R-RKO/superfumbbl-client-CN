@@ -1,5 +1,5 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
-import { isD6FaceValue, type D6FaceValue } from '@fumbbl40k/ffb-pitch';
+import { isD6FaceValue, playerServerSide, teamServerSide, type D6FaceValue, type ServerSide } from '@fumbbl40k/ffb-pitch';
 import type { D6LogToken } from './d6Log';
 import { isBlockDieFaceValue, type BlockDieLogToken } from './blockDieLog';
 import type { LogNameToken } from './logNames';
@@ -62,8 +62,22 @@ const FAILS = `${TAG_MARK}Ffails${TAG_END}`;
 // the faces show, side by side.
 function d6Pair(value: unknown): string { return `${hiddenTag('[')}${d6List(value, hiddenTag(', '))}${hiddenTag(']')}`; }
 
-function d6(value: unknown, kind: D6LogToken['kind'] = 'roll'): string {
-  return isD6FaceValue(value) ? `${D6_MARK}${kind === 'target' ? 'T' : 'R'}${value}${D6_END}` : String(value ?? '?');
+/** Per-die owner (owner 10-13, home/away dice): `home` / `away` pins THIS die to that server side, `none` pins it
+ *  neutral; omitted = the report-level owner (reportDiceOwner) applies. Encoded as one char between kind and face. */
+type D6Owner = ServerSide | 'none';
+function d6(value: unknown, kind: D6LogToken['kind'] = 'roll', owner?: D6Owner | null): string {
+  const mark = owner === 'home' ? 'H' : owner === 'away' ? 'A' : owner === 'none' ? 'N' : '';
+  return isD6FaceValue(value) ? `${D6_MARK}${kind === 'target' ? 'T' : 'R'}${mark}${value}${D6_END}` : String(value ?? '?');
+}
+/** The die's own player's side, or neutral when the player is unknown (never the report-level fallback). */
+function playerDieOwner(game: GameJson | null, playerId: unknown): D6Owner {
+  return playerServerSide(game, playerId) ?? 'none';
+}
+function otherSide(side: ServerSide | null): D6Owner {
+  return side === 'home' ? 'away' : side === 'away' ? 'home' : 'none';
+}
+function opposingSide(side: ServerSide | null): ServerSide | null {
+  return side === 'home' ? 'away' : side === 'away' ? 'home' : null;
 }
 
 function d6List(value: unknown, separator = ', '): string {
@@ -94,45 +108,48 @@ export interface ReportDisplay {
   tags: LogTagToken[];
 }
 
-function decodeDisplay(marked: string): ReportDisplay {
+/** `owner` = the report-level dice owner (reportDiceOwner); a die marked H / A / N overrides it for that die alone. */
+function decodeDisplay(marked: string, owner: ServerSide | null = null): ReportDisplay {
   const d6: D6LogToken[] = [];
   const blockDice: BlockDieLogToken[] = [];
   const names: LogNameToken[] = [];
   const tags: LogTagToken[] = [];
   let text = '';
   let cursor = 0;
-  const marker = /([RT])([1-6])|([1-6])|([HA])([^]*)|([TSWNF])([^]*)/g;
+  const marker = /([RT])([HAN]?)([1-6])|([1-6])|([HA])([^]*)|([TSWNF])([^]*)/g;
   for (let match = marker.exec(marked); match; match = marker.exec(marked)) {
     text += marked.slice(cursor, match.index);
-    if (match[6]) {
+    if (match[7]) {
       // Owner 08-18: a kind-tagged decoration run -- marks dropped, run recorded by offset.
-      const run = match[7] ?? '';
+      const run = match[8] ?? '';
       if (run) tags.push({
         index: text.length,
         length: run.length,
-        kind: match[6] === 'T' ? 'title' : match[6] === 'S' ? 'armour' : match[6] === 'N' ? 'stat-down-ni'
-          : match[6] === 'F' ? 'fail' : 'hidden',
+        kind: match[7] === 'T' ? 'title' : match[7] === 'S' ? 'armour' : match[7] === 'N' ? 'stat-down-ni'
+          : match[7] === 'F' ? 'fail' : 'hidden',
       });
       text += run;
-    } else if (match[4]) {
+    } else if (match[5]) {
       // #157-v2: a tagged player name -- the marks are dropped and the run is recorded by offset.
       // Owner 08-19: the run is `playerId SEP name`; the id is stripped with the marks and rides
       // the token (additive field) so the view can make the name clickable (locate cue).
-      const run = match[5] ?? '';
+      const run = match[6] ?? '';
       const sep = run.indexOf(NAME_ID_SEP);
       const name = sep >= 0 ? run.slice(sep + 1) : run;
       const playerId = sep > 0 ? run.slice(0, sep) : undefined;
-      if (name) names.push({ index: text.length, length: name.length, team: match[4] === 'H' ? 'home' : 'away', ...(playerId ? { playerId } : {}) });
+      if (name) names.push({ index: text.length, length: name.length, team: match[5] === 'H' ? 'home' : 'away', ...(playerId ? { playerId } : {}) });
       text += name;
-    } else if (match[3]) {
-      const value = Number(match[3]);
+    } else if (match[4]) {
+      const value = Number(match[4]);
       const result = face(value);
       blockDice.push({ index: text.length, value: value as BlockDieLogToken['value'], result });
       text += result;
     } else {
-      const value = Number(match[2]) as D6FaceValue;
-      d6.push({ index: text.length, value, kind: match[1] === 'T' ? 'target' : 'roll' });
-      text += match[2];
+      const value = Number(match[3]) as D6FaceValue;
+      // Owner 10-13: a die's own H / A / N mark beats the report-level owner; N = explicitly neutral.
+      const team = match[2] === 'H' ? 'home' : match[2] === 'A' ? 'away' : match[2] === 'N' ? null : owner;
+      d6.push({ index: text.length, value, kind: match[1] === 'T' ? 'target' : 'roll', ...(team ? { team } : {}) });
+      text += match[3];
     }
     cursor = match.index + match[0].length;
   }
@@ -443,7 +460,7 @@ export function formatRecoveryLines(recoveries: readonly Report[], game: GameJso
   const back: string[] = [];
   const stay: string[] = [];
   for (const value of recoveries) {
-    const entry = `${pn(game, value.playerId)} (${d6(value.roll)})`;
+    const entry = `${pn(game, value.playerId)} (${d6(value.roll, 'roll', playerDieOwner(game, value.playerId))})`;
     (value.recovering ? back : stay).push(entry);
   }
   const lines: string[] = [];
@@ -467,7 +484,7 @@ function turnEndLines(r: Report, g: GameJson | null): string[] {
   if (rulesVersion(g) === 'BB2016') {
     for (const value of heat) {
       const exhaustion = value as Record<string, unknown>;
-      heatParts.push(`${pn(g, exhaustion.playerId)} heat exhaustion ${d6(exhaustion.roll)}`);
+      heatParts.push(`${pn(g, exhaustion.playerId)} heat exhaustion ${d6(exhaustion.roll, 'roll', playerDieOwner(g, exhaustion.playerId))}`);
     }
   } else if (heat.length && r.heatRoll != null) {
     // BB2020/25 heatRoll is the D3 fainting count; entry rolls are zero.
@@ -674,7 +691,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const rolls = Array.isArray(r.rolls) ? r.rolls : [];
     const defs = Array.isArray(r.defectingArray) ? (r.defectingArray as unknown[]) : [];
     if (!ids.length) return 'No players defect after the concession';
-    return `Defecting players: ${ids.map((id, i) => `${pn(g, id)} ${d6(rolls[i])} (${defs[i] ? 'leaves' : 'stays'})`).join(', ')}`;
+    return `Defecting players: ${ids.map((id, i) => `${pn(g, id)} ${d6(rolls[i], 'roll', playerDieOwner(g, id))} (${defs[i] ? 'leaves' : 'stays'})`).join(', ')}`;
   },
   // #140: post-game winnings (both teams' gold). ReportWinnings{winningsHome, winningsAway};
   // ReportWinningsRoll adds the D6 per team.
@@ -792,8 +809,9 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // COMPLETENESS SWEEP · tranche 2 — star/special one-off log lines. (catchOfTheDay, allYouCanEat,
   // brilliantCoachingReRoll were initially deferred here but their classes DID exist — built in tranche 4 below.)
   indomitable: (r, g) => `${pn(g, r.playerId)} stays up (Indomitable)`,
+  // Owner 10-13: self-inflicted Old Pro rerolls the OPPONENT's die, so those dice wear the opponent's colour.
   oldPro: (r, g) => r.selfInflicted
-    ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to reroll ${d6(r.oldRoll)} into ${d6(r.roll)}`
+    ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to reroll ${d6(r.oldRoll, 'roll', otherSide(playerServerSide(g, r.playerId)))} into ${d6(r.roll, 'roll', otherSide(playerServerSide(g, r.playerId)))}`
     : `${pn(g, r.playerId)} uses Old Pro: rerolls ${d6(r.oldRoll)} into ${d6(r.roll)}`,
   pickMeUp: (r, g) => `${pn(g, r.playerId)} | Pick Me Up: ${hiddenTag('rolls ')}${d6(r.roll)}${outcomeSuffix(r.successful, r.reRolled)}`,
   // Kildash fix ("Dodgey snack stats not showing"): the roll only decides WHO is affected. Upstream ReportDodgySnackRoll carries
@@ -1093,13 +1111,16 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const home = g?.teamHome.teamName ?? 'Home';
     const away = g?.teamAway.teamName ?? 'Away';
     const version = rulesVersion(g);
-    const roll = version === 'BB2020' || version === 'BB2025' ? d6 : (value: unknown) => String(value ?? '?');
+    // Owner 10-13: each team's die wears that team's colour (the report's teamId is the WINNER, not the roller).
+    const roll = version === 'BB2020' || version === 'BB2025'
+      ? (value: unknown, side: ServerSide) => d6(value, 'roll', side)
+      : (value: unknown) => String(value ?? '?');
     let winner = typeof r.teamId === 'string' && r.teamId ? teamName(g, r.teamId) : 'both teams';
     if (version === 'BB2016') {
       winner = r.homeGainsReRoll && r.awayGainsReRoll ? 'both teams'
         : r.homeGainsReRoll ? home : r.awayGainsReRoll ? away : 'neither team';
     }
-    return `Brilliant Coaching | ${home} ${roll(r.rollHome)}, ${away} ${roll(r.rollAway)} | ${winner} gain a reroll`;
+    return `Brilliant Coaching | ${home} ${roll(r.rollHome, 'home')}, ${away} ${roll(r.rollAway, 'away')} | ${winner} gain a reroll`;
   },
   cheeringFans: (r, g) => {
     const home = g?.teamHome.teamName ?? 'Home';
@@ -1213,12 +1234,46 @@ function seriousInjuryLabel(value: unknown): string {
   return `${label} (${niStatDownTag('NI')})`;
 }
 
+/**
+ * Owner 10-13 (home/away dice): the SERVER side of the team that owns a report's d6 dice, or null when the dice have
+ * no single owner (weather, kick-off table, winnings, two-team rolls). The same attribution as the dice statistics
+ * (diceStats.ts): an injury's armour / injury dice belong to the attacker's team; a block roll to the chooser; any
+ * other roll to the rolling player's team, else the report's team.
+ */
+// Reports whose UNMARKED dice stay neutral (kick-off table, weather, fans, winnings). turnEnd (KO recovery, heat) and
+// defectingPlayers mark each die with its own player's side and extraReRoll each team's die with that team; a marked
+// die always wins over this report-level default (decodeDisplay).
+const UNOWNED_DICE_REPORTS = new Set(['turnEnd', 'weather', 'kickoffResult', 'winningsRoll', 'kickoffDodgySnack', 'penaltyShootout',
+  'winnings', 'dedicatedFans', 'cheeringFans', 'spectators', 'kickoffPitchInvasion', 'defectingPlayers', 'extraReRoll']);
+export function reportDiceOwner(report: Report, game: GameJson | null): ServerSide | null {
+  const id = String(report.reportId ?? '');
+  if (UNOWNED_DICE_REPORTS.has(id)) return null;
+  if (id === 'blockRoll' || id === 'blockReRoll') return teamServerSide(game, report.choosingTeamId);
+  if (id === 'injury') return playerServerSide(game, report.attackerId);
+  // Shadowing / Tentacles (upstream dice stats): BB2020 / BB2025 the roll is `defenderId`'s (the shadower / holder,
+  // mixed ReportTentaclesShadowingRoll TEAM_FOR_PLAYER); BB2016 it is the OPPOSING player's escape roll (bb2016
+  // ReportTentaclesShadowingRoll OPPONENT_TEAM_FOR_PLAYER of defenderId).
+  if (id === 'tentaclesShadowingRoll') {
+    const defender = playerServerSide(game, report.defenderId);
+    return rulesVersion(game) === 'BB2016' ? opposingSide(defender) : defender;
+  }
+  // A caught bomb's explosion die belongs to the catcher's OPPONENT (ReportBombExplodesAfterCatch
+  // OPPONENT_TEAM_FOR_PLAYER of catcherId: the thrower's side).
+  if (id === 'bombExplodesAfterCatch') return opposingSide(playerServerSide(game, report.catcherId));
+  // Ball & Chain's die is the acting Fanatic's.
+  if (id === 'scatterPlayer') {
+    const ballAndChain = actingPlayerHasBallAndChain(game);
+    if (ballAndChain) return playerServerSide(game, ballAndChain);
+  }
+  return playerServerSide(game, report.playerId) ?? teamServerSide(game, report.teamId);
+}
 export function formatReportDisplay(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay {
+  const owner = reportDiceOwner(report, game);
   const id = String(report.reportId ?? 'unknown');
   const formatter = formatters[id];
   if (formatter) {
     try {
-      return decodeDisplay(formatter(report, game, context));
+      return decodeDisplay(formatter(report, game, context), owner);
     } catch {
       // fall through to the generic line
     }
@@ -1241,7 +1296,7 @@ export function formatReportDisplay(report: Report, game: GameJson | null, conte
       return `${humanize(key)} ${JSON.stringify(report[key]).replace(/"/g, '')}`;
     })
     .join(', ');
-  return decodeDisplay(extras ? `${humanize(id)} | ${extras}` : humanize(id));
+  return decodeDisplay(extras ? `${humanize(id)} | ${extras}` : humanize(id), owner);
 }
 
 export function formatReport(report: Report, game: GameJson | null, context = legacyReportLogContext): string {
@@ -1255,7 +1310,7 @@ export function formatReport(report: Report, game: GameJson | null, context = le
 export function formatReportLines(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay[] {
   if (String(report.reportId ?? '') === 'turnEnd') {
     try {
-      return turnEndLines(report, game).map(decodeDisplay);
+      return turnEndLines(report, game).map((line) => decodeDisplay(line));
     } catch {
       // fall through to the single-line generic path
     }
@@ -1266,7 +1321,10 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   if (formatter) {
     try {
       const raw = formatter(report, game, context);
-      if (raw.includes('\n')) return raw.split('\n').filter((line) => line.length > 0).map(decodeDisplay);
+      if (raw.includes('\n')) {
+        const owner = reportDiceOwner(report, game);
+        return raw.split('\n').filter((line) => line.length > 0).map((line) => decodeDisplay(line, owner));
+      }
     } catch {
       // fall through to the single-line generic path
     }

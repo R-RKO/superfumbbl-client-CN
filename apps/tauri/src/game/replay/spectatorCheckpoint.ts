@@ -429,7 +429,8 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     for (const tokens of [entry.d6, entry.blockDice, entry.names, entry.tags]) for (const token of tokens) {
       if (!object(token) || !Number.isInteger(token.index) || Number(token.index) < 0 || Number(token.index) >= entry.text.length) fail(15);
     }
-    if (entry.d6.some((t) => !keys(t, ['index', 'value', 'kind']) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || !oneOf(D6_LOG_TOKEN_KINDS, t.kind))
+    // owner 10-13: an optional `team` (the server side that rolled the die) rides a d6 token
+    if (entry.d6.some((t) => !(keys(t, ['index', 'value', 'kind']) || (keys(t, ['index', 'value', 'kind', 'team']) && oneOf(TEAM_SIDES, (t as { team?: unknown }).team))) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || !oneOf(D6_LOG_TOKEN_KINDS, t.kind))
       || entry.blockDice.some((t) => !keys(t, ['index', 'value', 'result']) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || typeof t.result !== 'string')
       || entry.tags.some((t) => !keys(t, ['index', 'length', 'kind']) || !Number.isInteger(t.length) || t.length < 0 || t.index + t.length > entry.text.length
         || !oneOf(LOG_TAG_KINDS, t.kind))
@@ -556,7 +557,10 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   if (blockCard !== null) {
     const bools = ['pickable', 'opponentRerollPending', 'chooserTeamRerollAvailable', 'teamRR', 'mascot', 'mascotTrr', 'pro', 'brawler', 'consummate'] as const;
     const labels = ['consummateLabel', 'singleBlockDie', 'singleBlockDieLabel', 'multiBlockDice', 'multiBlockDiceLabel', 'singleSkull', 'singleSkullLabel'] as const;
-    if (!object(blockCard) || !keys(blockCard, ['dice', 'nrOfDice', ...bools, ...labels]) || !numbers(blockCard.dice) || !finite(blockCard.nrOfDice)
+    // owner 10-13: `choosingTeamId` (the dice owner) is optional so checkpoints written before it existed still validate
+    const cardKeys = ['dice', 'nrOfDice', ...bools, ...labels];
+    if (!object(blockCard) || !(keys(blockCard, cardKeys) || (keys(blockCard, [...cardKeys, 'choosingTeamId']) && nullableString((blockCard as { choosingTeamId?: unknown }).choosingTeamId)))
+      || !numbers(blockCard.dice) || !finite(blockCard.nrOfDice)
       || !bools.every((k) => typeof blockCard[k] === 'boolean') || !labels.every((k) => nullableString(blockCard[k]))) fail(40);
   }
   const card = p.reRollCard;

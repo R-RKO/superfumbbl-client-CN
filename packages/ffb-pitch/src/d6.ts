@@ -1,8 +1,13 @@
+import type { BlockDieSide } from './blockDieSurface';
+
 export type D6FaceValue = 1 | 2 | 3 | 4 | 5 | 6;
-export type D6FaceVariant = 'brushed-metal' | 'black';
+/** Owner 10-13: 'team' = "Brushed metal, home and away": the blue set for a die of the displayed home side, the red
+ *  set for away (d6-team-{home,away}-face-N.png, scripts/compose-brushed-dice.py). A die with no known owner keeps the
+ *  neutral brushed-metal face. */
+export type D6FaceVariant = 'brushed-metal' | 'black' | 'team';
 
 export const D6_FACE_VALUES: readonly D6FaceValue[] = [1, 2, 3, 4, 5, 6];
-export const D6_FACE_VARIANTS: readonly D6FaceVariant[] = ['brushed-metal', 'black'];
+export const D6_FACE_VARIANTS: readonly D6FaceVariant[] = ['brushed-metal', 'black', 'team'];
 export const DEFAULT_D6_FACE_VARIANT: D6FaceVariant = 'brushed-metal';
 
 export function isD6FaceValue(value: unknown): value is D6FaceValue {
@@ -12,10 +17,13 @@ export function isD6FaceValue(value: unknown): value is D6FaceValue {
 export function d6FaceUrl(
   value: D6FaceValue,
   variant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT,
+  side?: BlockDieSide | null,
 ): string {
-  const filename = variant === 'brushed-metal'
-    ? `d6-brushed-metal-face-${value}.png`
-    : `d6-face-${value}.png`;
+  const filename = variant === 'team' && (side === 'home' || side === 'away')
+    ? `d6-team-${side}-face-${value}.png`
+    : variant === 'black'
+      ? `d6-face-${value}.png`
+      : `d6-brushed-metal-face-${value}.png`;
   return new URL(`../assets/d6/${filename}`, import.meta.url).href;
 }
 

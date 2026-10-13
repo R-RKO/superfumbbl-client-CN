@@ -1,4 +1,4 @@
-import { isLeftWideColumn, isRightWideColumn, MAX_PER_WIDE_ZONE, MIN_ON_LOS, type SetupValidation } from '@fumbbl40k/ffb-pitch';
+import { isLeftWideColumn, isRightWideColumn, type SetupValidation } from '@fumbbl40k/ffb-pitch';
 
 /** Owner 10-03: "If the user has setup incorrectly, the modal should pop and indicate what they did wrong with arrows
  *  on offending players." One line per failed setup condition (the same four the setup pane lists) and the placed
@@ -30,21 +30,21 @@ export function setupProblems(
   // Astra review 10-03: an inert player (Solid Defence / Dwarfen Wisdom lock) cannot be moved, so it is never pointed at.
   const placed = players.filter((player): player is { playerId: string; coord: [number, number] } => !!player.coord && player.inert !== true);
   if (!validation.losOk) {
-    const needed = Math.min(MIN_ON_LOS, validation.available);
-    problems.push(`Only ${validation.onLos} on the line of scrimmage. You need ${needed} in the centre (the wide zones don't count).`);
+    // The server's own minimum: min(minPlayersOnLos, available players without Keen Players).
+    problems.push(`Only ${validation.onLos} on the line of scrimmage. You need ${validation.requiredOnLos} in the centre (the wide zones don't count).`);
   }
   if (!validation.leftOk) {
-    problems.push(`${validation.leftWide} players in the ${wideZoneWord('left', wordsSwapped)} wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
+    problems.push(`${validation.leftWide} players in the ${wideZoneWord('left', wordsSwapped)} wide zone. The limit is ${validation.maxPerWideZone}.`);
     for (const player of placed) if (isLeftWideColumn(player.coord[1])) offenders.add(player.playerId);
   }
   if (!validation.rightOk) {
-    problems.push(`${validation.rightWide} players in the ${wideZoneWord('right', wordsSwapped)} wide zone. The limit is ${MAX_PER_WIDE_ZONE}.`);
+    problems.push(`${validation.rightWide} players in the ${wideZoneWord('right', wordsSwapped)} wide zone. The limit is ${validation.maxPerWideZone}.`);
     for (const player of placed) if (isRightWideColumn(player.coord[1])) offenders.add(player.playerId);
   }
   if (!validation.countOk) {
     problems.push(validation.placed < validation.required
       ? `${validation.placed} of ${validation.required} players placed. Field ${validation.required - validation.placed} more.`
-      : `${validation.placed} players placed. The limit is ${validation.required}: send ${validation.placed - validation.required} back to reserves.`);
+      : `${validation.placed} players placed. The limit is ${validation.maxOnPitch}: send ${validation.placed - validation.maxOnPitch} back to reserves.`);
   }
   return { problems, offenders: [...offenders] };
 }

@@ -21,6 +21,8 @@ export const ui = reactive({
   browserOpen: false,
   /** Owner 10-06: the first-launch setup wizard re-run from Settings is open over the live shell (it owns the keyboard). */
   setupWizardRerunOpen: false,
+  /** Owner 10-13: SpectateView's bug-report modal is open (it owns every key and pad input; the dev console stands down). */
+  reportOpen: false,
   /** Owner 10-06: the client walkthrough (components/ClientTour.vue) is running - the FUMBBL.COM site stays hidden. */
   clientTourActive: false,
   /** Owner 10-08: the FUMBBL site is kept open in the floating window (components/FumbblFloat.vue) whenever the

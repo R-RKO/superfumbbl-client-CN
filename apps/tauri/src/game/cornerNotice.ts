@@ -5,7 +5,7 @@
  */
 import { ref } from 'vue';
 
-export type CornerNoticeKind = 'switch' | 'disconnect' | 'connect' | 'nonstandard' | 'player-cards';
+export type CornerNoticeKind = 'switch' | 'disconnect' | 'connect' | 'nonstandard' | 'player-cards' | 'report';
 export const cornerNotice = ref<{ kind: CornerNoticeKind; text: string } | null>(null);
 export const CORNER_NOTICE_MS = 1500;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -20,7 +20,7 @@ export function showCornerNotice(kind: CornerNoticeKind, text: string, durationM
   cornerNotice.value = { kind, text };
   timer = setTimeout(hideCornerNotice, durationMs);
 }
-/** Only the controller's own notices (the box was unticked): a player-cards notice stays. */
+/** Only the controller's own notices (the box was unticked): a player-cards or report notice stays. */
 export function hideControllerNotices(): void {
-  if (cornerNotice.value && cornerNotice.value.kind !== 'player-cards') hideCornerNotice();
+  if (cornerNotice.value && cornerNotice.value.kind !== 'player-cards' && cornerNotice.value.kind !== 'report') hideCornerNotice();
 }

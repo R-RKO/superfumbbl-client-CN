@@ -278,23 +278,7 @@ function validationForOptions(
   available: number,
   opts: TemplateLegalityOptions,
 ): SetupValidation {
-  const base = validateSetup(coords, available);
-  const required = Math.min(available, opts.maxPlayersOnField);
-  const requiredOnLos = available < opts.minPlayersOnLos ? required : opts.minPlayersOnLos;
-  const losOk = base.onLos >= requiredOnLos;
-  const leftOk = base.leftWide <= opts.maxPlayersInWideZone;
-  const rightOk = base.rightWide <= opts.maxPlayersInWideZone;
-  const countOk = base.placed === required;
-  return {
-    ...base,
-    available,
-    required,
-    losOk,
-    leftOk,
-    rightOk,
-    countOk,
-    valid: losOk && leftOk && rightOk && countOk,
-  };
+  return validateSetup(coords, available, { limits: opts });
 }
 
 export function resolveTemplate(

@@ -28,7 +28,7 @@ export const DIALOG_REGISTRY = {
   coinChoice: d('existing-dialog', 'DialogCoinChoiceHandler'),
   reRoll: d('existing-dialog', 'DialogReRollHandler'),
   reRollProperties: d('existing-dialog', 'DialogReRollPropertiesHandler'),
-  reRollForTargets: d('unhandled', 'DialogReRollForTargetsHandler'),
+  reRollForTargets: d('existing-dialog', 'DialogReRollForTargetsHandler'),
   reRollBlockForTargets: d('unhandled', 'DialogReRollBlockForTargetsHandler'),
   skillUse: d('existing-dialog', 'DialogSkillUseHandler'),
   progressBar: d('client-local-only', 'DialogManager client UI'),
@@ -100,7 +100,7 @@ export const DIALOG_REGISTRY = {
   buyPrayersAndInducements: d('existing-dialog', 'DialogBuyPrayersAndInducementsHandler'),
   blockRollProperties: d('existing-dialog', 'DialogBlockRollPropertiesHandler'),
   reRollBlockForTargetsProperties: d('existing-dialog', 'DialogReRollBlockForTargetsPropertiesHandler'),
-  opponentBlockSelectionProperties: d('unhandled', 'DialogOpponentBlockSelectionPropertiesHandler'),
+  opponentBlockSelectionProperties: d('existing-dialog', 'DialogOpponentBlockSelectionPropertiesHandler'),
   pickUpChoice: d('existing-dialog', 'DialogPickUpChoiceHandler'),
   selectKeyword: d('existing-dialog', 'DialogSelectKeywordHandler'),
   selectPosition: d('existing-dialog', 'DialogSelectPositionHandler'), // owner 10-05 (g1950414): Raise the Dead position pick -> clientPositionSelection (store.ts)

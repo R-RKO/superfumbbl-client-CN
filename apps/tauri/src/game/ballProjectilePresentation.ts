@@ -82,7 +82,7 @@ export interface BallProjectilePresentation {
    *  was not shown), `with` = with this command's scatter, `after` = once this command's flight (KICK / pass) lands. */
   ballOut: { cue: BallOutCue; phase: 'before' | 'with' | 'after' } | null;
   ballOutContext: BallOutContext;
-  playerScatter: { playerId: string; path: [number, number][] } | null;
+  playerScatter: { playerId: string; path: [number, number][]; ttmBounce?: boolean } | null;
   bomb: { square: [number, number]; sound: 'explode' } | null;
   fireball: { square: [number, number]; sound: 'fireball' } | null;
   throw: { kind: ThrowPresentationKind; from: [number, number]; to: [number, number]; fromPoint?: [number, number]; thrownId?: string; sound: 'throw' | 'woooaaah' } | null;
@@ -112,6 +112,10 @@ export interface BallOutContext {
   kickScatterReport?: Record<string, unknown> | null;
   /** The last scatterBall direction and the square it reached (a throw-in whose leaving hop was not shown). */
   lastScatter?: { square: [number, number]; dir: [number, number] } | null;
+  /** Owner 10-13: the thrown player of the current activation's Throw Team-Mate flight (his second throwTeamMate
+   *  animation is the landing bounce, a hop). Kept here, outside the checkpoint schema: after a seek it starts empty,
+   *  which only plays a bounce as a flight. */
+  ttmFlightThrownId?: string | null;
 }
 export const createBallOutContext = (): BallOutContext => ({ pendingBallOut: null, ballOutExit: null, kickScatterReport: null, lastScatter: null });
 
@@ -137,6 +141,8 @@ export function ballProjectilePresentation(
     priorBall?: readonly number[] | null;
     /** Owner 10-07: the review presenter's ball-out state (omitted = no ball-out tracking across commands). */
     ballOut?: Readonly<BallOutContext>;
+    /** Owner 10-13 (Modern): a TTM landing bounce is a hop after the flight, not a second flight. */
+    ttmBounceHop?: boolean;
   },
 ): BallProjectilePresentation {
   const nextContext: BallProjectileContext = {
@@ -226,6 +232,12 @@ export function ballProjectilePresentation(
     ?? (game as { defenderId?: unknown }).defenderId ?? '');
   const playerScatterCoveredByThrow = scatterPlayer?.isScatter === true
     && animationType === 'throwTeamMate' && String(animation?.thrownPlayerId ?? '') === thrownPlayerId;
+  // Owner 10-13 ("Bounce should occur after the flight"): the second throwTeamMate animation of the same activation's
+  // throw (scatterPlayer isScatter=false) is the bounce: the player-scatter hop below, no second flight.
+  if (!String(game.actingPlayer?.playerId ?? '')) outContext.ttmFlightThrownId = null;
+  const ttmBounce = context.ttmBounceHop === true && !!scatterPlayer && !playerScatterCoveredByThrow
+    && animationType === 'throwTeamMate' && !!thrownPlayerId && String(animation?.thrownPlayerId ?? '') === thrownPlayerId
+    && outContext.ttmFlightThrownId === thrownPlayerId;
   const sounds: BallProjectilePresentation['sounds'] = [];
   if (animationType === 'spellZap' || animationType === 'spellLightning') sounds.push({ id: 'zap', when: 'immediate' });
   if (animationType === 'thenIStartedBlastin') sounds.push({ id: 'blunder', when: 'immediate' });
@@ -253,12 +265,13 @@ export function ballProjectilePresentation(
     outContext.ballOutExit = null;
     outContext.lastScatter = null;
   }
-  const throwCue = kind && from && to ? {
+  const throwCue = kind && from && to && !(kind === 'throwTeamMate' && ttmBounce) ? {
     kind, from: [from[0], from[1]] as [number, number], to: [to[0], to[1]] as [number, number],
     ...(fromPoint ? { fromPoint } : {}),
     ...(thrownPlayerId ? { thrownId: thrownPlayerId } : {}),
     sound: (kind === 'throwTeamMate' ? 'woooaaah' : 'throw') as 'throw' | 'woooaaah',
   } : null;
+  if (kind === 'throwTeamMate' && throwCue && thrownPlayerId) outContext.ttmFlightThrownId = thrownPlayerId;
   if (kind === 'pass' && throwCue && outContext.pendingBallOut && !hasThrowInReport(reports)) {
     const landing = to ? [to[0], to[1]] as [number, number] : outContext.pendingBallOut.path.at(-1)!;
     ballOut = { cue: anchorBallOutAt(outContext.pendingBallOut, landing), phase: 'after' };
@@ -325,7 +338,7 @@ export function ballProjectilePresentation(
     ballOut,
     ballOutContext: outContext,
     playerScatter: playerPath && thrownPlayerId && !playerScatterCoveredByThrow && !ballAndChainScatter
-      ? { playerId: thrownPlayerId, path: playerPath } : null,
+      ? { playerId: thrownPlayerId, path: playerPath, ...(ttmBounce ? { ttmBounce: true } : {}) } : null,
     bomb: animationType === 'bombExplosion' && square ? { square, sound: 'explode' } : null,
     fireball: animationType === 'spellFireball' && square ? { square, sound: 'fireball' } : null,
     throw: throwCue,

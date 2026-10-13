@@ -100,7 +100,11 @@ export function auraEmitters(game: GameJson): { playerId: string; square: Square
   for (const p of placedPlayers(game)) {
     const skills = skillsOf(p.player);
     for (const skill of AURA_SKILLS) {
-      if (skills.has(skill)) out.push({ playerId: p.player.playerId, square: p.square, skill, isHome: p.isHome });
+      if (!skills.has(skill)) continue;
+      // Pick-Me-Up needs a holder with tackle zones (server StepPickMeUp.java:98 hasTacklezones():
+      // standing/moving/blocked, not confused/hypnotized). Disturbing Presence has no such gate.
+      if (skill === 'Pick-me-up' && !hasTackleZones(p.state)) continue;
+      out.push({ playerId: p.player.playerId, square: p.square, skill, isHome: p.isHome });
     }
   }
   return out;

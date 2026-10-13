@@ -31,7 +31,8 @@ import {
   bundledStadiumPacks,
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
-  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
+  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, squareAnchor, worldToSquare,
+  displayDiceSide, playerServerSide, teamServerSide, type BlockDieSide } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
@@ -396,22 +397,11 @@ import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
 import { useSuperFumbblLogoMip } from '../game/logoMips';
 import { useDelayedPresence } from '../game/delayedPresence';
-import { activeServerTarget, applyServerTarget, botConfigBaseUrl, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
+import { activeServerTarget, applyServerTarget, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
-import { coachPassword } from '../game/credentials';
-import {
-  BUG_REPORT_DESCRIPTION_MAX,
-  buildBugReportPayload,
-  formatAppLog,
-  gameServiceFromTarget,
-  gameServiceLabel,
-  resolveReportGameId,
-  sendBugReportWithScreenshotFallback,
-  wireLogBasename,
-  type BugReportLogRead,
-} from '../game/bugReport';
-import { captureClientWindowInBrowser, reportCaptureUnsettled, screenshotAttachment, type ReportCaptureResult } from '../game/bugReportScreenshot';
-import BugReportScreenshotPanel from '../components/BugReportScreenshotPanel.vue';
+import { gameServiceFromTarget, resolveReportGameId, wireLogBasename } from '../game/bugReport';
+import type { BugReportHost } from '../game/bugReportHost';
+import BugReportModal from '../components/BugReportModal.vue';
 // botGet/botPost: the token-auth seam (owner ruling 2026-08-17) lives once in forkChallenge.ts —
 // consolidated here rather than re-converting a 4th local copy; signatures are a drop-in match.
 import { botGet, botPost } from '../game/forkChallenge';
@@ -430,7 +420,8 @@ import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCa
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
-import { decisionCardOpen, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
+import { onReportOwnedKey } from '../game/reportModalKeys';
+import { decisionCardOpen, gameKeyDecision, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
 import { createIntensiveTrainingFocus, intensiveCardAnchor, intensiveTrainingFocusTarget } from '../game/intensiveTrainingFocus';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
@@ -751,9 +742,11 @@ function logNameColor(team: LogNameTeam): string | undefined {
   return tint[logNameSeatKey(team, gameStore.mySeat.value)];
 }
 /** Cache segmented log entries; entries are immutable once pushed, so a WeakMap keyed on them is safe. */
-type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind | 'dienum'; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string };
+type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind | 'dienum'; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string;
+  /** Owner 10-13: the server side of the team that rolled a d6 (home/away dice colour). */
+  dteam?: 'home' | 'away' };
 const logSegCache = new WeakMap<object, LogSegment[]>();
-function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 | 3 | 4 | 5 | 6; kind: 'roll' | 'target' }[]; blockDice?: BlockDieLogToken[]; names?: LogNameToken[]; tags?: LogTagToken[] }) {
+function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 | 3 | 4 | 5 | 6; kind: 'roll' | 'target'; team?: 'home' | 'away' }[]; blockDice?: BlockDieLogToken[]; names?: LogNameToken[]; tags?: LogTagToken[] }) {
   const hit = logSegCache.get(entry);
   if (hit) return hit;
   const segs: LogSegment[] = [];
@@ -766,7 +759,7 @@ function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 |
   let at = 0;
   for (const part of faceParts) {
     if ('blockFace' in part && part.blockFace) { segs.push({ blockFace: part.blockFace, result: part.result }); at += part.result.length; continue; }
-    if ('face' in part && part.face) { segs.push({ face: part.face, kind: part.kind }); at += 1; continue; }
+    if ('face' in part && part.face) { segs.push(part.team ? { face: part.face, kind: part.kind, dteam: part.team } : { face: part.face, kind: part.kind }); at += 1; continue; }
     const text = part.text ?? '';
     for (const piece of logTagParts(text, at, entry.tags)) {
       if (piece.kind) { if (piece.text) segs.push({ t: piece.text, tk: piece.kind }); continue; }
@@ -884,6 +877,7 @@ function onLiveOutsidePointer(e: PointerEvent): void {
   closeLiveSpectators();
 }
 function onLiveKey(e: KeyboardEvent): void {
+  if (reportOpen.value) return; // owner 10-13: the open Report modal owns every key, Escape included
   if (e.key === 'Escape') closeLiveSpectators();
 }
 function liveListPointer(inside: boolean): void {
@@ -1774,7 +1768,7 @@ const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => ['walk', 
 
 /** Match11: all display states, including a real Off state, live on the quick bar. */
 const TZ_MODES = ['opposition', 'friendly', 'both', 'off'] as const;
-const TZ_LABELS: Record<string, string> = { opposition: 'Opposition', friendly: 'Friendly', both: 'Both', off: 'Off' };
+const TZ_LABELS: Record<string, string> = { opposition: 'Opposition', friendly: 'Friendly', both: 'Relevant to the selected player', off: 'Off' }; // owner 10-13: 'both' = the zones relevant to the selection
 /** Owner 10-12: spectate and replay cycle their own absolute modes (none -> home -> away -> all), stored separately;
  *  play keeps TZ_MODES / settings.tackleZoneMode exactly as before. */
 const spectatorTackleZones = computed(() => usesSpectatorTackleZones(props.mode));
@@ -1894,113 +1888,70 @@ function cycleSprites() {
 
 // Owner feature request 2026-08-18: Report now opens a MODAL — the tester writes a short description
 // and the client attaches the diagnostics itself (wire log, in-app log, game id, coach names, build id)
-// and POSTs the lot to config-web. The old behaviour (copy a template, open Discord, hope the tester
-// finds and attaches their own wire log) survives only as the fallback link inside the modal.
-//
-// Zero game-wire impact: the send is HTTP to config-web, never the game websocket.
-// Credentials: `passwordMd5` only — see bugReport.ts. The clear text never leaves this process.
-declare const __APP_VERSION__: string;
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
-
+// and POSTs the lot to config-web. Owner 10-13: the dialog itself is components/BugReportModal.vue, shared with the
+// console shell's blade ribbon (App.vue); this view supplies only the in-game parts (game/bugReportHost.ts).
 const reportOpen = ref(false);
-const reportText = ref('');
+/** A send is in flight (v-model:busy from the dialog). */
 const reportBusy = ref(false);
-const reportError = ref('');
-const REPORT_MAX = BUG_REPORT_DESCRIPTION_MAX;
+const reportModal = ref<InstanceType<typeof BugReportModal> | null>(null);
 
 /** The game the report is about — null is a legitimate answer (Report is reachable with no game).
  *  Owner 08-18: falls back to the wire-log file's id — a FUMBBL-official spectate can lose the live
  *  model id while the wire log still knows the game. */
 const reportGameId = computed<number | string | null>(() =>
   resolveReportGameId(gameStore.game.value?.gameId ?? null, gameStore.state.wireLogFile));
-/** Which SERVICE that id belongs to — derived from the active server target, never guessed. */
-const reportGameService = computed(() => gameServiceFromTarget(settings.activeServerTarget));
 /** Absolute path of the current per-game wire log; empty when verbose logging is off. */
 const reportWireLogPath = computed(() => gameStore.state.wireLogFile);
 
-/** The auto-attached summary the modal shows, so the tester can SEE what rides along before sending. */
-const reportAttachments = computed(() => {
-  const items = [
-    `Game: ${reportGameId.value != null
-      ? `${gameServiceLabel(reportGameService.value)} ${reportGameId.value}`
-      : 'none (no game open)'}`,
-    `Build: ${APP_VERSION}`,
-    `Coach: ${settings.coach40k || settings.coach || '(not set)'}`,
-  ];
-  items.push(reportWireLogPath.value
-    ? `Wire log: ${wireLogBasename(reportWireLogPath.value)}`
-    : 'Wire log: none (verbose wire logging is off in Settings)');
-  const logLines = gameStore.state.log.length;
-  items.push(`Client log: ${logLines ? `${Math.min(logLines, 200)} recent lines` : 'empty'}`);
-  items.push(reportShotLine.value);
-  return items;
-});
+const reportHost: BugReportHost = {
+  // Read when Report is pressed: the mounted renderer's frame + its canvas, punched out of the DOM snapshot.
+  pitch: () => {
+    const live = renderer;
+    if (!live) return null;
+    return { capture: () => live.captureFrame(), element: pitchHost.value?.querySelector('canvas') ?? null };
+  },
+  gameId: () => reportGameId.value,
+  /** Which SERVICE that id belongs to — derived from the active server target, never guessed. */
+  gameService: () => gameServiceFromTarget(settings.activeServerTarget),
+  wireLogPath: () => reportWireLogPath.value,
+  noWireLogLine: 'Wire log: none (verbose wire logging is off in Settings)',
+  logEntries: () => gameStore.state.log,
+  devLogEntries: () => gameStore.state.devLog,
+  context: () => {
+    const g = gameStore.game.value as (GameJson & {
+      half?: number; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number };
+    }) | null;
+    return {
+      coach40k: settings.coach40k || null,
+      fumbblCoach: settings.coach || null,
+      homeCoach: (g?.teamHome as { coach?: string } | undefined)?.coach ?? null,
+      awayCoach: (g?.teamAway as { coach?: string } | undefined)?.coach ?? null,
+      wireLogFile: wireLogBasename(reportWireLogPath.value) || null,
+      serverTarget: settings.activeServerTarget,
+      sessionState: gameStore.state.sessionState,
+      half: g?.half ?? null,
+      homeTurn: g?.turnDataHome?.turnNr ?? null,
+      awayTurn: g?.turnDataAway?.turnNr ?? null,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+    };
+  },
+};
 
-// Owner 10-13: "attach a screenshot automatically when the user selects bug report". Pressing Report captures the
-// client window FIRST (pitch extract + DOM snapshot, bugReportScreenshot.ts) and opens the dialog as soon as the live
-// DOM has been read, so the dialog is never in the picture. The rest (encoding) finishes behind the open dialog.
-// Only this entry captures; nothing runs in the background. The capture is dropped when the dialog closes.
-const reportShot = ref<ReportCaptureResult | null>(null);
-const reportShotInclude = ref(true);
-/** Astra (10-13): Send waits for the capture to settle, so nothing is attached the coach has not seen. */
-const reportSendBlocked = computed(() => reportCaptureUnsettled(reportShot.value));
-/** Shown in the dialog when the report went out but the relay refused its screenshot (413, sent again without). */
-const reportNotice = ref('');
-let reportCaptureGeneration = 0;
-/** The generation of the capture still reading the live DOM (0 = none). Generation-keyed so a closed dialog's late
- *  capture can never clear the flag a newer one set (Astra: the reopen race). */
-let reportCaptureBusyGeneration = 0;
-let reportCaptureAbort: AbortController | null = null;
-
-/** The Report modal's attachment line for the picture, so the summary stays the truth about what is sent. */
-const reportShotLine = computed(() => {
-  const result = reportShot.value;
-  if (!result) return 'Screenshot: capturing...';
-  if (result.status !== 'ok') return 'Screenshot: none';
-  if (!reportShotInclude.value) return 'Screenshot: not included';
-  const { width, height, mimeType } = result.shot;
-  return `Screenshot: ${width} x ${height} ${mimeType === 'image/png' ? 'PNG' : 'JPEG'}`;
-});
-
+/** Report entry (quick bar, Esc menu, hotkey): the dialog captures the window first, then opens (BugReportModal). */
 function openReport() {
-  if (reportOpen.value || reportCaptureBusyGeneration !== 0) return;
-  reportError.value = '';
-  reportNotice.value = '';
-  reportShot.value = null;
-  reportShotInclude.value = true;
-  const generation = ++reportCaptureGeneration;
-  reportCaptureBusyGeneration = generation;
-  const releaseBusy = () => { if (reportCaptureBusyGeneration === generation) reportCaptureBusyGeneration = 0; };
-  const abort = new AbortController();
-  reportCaptureAbort = abort;
-  const pitchElement = renderer ? pitchHost.value?.querySelector('canvas') ?? null : null;
-  const live = renderer;
-  const current = () => generation === reportCaptureGeneration && reportOpen.value;
-  void captureClientWindowInBrowser({
-    capturePitch: live ? () => live.captureFrame() : null,
-    pitchElement,
-    signal: abort.signal,
-    onSnapshotTaken: () => {
-      releaseBusy();
-      if (generation === reportCaptureGeneration) reportOpen.value = true;
-    },
-  }).then((result) => {
-    if (current()) reportShot.value = result;
-  }).catch(() => {
-    if (current()) reportShot.value = { status: 'failed', notes: [] };
-  }).finally(() => {
-    releaseBusy();
-    if (reportCaptureAbort === abort) reportCaptureAbort = null;
-  });
+  reportModal.value?.openReport();
 }
 
 watch(reportOpen, (open) => {
-  if (open) return;
-  reportCaptureGeneration++;   // a capture still finishing lands nowhere
-  reportCaptureAbort?.abort(); // ... and stops at its next step instead of finishing for nobody
-  reportCaptureAbort = null;
-  reportShot.value = null;     // never keep the picture once the dialog is gone
+  ui.reportOpen = open; // App.vue's dev console stands down under the report (Astra P2)
+  // Owner 10-13: the open report owns the keyboard. A pan key held as it opens would otherwise glide forever (its
+  // keyup is swallowed by the modal), so drop every held pan key now. Focus moves into the report and Tab stays there
+  // (BugReportModal does both, game/reportModalKeys.ts).
+  if (open) clearPan();
 });
+/** The dialog's real DOM root (exposed by BugReportModal): onKeydown's outside-key branch pulls focus back into it. */
+const reportDialog = computed<HTMLElement | null>(() => reportModal.value?.root ?? null);
+onBeforeUnmount(() => { ui.reportOpen = false; });
 
 /** Non-blocking feedback, on the existing chat-toast stack (owner's established idiom for
  *  "tell me, don't stop me"). */
@@ -2014,85 +1965,8 @@ function pushReportToast(text: string, ms = 6000) {
   }
 }
 
-/** Read the current wire log back through the confined Tauri command. Any failure degrades to "no
- *  wire log attached" — a missing attachment must never block the tester's actual words. */
-async function readWireLogForReport(): Promise<BugReportLogRead | null> {
-  const fileName = wireLogBasename(reportWireLogPath.value);
-  if (!fileName) return null;
-  try {
-    const core = await import('@tauri-apps/api/core');
-    return (await core.invoke('read_bug_report_log', { fileName })) as BugReportLogRead;
-  } catch {
-    return null; // not in Tauri, or the file vanished — send the report without it
-  }
-}
-
-async function submitReport() {
-  const description = reportText.value.trim();
-  if (!description || reportBusy.value || reportSendBlocked.value) return;
-  // Astra (10-13, consent): the attachment decision (the image AND the checkbox) is frozen HERE, before the first
-  // await, from what the coach is looking at; nothing that changes after the click can ride along.
-  const screenshot = screenshotAttachment(reportShot.value, reportShotInclude.value);
-  reportBusy.value = true;
-  reportError.value = '';
-  reportNotice.value = '';
-  try {
-    const wireLog = await readWireLogForReport();
-    const g = gameStore.game.value as (GameJson & {
-      half?: number; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number };
-    }) | null;
-    // Fork account = the config-web credential (mirrors forkChallenge's forkCreds). When the tester
-    // has no fork coach set we fall back to whatever the active target resolves, so an anonymous
-    // spectator can still file something rather than being silently blocked.
-    const creds = !FORK_EDITION
-      ? { coach: settings.coach.trim() || 'anonymous', password: '' } // owner 09-10: public edition files under the FUMBBL coach
-      : settings.coach40k.trim()
-        ? { coach: settings.coach40k, password: coachPassword() }
-        : resolveJoinCreds();
-    const payload = buildBugReportPayload({
-      description,
-      publicEdition: !FORK_EDITION,
-      gameId: reportGameId.value,
-      gameService: reportGameService.value,
-      clientVersion: APP_VERSION,
-      creds,
-      wireLog,
-      appLog: formatAppLog(gameStore.state.log, gameStore.state.devLog),
-      // Owner 08-19: triage sees settings instantly. Secret-free by the serializer's construction.
-      settingsJson: serializeSettingsForFile(settings),
-      // Owner 10-13: the picture taken when Report was opened, only while the coach left it ticked (frozen above).
-      screenshot,
-      context: {
-        coach40k: settings.coach40k || null,
-        fumbblCoach: settings.coach || null,
-        homeCoach: (g?.teamHome as { coach?: string } | undefined)?.coach ?? null,
-        awayCoach: (g?.teamAway as { coach?: string } | undefined)?.coach ?? null,
-        wireLogFile: wireLogBasename(reportWireLogPath.value) || null,
-        serverTarget: settings.activeServerTarget,
-        sessionState: gameStore.state.sessionState,
-        half: g?.half ?? null,
-        homeTurn: g?.turnDataHome?.turnNr ?? null,
-        awayTurn: g?.turnDataAway?.turnNr ?? null,
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
-      },
-    });
-    const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, botConfigBaseUrl());
-    reportText.value = '';
-    if (screenshotDropped) {
-      // Astra: the relay refused the picture as too large (413) and the report went again without it. Say so in the
-      // dialog (it stays open, text cleared so nothing is sent twice) instead of a toast the coach may miss.
-      reportNotice.value = 'Your report was sent, but without the screenshot: the server said it was too large.';
-      return;
-    }
-    reportOpen.value = false;
-    pushReportToast('🐞 Report sent — thanks! The wire log went with it.');
-  } catch (error) {
-    // The report is NOT lost: the modal stays open with the tester's text intact, and the Discord
-    // fallback is right there. Losing someone's carefully-written report is worse than the bug.
-    reportError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    reportBusy.value = false;
-  }
+function onReportSent() {
+  pushReportToast('🐞 Report sent — thanks! The wire log went with it.');
 }
 
 /**
@@ -2422,9 +2296,23 @@ watch(
 );
 
 // Block rerolls: team=all dice; Brawler=Both Down; Pro/Consummate=one die; Savage Blow=selected dice.
-function blockFaceUrl(v: number): string {
+function blockFaceUrl(v: number, side: BlockDieSide | null = null): string {
   void assetMods.blockDiceRevision;
-  return PitchRenderer.blockFaceUrl(v);
+  return PitchRenderer.blockFaceUrl(v, side);
+}
+/** Owner 10-13 (home/away dice): the displayed side of dice owned by a server team id - the local coach's own dice
+ *  are home (blue) while playing, whichever seat they hold; spectators and replays see the server's home team blue
+ *  (the same seat mapping as the log names and the chat toasts). Null = unknown owner (neutral faces). */
+function diceSideOfTeam(teamId: unknown): BlockDieSide | null {
+  return displayDiceSide(teamServerSide(gameStore.game.value, teamId), gameStore.mySeat.value);
+}
+/** Player id -> the displayed side of the team that owns the player (the roller's dice colour). */
+function diceSideOfPlayer(playerId: unknown): BlockDieSide | null {
+  return displayDiceSide(playerServerSide(gameStore.game.value, playerId), gameStore.mySeat.value);
+}
+/** The server side ('home' | 'away') -> displayed side, for dice the store tags by side (penalty shootout, log). */
+function diceSideOfServerSide(side: 'home' | 'away' | null | undefined): BlockDieSide | null {
+  return displayDiceSide(side ?? null, gameStore.mySeat.value);
 }
 function blockFaceLabel(v: number): string { return PitchRenderer.blockFaceLabel(v); }
 const bpDieMode = ref<null | 'pro' | 'consummate' | 'multiBlockDice' | 'singleBlockDie'>(null);
@@ -2520,8 +2408,8 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
       return null;
     }
     bpDice3d = row;
-    row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface)); // owner 10-06: body tint for the block die surface
-    await row.updateFaceTextures(PitchRenderer.blockFaceUrls());
+    row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value)); // owner 10-06: body tint for the block die surface (10-13: the chooser's side)
+    await row.updateFaceTextures(PitchRenderer.blockFaceUrls(blockPartialSide.value));
     if (generation !== bpDice3dGeneration || bpDice3d !== row) return null;
     return row;
   } catch (error) {
@@ -2594,10 +2482,6 @@ watch(() => gameStore.state.blockPartial, (bp) => {
     }
   });
 }, { flush: 'post' });
-watch(() => assetMods.blockDiceRevision, () => {
-  bpDice3d?.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface)); // owner 10-06: the surface change bumps the revision once composed
-  if (bpDice3d) void bpDice3d.updateFaceTextures(PitchRenderer.blockFaceUrls()).catch(failBlockDice3d);
-});
 watch(
   () => [settings.order66, settings.blockDice3d, settings.spectatorClean, gameStore.playbackCatchingUp.value, bpReducedMotion.value] as const,
   () => {
@@ -2658,6 +2542,14 @@ const latchedBlockChoosingTeamId = ref<unknown>(null);
 watch(liveBlockChoosingTeamId, (id) => { if (id != null && id !== '') latchedBlockChoosingTeamId.value = id; }, { immediate: true });
 watch(() => gameStore.state.blockPartial, (bp) => { if (!bp) latchedBlockChoosingTeamId.value = null; });
 const blockChooserCaptionTeamId = computed(() => liveBlockChoiceDialog.value ? liveBlockChoosingTeamId.value : latchedBlockChoosingTeamId.value);
+/** Owner 10-13: the displayed side of the block card's dice - the server-declared chooser's team (the card's own
+ *  choosingTeamId, else the live / latched dialog chooser). Null = unknown: the side-less faces. */
+const blockPartialSide = computed<BlockDieSide | null>(() => diceSideOfTeam(gameStore.state.blockPartial?.choosingTeamId ?? blockChooserCaptionTeamId.value));
+// Owner 10-13: a new block whose chooser is on the other side re-faces the row (home blue / red away blanks).
+watch(() => [assetMods.blockDiceRevision, blockPartialSide.value] as const, () => {
+  bpDice3d?.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value)); // owner 10-06: the surface change bumps the revision once composed
+  if (bpDice3d) void bpDice3d.updateFaceTextures(PitchRenderer.blockFaceUrls(blockPartialSide.value)).catch(failBlockDice3d);
+});
 const liveMultiBlockChoosingTeamId = computed(() => currentMultiBlockChoosingTeamId(gameStore.game.value));
 const liveMultiBlockChooser = computed(() => projectBlockChooser(
   gameStore.game.value, liveMultiBlockChoosingTeamId.value, blockChooserSeat.value, blockChooserSpectator.value));
@@ -4472,9 +4364,11 @@ const savedSetupsCollapsed = ref(false);
 // Owner 10-05: "Can we add an X to the set up your team panel and saved setups panels to close them in setup mode?"
 // Closing is view-only (nothing is sent). Both come back for every new setup, and the rules card re-opens by
 // itself when the referee rejects the setup - that message must be seen. A small tab re-opens either one.
-const setupCardClosed = ref(false);
-const setupBrowserClosed = ref(false);
-watch(() => !!setupPhase.value, (inSetup, was) => { if (inSetup && !was) { setupCardClosed.value = false; setupBrowserClosed.value = false; } });
+// A rejection already in shared state when this view mounts (e.g. Classic -> modern remount) must show the card even when the setting is off.
+const setupCardClosed = ref(!settings.setupRulesCard && !((setupPhase.value?.setupErrors.length ?? 0) > 0 || !!solidDefenceError.value));
+const setupBrowserClosed = ref(!settings.setupFormationsPanel);
+// Owner 10-13: Settings > UI can start either panel closed (reopen tab stays). Read at each setup start; a mid-setup change applies next setup.
+watch(() => !!setupPhase.value, (inSetup, was) => { if (inSetup && !was) { setupCardClosed.value = !settings.setupRulesCard; setupBrowserClosed.value = !settings.setupFormationsPanel; } });
 watch(() => (setupPhase.value?.setupErrors.length ?? 0) > 0 || !!solidDefenceError.value, (rejected) => { if (rejected) setupCardClosed.value = false; });
 // Astra (10-05): a SECOND rejection while the first is still showing is true -> true above. Each rejection is its
 // own occurrence: a new server setupError dialog object, or the next Solid Defence error sequence.
@@ -4640,7 +4534,8 @@ watch(
       return;
     }
     const v = sp.validation;
-    renderer.setSetup(true, { losOk: v.losOk, leftOk: v.leftOk, rightOk: v.rightOk });
+    // Owner 10-13: Settings > UI "Zone helpers at setup" off = no green/red zone shading (null zones, as renderer.setSetup(true, null) elsewhere).
+    renderer.setSetup(true, settings.setupZoneHelpers ? { losOk: v.losOk, leftOk: v.leftOk, rightOk: v.rightOk } : null);
     renderer.setSetupSelectedPlayer(selectedSetupPlayerId.value);
     renderer.onDugoutSetupDragStart = startSetupPlayerDrag; // cond-b/#3: drag a reserve or a placed player
     renderer.onSetupClick = (coord, playerId) => {
@@ -5860,7 +5755,9 @@ watch(
 // "n+") beside the cursor and the "Perform foul?/Hand off?/Throw the pass?"
 // confirm modal for the armed target.
 const actionTip = reactive({ visible: false, mode: 'foul' as 'foul' | 'handoff' | 'pass', text: '', x: 0, y: 0 });
-const actionModal = ref<{ seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; rollText: string } | null>(null);
+const actionModal = ref<{ seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; rollText: string; note?: string } | null>(null);
+// Owner 10-13: set while the armed Pass card is computed from a planned destination (the ruler is drawn from there).
+let actionModalPassRuler = false;
 // Owner 2026-07-04d: the confirm modal is DRAGGABLE — a persisted per-session
 // position (null = the centred default). Reset when a new modal opens.
 const actionModalPos = ref<{ x: number; y: number } | null>(null);
@@ -6460,7 +6357,8 @@ watch(() => gameStore.state.bncScatter?.seq, () => {
   // g868 (owner 08-18): a scatter that ends in a BLOCK never arms another aim, so the "cleared by the next aim"
   // path never runs. The store now retires state.bncScatter when the activation does — mirror that to the renderer.
   if (!s) { renderer.setBncScatterDest(null); return; }
-  renderer.showActionDie(s.dest, s.roll, 'Ball & Chain');
+  // Owner 10-13: the die belongs to the Ball & Chain player, not to whoever stands on the destination square.
+  renderer.showActionDieOwnedBy(s.playerId ?? null, s.dest, s.roll, 'Ball & Chain');
   renderer.setBncScatterDest(s.dest, s.from);
 });
 // ORDER 66 (g478 #1): while the ported machine derives HIGH_KICK for the local (receiving) coach, the eligible
@@ -6816,6 +6714,45 @@ function bridgeActivePassPlan(square: [number, number], from: [number, number]):
     o66SubmittedPassDestination.value = null;
   }
 }
+
+/** Owner 10-13: the plotted route's destination while the acting passer has one (null = no route plotted). */
+function plannedPassDestination(): [number, number] | null {
+  const pend = o66PendingMove.value;
+  return pend && pend.route.length > 0 ? [pend.dest[0], pend.dest[1]] : null;
+}
+/** passTargetInTemplate measured from `from` (the planned destination) instead of the passer's current square. */
+function passTargetInRangeFrom(g: NonNullable<typeof gameStore.game.value>, from: [number, number], target: [number, number]): boolean {
+  if (isHailMaryPassAction(g)) return true;
+  return passRangeSquares(g, from).some((s) => s[0] === target[0] && s[1] === target[1]);
+}
+/** Owner 10-13 (Rick, "plan the execution of the pass at the destination square"): with a route plotted, a confirmed
+ *  pass target becomes ONE planner plan: walk the route one acked square at a time (roll holds unchanged), then send
+ *  the pass from the destination. The store re-checks the throw at arrival and sends nothing if it is no longer
+ *  legal. Returns false (caller keeps today's pass from the current square) when no route is plotted. */
+function commitPlannedPassFromDestination(actorId: string | null, square: [number, number], targetPlayerId: string | null): boolean {
+  const g = gameStore.game.value;
+  const pend = o66PendingMove.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!g || !pend || pend.route.length === 0 || !actingId || (actorId && actorId !== actingId)) return false;
+  if (deriveClientState(g, o66Ctx()) !== 'PASS') return false;
+  if (gameStore.startPlan({ playerId: actingId, actKind: 'pass', route: pend.route, targetCoordinate: square, targetPlayerId })) {
+    bridgeActivePassPlan(square, pend.dest);
+  }
+  o66PendingMove.value = null; renderer?.setO66Path([]);
+  o66PendingPass.value = null; o66PendingThrowKind.value = null;
+  return true;
+}
+// Owner 10-13: a walk-then-pass that reached its square with the throw no longer legal sent nothing. Surface the
+// normal pass targeting (range template + receiver click) from the passer's actual square.
+watch(() => gameStore.state.plannedPassRetired?.seq, (seq) => {
+  const retired = gameStore.state.plannedPassRetired;
+  const g = gameStore.game.value;
+  if (!seq || !retired || !g || !settings.order66 || !gameStore.isPlaying.value) return;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (actingId !== retired.playerId || !gameStore.iControl(actingId) || deriveClientState(g, o66Ctx()) !== 'PASS') return;
+  passTemplateForced.value = true;
+  o66ArmPassTemplate(actingId);
+});
 
 // A nominated or committed Pass/Bomb/TTM landing drives the authoritative Pass requirement and the
 // optional over-target Catch requirement. The committed bridge matters for empty-square passes: nomination clears
@@ -9238,7 +9175,7 @@ function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' 
       return;
     } else if (kind === 'bomb') gameStore.sendBombTarget(square);
     else if (kind === 'fireball') gameStore.resolveSquarePick(square);
-    else sendDirectPassWithBridge(square);
+    else if (!commitPlannedPassFromDestination(null, square, null)) sendDirectPassWithBridge(square);
     o66PendingPass.value = null;
     o66PendingThrowKind.value = null;
     clearHailMaryPassRulerAfterCommit();
@@ -9388,6 +9325,17 @@ function o66ConfirmPending(): boolean {
   // Consume repeat Confirm presses without degrading the stored Blitz into a plain Move send.
   if (o66PendingLeftClickBlitzPlan.value) return true;
   const pend = o66PendingMove.value;
+  // Owner 10-13: a Pass armed over a plotted route confirms walk-then-pass, not the walk alone.
+  if (st === 'PASS' && pend && actionModal.value?.mode === 'pass' && renderer?.hasArmedAction()) {
+    renderer.confirmArmedAction();
+    return true;
+  }
+  if (st === 'PASS' && pend && o66PendingThrowKind.value === 'pass' && o66PendingPass.value) {
+    const square = o66PendingPass.value;
+    o66PendingPass.value = null; o66PendingThrowKind.value = null;
+    if (passTargetInRangeFrom(g, pend.dest, square)) commitPlannedPassFromDestination(actingId, square, null);
+    return true;
+  }
   if (pend) {
     // The store's confirmed per-square presentation drain owns the acting token. Do not pre-arm the legacy
     // whole-route fallback here: it predicts motion before acknowledgement and can reclaim the token when the
@@ -9726,7 +9674,14 @@ function unknownPanelUp(): boolean {
 }
 /** Astra review (P2.2): the guards onKeydown applies, for pad input — focus in a text field / the chat entry / an
  *  editable region blocks every pad action (Start / LB / RB / View included). */
+/** P2b: Settings / the wizard rerun over the game keep the pad off the server cards behind them; an open context menu /
+ *  Game Menu is answered first (B closes it in the Esc order, ahead of the card's own decline); the open Report owns the
+ *  pad (owner 10-13). */
+function padFocusGuardForView(): boolean {
+  return appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || ctxMenu.visible || ui.gameMenuOpen || reportOpen.value;
+}
 function controllerInputBlocked(): boolean {
+  if (reportOpen.value) return true; // Astra P1 (owner 10-13): the open report owns every pad input too
   const focused = typeof document !== 'undefined' ? document.activeElement : null;
   return targetOwnsKeys(focused) || keyboardOwnedByTextControl(focused);
 }
@@ -9895,7 +9850,7 @@ function crosshairGateInput(): CrosshairGateInput {
 /** Left stick → the crosshair (one square per step, repeat with acceleration, precision = one step per tilt). */
 function onCrosshairStick(x: number, y: number): boolean {
   if (activeInput.value !== 'controller' || !renderer) return false;
-  if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || crosshair.suppressed.value) {
+  if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || reportOpen.value || crosshair.suppressed.value) {
     crosshair.stick(0, 0); // Astra P3-7: a stick held through the suppression resumes as a fresh tilt
     return true;
   }
@@ -10069,7 +10024,7 @@ const runAction = createInGameActionRunner({
 });
 /** Controller camera stick = the WASD glide with magnitude; fail-safe neutralise (Astra review P1). */
 const onCameraStick = createCameraStickHandler({
-  shellModalOpen: () => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
+  shellModalOpen: () => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || reportOpen.value,
   setPan: (x, y) => { if (!renderer) return false; renderer.setPanDirection(x, y); return true; },
   restoreKeys: () => {
     updatePanDir();
@@ -10100,6 +10055,20 @@ function onKeydown(event: KeyboardEvent) {
   // App-shell modals own the keyboard while open. In particular, Settings Esc must
   // run its transactional rollback path rather than this gameplay handler closing it.
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen)) return;
+  // Owner 10-13: "Bug reports should swallow all keyboard entry." The open Report modal owns every key (no confirm, no
+  // chat, no hotbar, no pan, no Esc cascade; Escape only closes it), and a focused text control owns every key but
+  // Escape: a Space typed in a note must never confirm the open card and send the command.
+  const keyOwner = gameKeyDecision({
+    reportOpen: reportOpen.value, reportBusy: reportBusy.value,
+    textFieldFocused: textFieldOwnsInput(event.target) || keyboardOwnedByTextControl(event.target), key: event.key,
+  });
+  if (keyOwner === 'closeReport') { event.preventDefault(); reportOpen.value = false; return; }
+  if (keyOwner === 'reportOwns') {
+    // Astra P1: focus outside the modal (body, or a game button) never gets a native Enter / Space activation, and Tab
+    // comes back into the report. Keys typed inside the modal never get here (its root stops them).
+    onReportOwnedKey(event, reportDialog.value);
+    return;
+  }
   // S43: while the unanswered-prompt panel is up, Enter / Space / Esc reach no game command (Esc may close its confirmation).
   const ucKey = unknownPanelKeyDecision({
     panelUp: unknownPanelUp(), confirming: unknownConfirm.value !== null,
@@ -10114,6 +10083,7 @@ function onKeydown(event: KeyboardEvent) {
   // marks) keeps its own activation keys - Space, Enter, the arrows - and lets every other key (H, Escape ...) through.
   if (event.target instanceof HTMLInputElement && inputOwnsKey(event.target, event.key)) return;
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
+  if (keyOwner === 'textOwns') return; // owner 10-13: typing in a text field never reaches confirm / chat / hotbar / pan
   // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else) — the first step of the gameMenu action.
   if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); runAction('gameMenu', 'keyboard'); return; }
   // Controller support P1 (owner 10-07): every REBINDABLE keyboard binding (Settings > Controls) runs through runAction,
@@ -10173,6 +10143,11 @@ let rendererMountActive = false;
 // renderer.setPregameSigns) — replacing the old periodic single-sign timer.
 onMounted(async () => {
   rendererMountActive = true;
+  // Astra (report fix): the pad card-focus interceptor is global and already live (controllerRuntime), so its guard is
+  // installed synchronously, before the first await of the mount: a Report opened while the renderer is still
+  // initialising must keep pad A off the decision cards behind it. (The action runner and the stick handlers are only
+  // registered after the awaits, so before then no in-game pad action runs at all.)
+  setPadFocusGuard(padFocusGuardForView);
   // Exact confirmed movement is a Modern renderer capability. Register before any async mount work so incoming
   // frames cannot open a gate without a seq-aware presentationStep consumer; Classic intentionally never registers.
   unregisterConfirmedMovementPresentation = gameStore.registerConfirmedMovementPresentationConsumer();
@@ -10627,6 +10602,13 @@ onMounted(async () => {
           return;
         }
         if (ix.kind === 'passTarget') {
+          // Owner 10-13: with a route plotted the throw is from its destination; refuse a target out of range there.
+          const plannedFrom = plannedPassDestination();
+          if (plannedFrom && !passTargetInRangeFrom(g, plannedFrom, ix.square)) {
+            const p = renderer?.squareToCanvas(ix.square);
+            showToast(`Out of range from ${squareLabel(plannedFrom[0], plannedFrom[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+            return;
+          }
           // Receiver-click Pass uses the same two-click nominate/confirm rail as square targeting.
           nominateOrConfirmThrow(ix.square, 'pass');
           return;
@@ -10969,7 +10951,15 @@ onMounted(async () => {
     actionTip.y = tip.canvasY + 20;
   };
   renderer.onActionTarget = (req) => {
-    actionModal.value = req ? { seq: req.seq, mode: req.mode, targetId: req.targetId, rollText: req.rollText } : null;
+    // Owner 10-13 (pass at destination): with a route plotted, the armed Pass is thrown from the route's destination
+    // after the walk. The card says so and the range ruler runs from that square to the target while it is up.
+    const passFrom = req?.mode === 'pass' && settings.order66 ? (renderer?.plannedPassOrigin() ?? null) : null;
+    actionModal.value = req
+      ? { seq: req.seq, mode: req.mode, targetId: req.targetId, rollText: req.rollText,
+          ...(passFrom ? { note: `Pass from ${squareLabel(passFrom[0], passFrom[1])} after moving` } : {}) }
+      : null;
+    if (passFrom && req) { renderer?.setPassRuler(passFrom, req.targetSquare as [number, number]); actionModalPassRuler = true; }
+    else if (actionModalPassRuler) { actionModalPassRuler = false; renderer?.setPassRuler(hailMaryPassRulerFrom(), null); }
     // Owner 2026-07-04f: FOULS surface the confirm AWAY from the foul spot (the
     // opposite host corner from the target) so it never obscures the action;
     // pass/hand-off keep the near-target anchor. Both are movable + resizable.
@@ -10998,6 +10988,9 @@ onMounted(async () => {
     actionModal.value = null;
     actionTip.visible = false;
     if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: no throw / foul under an open confirmation
+    // Owner 10-13: in Order 66 the receiver click of a declared Pass arms this card. With a route plotted it commits
+    // walk-then-pass as ONE planner plan (thrown from the destination once the walk is acked), never a pass from here.
+    if (mode === 'pass' && settings.order66 && commitPlannedPassFromDestination(actorId, targetSquare as [number, number], targetId)) return;
     const p = path as [number, number][];
     // LEGACY ONLY (order66=off): this action-modal hotbar is hidden in Order 66 (template v-if !settings.order66),
     // so o66 play NEVER reaches here — the o66 foul/pass teleport fix lives in onPlayerClick/onTilePick via
@@ -11433,10 +11426,8 @@ onMounted(async () => {
   // Astra P2-1: an open card / dialog owns focus — the crosshair hides and A / X stay off the pitch, except for the
   // server square / player picks it serves. (Registered here: the gate reads view state declared further down.)
   stopCrosshairGateWatch?.();
-  stopCrosshairGateWatch = watchEffect(() => { crosshairSuppressed.value = ui.gameMenuOpen || ui.settingsOpen || padFocusOwnsInput.value || crosshairGate(crosshairGateInput()).suppress; });
-  // P2b: Settings / the wizard rerun over the game keep the pad off the server cards behind them; an open context
-  // menu / Game Menu is answered first (B closes it in the Esc order, ahead of the card's own decline).
-  setPadFocusGuard(() => appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || ctxMenu.visible || ui.gameMenuOpen);
+  stopCrosshairGateWatch = watchEffect(() => { crosshairSuppressed.value = ui.gameMenuOpen || ui.settingsOpen || reportOpen.value || padFocusOwnsInput.value || crosshairGate(crosshairGateInput()).suppress; });
+  // The pad card-focus guard (padFocusGuardForView) is installed at the very start of onMounted, before any await.
   // Astra P2-a: a mandatory pitch choice (push direction, kick aim) keeps every non-mandatory card off the pad.
   setPadFocusMandatoryPitch(() => {
     const pk = renderer?.pitchPickers();
@@ -13497,45 +13488,9 @@ function sendChat() {
 
     <!-- Owner 2026-07-08: CREATE GAME — pick a team from the library + challenge an opponent by name.
          The Bot pairs reciprocal challenges and returns a JNLP we open in-process. -->
-    <!-- Owner 2026-08-18: the Report modal. Reuses the Create Game modal's shell/classes; the tester
-         writes what happened and the client attaches the diagnostics itself. The attachment list is
-         shown, not implied, so nobody sends a log they didn't know they were sending. Backdrop click
-         does NOT close it — losing a half-written report to a stray click is exactly the failure this
-         feature exists to remove. -->
-    <div v-if="reportOpen" class="modal-backdrop cg-backdrop">
-      <div class="cg-menu br-menu">
-        <div class="cg-head">
-          <h2>🐞 Report an Issue</h2>
-          <button class="cg-close" :disabled="reportBusy" @click="reportOpen = false">✕</button>
-        </div>
-
-        <!-- Owner 10-13: the automatic screenshot sits ABOVE the description, first thing under the title. -->
-        <BugReportScreenshotPanel v-model="reportShotInclude" :result="reportShot" :disabled="reportBusy" />
-
-        <label class="cg-field">What happened?
-          <textarea v-model="reportText" class="br-text" rows="7" :maxlength="REPORT_MAX"
-            placeholder="What did you do, what did you expect, and what happened instead?"></textarea>
-        </label>
-        <p class="hint br-count">{{ reportText.length }} / {{ REPORT_MAX }}</p>
-
-        <div class="br-attach">
-          <span class="cg-field-label">Sent with your report</span>
-          <ul>
-            <li v-for="line in reportAttachments" :key="line">{{ line }}</li>
-          </ul>
-        </div>
-
-        <p v-if="reportError" class="br-error">{{ reportError }}</p>
-        <p v-if="reportNotice" class="br-notice" data-testid="br-notice">{{ reportNotice }}</p>
-
-        <div class="cg-actions">
-          <button type="button" class="cg-cancel" :disabled="reportBusy" @click="reportOpen = false">{{ reportNotice ? 'Close' : 'Cancel' }}</button>
-          <button type="button" class="cg-create" data-testid="br-send" :disabled="reportBusy || reportSendBlocked || !reportText.trim()"
-            :title="reportSendBlocked ? 'Waiting for the screenshot' : undefined"
-            @click="submitReport">{{ reportBusy ? 'Sending…' : 'Send Report' }}</button>
-        </div>
-      </div>
-    </div>
+    <!-- Owner 2026-08-18: the Report modal (owner 10-13: components/BugReportModal.vue, shared with the console shell's
+         blade ribbon). Backdrop click does NOT close it; the dialog root owns the keyboard. -->
+    <BugReportModal ref="reportModal" v-model:open="reportOpen" v-model:busy="reportBusy" :host="reportHost" @sent="onReportSent" />
 
     <div v-if="createGameOpen" class="modal-backdrop cg-backdrop" @click.self="createGameOpen = false">
       <div class="cg-menu">
@@ -13934,7 +13889,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -14065,9 +14020,9 @@ function sendChat() {
           <ol class="ps-rounds">
             <li v-for="(r, i) in visiblePenaltyShootout.rounds" :key="i" class="ps-round">
               <span class="ps-round-label">{{ r.label }}</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :label="`${visiblePenaltyShootout.homeName} rolled ${r.home}`" />
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :side="diceSideOfServerSide('home')" :label="`${visiblePenaltyShootout.homeName} rolled ${r.home}`" />
               <span class="ps-vs">vs</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :label="`${visiblePenaltyShootout.awayName} rolled ${r.away}`" />
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :side="diceSideOfServerSide('away')" :label="`${visiblePenaltyShootout.awayName} rolled ${r.away}`" />
               <span class="ps-round-win">{{ r.homeWon ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }}</span>
             </li>
           </ol>
@@ -14210,7 +14165,7 @@ function sendChat() {
                skill / when no armour roll is live (generic body renders as before). -->
           <div v-if="skillChoiceArmorDice" class="sc-cb-armour">
             <span class="sc-cb-emoji" aria-hidden="true">🛡️</span>
-            <D6Face v-for="(d, di) in skillChoiceArmorDice" :key="di" class="sc-die sc-cb-die" :value="d" :label="`Armour die ${d}`" />
+            <D6Face v-for="(d, di) in skillChoiceArmorDice" :key="di" class="sc-die sc-cb-die" :value="d" :side="diceSideOfPlayer(gameStore.state.skillChoice?.playerId)" :label="`Armour die ${d}`" />
           </div>
           <div v-if="!passSkillCardCopy && modifierSkillCardCopy?.resultLine" class="sc-subtext">{{ modifierSkillCardCopy.resultLine }}</div>
           <div v-if="passSkillCardCopy" class="sc-pass-result">
@@ -14226,7 +14181,7 @@ function sendChat() {
                  same glyph placeholder the pitch markings use (markerGlyph → 'T'), not a blank. -->
             <span v-else class="sc-glyph" aria-hidden="true">{{ markerGlyph(gameStore.state.skillChoice.skill) }}</span>
             <template v-if="gameStore.state.skillChoice.minimumRoll > 0">
-              <D6Face class="sc-die" :value="gameStore.state.skillChoice.minimumRoll" :label="`Needed ${gameStore.state.skillChoice.minimumRoll}`" />
+              <D6Face class="sc-die" :value="gameStore.state.skillChoice.minimumRoll" :side="diceSideOfPlayer(gameStore.state.skillChoice.playerId)" :label="`Needed ${gameStore.state.skillChoice.minimumRoll}`" />
               <span class="sc-needed">+</span>
             </template>
             <span v-else class="sc-name">{{ gameStore.state.skillChoice.label }}</span>
@@ -14446,15 +14401,15 @@ function sendChat() {
           <ul class="setup-conditions">
             <li :class="{ ok: setupPhase.validation.losOk }">
               <span class="setup-mark">{{ setupPhase.validation.losOk ? '✓' : '✗' }}</span>
-              At least 3 on the line ({{ setupPhase.validation.onLos }}/3)
+              At least {{ setupPhase.validation.requiredOnLos }} on the line ({{ setupPhase.validation.onLos }}/{{ setupPhase.validation.requiredOnLos }})
             </li>
             <li :class="{ ok: setupPhase.validation.leftOk }">
               <span class="setup-mark">{{ setupPhase.validation.leftOk ? '✓' : '✗' }}</span>
-              Max 2 in the {{ wideZoneWord('left', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.leftWide }})
+              Max {{ setupPhase.validation.maxPerWideZone }} in the {{ wideZoneWord('left', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.leftWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.rightOk }">
               <span class="setup-mark">{{ setupPhase.validation.rightOk ? '✓' : '✗' }}</span>
-              Max 2 in the {{ wideZoneWord('right', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.rightWide }})
+              Max {{ setupPhase.validation.maxPerWideZone }} in the {{ wideZoneWord('right', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.rightWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.countOk }">
               <span class="setup-mark">{{ setupPhase.validation.countOk ? '✓' : '✗' }}</span>
@@ -14889,7 +14844,7 @@ function sendChat() {
           <div class="bl-opts">
             <template v-if="gameStore.state.bloodlust.stage === 'reroll'">
               <div v-if="gameStore.state.bloodlust.roll != null" class="rr-prompt-line">
-                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.bloodlust.roll"
+                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.bloodlust.roll" :side="diceSideOfPlayer(gameStore.state.bloodlust.playerId)"
                   :label="`Rolled ${gameStore.state.bloodlust.roll}`" />
               </div>
               <div v-if="bloodlustTastyMorselAvailable" class="rr-prompt-line bl-special-available">
@@ -15595,7 +15550,7 @@ function sendChat() {
               :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
               :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? 'Remove this die' : 'Select this die') : (bpDieMode ? 'Reroll this die' : (bpUphillDecision ? blockFaceLabel(d) + ' — awaiting the chooser' : (settings.order66 ? blockFaceLabel(d) : 'Keep this die')))"
               @click="clickBlockPartialDie(i)">
-              <img v-if="settings.order66" :src="blockFaceUrl(d)" :alt="blockFaceLabel(d)" />
+              <img v-if="settings.order66" :src="blockFaceUrl(d, blockPartialSide)" :alt="blockFaceLabel(d)" />
               <template v-else>{{ blockFaceLabel(d) }}</template>
             </button>
           </div>
@@ -15688,7 +15643,7 @@ function sendChat() {
                 :disabled="!multiBlockDialogMine || (mbrDieMode?.targetId !== row.targetId && (row.isOwnChoice !== true || !row.pickable))"
                 :title="mbrDieMode?.targetId === row.targetId ? 'Reroll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
                 @click="multiBlockPickDie(row.targetId, i, row.isOwnChoice === true && row.pickable)">
-                <img v-if="settings.order66" :src="blockFaceUrl(d)" :alt="blockFaceLabel(d)" />
+                <img v-if="settings.order66" :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />
                 <template v-else>{{ blockFaceLabel(d) }}</template>
               </button>
             </div>
@@ -15750,6 +15705,51 @@ function sendChat() {
             </div>
           </div>
           <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">{{ mbrArmedHintText }}</div>
+        </div>
+
+        <!-- BB2025 uphill Multiple Block (opponentBlockSelectionProperties): the DEFENDING coach picks the attacker's
+             result for each target the attacker could not choose. Armed only for my team (store); one click answers one
+             target and the server re-raises for the rest. Reuses the multi-block card and block-face art. -->
+        <div v-if="gameStore.state.opponentBlockSelection" v-pad-focus="{ mandatory: true }"
+          class="multi-block-resolution opponent-block-selection"
+          :style="reactivePromptStyle('multiBlock')" title="Drag to move"
+          @pointerdown="startReactivePromptDrag('multiBlock', $event)">
+          <div class="mbr-title">MULTIPLE BLOCK</div>
+          <div v-for="row in gameStore.state.opponentBlockSelection.rows" :key="row.targetId" class="mbr-row">
+            <span class="mbr-name">Choose the result for {{ gameStore.state.opponentBlockSelection.attacker }}'s block on {{ row.target }}</span>
+            <div class="mbr-dice">
+              <button v-for="(d, i) in row.dice" :key="i" class="bp-die" :class="{ 'bp-die-art': settings.order66 }"
+                :title="blockFaceLabel(d)" @click="gameStore.resolveOpponentBlockSelection(row.targetId, i)">
+                <img v-if="settings.order66" :src="blockFaceUrl(d, diceSideOfTeam(gameStore.state.opponentBlockSelection.teamId))" :alt="blockFaceLabel(d)" />
+                <template v-else>{{ blockFaceLabel(d) }}</template>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- BB2025 Foul Appearance in a Multiple Block (reRollForTargets): the attacking coach rerolls ONE failed target
+             with a server-offered source, or declines. Sources and targets are exactly the dialog's (store). -->
+        <div v-if="gameStore.state.reRollForTargets" v-pad-focus="{}"
+          class="multi-block-resolution reroll-for-targets"
+          :style="reactivePromptStyle('multiBlock')" title="Drag to move"
+          @pointerdown="startReactivePromptDrag('multiBlock', $event)">
+          <div class="mbr-title">{{ gameStore.state.reRollForTargets.reRolledAction.toUpperCase() }}</div>
+          <div class="rr-prompt-line rr-question">Reroll the failed {{ gameStore.state.reRollForTargets.reRolledAction }}
+            {{ gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }}?</div>
+          <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">Loner: the reroll is not guaranteed to help.</div>
+          <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
+            <span class="mbr-name">The roll against {{ t.target }} failed<template v-if="t.minimumRoll != null">, needs {{ t.minimumRoll }}+</template></span>
+            <div class="mbr-actions">
+              <button v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source" class="bp-opt"
+                :title="`${opt.label} on ${t.target}`" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
+                <span class="bp-opt-label">{{ opt.label }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="bp-actions">
+            <button class="bp-opt rr-decline-chip" data-pad-cancel title="No reroll"
+              @click="gameStore.resolveReRollForTargets(null)">No reroll</button>
+          </div>
         </div>
 
         <!-- Owner o66d: the legacy action hotbar is redundant in Order 66 (the context menu drives declares) —
@@ -15830,7 +15830,7 @@ function sendChat() {
               </div>
               <div v-if="gameStore.state.reRollPrompt.roll != null" class="rr-prompt-line">
                 <span>You rolled:</span>
-                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.reRollPrompt.roll" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
+                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
                 <span v-if="passRerollContext">{{ passRerollContext.result }}</span>
               </div>
               <div v-if="gameStore.state.reRollPrompt.needed != null" class="rr-prompt-line">
@@ -15846,7 +15846,7 @@ function sendChat() {
               <span class="rr-ctx-label">{{ gameStore.state.reRollPrompt.label }}</span>
               <span v-if="gameStore.state.reRollPrompt.result && !passRerollContext">Result: {{ gameStore.state.reRollPrompt.result }}</span>
               <D6Face v-if="gameStore.state.reRollPrompt.roll != null" class="sc-die rr-ctx-die"
-                :value="gameStore.state.reRollPrompt.roll" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
+                :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
               <span v-if="passRerollContext">{{ passRerollContext.result }}</span>
               <span v-if="gameStore.state.reRollPrompt.needed != null" class="sc-needed">needs <D6Face :value="gameStore.state.reRollPrompt.needed" :label="`Needed ${gameStore.state.reRollPrompt.needed}`" />+</span>
               <span v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext">Current roll is a FUMBLE.</span>
@@ -19587,43 +19587,7 @@ function sendChat() {
 .config-bar .quick-live b { color: #fff; font-size: max(var(--ui-min-primary-text-size, 16px), 0.864rem); }
 .quick-live-detail { color: #d3d6db; font-size: max(var(--ui-min-text-size, 12px), 0.684rem); letter-spacing: 0.048em; }
 .config-bar .quick-live[data-flash='true'] { animation: live-flash 0.4s ease-in-out 3; }
-/* Report modal (owner 2026-08-18) — rides the .cg-menu shell, amber-accented like the button. */
-.br-menu { max-width: 520px; border-color: var(--ui-accent); }
-.br-text {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
-  line-height: 1.35;
-}
-.br-count { text-align: right; margin: 2px 0 6px; }
-.br-attach {
-  border: 1px solid var(--ui-border);
-  border-radius: 5px;
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  background: color-mix(in srgb, var(--ui-surface-2) 60%, transparent);
-}
-.br-attach ul { margin: 4px 0 0; padding-left: 16px; }
-.br-attach li { font-size: max(var(--ui-min-text-size, 12px), 0.74rem); color: var(--ui-muted, #9aa); line-height: 1.5; }
-.br-error {
-  color: #ffb4b4;
-  border: 1px solid #a44;
-  border-radius: 5px;
-  padding: 6px 10px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.76rem);
-  margin: 0 0 8px;
-}
-.br-notice {
-  color: #ffe2a8;
-  border: 1px solid #a8843a;
-  border-radius: 5px;
-  padding: 6px 10px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.76rem);
-  margin: 0 0 8px;
-}
-.br-fallback { text-align: center; margin-top: 8px; }
-.br-fallback a { color: var(--ui-accent); }
+/* Report modal styles: components/BugReportModal.vue (owner 10-13). */
 /* Skill display has exactly two local presentation states: Icons / Markings. */
 .config-bar button.skill-mode-btn {
   font-family: Arial, Helvetica, sans-serif;

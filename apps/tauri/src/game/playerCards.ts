@@ -79,6 +79,40 @@ export function textFieldOwnsInput(focused: unknown): boolean {
   return el.isContentEditable === true;
 }
 
+/**
+ * Owner 2026-10-13: "Bug reports should swallow all keyboard entry. Currently if the confirm dialog is up, it sends the
+ * command through." Who owns a keydown before the in-game hotkeys (confirm, Enter = chat, Digit1-6 hotbar, pan, Esc
+ * cascade) may see it:
+ *  - the Report modal open: it owns EVERY key; Escape closes it (unless a send is in flight) and nothing else runs;
+ *  - a focused text control (textarea, text input, select, contenteditable): it owns every key but Escape, so a Space
+ *    typed in a note never confirms the open card, Enter never opens chat, a digit never picks a hotbar action.
+ *    Escape keeps its existing behaviour from a text field (the caller's own branches decide);
+ *  - otherwise the key passes to the game handler (a focused prompt BUTTON keeps its native activation there).
+ */
+export type GameKeyOwner = 'closeReport' | 'reportOwns' | 'textOwns' | 'pass';
+export interface GameKeyInput {
+  reportOpen: boolean;
+  /** A report send is in flight: Escape must not close it. */
+  reportBusy: boolean;
+  /** textFieldOwnsInput / keyboardOwnedByTextControl on the event target. */
+  textFieldFocused: boolean;
+  key: string;
+}
+export function gameKeyDecision(i: GameKeyInput): GameKeyOwner {
+  if (i.reportOpen) return i.key === 'Escape' && !i.reportBusy ? 'closeReport' : 'reportOwns';
+  if (i.textFieldFocused && i.key !== 'Escape') return 'textOwns';
+  return 'pass';
+}
+/**
+ * Astra review of the report fix: a key the open report owns whose target sits OUTSIDE the modal (focus on body, or a
+ * HUD button tabbed to) must not activate that control natively. Enter / Space are cancelled (no native End Turn
+ * click); Tab is cancelled and focus pulled back into the report.
+ */
+export function reportOutsideKey(key: string): { preventDefault: boolean; pullFocus: boolean } {
+  if (key === 'Tab') return { preventDefault: true, pullFocus: true };
+  return { preventDefault: key === 'Enter' || key === ' ' || key === 'Spacebar', pullFocus: false };
+}
+
 type Maybe<T> = T | null | undefined;
 /** The store slice read for "a decision card is up" (shapes as in game/store.ts state; the same list as the
  *  controller branch's crosshairGateInput `cardOpen`). */

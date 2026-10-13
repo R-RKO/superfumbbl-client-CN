@@ -3,8 +3,10 @@
 //
 // Upstream (bb2025 StepInitScatterPlayer -> StepRightStuff) sends the Throw Team-Mate flight and the landing roll as
 // separate model syncs a few ms apart: the `throwTeamMate` animation (+ the thrown player's landing coordinate), then
-// `rightStuffRoll` (failed) + the reroll dialog (reRolledAction "Right Stuff"). Both apply at once; the flight takes
-// ~640 ms on screen, so the card used to surface on the first frame of the flight, anchored to the moving token.
+// `rightStuffRoll` (failed) + the reroll dialog (reRolledAction "Right Stuff"). Both used to apply at once; the flight took
+// ~640 ms on screen, so the card used to surface on the first frame of the flight, anchored to the moving token. (Owner
+// 10-13: Modern now flies 1.2 s and the landing frame waits behind the flight in the playback queue; this hold still
+// covers the landing die's read beat; Classic has no hold.)
 //
 // This hold defers ONLY the card's presentation (the model and the server's dialog are live; nothing is answered and
 // no frame is held). The card is armed when, for the thrown player:
