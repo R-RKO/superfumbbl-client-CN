@@ -13802,11 +13802,11 @@ export class PitchRenderer {
     fa.tick = tick;
   }
 
-  // Owner 09-08: END TURN with idle players — a bouncing ▼ over EVERY unactivated own player plus a repeating gold
+  // Owner 09-08: END TURN with idle players — the pick arrow (owner 10-12) over EVERY unactivated own player plus a repeating gold
   // ring pulse on each, so the coach sees who has not acted before confirming. The host owns the lifecycle:
   // "End turn" clears at once; "Go back" arms a 2 s expiry; any player click clears (SpectateView).
   private unactivatedCues: {
-    nodes: { node: Text; tick: () => void }[];
+    nodes: { node: Container; tick: () => void }[];
     squares: [number, number][];
     pulse: ReturnType<typeof setTimeout> | null;
     clear: ReturnType<typeof setTimeout> | null;
@@ -13816,28 +13816,23 @@ export class PitchRenderer {
   showUnactivatedCues(playerIds: readonly string[], lifeMs?: number): void {
     this.clearUnactivatedCues();
     if (!this.app || playerIds.length === 0) return;
-    const nodes: { node: Text; tick: () => void }[] = [];
+    const nodes: { node: Container; tick: () => void }[] = [];
     const squares: [number, number][] = [];
     for (const playerId of playerIds) {
       const square = this.cueAnchorForPlayer(playerId);
       if (!square) continue;
       const [x, y] = square;
-      const tp = this.tokenPos(x, y);
-      const anchor = squareAnchor(x, y);
-      const scale = depthScale(x, y);
-      const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
-      node.anchor.set(0.5);
-      node.scale.set(scale);
-      const baseY = anchor.y - TILE_H * 0.5 * scale;
-      node.position.set(tp.x, baseY);
-      node.zIndex = this.depthZ(x, y) + 72;
+      // Owner 10-12: the same chunky over-head arrow every nomination flow uses (buildPickArrow: charge, Pick-Me-Up,
+      // player picks), its tip just over the head, not the small chest-height glyph. Same hop as the pick arrows.
+      const arrow = this.buildPickArrow([x, y]);
+      const node = arrow.node;
+      const baseY = node.position.y;
+      const scale = arrow.scale;
       this.effectsLayer.addChild(node);
       this.anchorEffect(node, x, y, true, true);
-      const t0 = performance.now();
       const tick = () => {
         if (node.destroyed) { this.app?.ticker.remove(tick); return; }
-        const t = performance.now() - t0;
-        node.y = baseY - 5 * scale * Math.max(0, Math.sin(t / 220)); // same bounce as the roster cue
+        node.y = baseY + Math.abs(Math.sin(performance.now() / 350)) * 6 * scale; // the pick arrows' hop
       };
       this.app.ticker.add(tick);
       nodes.push({ node, tick });
@@ -13883,7 +13878,8 @@ export class PitchRenderer {
     if (cue.clear) this.cancelTimer(cue.clear);
     for (const { node, tick } of cue.nodes) {
       this.app?.ticker.remove(tick);
-      if (!node.destroyed) { node.parent?.removeChild(node); node.destroy(); }
+      // The pick arrow is a Container with a Graphics child: destroy recursively (Astra 10-12).
+      if (!node.destroyed) { node.parent?.removeChild(node); node.destroy({ children: true }); }
     }
   }
 
