@@ -65,10 +65,13 @@ export type BlockProCompositeKind = BlockProCompositeOption['kind'];
  *   - the fallback needs the TRR property itself (the server spends a team reroll without re-checking,
  *     bb2025 RollMechanic.useReRoll:354-355), so LONER / Brilliant Coaching alone never offer it;
  *   - with a usable Team Mascot (MASCOT and no Brilliant Coaching / Pump up the Crowd / Star of the Show, upstream
- *     DialogExtensionMascot.teamReRollSource) the fallbacks are Mascot and Mascot-then-TRR; plain Pro TRR is not
- *     reachable there (the TRR box is disabled until Mascot is ticked). In the multiple-block dialog's one-die
- *     panel that box is never enabled (its Mascot box has no listener, :223-233), so upstream cannot send
- *     Pro Mascot TRR from there and neither do we.
+ *     DialogExtensionMascot.teamReRollSource) the fallbacks are Pro TRR, Pro Mascot and Pro Mascot TRR. Owner 10-13:
+ *     "We should be offering Pro + RR with Mascot as an option here." Upstream's Java UI hides plain Pro TRR behind
+ *     a Mascot (the TRR box is disabled until Mascot is ticked), but the server accepts it independently: with
+ *     source `Pro TRR` bb2025 RollMechanic.useReRoll:326-363 runs Pro and on failure goes straight to the team
+ *     reroll branch (:354) whether or not a Mascot exists (the Mascot branch only runs for Pro Mascot /
+ *     Pro Mascot TRR). In the multiple-block dialog's one-die panel the Mascot box has no listener (:223-233), so
+ *     upstream cannot send Pro Mascot TRR from there and neither do we: Pro TRR and Pro Mascot only.
  *  ONE-DIE rolls only. Upstream also shows the boxes on 2 and 3 dice, but its answer for a composite source carries
  *  no usable die index (single block: sendUseReRoll(BLOCK, source), DialogBlockRollPropertiesHandler:108) and the
  *  server then rerolls EVERY die (bb2025 StepBlockRoll:242-278 and StepBlockRollMultiple.roll:401-424 test
@@ -83,7 +86,7 @@ export function blockProCompositeOptions(dialogId: unknown, roll: Record<string,
   const trr = rr.includes('TRR');
   const mascot = rr.includes('MASCOT') && !['BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].some((p) => rr.includes(p));
   const sources = mascot
-    ? (trr && dialogId === 'blockRollProperties' ? ['Pro Mascot', 'Pro Mascot TRR'] : ['Pro Mascot'])
+    ? (trr ? (dialogId === 'blockRollProperties' ? ['Pro TRR', 'Pro Mascot', 'Pro Mascot TRR'] : ['Pro TRR', 'Pro Mascot']) : ['Pro Mascot'])
     : trr ? ['Pro TRR'] : [];
   return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source));
 }
