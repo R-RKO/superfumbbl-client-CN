@@ -123,6 +123,8 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   // token enters that square"): the first roll of a move into a square is shown on the token's arrival there. A
   // rerolled result replaces a die that is already up; a roller that is not moving is "arrived" at once.
   if (!reRolled && (id === 'dodgeRoll' || id === 'goForItRoll' || id === 'leapRoll')) result.die.awaitsArrival = true;
+  // Owner 10-13: the Throw Team-Mate landing roll likewise waits for the thrown player to come down on the square.
+  if (!reRolled && id === 'rightStuffRoll') result.die.awaitsArrival = true;
   // Owner 10-05: "The marker that says GFI, Dodge, etc, should persist on a failed roll until the roll is either
   // accepted or cleared. Teardown should occur at the same time as the die." The failed die (with its cause marker)
   // was held through the reroll offer only on the WATCHING client; the rolling coach's own die faded after its

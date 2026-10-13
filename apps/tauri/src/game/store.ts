@@ -44,7 +44,7 @@ import { reduceDriveProjection, type DriveProjection } from './driveProjection';
 import { spectatorFieldFlip, spectatorFixedFlip, viewerCoachName, viewerSide } from './spectatorView';
 import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, type BlitzProjection } from './blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
-import { computed, customRef, nextTick, reactive, shallowRef, triggerRef, watch } from 'vue';
+import { computed, customRef, nextTick, reactive, ref, shallowRef, triggerRef, watch } from 'vue';
 import { boardTurnKey, createBoardProjection, reduceBoardProjection } from './boardProjection';
 import {
   GameSession,
@@ -94,6 +94,7 @@ import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
+import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
 import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
 import {
@@ -1439,6 +1440,12 @@ const state = new Proxy(legacyState, {
       // Owner 10-11: the orientation follows Settings > Spectator and replay view, so it is not part of the cached HUD.
       if (key === 'fieldFlip') return { flip: publishedFieldFlip(position), seq: position.epoch };
       const hud = spectatorHud(position);
+      // Owner 10-13: a failed TTM landing's (read-only) reroll card waits for the landing die's read beat, as the coach's.
+      if (key === 'reRollPrompt') {
+        void ttmLandingHoldRev.value; // reactive: the card shows when the hold releases
+        const card = hud.reRollPrompt;
+        if (card && isRightStuffReRolledAction(card.reRolledAction) && ttmLandingHold.held(card.playerId)) return null;
+      }
       if (Object.prototype.hasOwnProperty.call(hud, key)) return Reflect.get(hud, key);
       if (spectatorTransientKeys.has(key)) {
         // Read even an absent property so Vue subscribes before the first cue arrives.
@@ -1486,8 +1493,49 @@ function publishActionDice(rolls: ActionDiceBatchState['rolls']): void {
   const queue = state.actionDiceQueue;
   state.actionDiceQueue = [...queue.slice(Math.max(0, queue.length - (ACTION_DICE_QUEUE_CAP - 1))), batch];
 }
+/** Owner 10-13 ("The reroll prompt for a failed landing roll on a TTM is appearing early and tracking the player"):
+ *  the landing reroll card waits for the thrown player's flight to end and for the landing die's read beat
+ *  (logic/ttmLandingPromptHold.ts). Presentation only: the dialog is live, nothing is answered, no frame waits. The
+ *  revision makes the spectator HUD getter (which hides a held card) reactive. */
+const ttmLandingHoldRev = ref(0);
+/** Review / live spectate: the publication of a played failed landing hands its die's show to the hold here. */
+let spectatorLandingDieShown: ((batch: ActionDiceBatchState | null) => void) | null = null;
+const ttmLandingHold = createTtmLandingPromptHold({
+  schedule: (callback, ms) => scheduleGameTimeout(callback, ms),
+  cancel: (handle) => cancelGameTimeout(handle as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
+  onChange: () => { ttmLandingHoldRev.value += 1; },
+});
+/** The landing die reads this long once it is on screen before the card goes up: the viewer-visible floor, the same
+ *  beat a dodge / rush die keeps when a reroll offer is queued behind it (MOVE_ROLL_VIEW_FLOOR_MS). */
+const TTM_LANDING_PROMPT_READ_MS = 450;
+/** Safety margin of the landing hold past the flight and the read beat (the die's arrival wait is bounded by it too). */
+const TTM_LANDING_PROMPT_SAFETY_MS = 1000;
+/** Astra 10-13 (MAJOR): Classic (ClassicView) draws the flight too (renderer.playThrow) and reads the same
+ *  `reRollPrompt`, but it has no die-show reporter, so a hold there would only ever end on its safety timer: Classic
+ *  keeps the card on the dialog frame, exactly as before (same gate as the kick-off catch staging). */
+function ttmLandingHoldApplies(): boolean {
+  return settings.uiMode !== 'classic';
+}
+// Astra 10-13 (confirmation): the gate is read when a hold starts, so a Modern -> Classic switch while a card is held
+// presents it at once (the arms still check their dialog instance). Classic -> Modern starts nothing retroactively.
+watch(() => settings.uiMode, (mode) => { if (mode === 'classic') ttmLandingHold.release(); }, { flush: 'sync' });
+/** Start the landing hold of `playerId` for a published failed landing die `batch` (its show report is the wake). */
+function beginTtmLandingHold(playerId: string, batch: ActionDiceBatchState | null): void {
+  if (!batch || playback.catchingUp || !ttmLandingHoldApplies()) return;
+  const shown = ttmLandingHold.begin(playerId, {
+    readMs: presentationMs(TTM_LANDING_PROMPT_READ_MS), safetyMarginMs: presentationMs(TTM_LANDING_PROMPT_SAFETY_MS),
+  });
+  whenActionDiceShown(batch, null, (msUntilShown) => shown(msUntilShown));
+}
+/** The failed, first (not rerolled) landing roll of this frame, if any. */
+function failedLandingRoll(reports: readonly Record<string, unknown>[]): Record<string, unknown> | undefined {
+  return reports.find((report) => String(report.reportId) === 'rightStuffRoll' && report.successful === false
+    && report.reRolled !== true && typeof report.playerId === 'string' && report.playerId !== '');
+}
 /** Null the newest-batch slot and empty the queue together (every reset / teardown site). */
 function clearActionDice(): void {
+  ttmLandingHold.drop(); // its show waiter goes with the dice below: the dropped card re-surfaces from the live dialog
   state.actionDice = null;
   state.actionDiceQueue = [];
   actionDiceClearEpoch += 1;
@@ -4727,6 +4775,25 @@ async function pauseSpectatorView(): Promise<void> {
         ? structuredClone(previous.durableProjection.apothecaryResult) : null;
       transitionInjuryOutcomes = structuredClone(previous?.durableProjection.injuryOutcomes
         ?? position.durableProjection.injuryOutcomes);
+      // Owner 10-13: every publication ends the previous position's landing hold. A PLAYED failed TTM landing that
+      // opens a reroll card holds that card until present() has shown the landing die and it has read (the die's show
+      // report is the wake, the hold's safety timer the backstop). A seek / snapshot / multi-step jump shows it at once.
+      ttmLandingHold.drop();
+      spectatorLandingDieShown = null;
+      if (!snap && previous && !playback.catchingUp && ttmLandingHoldApplies() && previous.cursor.sequence !== position.cursor.sequence) {
+        const card = position.durableProjection.reRollCard;
+        const played = history.eventAfter(previous.cursor);
+        const playedReports = played && played.cursor.sequence === position.cursor.sequence
+          ? ((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []) : [];
+        const landing = failedLandingRoll(playedReports);
+        if (card && landing && isRightStuffReRolledAction(card.reRolledAction) && card.playerId === String(landing.playerId)) {
+          // held from the publication itself (no frame of the card before present() runs); the die's show times it
+          const shown = ttmLandingHold.begin(card.playerId, {
+            readMs: presentationMs(TTM_LANDING_PROMPT_READ_MS), safetyMarginMs: presentationMs(TTM_LANDING_PROMPT_SAFETY_MS),
+          });
+          spectatorLandingDieShown = (batch) => whenActionDiceShown(batch, null, (msUntilShown) => shown(msUntilShown));
+        }
+      }
       spectatorPublication.publish(position, snap);
       // Owner 10-10: the injury token hold on the review path. A seek / snapshot draws the model as it is; a played
       // transition arms here, in the synchronous publication boundary (the model watcher has not flushed yet).
@@ -4998,6 +5065,9 @@ async function pauseSpectatorView(): Promise<void> {
           if (roll.modal) state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
         }
         if (dice.length) publishActionDice(dice);
+        // Owner 10-13: the landing die of a held TTM landing card is the hold's wake (see the publication above).
+        const landingShown = spectatorLandingDieShown;
+        if (landingShown && dice.some((die) => die.cause === 'ttm' && die.failed)) { spectatorLandingDieShown = null; landingShown(state.actionDice); }
       };
       const hasFail = firstRolls.some((roll) => roll.die?.failed || roll.modal?.ok === false || roll.trait?.successful === false);
       const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
@@ -8755,6 +8825,7 @@ function applyFrameContents(frame: QueuedFrame) {
         path.push([cx, cy]);
       }
       state.scatterAnim = { playerId: thrownId, path, seq: (state.scatterAnim?.seq ?? 0) + 1 };
+      ttmLandingHold.noteFlight(thrownId, (path.length - 1) * presentationMs(150)); // owner 10-13: the hop is part of the landing
     }
   }
   // B&C ph-2 (07-13): scatterPlayer while the ACTING player movesRandomly = the B&C throw-in scatter (the scattered player is the ACTOR here, not defenderId). ⚖ dest = the server square.
@@ -8975,6 +9046,8 @@ function applyFrameContents(frame: QueuedFrame) {
           } else if (!pacedPass) {
             const seq = (state.throwAnim?.seq ?? 0) + 1;
             state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound };
+            // Owner 10-13: the landing reroll card waits for this flight (ttmLandingHold).
+            if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, presentationMs(TTM_THROW_MS));
             // Owner 10-03: nothing behind a bomb throw (its explosion, the knockdowns, the server's destination clear)
             // applies until the bomb has landed - see bombFlightWaitMs.
             if (kind === 'throwBomb' && play.active) bombFlightHoldUntil = Date.now() + presentationMs(BOMB_FLIGHT_MS);
@@ -9282,6 +9355,10 @@ function applyFrameContents(frame: QueuedFrame) {
       const diceBeforeRolls = state.actionDice;
       pushDice([...firstRolls, ...reRolledRolls]);
       const firstRollsBatch = state.actionDice !== diceBeforeRolls ? state.actionDice : null;
+      // Owner 10-13: a failed TTM landing - its reroll card (surfaced below by the followups of this same frame) waits
+      // for the flight and for this die's read beat.
+      const failedLanding = failedLandingRoll(reports);
+      if (failedLanding) beginTtmLandingHold(String(failedLanding.playerId), firstRollsBatch);
       // Hold downstream presentation for action-roll readability; force the beat in play mode.
       // U8 (owner: NO drain before movement step 1 — drains at step 2+): a SUCCESS action-roll (the classic
       // dodge-off-step-1) often lands in an EARLIER frame than the move it precedes; its force-beat then holds the
@@ -11332,6 +11409,7 @@ function clearCinematics(hardGameBoundary = false) {
   blockPipeline.reset(); // Phase 1: drop any in-flight run so it can't gate the next game
   resetPresentation(); // #67: drop any in-flight movement drain so it can't leak into the next game
   pendingFireballBeats = 0;
+  ttmLandingHold.drop(); // owner 10-13: a held landing card never crosses a reset / seek / game change
 }
 
 /** Retire every presentation producer after a collapsed replay frame without erasing durable report/model state. */
@@ -18731,6 +18809,13 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
   // have not been shown. The staged catch's own publish is the wake (no watchdog); it is preserved by every flush and
   // dropped only by a full reset, after which the live dialog re-surfaces. Nothing is answered here.
   const stagedCatch = /catch/i.test(String(dp.reRolledAction ?? '')) ? queuedKickoffCatchFor(playerId) : null;
+  // Owner 10-13: a failed TTM landing's card goes up once the thrown player has landed and the landing die has read
+  // (ttmLandingHold). Until then the coach is not shown the card and so cannot answer it (keyboard / pad included), as
+  // with a dodge card queued behind its walk. A card the server withdrew meanwhile is not armed; a dropped hold (reset,
+  // seek, catch-up) forgets the de-dup key so the live dialog re-surfaces on the next followups pass.
+  if (isRightStuffReRolledAction(dp.reRolledAction) && ttmLandingHold.defer(playerId,
+    () => { if (dialogInstanceLive(reRollArmedKey)) armReRollPrompt(); },
+    () => { followupHandled.delete(key); })) return;
   if (stagedCatch) stagedCatch.arms.push(armReRollPrompt);
   else if (settings.order66 && play.active && movementDraining(playerId)) enqueuePromptBehind('reRoll', armReRollPrompt);
   else armReRollPrompt();

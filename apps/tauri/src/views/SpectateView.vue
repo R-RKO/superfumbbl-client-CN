@@ -37,6 +37,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { cardStatLine, positionStatLine } from '../game/statDisplay';
 import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing, movementStepsPending } from '../game/store';
+import { isRightStuffReRolledAction } from '../game/logic/ttmLandingPromptHold';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
@@ -405,10 +406,12 @@ import {
   gameServiceFromTarget,
   gameServiceLabel,
   resolveReportGameId,
-  sendBugReport,
+  sendBugReportWithScreenshotFallback,
   wireLogBasename,
   type BugReportLogRead,
 } from '../game/bugReport';
+import { captureClientWindowInBrowser, reportCaptureUnsettled, screenshotAttachment, type ReportCaptureResult } from '../game/bugReportScreenshot';
+import BugReportScreenshotPanel from '../components/BugReportScreenshotPanel.vue';
 // botGet/botPost: the token-auth seam (owner ruling 2026-08-17) lives once in forkChallenge.ts —
 // consolidated here rather than re-converting a 4th local copy; signatures are a drop-in match.
 import { botGet, botPost } from '../game/forkChallenge';
@@ -1929,13 +1932,75 @@ const reportAttachments = computed(() => {
     : 'Wire log: none (verbose wire logging is off in Settings)');
   const logLines = gameStore.state.log.length;
   items.push(`Client log: ${logLines ? `${Math.min(logLines, 200)} recent lines` : 'empty'}`);
+  items.push(reportShotLine.value);
   return items;
 });
 
+// Owner 10-13: "attach a screenshot automatically when the user selects bug report". Pressing Report captures the
+// client window FIRST (pitch extract + DOM snapshot, bugReportScreenshot.ts) and opens the dialog as soon as the live
+// DOM has been read, so the dialog is never in the picture. The rest (encoding) finishes behind the open dialog.
+// Only this entry captures; nothing runs in the background. The capture is dropped when the dialog closes.
+const reportShot = ref<ReportCaptureResult | null>(null);
+const reportShotInclude = ref(true);
+/** Astra (10-13): Send waits for the capture to settle, so nothing is attached the coach has not seen. */
+const reportSendBlocked = computed(() => reportCaptureUnsettled(reportShot.value));
+/** Shown in the dialog when the report went out but the relay refused its screenshot (413, sent again without). */
+const reportNotice = ref('');
+let reportCaptureGeneration = 0;
+/** The generation of the capture still reading the live DOM (0 = none). Generation-keyed so a closed dialog's late
+ *  capture can never clear the flag a newer one set (Astra: the reopen race). */
+let reportCaptureBusyGeneration = 0;
+let reportCaptureAbort: AbortController | null = null;
+
+/** The Report modal's attachment line for the picture, so the summary stays the truth about what is sent. */
+const reportShotLine = computed(() => {
+  const result = reportShot.value;
+  if (!result) return 'Screenshot: capturing...';
+  if (result.status !== 'ok') return 'Screenshot: none';
+  if (!reportShotInclude.value) return 'Screenshot: not included';
+  const { width, height, mimeType } = result.shot;
+  return `Screenshot: ${width} x ${height} ${mimeType === 'image/png' ? 'PNG' : 'JPEG'}`;
+});
+
 function openReport() {
+  if (reportOpen.value || reportCaptureBusyGeneration !== 0) return;
   reportError.value = '';
-  reportOpen.value = true;
+  reportNotice.value = '';
+  reportShot.value = null;
+  reportShotInclude.value = true;
+  const generation = ++reportCaptureGeneration;
+  reportCaptureBusyGeneration = generation;
+  const releaseBusy = () => { if (reportCaptureBusyGeneration === generation) reportCaptureBusyGeneration = 0; };
+  const abort = new AbortController();
+  reportCaptureAbort = abort;
+  const pitchElement = renderer ? pitchHost.value?.querySelector('canvas') ?? null : null;
+  const live = renderer;
+  const current = () => generation === reportCaptureGeneration && reportOpen.value;
+  void captureClientWindowInBrowser({
+    capturePitch: live ? () => live.captureFrame() : null,
+    pitchElement,
+    signal: abort.signal,
+    onSnapshotTaken: () => {
+      releaseBusy();
+      if (generation === reportCaptureGeneration) reportOpen.value = true;
+    },
+  }).then((result) => {
+    if (current()) reportShot.value = result;
+  }).catch(() => {
+    if (current()) reportShot.value = { status: 'failed', notes: [] };
+  }).finally(() => {
+    releaseBusy();
+    if (reportCaptureAbort === abort) reportCaptureAbort = null;
+  });
 }
+
+watch(reportOpen, (open) => {
+  if (open) return;
+  reportCaptureGeneration++;   // a capture still finishing lands nowhere
+  reportCaptureAbort?.abort(); // ... and stops at its next step instead of finishing for nobody
+  reportCaptureAbort = null;
+  reportShot.value = null;     // never keep the picture once the dialog is gone
+});
 
 /** Non-blocking feedback, on the existing chat-toast stack (owner's established idiom for
  *  "tell me, don't stop me"). */
@@ -1964,9 +2029,13 @@ async function readWireLogForReport(): Promise<BugReportLogRead | null> {
 
 async function submitReport() {
   const description = reportText.value.trim();
-  if (!description || reportBusy.value) return;
+  if (!description || reportBusy.value || reportSendBlocked.value) return;
+  // Astra (10-13, consent): the attachment decision (the image AND the checkbox) is frozen HERE, before the first
+  // await, from what the coach is looking at; nothing that changes after the click can ride along.
+  const screenshot = screenshotAttachment(reportShot.value, reportShotInclude.value);
   reportBusy.value = true;
   reportError.value = '';
+  reportNotice.value = '';
   try {
     const wireLog = await readWireLogForReport();
     const g = gameStore.game.value as (GameJson & {
@@ -1991,6 +2060,8 @@ async function submitReport() {
       appLog: formatAppLog(gameStore.state.log, gameStore.state.devLog),
       // Owner 08-19: triage sees settings instantly. Secret-free by the serializer's construction.
       settingsJson: serializeSettingsForFile(settings),
+      // Owner 10-13: the picture taken when Report was opened, only while the coach left it ticked (frozen above).
+      screenshot,
       context: {
         coach40k: settings.coach40k || null,
         fumbblCoach: settings.coach || null,
@@ -2005,9 +2076,15 @@ async function submitReport() {
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
       },
     });
-    await sendBugReport(payload, tauriFetch, botConfigBaseUrl());
-    reportOpen.value = false;
+    const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, botConfigBaseUrl());
     reportText.value = '';
+    if (screenshotDropped) {
+      // Astra: the relay refused the picture as too large (413) and the report went again without it. Say so in the
+      // dialog (it stays open, text cleared so nothing is sent twice) instead of a toast the coach may miss.
+      reportNotice.value = 'Your report was sent, but without the screenshot: the server said it was too large.';
+      return;
+    }
+    reportOpen.value = false;
     pushReportToast('🐞 Report sent — thanks! The wire log went with it.');
   } catch (error) {
     // The report is NOT lost: the modal stays open with the tester's text intact, and the Discord
@@ -3934,7 +4011,10 @@ watchDecisionSurface(
     }
     const follow = () => {
       if (!gameStore.state.reRollPrompt) { rerollMenuPos.ready = false; return; }
-      const pos = renderer?.playerScreenPos(p.playerId, sq);
+      // Owner 10-13: a TTM landing card sits on the server's landing square (the card is held until the thrown player
+      // has come down there), never on a token still in flight or hopping. Every other card keeps the token anchor.
+      const pos = (sq && isRightStuffReRolledAction(p.reRolledAction) ? renderer?.screenPosOf(sq) : null)
+        ?? renderer?.playerScreenPos(p.playerId, sq);
       const host = pitchHost.value;
       if (reactivePromptHeld.value !== 'reroll') {
         const placed = reRollPromptScreenPosition(pos, {
@@ -13429,6 +13509,9 @@ function sendChat() {
           <button class="cg-close" :disabled="reportBusy" @click="reportOpen = false">✕</button>
         </div>
 
+        <!-- Owner 10-13: the automatic screenshot sits ABOVE the description, first thing under the title. -->
+        <BugReportScreenshotPanel v-model="reportShotInclude" :result="reportShot" :disabled="reportBusy" />
+
         <label class="cg-field">What happened?
           <textarea v-model="reportText" class="br-text" rows="7" :maxlength="REPORT_MAX"
             placeholder="What did you do, what did you expect, and what happened instead?"></textarea>
@@ -13443,10 +13526,12 @@ function sendChat() {
         </div>
 
         <p v-if="reportError" class="br-error">{{ reportError }}</p>
+        <p v-if="reportNotice" class="br-notice" data-testid="br-notice">{{ reportNotice }}</p>
 
         <div class="cg-actions">
-          <button type="button" class="cg-cancel" :disabled="reportBusy" @click="reportOpen = false">Cancel</button>
-          <button type="button" class="cg-create" :disabled="reportBusy || !reportText.trim()"
+          <button type="button" class="cg-cancel" :disabled="reportBusy" @click="reportOpen = false">{{ reportNotice ? 'Close' : 'Cancel' }}</button>
+          <button type="button" class="cg-create" data-testid="br-send" :disabled="reportBusy || reportSendBlocked || !reportText.trim()"
+            :title="reportSendBlocked ? 'Waiting for the screenshot' : undefined"
             @click="submitReport">{{ reportBusy ? 'Sending…' : 'Send Report' }}</button>
         </div>
       </div>
@@ -19524,6 +19609,14 @@ function sendChat() {
 .br-error {
   color: #ffb4b4;
   border: 1px solid #a44;
+  border-radius: 5px;
+  padding: 6px 10px;
+  font-size: max(var(--ui-min-text-size, 12px), 0.76rem);
+  margin: 0 0 8px;
+}
+.br-notice {
+  color: #ffe2a8;
+  border: 1px solid #a8843a;
   border-radius: 5px;
   padding: 6px 10px;
   font-size: max(var(--ui-min-text-size, 12px), 0.76rem);

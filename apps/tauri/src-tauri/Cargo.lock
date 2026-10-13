@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "fumbbl40k"
-version = "1.0.197"
+version = "1.0.198"
 dependencies = [
  "base64 0.22.1",
  "discord-presence",

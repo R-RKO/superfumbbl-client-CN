@@ -2123,6 +2123,31 @@ export class PitchRenderer {
     if (wasEmpty) this.queueOverlayRedraw();
   }
 
+  /**
+   * Owner 10-13 (bug report screenshot): the pitch as it is on screen right now, for the Report dialog's automatic
+   * capture. A fresh render of the stage through `renderer.extract` over the screen frame (the WebGL drawing buffer is
+   * not preserved, so the live canvas itself cannot be read back), at the renderer's own resolution, plus the live
+   * canvas's CSS rect so the caller can place it. Null when no application is mounted or the extract fails.
+   * Read-only: no state, ticker or camera change.
+   */
+  captureFrame(): { canvas: HTMLCanvasElement; rect: { left: number; top: number; width: number; height: number } } | null {
+    const app = this.app;
+    if (!app) return null;
+    try {
+      const view = app.canvas as HTMLCanvasElement;
+      const box = view.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return null;
+      const canvas = app.renderer.extract.canvas({
+        target: app.stage,
+        frame: new Rectangle(0, 0, app.screen.width, app.screen.height),
+        clearColor: app.renderer.background.color,
+      }) as HTMLCanvasElement;
+      return { canvas, rect: { left: box.left, top: box.top, width: box.width, height: box.height } };
+    } catch {
+      return null;
+    }
+  }
+
   private destroyApplication(app: Application): void {
     if (this.destroyedApplications.has(app)) return;
     this.destroyedApplications.add(app);

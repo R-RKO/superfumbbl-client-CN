@@ -21,6 +21,7 @@
 
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { configWebUnreachableMessage, stripSecretFields } from './settings';
+import type { BugReportScreenshotAttachment } from './bugReportScreenshot';
 
 /** Owner cap on the free-text field. The textarea enforces it too; this is the authority. */
 export const BUG_REPORT_DESCRIPTION_MAX = 4000;
@@ -120,6 +121,9 @@ export interface BugReportInput {
    *  (serializeSettingsForFile), and re-stripped here anyway — belt and braces. */
   settingsJson?: string | null;
   context?: Record<string, unknown>;
+  /** Owner 10-13: the automatic capture taken when Report was opened, only when the coach left it ticked
+   *  (bugReportScreenshot.screenshotAttachment). Matches config-web's `screenshot` contract. */
+  screenshot?: BugReportScreenshotAttachment | null;
 }
 
 const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
@@ -232,6 +236,13 @@ export function buildBugReportPayload(input: BugReportInput): Record<string, unk
   if (input.appLog !== null) payload.appLog = input.appLog;
   const settings = sanitizeSettingsJsonForReport(input.settingsJson);
   if (settings !== null) payload.settings = settings;
+  if (input.screenshot) {
+    payload.screenshot = {
+      fileName: input.screenshot.fileName,
+      mimeType: input.screenshot.mimeType,
+      base64: input.screenshot.base64,
+    };
+  }
   return payload;
 }
 
@@ -257,6 +268,35 @@ export async function sendBugReport(
   }
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(String(data.error ?? `The server rejected the report (HTTP ${response.status}).`));
+    throw new BugReportHttpError(response.status, String(data.error ?? `The server rejected the report (HTTP ${response.status}).`));
   }
+}
+
+/** A non-OK answer from config-web; `status` lets the caller tell a too-large body (413) from anything else. */
+export class BugReportHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'BugReportHttpError';
+  }
+}
+
+/**
+ * Astra review (10-13): send, and when the relay answers 413 for a report that carries a screenshot, send ONCE more
+ * without the `screenshot` key, so an oversized picture never costs the coach their written report. Every other
+ * error (and a 413 on a report with no screenshot) is thrown unchanged. `screenshotDropped` tells the dialog to say so.
+ */
+export async function sendBugReportWithScreenshotFallback(
+  payload: Record<string, unknown>,
+  transport: BugReportTransport,
+  baseUrl: string,
+): Promise<{ screenshotDropped: boolean }> {
+  try {
+    await sendBugReport(payload, transport, baseUrl);
+    return { screenshotDropped: false };
+  } catch (error) {
+    if (!(error instanceof BugReportHttpError) || error.status !== 413 || !('screenshot' in payload)) throw error;
+  }
+  const { screenshot: _dropped, ...withoutScreenshot } = payload;
+  await sendBugReport(withoutScreenshot, transport, baseUrl);
+  return { screenshotDropped: true };
 }
