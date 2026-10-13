@@ -177,7 +177,8 @@ export interface AppSettings extends ConfirmationSettings {
   botConfigUrl: string;
   // video (F-2): renderScale 1 = 100% default; 0 remains the explicit Auto option. FPS is always bounded.
   renderScale: number;
-  fpsCap: number;
+  /** 'display' (owner 10-13) = match the monitor's measured refresh rate; resolved to a number before the renderer. */
+  fpsCap: number | 'display';
   /** Owner 08-19: stadium bowl on/off (Modern; Classic forces off via its preset). */
   showStadium: boolean;
   /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles, 'classic' = seat atlas + fan sprites (default again, owner 10-05). */
@@ -1013,7 +1014,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     const videoChoice = (value: unknown, allowed: readonly number[], fallback: number): number =>
       typeof value === 'number' && Number.isFinite(value) && allowed.includes(value) ? value : fallback;
     merged.renderScale = videoChoice(merged.renderScale, [0, 0.5, 0.75, 1, 1.5, 2, 3, 4], DEFAULTS.renderScale); // owner 09-05: 300/400% added
-    merged.fpsCap = videoChoice(merged.fpsCap, [30, 60, 120], DEFAULTS.fpsCap);
+    merged.fpsCap = merged.fpsCap === 'display' ? 'display' : videoChoice(merged.fpsCap, [30, 60, 120], 60); // owner 10-13: 'Match display'; never 0 / unbounded
     merged.soundStyles = raw.soundStyles && typeof raw.soundStyles === 'object' && !Array.isArray(raw.soundStyles)
       ? Object.fromEntries(Object.entries(raw.soundStyles).filter(([key, value]) => key.length > 0 && typeof value === 'string'))
       : { ...DEFAULTS.soundStyles };

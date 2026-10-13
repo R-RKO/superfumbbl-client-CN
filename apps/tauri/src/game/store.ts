@@ -802,6 +802,10 @@ const legacyState = reactive({
   squarePick: null as { squares: [number, number][]; skill?: string; kind: 'trickster' | 'raidingParty' | 'dumpOff' | 'safeHands' | 'wizard' | 'placeCarriedPlayer'; playerId?: string; seq: number } | null,
   /** o66aj: INTERACTIVE KICK PLACEMENT — my kick-off targets a receiving-half square → CLIENT_KICKOFF (resolveKickPlacement). Armed only for the interactive coach; headless keeps the auto-kick so driven games never hang. */
   kickPlacement: null as { squares: [number, number][]; seq: number } | null,
+  /** Owner 10-13 (Settings > Confirmations > Confirm kick-off square): the square the kicking coach clicked, held
+   *  for the "Kick to ...?" card. Client-only: nothing is sent until Confirm. Bound to the kickPlacement arm it was
+   *  picked under (`placementSeq`) and cleared with it, so it never outlives the kick-off aim or a reconnect. */
+  kickConfirm: null as { square: [number, number]; placementSeq: number; seq: number } | null,
   /** Owner 07-05: skill USED (skillUse report, used=true) — fading icon + toast. `anchored` (07-06 #1/#5) = pin to `square`, don't follow the live token (a pushed defender's reaction skill: Sidestep/Stand Firm/Fend/Grab). */
   skillUsed: null as { playerId: string; skill: string; square: [number, number]; name: string; toast?: string; anchored?: boolean; declined?: boolean;
     /** Owner 09-09: a SECOND pill on another player raised by the same report (Tentacles: the held mover). */
@@ -6704,6 +6708,15 @@ type KickoffPresentationOccurrence = {
 let kickoffPresentationOccurrence: KickoffPresentationOccurrence | null = null;
 let kickScatterPreviewSeq = 0;
 
+/** Owner 10-13 (Confirm kick-off square; Astra kickconfirm-2 P1): the server has the kick-off in flight (its scatter
+ *  or KICK frame arrived, a timeout kick included). A held square is void, and with the setting ON the armed aim goes
+ *  too, so a later click + Confirm can never send a second CLIENT_KICKOFF. With the setting OFF the aim is left exactly
+ *  as before (a sent click has already cleared it; the OFF path stays byte-identical). */
+function retireKickAimOnServerKick(): void {
+  state.kickConfirm = null;
+  if (settings.confirmKickoffSquare) state.kickPlacement = null;
+}
+
 function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
   const gameId = (game.value as { gameId?: string | number } | null)?.gameId;
   if (gameId == null) return;
@@ -6714,6 +6727,7 @@ function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
   const key = `${String(gameId)}:${event.commandNr}`;
   if (acceptedAuthoritativeKicks.has(key)) return;
   acceptedAuthoritativeKicks.add(key);
+  retireKickAimOnServerKick(); // owner 10-13: the server kicked (a timeout kick included)
   const occurrence = kickoffPresentationOccurrence;
   if (occurrence
     && occurrence.gameId === String(gameId)
@@ -9548,6 +9562,7 @@ function applyFrameContents(frame: QueuedFrame) {
   if (Array.isArray(scatterReport?.ballCoordinateEnd)) {
     const endpoint = scatterReport.ballCoordinateEnd as [number, number];
     unboundKickCommandNr = null; // a new kick-off: an unbound KICK of the previous one owns nothing any more
+    retireKickAimOnServerKick(); // owner 10-13: the kick-off has been taken
     try {
       const preview = projectKickScatterPreview(scatterReport);
       const commandNr = Number((cmd as { commandNr?: unknown }).commandNr);
@@ -11542,6 +11557,7 @@ function resetPlayback() {
   state.infoNotice = null; // owner 2026-07-08: fresh game — reset the informationOkay notice
   state.bloodlust = null; // owner 2026-07-08: fresh game — clear the vampire bloodlust card
   state.kickPlacement = null; // owner o66aj: fresh game — drop any armed kick-placement pick
+  state.kickConfirm = null; // owner 10-13: a pending kick-off confirmation never crosses a game or reconnect boundary
   clearKickSkillDialog(); // upstream kickSkill choice/landing candidates never cross a game or reconnect boundary
   clearAuthoritativeKickPresentation(true);
   unboundKickCommandNr = null;
@@ -22353,7 +22369,17 @@ function noteInducementPhase(g: GameJson, dlg: string | undefined): void {
   if (record && state.inducementBuy) record.mineSeen = true;
   state.inducementOwnDialogPending = !!record && record.observedStart && !record.mineSeen && buyDialog;
 }
+/** The seated coach's side is the one kicking off (the playing side kicks; o66aj kick placement). */
+function mySeatKicksOff(g: GameJson): boolean {
+  const mySideId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
+  const iAmHome = mySideId === (g.teamHome as { teamId?: string }).teamId;
+  return !!g.homePlaying === iAmHome;
+}
+
 function drivePregameStep() {
+  // Owner 10-13 / Astra kickconfirm-1 P1: a held kick-off square retires the moment it is no longer answerable
+  // (ownership, a dialog, the ball in play, a phase change, the setting off), ABOVE every early-return branch below.
+  if (state.kickConfirm && !gameStore.kickConfirmLive()) state.kickConfirm = null;
   const g = game.value;
   if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
@@ -23096,6 +23122,7 @@ function drivePregameStep() {
   if (g.turnMode !== 'kickoffReturn' && g.turnMode !== 'passBlock') state.onTheBallWaiting = null;
   // Clear kick-placement UI after leaving kickoff aim or once the ball is in play.
   if (state.kickPlacement && (g.turnMode !== 'kickoff' || !!g.fieldModel?.ballInPlay)) state.kickPlacement = null;
+  if (state.kickConfirm && state.kickConfirm.placementSeq !== state.kickPlacement?.seq) state.kickConfirm = null; // owner 10-13: dies with the aim
   // Solid Defence is setup-shaped; reuse setup placement with phase-specific eligibility.
   if (wisdomPreMode) { clearSetupLoop(); return; }
   if (g.turnMode === DWARFEN_WISDOM_TURN_MODE) {
@@ -23157,9 +23184,7 @@ function drivePregameStep() {
     // [17,7]. The kicker is the currently-playing side; the ball must land in the RECEIVING team's half (home
     // half = x 0..12, away = x 13..25). INTERACTIVE coach → arm the aim-square pick (resolveKickPlacement sends
     // CLIENT_KICKOFF); headless/non-interactive keeps the auto-kick so driven games never hang.
-    const mySideId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
-    const iAmHome = mySideId === (g.teamHome as { teamId?: string }).teamId;
-    const myKick = !!g.homePlaying === iAmHome; // the playing side kicks off
+    const myKick = mySeatKicksOff(g); // the playing side kicks off
     if (humanSetupSurface() && myKick) {
       if (!state.kickPlacement && once('kickoff-pick')) {
         // SEND-FRAME receiving half is ALWAYS x 13..25 (verified against upstream StepKickoff + FieldCoordinate.
@@ -24162,9 +24187,50 @@ export const gameStore = {
   resolveKickPlacement(coord: [number, number]) {
     if (!state.kickPlacement) return;
     if (!play.active || !game.value) { state.kickPlacement = null; return; }
+    state.kickConfirm = null;
     sendCommand({ netCommandId: NetCommandId.CLIENT_KICKOFF, ballCoordinate: [coord[0], coord[1]] });
     log('system', `play: KICK-OFF aimed at [${coord[0]},${coord[1]}] (server scatters)`);
     state.kickPlacement = null;
+  },
+  /** Owner 10-13: a click on an eligible kick square. Settings > Confirm kick-off square OFF (default) = exactly
+   *  today's send (resolveKickPlacement). ON = hold the square for the "Kick to ...?" card and send nothing; another
+   *  click re-targets (replaces the held square). */
+  pickKickSquare(coord: [number, number]) {
+    const placement = state.kickPlacement;
+    if (!placement) return;
+    if (!settings.confirmKickoffSquare) { gameStore.resolveKickPlacement(coord); return; }
+    if (!play.active || !game.value) return;
+    state.kickConfirm = { square: [coord[0], coord[1]], placementSeq: placement.seq, seq: (state.kickConfirm?.seq ?? 0) + 1 };
+    if (!gameStore.kickConfirmLive()) state.kickConfirm = null; // not answerable now (a dialog, ownership ...): hold nothing
+  },
+  /** Owner 10-13: Confirm on the kick-off card = the exact command the click sends with the setting off. Sends only
+   *  while the kick-off aim it was picked under is still armed (a phase change / reconnect drops it unsent). */
+  confirmKickSquare() {
+    const pending = gameStore.kickConfirmLive();
+    state.kickConfirm = null;
+    if (pending) gameStore.resolveKickPlacement(pending.square);
+  },
+  /** Owner 10-13: the held kick-off square, only while the server still has this coach aiming the kick-off it was
+   *  picked under: the setting on, seated, same kickPlacement arm, turnMode kickoff, ball not in play, no dialog
+   *  replacing the aim, and this seat still the kicking side. The card renders from this (and Confirm re-checks it),
+   *  so it closes the moment the server moves on, even before the store's own clear runs. */
+  kickConfirmLive(): { square: [number, number]; seq: number } | null {
+    const pending = state.kickConfirm;
+    const g = game.value;
+    if (!pending || !settings.confirmKickoffSquare || !play.active || !g) return null;
+    if (state.kickPlacement?.seq !== pending.placementSeq) return null;
+    if (g.turnMode !== 'kickoff' || !!g.fieldModel?.ballInPlay) return null;
+    // Astra kickconfirm-2 P1: only an ANSWER-BLOCKING dialog retires the card. A dialog the kick path itself sends
+    // through (commandPermittedByLock: staleDialogOutlivedPhase, e.g. the informational setupError SetupMechanic leaves
+    // up into kickoff) is compatible: the coach must still be able to kick.
+    const dialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
+    if (g.dialogParameter != null && !staleDialogOutlivedPhase(dialogId, g.turnMode)) return null;
+    if (!mySeatKicksOff(g)) return null;
+    return { square: pending.square, seq: pending.seq };
+  },
+  /** Owner 10-13: Go back / Escape on the kick-off card: drop the held square, keep aiming. No wire. */
+  cancelKickSquare() {
+    state.kickConfirm = null;
   },
   /** Dedicated Kick-after-roll pitch election. Ownership stays inside the shared controller. */
   registerKickElectionSurface(surface: KickElectionSurface): () => void {
@@ -28615,6 +28681,11 @@ export const gameStore = {
     triggerRef(game);
   },
 };
+
+// Owner 10-13 / Astra kickconfirm-1 (P1, P2): a held kick-off square retires as soon as it stops being answerable for
+// ANY reason (the ball in play, the setting switched off, a dialog, ownership, a phase change), not only when the
+// pregame driver next runs. The card and the crosshair lock follow kickConfirmLive and close with it.
+watch(() => gameStore.kickConfirmLive() === null, (dead) => { if (dead && state.kickConfirm) state.kickConfirm = null; }, { flush: 'sync' });
 
 // DEV verification hook: expose the REAL store instance — console dynamic imports otherwise create a second module copy whose pushes never render.
 if (import.meta.env.DEV) {

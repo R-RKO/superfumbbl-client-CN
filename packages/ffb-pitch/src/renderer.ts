@@ -24,6 +24,7 @@ import {
 import { AURA_RADIUS, auraEmitters, bombCells, catchTarget, foulTarget, interceptors, passTargetRoll } from './actions';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
+import { jumpTargetForPlayer, serverMoveSquareRolls, type ServerMoveRoll } from './jumpTarget';
 import {
   PITCH_COLS,
   PITCH_ROWS,
@@ -399,6 +400,10 @@ type MovementOverlayEntry = {
 };
 
 /** Uncommitted Rush costs on reachable squares should inform without competing with players or a queued path. */
+/** Owner 10-13: a step owing BOTH a rush and a dodge stacks them vertically, rush die on top and the dodge chip
+ *  directly below on the same x. The gap is the die's half height (~6.5) + 2 px + the chip's half height (~4.25),
+ *  times the depth scale so the stack stays attached at every depth and zoom. */
+export const ROLL_STACK_GAP = 13;
 const REACHABLE_RUSH_DIE_ALPHA = 1; // owner 09-09: the rest die keeps the moving die's opacity (was 0.6) // owner 09-08: 0.3 read too faint on the board
 /** Owner 2026-07-06 / 09-09: a Jump/Leap/Pogo lifts the sprite in one whole-flight arc, paced a touch slower than a
  *  step so it reads as a spring; a pending flag older than the TTL is dropped rather than arcing a later move. */
@@ -819,14 +824,14 @@ function equalStringSet(a: ReadonlySet<string> | null, b: ReadonlySet<string> | 
 }
 
 function equalMoveRollMap(
-  a: ReadonlyMap<string, { gfi: number; dodge: number }> | null,
-  b: ReadonlyMap<string, { gfi: number; dodge: number }> | null,
+  a: ReadonlyMap<string, ServerMoveRoll> | null,
+  b: ReadonlyMap<string, ServerMoveRoll> | null,
 ): boolean {
   if (a === b) return true;
   if (a === null || b === null || a.size !== b.size) return false;
   for (const [key, value] of a) {
     const other = b.get(key);
-    if (!other || other.gfi !== value.gfi || other.dodge !== value.dodge) return false;
+    if (!other || other.gfi !== value.gfi || other.dodge !== value.dodge || !!other.jump !== !!value.jump) return false;
   }
   return true;
 }
@@ -4307,11 +4312,16 @@ export class PitchRenderer {
   private tilePickGfi: Set<string> | null = null;
   /** Owner o66j (#9/#10/#11): the SERVER'S per-square minimum rolls for the eligible move tiles
    *  (`x,y`→{gfi,dodge}, 0 = not required). Drives the "D N+" dodge chip + the rush die drawn on each reachable
-   *  square, so the coach sees the dodge/GFI cost of every step BEFORE committing. Server-derived (⚖). */
-  private tilePickRolls: Map<string, { gfi: number; dodge: number }> | null = null;
-  setO66MoveRolls(rolls: Map<string, { gfi: number; dodge: number }> | null): void {
-    const next = rolls && rolls.size > 0
-      ? new Map(Array.from(rolls, ([key, value]) => [key, { gfi: value.gfi, dodge: value.dodge }]))
+   *  square, so the coach sees the dodge/GFI cost of every step BEFORE committing. Server-derived (⚖).
+   *  JLeav 10-13: an entry flagged `jump` (server squares while leaping) carries the JUMP target in `dodge` and is
+   *  drawn as the orange "J N+" chip, never as a rush die. */
+  private tilePickRolls: Map<string, ServerMoveRoll> | null = null;
+  setO66MoveRolls(rolls: ReadonlyMap<string, ServerMoveRoll> | null): void {
+    const next: Map<string, ServerMoveRoll> | null = rolls && rolls.size > 0
+      ? new Map(Array.from(rolls, ([key, value]): [string, ServerMoveRoll] => [
+        key,
+        value.jump ? { gfi: value.gfi, dodge: value.dodge, jump: true } : { gfi: value.gfi, dodge: value.dodge },
+      ]))
       : null;
     if (equalMoveRollMap(this.tilePickRolls, next)) return;
     this.tilePickRolls = next;
@@ -4690,6 +4700,9 @@ export class PitchRenderer {
    *  render as amber tiles; off-pitch ones render as X marks into the skirt (touchback). Rebuilt each pointermove. */
   private kickScatterMarker: Container | null = null;
   onKickPick: ((coord: [number, number]) => void) | null = null;
+  /** Owner 10-13 (Confirm kick-off square): the pending square the kick crosshair is LOCKED on while the "Confirm
+   *  Kickoff?" card is open. Pointer moves leave the aim markers alone; a click still re-targets (onKickPick). */
+  private kickPickLock: [number, number] | null = null;
   /** Owner 2026-07-06: per-aura shading modes ('always' every emitter, 'selected'
    *  only the selected player's, 'off' none). Each aura is surfaced independently;
    *  colours are friendly/opposition (see drawAuras + friendlyIsHome). */
@@ -4743,6 +4756,60 @@ export class PitchRenderer {
     if (next === this.southernPanExtension) return;
     this.southernPanExtension = next;
     this.clampCamera();
+  }
+  /** Bug 10-13 (JLeav, sideways): screen px at the top of the canvas that the host's fixed HUD covers (the coach plates,
+   *  the scoreboard, the turn timer). E-W only: there the sideline bands (dugouts + turn track) run along the TOP, so
+   *  the fit reserves this gutter and the pan may bring the band's top edge down to it - scrolled to the top, the
+   *  INJURED / KO / RESERVES boxes sit below the plates instead of under them. N-S keeps its dugouts at the sides and
+   *  is unchanged. */
+  private topHudClearance = 0;
+
+  setTopHudClearance(pixels: number): void {
+    const next = Number.isFinite(pixels) ? Math.max(0, Math.round(pixels)) : 0;
+    if (next === this.topHudClearance) return;
+    this.topHudClearance = next;
+    if (!this.app || this.clampToPitchEdge || getOrientation() !== 'ew') return;
+    // The wheel-out floor follows the gutter; the coach's zoom and pan are kept (only re-legalised).
+    this.cameraFitScale = this.currentFitScale();
+    this.updateOverlayScales();
+    this.clampCamera();
+  }
+  /** The top gutter the E-W pan keeps clear (0 in N-S and in Classic's pitch-edge clamp). */
+  private topHudReserve(): number {
+    return !this.clampToPitchEdge && getOrientation() === 'ew' ? this.topHudClearance : 0;
+  }
+  /** Astra P2-3: the part of the gutter the FIT must reserve - only what the content above the top band (the stands,
+   *  with the stadium on) does not already cover at the unreserved fit. Stadium off: the whole gutter; stadium on:
+   *  usually nothing, so the fit (and the pixel-zoom floor) stays as it was. */
+  private topHudFitReserve(fitAt: (reserveTop: number) => number): number {
+    const gutter = this.topHudReserve();
+    if (gutter <= 0) return 0;
+    const content = this.readContentBounds() ?? this.contentBounds;
+    const bandTop = Math.min(...this.sidelineBandWorldRects().map((r) => r.y0));
+    const above = content ? Math.max(0, bandTop - content.y) : 0;
+    return Math.max(0, gutter - above * fitAt(0));
+  }
+  /** World AABBs of the two sideline bands - the 4-square margins either side of the pitch that hold the dugouts
+   *  (columns 15.5-18.5 / -3.5..-1.5 plus the half-square gap) and the turn track, end zone to end zone. */
+  private sidelineBandWorldRects(): Array<{ x0: number; y0: number; x1: number; y1: number }> {
+    return [[-4, 0], [PITCH_ROWS, PITCH_ROWS + 4]].map(([w0, w1]) => {
+      const pts = [extPoint(0, w0!), extPoint(PITCH_COLS, w0!), extPoint(0, w1!), extPoint(PITCH_COLS, w1!)];
+      return {
+        x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)),
+        x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)),
+      };
+    });
+  }
+  /** Viewport y of the canvas's top edge (host chrome measured in client px converts to canvas px with it). */
+  canvasClientTop(): number | null {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
+    return canvas ? canvas.getBoundingClientRect().top : null;
+  }
+  /** Screen rects (canvas px) of the two sideline bands at the current camera; empty before the stage exists. */
+  sidelineBandScreenRects(): Array<{ x0: number; y0: number; x1: number; y1: number }> {
+    if (!this.app) return [];
+    const s = this.world.scale.x, ox = this.world.position.x, oy = this.world.position.y;
+    return this.sidelineBandWorldRects().map((r) => ({ x0: ox + r.x0 * s, y0: oy + r.y0 * s, x1: ox + r.x1 * s, y1: oy + r.y1 * s }));
   }
   /** World-local bounds of all rendered content, refreshed on layout (resetCamera).
    *  The clamp works against this so it tracks the furthest asset on each axis. */
@@ -4815,7 +4882,11 @@ export class PitchRenderer {
         // devicePixelRatio blew the canvas CSS up by that factor (2.5× on hi-DPI),
         // overflowing the page and making the UI look duplicated.
         autoDensity: true,
+        // Owner 10-13: never an unbounded loop. Start stopped; bounded below, then started.
+        autoStart: false,
       });
+      app.ticker.maxFPS = 60;
+      app.start?.(); // optional: test doubles of Application may not implement start
     } catch (error) {
       if (!this.initActive(generation, app)) {
         this.destroyApplication(app);
@@ -8809,14 +8880,20 @@ export class PitchRenderer {
       const ds = depthScale(sx, sy);
       if (rolls) {
         const both = rolls.dodge > 0 && rolls.gfi > 0;
-        if (rolls.dodge > 0) {
-          const chip = this.buildDodgeChip(a.x + (both ? -9 * ds : 0), a.y, ds * 0.5, rolls.dodge);
+        if (rolls.dodge > 0 && rolls.jump) {
+          // JLeav 10-13: the server's jump price (AG + jump modifiers), not a walk-reach rush die. Stacked under the
+          // rush die like the dodge chip when the square owes both.
+          const chip = this.buildJumpChip(a.x, a.y + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+          chip.alpha = 0.9;
+          this.pathLayer.addChild(chip);
+        } else if (rolls.dodge > 0) {
+          const chip = this.buildDodgeChip(a.x, a.y + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         }
         if (rolls.gfi > 0) {
           this.pathLayer.addChild(
-            this.buildReachableRushDie(a.x + (both ? 10 * ds : 0), a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
+            this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
           );
         }
       } else if (legacyRush) {
@@ -9005,13 +9082,13 @@ export class PitchRenderer {
                   `o66-path:dodge:${stepKey}`,
                   'path',
                   `${target}:${ds}`,
-                  a.x + (both ? -9 * ds : 0),
-                  cy,
+                  a.x,
+                  cy + (both ? ROLL_STACK_GAP * ds : 0),
                   0.95,
                   () => this.buildDodgeChip(0, 0, ds * 0.5, target),
                 );
               } else {
-                const chip = this.buildDodgeChip(a.x + (both ? -9 * ds : 0), cy, ds * 0.5, target);
+                const chip = this.buildDodgeChip(a.x, cy + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, target);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
             }
@@ -9022,13 +9099,13 @@ export class PitchRenderer {
                   `o66-path:rush:${stepKey}`,
                   'path',
                   `${target}:${ds}`,
-                  a.x + (both ? 10 * ds : 0),
+                  a.x,
                   cy,
                   1,
                   () => this.buildRollDie(0, 0, ds * 0.8, target), // owner 09-09: 0.8 x depth like the reach dice
                 );
               } else {
-                const die = this.buildRollDie(a.x + (both ? 10 * ds : 0), cy, ds * 0.8, target);
+                const die = this.buildRollDie(a.x, cy, ds * 0.8, target);
                 die.alpha = 1; this.pathLayer.addChild(die); // owner 09-08: planned rush die fully opaque
               }
             }
@@ -9303,11 +9380,12 @@ export class PitchRenderer {
         const destMarks = oppositionCounts.get(squareKey(sx, sy)) ?? 0;
         const dodgeDestMarks = oppositionDodgeMarks.get(squareKey(sx, sy)) ?? 0;
         if (this.jumpSteps.has(i)) {
-          // jump over a downed player: AG test, modified by markers of the
-          // square jumped from AND the landing square (FGUR p.23)
-          const sourceMarks = oppositionCounts.get(squareKey(fromSquare[0], fromSquare[1])) ?? 0;
-          const target = Math.min(6, Math.max(2, info.player.agility + sourceMarks + destMarks));
-          this.pathLayer.addChild(this.buildJumpChip(a.x, a.y - 3, stepScale, target));
+          // JLeav 10-13: a jump over a downed player shows the SERVER's price when it sent one (a leaping move
+          // square's minimumRollDodge); otherwise the mirrored BB2025 projection (jumpTarget.ts). Unknown AG draws
+          // no chip rather than a guessed 2+.
+          const priced = i === 0 && this.selectedIsActor() ? this.serverJumpRoll(sx, sy) : null;
+          const target = priced ?? jumpTargetForPlayer(this.game, this.selectedPlayerId, fromSquare, [sx, sy]);
+          if (target !== null) this.pathLayer.addChild(this.buildJumpChip(a.x, a.y - 3, stepScale, target));
           fromSquare = [sx, sy];
           return;
         }
@@ -10169,6 +10247,13 @@ export class PitchRenderer {
     return content;
   }
 
+  /** The server's jump price for a square: a leaping move square's minimumRollDodge (null when unpriced). Only
+   *  valid for a jump from the acting player's CURRENT square, which is what the server priced. */
+  private serverJumpRoll(sx: number, sy: number): number | null {
+    const roll = this.tilePickRolls?.get(squareKey(sx, sy)) ?? serverMoveSquareRolls(this.game).get(squareKey(sx, sy));
+    return roll?.jump && roll.dodge > 0 ? roll.dodge : null;
+  }
+
   /** Orange jump chip: "J" plus the modified agility face needed (RC4). */
   private buildJumpChip(x: number, y: number, scale: number, target: number): Container {
     const chip = new Container();
@@ -10994,8 +11079,9 @@ export class PitchRenderer {
     if (this.pointerHidden === hidden) return;
     this.pointerHidden = hidden;
     const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
-    if (hidden && this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
-    if (hidden) this.kickHoverMarker = null;
+    // Owner 10-13 (Astra kickconfirm-2 P2): a LOCKED kick square is not pointer art; its reticle stays in controller mode.
+    if (hidden && !this.kickPickLock && this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+    if (hidden && !this.kickPickLock) this.kickHoverMarker = null;
     if (canvas) canvas.style.cursor = hidden ? 'none' : this.restingCursor();
   }
   isPointerHidden(): boolean { return this.pointerHidden; }
@@ -11784,7 +11870,7 @@ export class PitchRenderer {
    * Standard video options (F-2, owner 2026-07-02): render resolution scale
    * (0 = match devicePixelRatio) and FPS cap (0 = uncapped).
    */
-  setVideoOptions(options: { renderScale?: number; fpsCap?: number }): void {
+  setVideoOptions(options: { renderScale?: number; fpsCap?: number | 'display' }): void {
     if (!this.app) return;
     // Owner 09-05: the scale is a MULTIPLIER of the display's device pixel ratio — 100% = one canvas pixel per
     // PHYSICAL pixel (the OS no longer resamples the canvas: Windows 125/150/250% scaling made every 'native' sprite
@@ -11796,7 +11882,9 @@ export class PitchRenderer {
       this.resize();
       this.requantizeZoom();
     }
-    this.app.ticker.maxFPS = options.fpsCap ?? 0;
+    // Owner 10-13: always bounded. Callers resolve 'display' to a number; a stray string/0/NaN (e.g. Classic) gets 60.
+    const cap = options.fpsCap;
+    this.app.ticker.maxFPS = typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : 60;
   }
 
   /**
@@ -12773,6 +12861,7 @@ export class PitchRenderer {
     this.kickPickSquares = squares && squares.length ? new Set(squares.map(([x, y]) => `${x},${y}`)) : null;
     this.clearHoverSquareMarker();
     if (!this.kickPickSquares) {
+      this.kickPickLock = null;
       if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
       this.kickHoverMarker = null;
       if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
@@ -12780,6 +12869,39 @@ export class PitchRenderer {
       this.kickHoverLast = null;
       if (this.app) this.canvasCursor(this.app.canvas as HTMLCanvasElement, this.restingCursor());
     }
+  }
+
+  /** Owner 10-13 (Confirm kick-off square): lock the kick crosshair + scatter grid on `square` (the pending kick
+   *  square), anchored on the square exactly as the hover aim draws it, or release it (null) back to hover-follow.
+   *  Only meaningful while the kick pick is armed. */
+  setKickPickLock(square: [number, number] | null): void {
+    this.kickPickLock = square && this.kickPickSquares ? [square[0], square[1]] : null;
+    if (!this.kickPickLock) return;
+    this.drawKickAim(this.kickPickLock[0], this.kickPickLock[1], null);
+  }
+
+  /** The kick square the crosshair is locked on (Confirm kick-off square), or null while it follows the pointer. */
+  kickPickLockedSquare(): [number, number] | null {
+    return this.kickPickLock ? [this.kickPickLock[0], this.kickPickLock[1]] : null;
+  }
+
+  /** The kick aim markers on square (sx,sy): the scatter-deviation grid plus the ball crosshair. `freeFollow` = the
+   *  pointer's world position (hover aim) or null to sit on the square's anchor (reprojection, a locked square). */
+  private drawKickAim(sx: number, sy: number, freeFollow: { x: number; y: number } | null): void {
+    if (!this.kickPickSquares) return;
+    const legal = this.kickPickSquares.has(`${sx},${sy}`);
+    if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
+    this.kickScatterMarker = this.buildKickScatterGrid(sx, sy);
+    this.kickHoverLast = [sx, sy];
+    this.kickScatterMarker.alpha = legal ? 1 : 0.45;
+    this.overlayLayer.addChild(this.kickScatterMarker);
+    if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+    // Owner o66mg: no pointer-following cursor art in controller mode; a LOCKED square is not pointer art, it stays.
+    if (this.pointerHidden && !this.kickPickLock) { this.kickHoverMarker = null; return; }
+    this.kickHoverMarker = this.buildKickBallCrosshair([sx, sy]);
+    if (freeFollow) this.kickHoverMarker.position.set(freeFollow.x, freeFollow.y); // free-follow: override the square anchor
+    this.kickHoverMarker.alpha = legal ? 1 : 0.4;
+    this.overlayLayer.addChild(this.kickHoverMarker);
   }
 
   /** Owner o66 #13: build the kick SCATTER-DEVIATION grid anchored on the aimed square (cx,cy). The ball deviates
@@ -13631,21 +13753,12 @@ export class PitchRenderer {
     }
     this.ballOutFlight?.reproject(); // the ball-out stand-in + TOUCHBACK / OUT OF BOUNDS stamp (elapsed time kept)
     // The kicking coach's aim markers are rebuilt only on pointer move: rebuild them from the last hovered square.
-    const hover = this.kickHoverLast;
+    const hover = this.kickPickLock ?? this.kickHoverLast;
     if (hover && this.kickPickSquares && this.kickScatterMarker && !this.kickScatterMarker.destroyed) {
-      const legal = this.kickPickSquares.has(`${hover[0]},${hover[1]}`);
-      this.kickScatterMarker.destroy({ children: true });
-      this.kickScatterMarker = this.buildKickScatterGrid(hover[0], hover[1]);
-      this.kickScatterMarker.alpha = legal ? 1 : 0.45;
-      this.overlayLayer.addChild(this.kickScatterMarker);
-      if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
       // The pointer has not moved, so its old world position means nothing under the new projection: the
-      // crosshair sits on the hovered square's anchor until the next pointer move free-follows again.
+      // crosshair sits on the hovered (or locked) square's anchor until the next pointer move free-follows again.
       // Controller (owner o66mg): no pointer-following cursor art while the pad crosshair hides the pointer.
-      if (this.pointerHidden) { this.kickHoverMarker = null; return; }
-      this.kickHoverMarker = this.buildKickBallCrosshair([hover[0], hover[1]]);
-      this.kickHoverMarker.alpha = legal ? 1 : 0.4;
-      this.overlayLayer.addChild(this.kickHoverMarker);
+      this.drawKickAim(hover[0], hover[1], null);
     }
   }
 
@@ -16739,9 +16852,10 @@ export class PitchRenderer {
   }
   /** Screen px kept clear around the pitch in the full-pitch view (each side). */
   private static readonly PITCH_FIT_MARGIN = 6;
-  private fitScaleFor(worldW: number, worldH: number, margin: number): number {
+  private fitScaleFor(worldW: number, worldH: number, margin: number, reserveTop = 0): number {
     if (!this.app) return this.cameraFitScale;
-    return this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (this.app.screen.height - margin) / worldH), 'floor');
+    const h = Math.max(margin + 1, this.app.screen.height - reserveTop);
+    return this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (h - margin) / worldH), 'floor');
   }
 
   /** The fit scale for the CURRENT viewport (resetCamera's maths without moving the camera) — Astra 09-14: a kept
@@ -16751,7 +16865,8 @@ export class PitchRenderer {
     const edge = this.clampToPitchEdge;
     const padW = edge ? 0 : ew ? 0 : 2 * 4 * TILE_W;
     const padH = edge ? 0 : ew ? 2 * 4 * TILE_H : 0;
-    return this.fitScaleFor(worldWidth() + padW, worldHeight() + padH, 24);
+    const w = worldWidth() + padW, h = worldHeight() + padH;
+    return this.fitScaleFor(w, h, 24, this.topHudFitReserve((r) => this.fitScaleFor(w, h, 24, r)));
   }
 
   /** A kept (diverged) camera after the host changed size: refresh the fit reference, refit if the view now sits at or
@@ -16790,7 +16905,8 @@ export class PitchRenderer {
     const offY = edge ? 0 : ew ? dugoutH : 0;
     const worldW = worldWidth() + padW;
     const worldH = worldHeight() + padH;
-    const scale = this.fitScaleFor(worldW, worldH, margin);
+    // bug 10-13: E-W keeps the HUD gutter (only the part the stands do not already cover, Astra P2-3)
+    const scale = this.fitScaleFor(worldW, worldH, margin, this.topHudFitReserve((r) => this.fitScaleFor(worldW, worldH, margin, r)));
     this.cameraFitScale = scale; // 100% reference for badge zoom scaling + the wheel-out floor
     // Owner 09-24: the DEFAULT view is the ladder's 2x rung (the third step in from the stadium fit), centred on
     // the pitch — not the whole-stadium fit (the fit stays the wheel-out floor). offX/offY only shape the fit.
@@ -16829,15 +16945,20 @@ export class PitchRenderer {
   private clampCamera(): void {
     if (!this.app || !this.clampToPitch) return;
     const scale = this.world.scale.x;
-    const clampAxis = (pos: number, bMin: number, bSize: number, screen: number, endExtension = 0): number => {
+    // `startTarget`: a position the camera must be able to reach toward the START edge (bug 10-13: E-W's top HUD
+    // gutter - the position that puts the sideline band's top edge at the gutter). -Infinity = none (unchanged).
+    const clampAxis = (pos: number, bMin: number, bSize: number, screen: number, endExtension = 0, startTarget = -Infinity): number => {
       const size = bSize * scale;
       if (size <= screen) {
         const centre = (screen - size) / 2 - bMin * scale;
         // Normally a fit-size axis locks to centre. Fullscreen's southern extension deliberately permits only
         // additional travel toward the far/end edge while retaining the existing centred reset position.
-        return Math.min(centre, Math.max(centre - endExtension, pos));
+        // Bug 10-13: with a start target the resting position moves off centre toward it, as far as the content
+        // still fits on screen, and the camera may travel on to the target itself.
+        const rest = Math.max(centre, Math.min(startTarget, screen - (bMin + bSize) * scale));
+        return Math.min(Math.max(rest, startTarget), Math.max(rest - endExtension, pos));
       }
-      const hi = -bMin * scale; // min edge pinned to the viewport start
+      const hi = Math.max(-bMin * scale, startTarget); // min edge pinned to the viewport start (or the HUD gutter)
       const lo = screen - (bMin + bSize) * scale - endExtension; // max edge + optional HUD clearance
       return Math.min(hi, Math.max(lo, pos));
     };
@@ -16856,14 +16977,17 @@ export class PitchRenderer {
     const xMin = (ew ? 0 : -dugoutW) + sideInset;
     const xSize = worldWidth() + (ew ? 0 : 2 * dugoutW) - sideInset * 2;
     this.world.position.x = clampAxis(this.world.position.x, xMin, xSize, this.app.screen.width);
-    // Y → full rendered-content extent.
+    // Y → full rendered-content extent. Bug 10-13: in E-W the top sideline band can always come down below the HUD.
     if (this.contentBounds) {
+      const reserve = this.topHudReserve();
+      const bandTop = reserve > 0 ? Math.min(...this.sidelineBandWorldRects().map((r) => r.y0)) : 0;
       this.world.position.y = clampAxis(
         this.world.position.y,
         this.contentBounds.y,
         this.contentBounds.height,
         this.app.screen.height,
         this.southernPanExtension,
+        reserve > 0 ? reserve - bandTop * scale : -Infinity,
       );
     }
   }
@@ -21208,21 +21332,17 @@ export class PitchRenderer {
     // when the placement cleared without a fresh pointermove).
     if (this.kickPickSquares) {
       this.clearHoverSquareMarker();
-      if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+      // Owner 10-13: a LOCKED kick square (Confirm kick-off square card open) ignores the pointer; clicks re-target.
+      if (this.kickPickLock) {
+        // the locked reticle is kept, or rebuilt on its square if anything took it down
+        if (!this.kickHoverMarker || this.kickHoverMarker.destroyed) this.drawKickAim(this.kickPickLock[0], this.kickPickLock[1], null);
+        this.canvasCursor(canvas, 'crosshair');
+        return;
+      }
       // Owner o66 #13: the SCATTER-DEVIATION grid rides the cursor, anchored on the SNAPPED aimed square (the
       // ball's landing square if clicked here) even though the crosshair itself free-follows the raw pointer.
-      if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
-      this.kickScatterMarker = this.buildKickScatterGrid(sx, sy);
-      this.kickHoverLast = [sx, sy];
-      this.kickScatterMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.45;
-      this.overlayLayer.addChild(this.kickScatterMarker);
       // Owner o66mg: no pointer-following cursor art in controller mode (the rail marks the square).
-      if (!this.pointerHidden) {
-        this.kickHoverMarker = this.buildKickBallCrosshair([sx, sy]);
-        this.kickHoverMarker.position.set(worldX, worldY); // free-follow: override the square anchor
-        this.kickHoverMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.4;
-        this.overlayLayer.addChild(this.kickHoverMarker);
-      } else this.kickHoverMarker = null;
+      this.drawKickAim(sx, sy, { x: worldX, y: worldY });
       this.canvasCursor(canvas, 'crosshair');
       return;
     }

@@ -205,13 +205,45 @@ function shown(marking: string): string {
   const chars = [...drawn(marking)];
   return chars.length > SHOWN_MAX ? `${chars.slice(0, SHOWN_MAX).join('')}…` : chars.join('');
 }
+
+// The slider track fill (same as App.vue's v-fill-range): paints the track up to the thumb.
+function fillRange(el: HTMLInputElement): void {
+  const min = Number(el.min || 0), max = Number(el.max || 100), v = Number(el.value);
+  el.style.setProperty('--fill', `${max > min ? Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100)) : 0}%`);
+}
+const vFillRange = {
+  mounted(el: HTMLInputElement) { fillRange(el); el.addEventListener('input', () => fillRange(el)); },
+  updated(el: HTMLInputElement) { fillRange(el); },
+};
 </script>
 
 <template>
   <fieldset class="settings-group skill-markings" data-testid="skill-markings" :aria-busy="busy">
     <legend>Skill markings</legend>
 
-    <!-- SOURCE -->
+    <!-- APPEARANCE (owner 10-13: was its own "Skill marking appearance" box) -->
+    <div class="mk-appearance" role="group" aria-label="How markings look on the pitch">
+      <label class="mk-field">
+        <span>Color</span>
+        <input v-model="settings.skillMarkingColor" type="color" />
+      </label>
+      <label class="mk-field">
+        <span>Font</span>
+        <select v-model="settings.skillMarkingFont" class="mk-input">
+          <option value="arial">Arial / Helvetica</option>
+          <option value="helvetica">Helvetica / Arial</option>
+          <option value="system">System sans</option>
+          <option value="nuffle">Nuffle</option>
+        </select>
+      </label>
+      <label class="mk-field mk-field-size">
+        <span>Size {{ settings.skillMarkingSize }}px</span>
+        <input v-model.number="settings.skillMarkingSize" v-fill-range type="range" min="6" max="24" step="1" />
+      </label>
+    </div>
+    <p class="hint">All glyphs for a player are antialiased and kept together on one line.</p>
+
+    <!-- SOURCE: the fumbbl.com import, a compact sub-row of this same box -->
     <div class="mk-source" role="group" aria-label="Where the markings come from">
       <p class="mk-origin" data-testid="markings-origin">
         <template v-if="settings.markingsImportCoach">
@@ -342,7 +374,12 @@ function shown(marking: string): string {
 
 <style scoped>
 .skill-markings { container-type: inline-size; gap: 0.6rem; min-width: 0; }
-.mk-source { display: grid; gap: 0.35rem; }
+.mk-appearance { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; }
+.mk-field-size { flex: 1 1 10em; }
+/* Settings labels are primary text (white, primary floor); only annotations stay grey at the small floor (owner 07-14). */
+.mk-appearance .mk-field { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-text); }
+.mk-appearance .mk-input { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); }
+.mk-source { display: grid; gap: 0.35rem; padding-top: 0.5rem; border-top: 1px solid var(--ui-border); }
 .mk-origin { margin: 0; color: var(--ui-text); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
 .mk-origin b { color: var(--ui-accent); }
 .mk-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }

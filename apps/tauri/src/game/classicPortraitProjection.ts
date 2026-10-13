@@ -131,7 +131,7 @@ export function classicPortraitVisualRevision(
 
 export interface ClassicVideoOptions {
   renderScale: number;
-  fpsCap: number;
+  fpsCap: number | 'display';
 }
 
 /** Live Classic video parity with Modern. Initial application remains in the

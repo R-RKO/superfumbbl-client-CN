@@ -354,7 +354,10 @@ export function beginScaledPanelResize(options: {
     ...current,
     scale: scaleFromPointerDelta(baseScale, rect.width, nextEvent.clientX - startX, options.minScale ?? 0.4, ceiling),
   });
+  let finished = false;
   const finish = () => {
+    if (finished) return; // bug 10-13 (Astra): idempotent, since pointerup AND the host's cancel / blur end may both call it
+    finished = true;
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', finish);
     const finalRect = panel.getBoundingClientRect();

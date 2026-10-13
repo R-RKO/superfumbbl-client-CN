@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
+import { measuredRefreshHz, resolveFpsCap, trackDisplayRate } from '../game/displayRefreshRate';
 import {
   cachedBundledFumbblAsset,
   PitchRenderer,
@@ -31,7 +32,7 @@ import {
   bundledStadiumPacks,
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
-  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, squareAnchor, worldToSquare,
+  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, serverMoveSquareRolls, squareAnchor, worldToSquare,
   displayDiceSide, playerServerSide, teamServerSide, type BlockDieSide } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -419,8 +420,10 @@ import { createPadBlockDeclareWatch } from '../game/padBlockDeclare';
 import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCardRules';
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
+import { createHudClearanceSync, createHudDragEnds, measureHudTopDom } from '../game/hudTopClearance';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import { onReportOwnedKey } from '../game/reportModalKeys';
+import { kickConfirmEnter } from '../game/kickConfirmKeys';
 import { decisionCardOpen, gameKeyDecision, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
 import { createIntensiveTrainingFocus, intensiveCardAnchor, intensiveTrainingFocusTarget } from '../game/intensiveTrainingFocus';
 import ReplayControls from '../components/ReplayControls.vue';
@@ -1135,6 +1138,70 @@ function measureTopPanel() {
     centerPanelBox.value = null;
   }
 }
+/** Bug 10-13 (JLeav, sideways): tell the renderer how far down the fixed top HUD reaches, so in E-W (dugouts along the
+ *  top) the coach can scroll the INJURED / KO / RESERVES boxes and the turn track out from under the coach plates and
+ *  the scoreboard. Runs with measureTopPanel (mount, resize, every HUD reflow) and from a ResizeObserver on the
+ *  measured elements (text size / font changes). Plates are measured from their untransformed layout box plus what
+ *  hangs off them (RES/OUT tab, prayer tag: their RENDERED rects, so the prayer tag's translateY counts), at their
+ *  PLAYING scale around their own transform origin, so the clearance is the same on both coaches' turns.
+ *  Deliberately excluded: the quick bar and the log/chat dock (bottom chrome, or teleported out of the host when
+ *  docked) and the roster pop-out (a transient overlay); none of them pins the top of the pitch.
+ *  Astra P2-2: no update while a HUD panel or the timer is being dragged or resized (the camera would chase the
+ *  pointer); the drag's pointerup syncs once. */
+let hudResizeObserver: ResizeObserver | null = null;
+const hudObserved = new Set<Element>();
+let hudSyncRaf = 0;
+function scheduleHudTopClearance(): void {
+  if (hudSyncRaf) return;
+  hudSyncRaf = requestAnimationFrame(() => { hudSyncRaf = 0; syncHudTopClearance(); });
+}
+function observeHudElements(elements: HTMLElement[]): void {
+  if (typeof ResizeObserver === 'undefined') return;
+  hudResizeObserver ??= new ResizeObserver(scheduleHudTopClearance);
+  for (const el of [...hudObserved]) {
+    if (!el.isConnected) { hudResizeObserver.unobserve(el); hudObserved.delete(el); }
+  }
+  for (const el of elements) {
+    if (hudObserved.has(el)) continue;
+    hudResizeObserver.observe(el);
+    hudObserved.add(el);
+  }
+}
+onBeforeUnmount(() => {
+  hudResizeObserver?.disconnect();
+  hudResizeObserver = null;
+  hudObserved.clear();
+  if (hudSyncRaf) cancelAnimationFrame(hudSyncRaf);
+  hudSyncRaf = 0;
+});
+function measureHudTopNow(previous: ReadonlySet<string>): { clearance: number; included: Set<string> } | null {
+  const host = pitchHost.value;
+  if (!host || !renderer) return null;
+  const measured = measureHudTopDom(host, {
+    playingScale: (id, _el, style) => {
+      const customScale = settings.uiLayout[id]?.scale;
+      return customScale != null
+        ? customScale * COACH_ACTIVE_SCALE_MULTIPLIER
+        : Number.parseFloat(style.getPropertyValue('--coach-panel-active-scale')) || 1;
+    },
+    canvasTop: renderer.canvasClientTop(),
+    previous,
+  });
+  observeHudElements(measured.elements);
+  return { clearance: measured.clearance, included: measured.included };
+}
+const hudClearanceSync = createHudClearanceSync({
+  measure: measureHudTopNow,
+  apply: (clearance) => renderer?.setTopHudClearance(clearance),
+  blocked: () => Object.keys(panelScaleResizeActive).length > 0, // a scale-resize in progress
+  defer: (run) => { void nextTick(run); },
+});
+const syncHudTopClearance = hudClearanceSync.sync;
+const holdHudClearance = hudClearanceSync.hold;
+/** Astra P2 (2nd pass): every HUD drag / resize ends exactly once (pointerup, pointercancel, lost capture, window blur
+ *  or unmount), so the clearance hold can never stay open. */
+const hudDragEnds = createHudDragEnds();
+onBeforeUnmount(hudDragEnds.endAll);
 // Owner 2026-07-03 r4: the quick config-bar sits at the BOTTOM-LEFT of the screen
 // again, but keeps the coach-panel-matched WIDTH (measured on mount + resize).
 const configBarStyle = computed(() => {
@@ -1220,6 +1287,7 @@ function startPanelMove(id: string, ev: PointerEvent) {
   const startX = ev.clientX, startY = ev.clientY;
   const current = resolvePanelPosition(entry, { width: rect.width, height: rect.height }, { width: hr.width, height: hr.height });
   const ox = current.x, oy = current.y;
+  const releaseHudClearance = holdHudClearance(); // Astra P2-2: the camera does not chase a dragged plate
   const move = (e: PointerEvent) => {
     const size = { width: rect.width, height: rect.height };
     const viewport = { width: hr.width, height: hr.height };
@@ -1232,8 +1300,8 @@ function startPanelMove(id: string, ev: PointerEvent) {
       ),
     };
   };
-  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  window.addEventListener('pointermove', move);
+  hudDragEnds.bind(ev.currentTarget, ev.pointerId, () => { window.removeEventListener('pointermove', move); releaseHudClearance(); });
 }
 function startPanelResize(id: string, ev: PointerEvent) {
   if (!settings.uiCustomize) return;
@@ -1243,7 +1311,7 @@ function startPanelResize(id: string, ev: PointerEvent) {
   if (!panel || !host) return;
   const entry = ensurePanelEntry(id, panel);
   if (!entry) return;
-  beginScaledPanelResize({
+  const finishResize = beginScaledPanelResize({
     event: ev,
     panel,
     host,
@@ -1255,9 +1323,10 @@ function startPanelResize(id: string, ev: PointerEvent) {
     write: (next) => { settings.uiLayout[id] = next; },
     setActive: (active) => {
       if (active) panelScaleResizeActive[id] = true;
-      else delete panelScaleResizeActive[id];
+      else { delete panelScaleResizeActive[id]; void nextTick(syncHudTopClearance); } // Astra P2-2: sync once at the end
     },
   });
+  hudDragEnds.bind(ev.currentTarget, ev.pointerId, finishResize); // a cancelled / blurred resize still ends (and ungates)
 }
 function resetPanel(id: string) { delete settings.uiLayout[id]; }
 
@@ -2861,6 +2930,15 @@ watch(
     else trackKickElection();
   },
 );
+// Owner 10-13 (Settings > Confirm kick-off square): the held kick square, live only while the server still has this
+// coach aiming that kick-off (store.kickConfirmLive). Owner 10-13 feedback: while the card is open the kick crosshair
+// is LOCKED on the pending square (its landing grid shown there); a re-target moves it, Go back releases it.
+const kickConfirmCard = computed(() => gameStore.kickConfirmLive());
+watch(
+  () => { const sq = kickConfirmCard.value?.square; return sq ? `${sq[0]},${sq[1]}` : null; },
+  () => renderer?.setKickPickLock(kickConfirmCard.value?.square ?? null),
+  { flush: 'sync' },
+);
 // Owner o66aj: INTERACTIVE KICK PLACEMENT — arm the receiving-half aim squares as clickable crosshairs; the
 // click routes to resolveKickPlacement in onTilePick. Cleared (setTilePick(false)) when the pick resolves.
 watch(
@@ -3933,7 +4011,7 @@ type ReactivePromptDragKey =
   | 'apothecaryChoice' | 'apothecaryD16' | 'selectSkill' | 'endTurnWarn' | 'endActConfirm'
   | 'blitzMove' | 'keywordChoice' | 'cardChoice' | 'cardBuy' | 'coinChoice' | 'receiveChoice'
   | 'yesNo' | 'blockAlternative' | 'followup' | 'blockPartial' | 'multiBlock'
-  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer';
+  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer' | 'kickConfirm';
 type ReactivePromptDragPos = { x: number; y: number };
 const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePromptDragPos | null>>({
   skillChoice: null,
@@ -3948,6 +4026,7 @@ const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePro
   selectSkill: null,
   endTurnWarn: null,
   endActConfirm: null,
+  kickConfirm: null,
   blitzMove: null,
   keywordChoice: null,
   cardChoice: null,
@@ -6248,7 +6327,12 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
     const st = g ? deriveClientState(g, o66Ctx()) : '';
     const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     // #181 PU-5/PU-5a: rush rides the walk, so it takes the SAME raw-action guard — see putridWalkArmed.
-    const rush = (st === 'MOVE' || st === 'PASS' || (st === 'PUNT' && !!g && !isPuntTargeting(g)) || st === 'FOUL' || isBlitzMovementState(st) || st === 'HAND_OVER' || st === 'GAZE_MOVE' || st === 'GAZE' || isThrowMateState(st) || st === 'SELECT_BLITZ_TARGET' || (st === 'PUTRID_REGURGITATION_BLITZ' && putridWalkArmed())) && actingId ? (renderer.o66Reach(actingId, o66PendingMove.value?.route ?? [])?.rush ?? []) : []; // #91: reach+rush in selectBlitzTarget for the convert-to-move gesture
+    // JLeav 10-13 (g1953055, Ulfwerener jump on moves 5&6): while LEAPING the eligible squares are the server's
+    //   JUMP set, priced per square (minimumRollDodge = AG + jump modifiers, minimumRollGfi = rush). The walk reach
+    //   routes AROUND the downed player, so its rush ring painted a false 2+ rush die on a non-rush jump landing.
+    //   Show the server's prices instead and never the walk-reach rush ring (server-derived law).
+    const leapingJump = !!g && JUMP_MOVE_STATES.has(st) && !!(g.actingPlayer as { leaping?: boolean } | undefined)?.leaping;
+    const rush = leapingJump ? [] : (st === 'MOVE' || st === 'PASS' || (st === 'PUNT' && !!g && !isPuntTargeting(g)) || st === 'FOUL' || isBlitzMovementState(st) || st === 'HAND_OVER' || st === 'GAZE_MOVE' || st === 'GAZE' || isThrowMateState(st) || st === 'SELECT_BLITZ_TARGET' || (st === 'PUTRID_REGURGITATION_BLITZ' && putridWalkArmed())) && actingId ? (renderer.o66Reach(actingId, o66PendingMove.value?.route ?? [])?.rush ?? []) : []; // #91: reach+rush in selectBlitzTarget for the convert-to-move gesture
     // PASS: throw targets are the bb2025 RANGE TEMPLATE from the passer's CURRENT square (owner: limit targets to
     // the pass range, not the whole pitch). Armed as `extra` — clickable + faintly ringed, but NOT walk-dots.
     // TTM/KTM (owner o66am): once a team-mate is PICKED UP (o66ThrownMate set), the LANDING targets are the same pass
@@ -6335,7 +6419,7 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
     } else {
       renderer.setTilePick(true, hailMaryPass ? null : squares, 'order66-move', hailMaryPass ? null : rush, extra);
     }
-    renderer.setO66MoveRolls(null);
+    renderer.setO66MoveRolls(leapingJump ? serverMoveSquareRolls(g) : null);
     renderer.setO66PassRolls(passRolls);
   } else {
     renderer.setBncAim(null, []);
@@ -7296,8 +7380,8 @@ watch(() => settings.showPlayerNumbers, (on) => { if (renderer) { renderer.showP
 
 // F-2: video options apply live
 watch(
-  () => [settings.renderScale, settings.fpsCap],
-  () => renderer?.setVideoOptions({ renderScale: settings.renderScale, fpsCap: settings.fpsCap }),
+  () => [settings.renderScale, settings.fpsCap, measuredRefreshHz.value],
+  () => renderer?.setVideoOptions({ renderScale: settings.renderScale, fpsCap: resolveFpsCap(settings.fpsCap, measuredRefreshHz.value) }),
 );
 
 // Owner: brightness/gamma slider applies live
@@ -8705,6 +8789,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // It now only answers the prompt with its safe option ("Go back") and does nothing else.
   if (endActConfirm.value) { ctxMenu.visible = false; cancelEndActivation(); return; }
   if (endTurnWarnCount.value !== null) { ctxMenu.visible = false; cancelEndTurnWarn(); return; }
+  if (kickConfirmCard.value) { ctxMenu.visible = false; gameStore.cancelKickSquare(); return; } // owner 10-13: = Go back
   // Owner 10-05: a right-click with a player switch pending only cancels it (never an end of the activation). After
   // the confirmation branches above (Astra): an open prompt owns the gesture.
   if (cancelDeferredFriendlySwitch()) { ctxMenu.visible = false; popup.visible = false; return; }
@@ -9233,7 +9318,7 @@ function pitchHeldByConfirmation(): boolean {
  *  merely left focused by a mouse click (End Turn, a quick-bar action) does not match :focus-visible, so the common
  *  "click End Turn, press Space" flow still confirms. */
 function keyboardFocusedOutsideButton(target: EventTarget | null): boolean {
-  if (!pitchHeldByConfirmation() && !setupConfirm.value) return false;
+  if (!pitchHeldByConfirmation() && !setupConfirm.value && !kickConfirmCard.value) return false; // owner 10-13: the kick card too
   if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel')) return false;
   // Astra pass 3 (10-04): :focus-visible is a per-browser heuristic. Ownership is decided by a recorded fact: the
   // focused button is the one the coach last pressed with the pointer (mouse focus) or it is not (keyboard focus).
@@ -9269,6 +9354,8 @@ function confirmPlannerFromButton(): boolean {
 /** Astra re-review 10-04: an open client confirmation outranks every planner arm (a staged Block / Blitz used to
  *  be committed by Space while the End Turn warning was up). The End Turn warning is always the newer of the two. */
 function answerOpenConfirmation(): boolean {
+  // Owner 10-13 (Astra kickconfirm-1 P2): the kick-off card answers in every mode (it is live only while seated).
+  if (kickConfirmCard.value) { gameStore.confirmKickSquare(); return true; }
   if (!settings.order66 || !gameStore.isPlaying.value || !gameStore.game.value) return false;
   if (wideRailActivationPrompt.value) return false; // the election consumes Space itself (o66ConfirmPending)
   if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
@@ -9637,6 +9724,7 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
 /** #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
  *  END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical. */
 function escapeCascade(): void {
+  if (kickConfirmCard.value) { gameStore.cancelKickSquare(); return; } // owner 10-13: Esc = Go back, keep aiming
   if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
     popup.visible = false;
   } else if (settings.order66 && gameStore.isPlaying.value) {
@@ -9843,6 +9931,7 @@ function crosshairGateInput(): CrosshairGateInput {
       setupLegalityPanel: setupConfirmOpen.value,
       unknownPanel: unknownPanelUp(),
       unknownTilePick: unknownPanelUp() && unknownPickingTile.value,
+      kickoffSquareConfirm: !!kickConfirmCard.value,
     },
     pickers: renderer?.pitchPickers() ?? { push: false, kick: false, tile: false, tileSkill: undefined, player: false },
   });
@@ -10095,6 +10184,17 @@ function onKeydown(event: KeyboardEvent) {
   const boundActions = actionsForInput(settings, 'keyboard', event.code, setupPhase.value ? 'setup' : 'game');
   // Astra final P2: context-first on the keyboard too — confirm wins only when it is the context's first candidate.
   const keyActions = resolveKeyActions(boundActions);
+  // Owner 10-13 (Astra kickconfirm-1 P2): with the "Confirm Kickoff?" card open, Enter confirms it (ahead of openChat),
+  // through the same runAction('confirm') path as the confirm key; a focused button keeps its own Enter.
+  // Astra kickconfirm-2 P1: the decision runs the landed gameKeyDecision ownership rule first (report / text field).
+  if (kickConfirmEnter({
+    cardOpen: !!kickConfirmCard.value, key: event.key, reportOpen: reportOpen.value, reportBusy: reportBusy.value,
+    textFieldFocused: textFieldOwnsInput(event.target) || keyboardOwnedByTextControl(event.target),
+    buttonOwnsKey: focusedPromptButton(event.target) || keyboardFocusedOutsideButton(event.target),
+    modified: event.shiftKey || event.ctrlKey || event.metaKey || event.altKey, repeat: event.repeat,
+  })) {
+    if (runAction('confirm', 'keyboard')) { event.preventDefault(); return; }
+  }
   if (keyActions.tryFirst.length && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
     && !keyboardOwnedByTextControl(event.target)) {
     for (const id of keyActions.tryFirst) if (runAction(id, 'keyboard')) { event.preventDefault(); return; }
@@ -10322,7 +10422,8 @@ onMounted(async () => {
   // owner 2026-07-08: block-dice preview toggle — arm for the active player if on
   updateBlockPreview(); // owner 2026-07-07: action/target-gated block-dice preview
   renderer.showPlayerNumbers = settings.showPlayerNumbers;
-  renderer.setVideoOptions({ renderScale: settings.renderScale, fpsCap: settings.fpsCap });
+  trackDisplayRate();
+  renderer.setVideoOptions({ renderScale: settings.renderScale, fpsCap: resolveFpsCap(settings.fpsCap, measuredRefreshHz.value) });
   renderer.setBrightness(settings.brightness);
   renderer.setFantasyCursorEnabled(settings.useFantasyCursor);
   renderer.setGridOptions({ show: settings.gridLines, widthMul: settings.gridLineWidth, color: gridColorInt(), alphaMul: settings.gridLineOpacity });
@@ -11294,8 +11395,9 @@ onMounted(async () => {
   renderer.onContextMenu = openContextMenu;
   renderer.onMiddleClick = onPitchMiddleClick;
   renderer.onActionRejected = showToast;
-  // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off.
-  renderer.onKickPick = (coord) => gameStore.resolveKickPlacement(coord as [number, number]);
+  // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off. Owner 10-13: with Settings >
+  // Confirm kick-off square ON it opens the "Kick to ...?" card instead (pickKickSquare; OFF = the same send as before).
+  renderer.onKickPick = (coord) => gameStore.pickKickSquare(coord as [number, number]);
   renderer.onBlockConfirm = (attackerId, defenderId, preview) => {
     // Owner 09-28 (S6 follow-up, Sol item 4, recorded not fixed): this legacy order66-off sender goes straight to
     // gameStore.playerBlitz/playerBlock with no blitz-commit hold, so Gored/Chainsaw never offers here either —
@@ -11386,11 +11488,12 @@ onMounted(async () => {
   await nextTick();
   if (!rendererMountActive || renderer !== mountedRenderer) return;
   measureTopPanel();
+  syncHudTopClearance();
   // Owner 2026-07-06 (finding A): registered here (past `await nextTick()`) so its
   // cleanup can't live inline — torn down in the synchronous onBeforeUnmount below.
   // Owner 2026-07-06: on resize, re-clamp persisted/dragged UI (log window + customize
   // panels) into the viewport so they stay visible, THEN re-measure the config-bar.
-  panelMeasureHandler = () => { clampUiToViewport(); measureTopPanel(); };
+  panelMeasureHandler = () => { clampUiToViewport(); measureTopPanel(); syncHudTopClearance(); };
   window.addEventListener('resize', panelMeasureHandler);
   clampUiToViewport(); // fix any position already off-screen from a prior window size
   watch(
@@ -11407,11 +11510,18 @@ onMounted(async () => {
       gameStore.state.spectatorCount,
       liveSpectatorsExpanded.value,
       !!hud.value,
+      inducePhaseOpen.value, // bug 10-13: the coach plates hide during the inducement phase
+      settings.modernHudStyle,
+      settings.uiTextSize, // Astra P2-4: text size / font reflow the plates (the ResizeObserver also catches it)
+      settings.uiFont,
+      timerPos.value,
+      homePrayers.value.length,
+      awayPrayers.value.length,
     ] as const,
     // Owner 2026-07-06: also re-clamp into the viewport when the panels (re)appear or
     // move — a panel persisted off-screen from a prior window size is pulled back in
     // once it renders. (clamp is a no-op unless something is actually off-screen.)
-    () => nextTick(() => { clampUiToViewport(); measureTopPanel(); }),
+    () => nextTick(() => { clampUiToViewport(); measureTopPanel(); syncHudTopClearance(); }),
     { flush: 'post' },
   );
   // Owner 2026-07-04: hand-placement setup is on in the live UI (auto for bots).
@@ -11431,7 +11541,8 @@ onMounted(async () => {
   // Astra P2-a: a mandatory pitch choice (push direction, kick aim) keeps every non-mandatory card off the pad.
   setPadFocusMandatoryPitch(() => {
     const pk = renderer?.pitchPickers();
-    return (!!gameStore.state.pushChoice && !!pk?.push) || (!!gameStore.state.kickPlacement && !!pk?.kick);
+    // Owner 10-13: the kick-off confirmation card is the coach's answer to the kick aim; it takes the pad while open.
+    return (!!gameStore.state.pushChoice && !!pk?.push) || (!!gameStore.state.kickPlacement && !!pk?.kick && !kickConfirmCard.value);
   });
   // Astra P2-f: presses resolve setup-context actions first during setup, in-play actions in play.
   setActiveControlContext(() => (setupPhase.value ? 'setup' : 'game'));
@@ -13203,18 +13314,15 @@ function startTimerDrag(event: PointerEvent) {
   const hostRect = host.getBoundingClientRect();
   const dx = event.clientX - rect.left;
   const dy = event.clientY - rect.top;
+  const releaseHudClearance = holdHudClearance(); // Astra P2-2: the camera does not chase the dragged timer
   const move = (ev: PointerEvent) => {
     timerPos.value = {
       x: Math.max(0, Math.min(ev.clientX - hostRect.left - dx, hostRect.width - rect.width)),
       y: Math.max(0, Math.min(ev.clientY - hostRect.top - dy, hostRect.height - rect.height)),
     };
   };
-  const up = () => {
-    window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up);
-  };
   window.addEventListener('pointermove', move);
-  window.addEventListener('pointerup', up);
+  hudDragEnds.bind(el, event.pointerId, () => { window.removeEventListener('pointermove', move); releaseHudClearance(); });
 }
 
 function sendChat() {
@@ -15249,6 +15357,20 @@ function sendChat() {
           <span class="kick-aim-modal-title">KICK-OFF</span>
           <span class="kick-aim-modal-text">Select Target Square</span>
         </div>
+        <!-- Owner 10-13: Settings > Confirm kick-off square. The clicked square waits here; Confirm sends the same
+             CLIENT_KICKOFF the click sends with the setting off. Another click on the pitch re-targets (the locked
+             crosshair moves with it). Like every PitchConfirmationPanel it takes the clicks under its own footprint
+             (it has no backdrop); it is draggable, so a covered square stays reachable (Astra kickconfirm-1 P2). -->
+        <PitchConfirmationPanel v-if="kickConfirmCard" :key="'kick-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
+          title="Confirm Kickoff?" label="Confirm Kickoff?" test-id="kickoff-square-confirm" compact
+          :position-style="reactivePromptStyle('kickConfirm')" draggable
+          :data-square="kickConfirmCard.square.join(',')"
+          @drag-start="startReactivePromptDrag('kickConfirm', $event)">
+          <template #actions>
+            <button class="rr-use" data-pad-primary @click="gameStore.confirmKickSquare()">Confirm</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelKickSquare()">Go back</button>
+          </template>
+        </PitchConfirmationPanel>
 
         <!-- Owner o66aa: 2-click target cue — 🏈 over a pass/hand-off target, 🥾 AV+ over a foul victim. -->
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
@@ -16022,6 +16144,8 @@ function sendChat() {
 .coach-panel.away { --coach-panel-base-scale: 0.80784; right: 8px; flex-direction: row-reverse; text-align: right; transform: scale(0.80784); transform-origin: top right; border-right-color: var(--seat-away-mid); }
 .coach-panel.home[data-playing='true'] { transform: scale(1.03488); }
 .coach-panel.away[data-playing='true'] { transform: scale(1.03488); }
+/* Bug 10-13: the playing scale above, for syncHudTopClearance (keep equal; hudTopClearance.test.ts checks it). */
+.coach-panel { --coach-panel-active-scale: 1.03488; }
 .hud-center.scoreboard {
   transform: translateX(-50%) scale(0.96);
   transform-origin: top center;
@@ -16031,6 +16155,7 @@ function sendChat() {
   .coach-panel.away { --coach-panel-base-scale: 0.646272; transform: scale(0.646272); }
   .coach-panel.home[data-playing='true'] { transform: scale(0.82368); }
   .coach-panel.away[data-playing='true'] { transform: scale(0.82368); }
+  .coach-panel { --coach-panel-active-scale: 0.82368; }
   .hud-center.scoreboard {
     transform: translateX(-50%) scale(0.8256);
     transform-origin: top center;

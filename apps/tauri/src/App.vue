@@ -47,6 +47,7 @@ import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
 import { UI_FONTS } from './game/uiFonts';
+import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
 import DisplayCaps from './components/DisplayCaps.vue';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
@@ -1044,6 +1045,7 @@ const settingsOpen = computed({
   get: () => ui.settingsOpen,
   set: (v: boolean) => (ui.settingsOpen = v),
 });
+watch(() => ui.settingsOpen, (open) => { setDisplayRatePolling(open); if (open) { trackDisplayRate(); void refreshDisplayRate(); } }); // owner 10-13: re-measure the monitor refresh rate when Settings opens
 const settingsTab = computed({
   get: () => resolveSettingsTab(ui.settingsTab),
   set: (v: SettingsTab) => (ui.settingsTab = resolveSettingsTab(v)),
@@ -2762,12 +2764,14 @@ onBeforeUnmount(() => {
             </label>
             <label class="row">
               <span>FPS limit</span>
-              <select v-model.number="settings.fpsCap">
+              <select v-model="settings.fpsCap">
                 <option :value="30">30</option>
                 <option :value="60">60</option>
                 <option :value="120">120</option>
+                <option value="display">{{ matchDisplayLabel(measuredRefreshHz) }}</option>
               </select>
             </label>
+            <p class="hint">{{ measuredRefreshHz ? "Match display caps the frame rate at your monitor's refresh rate." : "Match display caps the frame rate at your monitor's refresh rate; measuring it now." }}</p>
             <div class="actions" style="justify-content: flex-start">
               <button @click="toggleFullscreen">{{ fullscreen ? 'Exit native fullscreen' : 'Native fullscreen' }}</button>
             </div>
@@ -3029,28 +3033,6 @@ onBeforeUnmount(() => {
                 <option value="emoji">Emoji glyphs</option>
               </select>
             </label>
-            <fieldset v-if="settings.skillDisplay === 'markings'" class="settings-group">
-              <legend>Skill marking appearance</legend>
-              <label class="row">
-                <span>Color</span>
-                <input v-model="settings.skillMarkingColor" type="color" />
-              </label>
-              <label class="row">
-                <span>Font</span>
-                <select v-model="settings.skillMarkingFont">
-                  <option value="arial">Arial / Helvetica</option>
-                  <option value="helvetica">Helvetica / Arial</option>
-                  <option value="system">System sans</option>
-                  <option value="nuffle">Nuffle</option>
-                </select>
-              </label>
-              <label class="row">
-                <span>Size</span>
-                <input v-model.number="settings.skillMarkingSize" v-fill-range type="range" min="6" max="24" step="1" />
-                <span>{{ settings.skillMarkingSize }}px</span>
-              </label>
-              <p class="hint">All glyphs for a player are antialiased and kept together on one line.</p>
-            </fieldset>
             <!-- Per-skill display config (owner 2026-07-03 r6f): every skill in the
                  game, grouped into Skill Icons / Skill Markers, each with MY TEAM
                  (home coach) / OPPOSITION (away coach) behaviour + a marker glyph. -->
@@ -3150,10 +3132,11 @@ onBeforeUnmount(() => {
                 <span class="hint" aria-live="polite">{{ skillConfigStatus }}</span>
               </div>
             </details>
-            <!-- Owner 10-09: the skill-markings flow (source + import, table, add, clear all). Only while Skill
-                 markings are the chosen display, as before. -->
-            <SkillMarkingsSettings v-if="settings.skillDisplay === 'markings'" :skills="allSkills" />
           </fieldset>
+
+          <!-- Owner 10-13: ONE "Skill markings" box (appearance, fumbbl.com import, table, add, clear all) as a sibling
+               of Skill display, no nested fieldsets. Only while Skill markings are the chosen display. -->
+          <SkillMarkingsSettings v-if="settings.skillDisplay === 'markings'" :skills="allSkills" />
 
           <fieldset class="settings-group">
             <legend>On-field markings</legend>

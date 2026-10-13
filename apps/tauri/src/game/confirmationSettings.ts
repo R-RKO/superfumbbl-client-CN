@@ -5,7 +5,8 @@ import type { EndActivationConfirmKind } from './logic/order66Interaction';
  *
  *  These are the CLIENT's own "are you sure" prompts - never a server dialog (the client does not answer those for
  *  the coach). Turning one off means the gesture goes straight through, exactly as the prompt's confirm button would
- *  have sent it. All default ON. */
+ *  have sent it. All default ON, except the opt-in prompts in CONFIRMATION_OPT_IN (owner 10-13: Confirm kick-off
+ *  square, default OFF so the kick-off click keeps sending at once). */
 export interface ConfirmationSettings {
   confirmEndTurn: boolean;
   confirmEndBlitz: boolean;
@@ -18,6 +19,9 @@ export interface ConfirmationSettings {
   confirmEndActivation: boolean;
   confirmSetup: boolean;
   confirmConcedeOffer: boolean;
+  /** Owner 10-13: "Add a setting for 'Confirm Kick Off Square'. When enabled, the user will need to select confirm on
+   *  a modal to confirm their target square." Default OFF (opt-in). */
+  confirmKickoffSquare: boolean;
 }
 export type ConfirmationSettingKey = keyof ConfirmationSettings;
 
@@ -32,7 +36,11 @@ export const CONFIRMATION_DEFAULTS: ConfirmationSettings = {
   confirmEndActivation: true,
   confirmSetup: true,
   confirmConcedeOffer: true,
+  confirmKickoffSquare: false,
 };
+
+/** The prompts that default OFF: only an explicit `true` turns one on. */
+export const CONFIRMATION_OPT_IN: ReadonlySet<ConfirmationSettingKey> = new Set<ConfirmationSettingKey>(['confirmKickoffSquare']);
 
 /** The Settings rows, in display order. */
 export const CONFIRMATION_SETTING_ROWS: readonly { key: ConfirmationSettingKey; label: string; hint: string }[] = [
@@ -46,6 +54,7 @@ export const CONFIRMATION_SETTING_ROWS: readonly { key: ConfirmationSettingKey; 
   { key: 'confirmEndActivation', label: 'End activation with Escape', hint: 'Asks before Escape ends any other activation, and before an End that would roll for the player.' },
   { key: 'confirmSetup', label: 'Confirm Setup', hint: 'Asks before a legal setup is locked in. A setup that is not legal always shows what is wrong.' },
   { key: 'confirmConcedeOffer', label: 'Offer to concede at setup', hint: 'Asks whether to concede when you have too few players to field. You can still concede from the Game Menu.' },
+  { key: 'confirmKickoffSquare', label: 'Confirm kick-off square', hint: 'Asks you to confirm the square you clicked before the kick-off is sent. Off: the click kicks at once.' },
 ];
 
 const END_ACTIVATION_KEY: Record<EndActivationConfirmKind, ConfirmationSettingKey> = {
@@ -62,9 +71,12 @@ export function endActivationConfirmEnabled(kind: EndActivationConfirmKind, sett
   return settings[END_ACTIVATION_KEY[kind]] !== false;
 }
 
-/** Fail-closed read of the stored settings blob: only an explicit `false` turns a prompt off. */
+/** Fail-closed read of the stored settings blob: only an explicit `false` turns a prompt off (and, for an opt-in
+ *  prompt, only an explicit `true` turns it on - a missing or junk value keeps the default). */
 export function normalizeConfirmationSettings(raw: Record<string, unknown> | null | undefined): ConfirmationSettings {
   const out = { ...CONFIRMATION_DEFAULTS };
-  for (const key of Object.keys(CONFIRMATION_DEFAULTS) as ConfirmationSettingKey[]) out[key] = raw?.[key] !== false;
+  for (const key of Object.keys(CONFIRMATION_DEFAULTS) as ConfirmationSettingKey[]) {
+    out[key] = CONFIRMATION_OPT_IN.has(key) ? raw?.[key] === true : raw?.[key] !== false;
+  }
   return out;
 }

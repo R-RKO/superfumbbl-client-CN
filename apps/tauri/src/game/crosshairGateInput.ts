@@ -60,6 +60,9 @@ export interface CrosshairGateSnapshot {
     unknownPanel: boolean;
     /** P2b (Astra P2-3): the unanswered-prompt panel's "pick a tile" coordinate pick is armed — the crosshair serves it. */
     unknownTilePick?: boolean;
+    /** Owner 10-13: the "Kick to ...?" confirmation card is open (Settings > Confirm kick-off square). Like the Zap
+     *  confirm: a card the pad answers (B = Go back), and the kick aim behind it stops owning the crosshair. */
+    kickoffSquareConfirm?: boolean;
   };
   /** renderer.pitchPickers() */
   pickers: { push: boolean; kick: boolean; tile: boolean; tileSkill: string | undefined; player: boolean };
@@ -79,7 +82,8 @@ export function crosshairGateInput(snap: CrosshairGateSnapshot): CrosshairGateIn
   const playerPickOffPitch = !!st.playerPick && isPickKeptOffPitch(st.playerPick.key);
   const nonDeclinablePick = !!st.playerPick && !st.playerPick.declinable;
   // Cards the pad's B can answer (a real decline / cancel): with one of these up an open dialog is not "mandatory".
-  const declinableCard = !!st.reRollPrompt?.mine || (!!st.skillChoice?.mine && !st.skillChoice?.using) || !!st.followupChoice
+  const kickConfirm = !!v.kickoffSquareConfirm;
+  const declinableCard = kickConfirm || !!st.reRollPrompt?.mine || (!!st.skillChoice?.mine && !st.skillChoice?.using) || !!st.followupChoice
     || !!st.yesNo || !!st.blitzBlockChoice || !!st.foulChoiceHold || v.wideRailPrompt || v.endActivationConfirm || v.endTurnWarn
     || (!!st.playerPick && st.playerPick.declinable) || bloodlustCard;
   const cardOpen = declinableCard || blockCard || multiBlockPick || listChoice || teamChooser || apothecary || !!st.kickSkill
@@ -88,12 +92,12 @@ export function crosshairGateInput(snap: CrosshairGateSnapshot): CrosshairGateIn
   // The crosshair serves a server pick only while the renderer's picker for it is armed.
   const squarePickArmed = !!st.squarePick && !st.wizardTargetConfirm && p.tile && !(p.tileSkill ?? '').startsWith('order66-');
   const playerPickArmed = (!!st.playerPick && !playerPickOffPitch || !!st.pickMeUpEligible) && p.player;
-  const pitchPickOpen = (!!st.pushChoice && p.push) || (!!st.kickPlacement && p.kick) || squarePickArmed || playerPickArmed
+  const pitchPickOpen = (!!st.pushChoice && p.push) || (!!st.kickPlacement && p.kick && !kickConfirm) || squarePickArmed || playerPickArmed
     || v.setupLegalityPanel || !!v.unknownTilePick;
   return {
     cardOpen,
     pitchPickOpen,
-    mandatoryChoiceOpen: !!st.pushChoice || blockPick || multiBlockPick || !!st.kickPlacement || teamChooser || nonDeclinablePick
+    mandatoryChoiceOpen: !!st.pushChoice || blockPick || multiBlockPick || (!!st.kickPlacement && !kickConfirm) || teamChooser || nonDeclinablePick
       || listChoice || apothecary || (snap.dialogOpen && !declinableCard),
   };
 }
