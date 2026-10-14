@@ -452,21 +452,19 @@ export function blockResultFaceName(v: unknown): string {
   }
 }
 
-/** #10x (owner 08-17, live game 864 sighting): group a turnEnd's knockoutRecoveryArray
- *  into two lines by outcome (recovers / stays out), preserving each group's within-array
- *  order (the order the server rolled them in). Each entry keeps its player NAME next to
- *  its own roll — the thing the owner asked not to lose while splitting the wall of text. */
+/** KO recovery, one log line per player in the order the server rolled them (owner 10-13, replacing the 08-17 grouped
+ *  lines): "<Player> recovers from their KO <roll> (N+)" / "<Player> stays out for the drive <roll> (N+)". The needed
+ *  number comes from the server's own KnockoutRecovery entry (ffb-common KnockoutRecovery.java:66-73): the keg count
+ *  (bloodweiserBabes) and Bugman's modifier (bugmansXXXXXXModifier, absent = 0, the int option's default) fed to
+ *  DiceInterpreter.isRecoveringFromKnockout (ffb-server DiceInterpreter.java:123: roll > 1 && roll + mod > 3), so the
+ *  target is max(2, 4 - mod), "N+". */
 export function formatRecoveryLines(recoveries: readonly Report[], game: GameJson | null): string[] {
-  const back: string[] = [];
-  const stay: string[] = [];
-  for (const value of recoveries) {
-    const entry = `${pn(game, value.playerId)} (${d6(value.roll, 'roll', playerDieOwner(game, value.playerId))})`;
-    (value.recovering ? back : stay).push(entry);
-  }
-  const lines: string[] = [];
-  if (back.length) lines.push(`KO recovery | back on their feet: ${back.join(', ')}`);
-  if (stay.length) lines.push(`KO recovery | stay out: ${stay.join(', ')}`);
-  return lines;
+  return recoveries.map((value) => {
+    const modifier = (Number(value.bloodweiserBabes ?? value.bloodweiserKegs) || 0) + (Number(value.bugmansXXXXXXModifier) || 0);
+    const needed = Math.max(2, 4 - modifier);
+    const roll = d6(value.roll, 'roll', playerDieOwner(game, value.playerId));
+    return `${pn(game, value.playerId)} ${value.recovering ? 'recovers from their KO' : 'stays out for the drive'} ${roll} (${needed}+)`;
+  });
 }
 
 /** #10x: the turnEnd part-list, one entry per intended LOG LINE (still D6-marked, not yet
@@ -999,6 +997,13 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const isCrowdPush = normalizedInjuryType === 'crowdpush' || normalizedInjuryType === 'crowdpushforspp';
     const isFailedMove = normalizedInjuryType === 'dropdodge' || normalizedInjuryType === 'dropgfi';
     const isBlockFamily = normalizedInjuryType.startsWith('block');
+    const isFoulInjury = injuryTypeName.startsWith('foul');
+    // Owner 10-13: a foul reads "<Fouler> fouls <Target> | armour .. | Injury: ..". The fouler is the report's
+    // attackerId (ReportInjury sends it for every foul type); if it is ever absent, fall back to the acting
+    // player exactly as the `referee` formatter does (a foul is always made by the acting player).
+    const foulerId = isFoulInjury
+      ? (typeof r.attackerId === 'string' && r.attackerId ? r.attackerId : g?.actingPlayer?.playerId)
+      : undefined;
     const attacker = typeof r.attackerId === 'string' && r.attackerId ? pn(g, r.attackerId) : '';
     const genericCause = humanize(injuryTypeName || 'injury');
     const armourCause = isBlockFamily
@@ -1012,8 +1017,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
             : `${genericCause.charAt(0).toUpperCase()}${genericCause.slice(1)}`;
     const lead: string = isCrowdPush
       ? `${name} is pushed into the crowd`
-      : injuryTypeName.startsWith('foul') && typeof r.attackerId === 'string' && r.attackerId
-        ? `${pn(g, r.attackerId)} fouls ${name}`
+      : foulerId
+        ? `${pn(g, foulerId)} fouls ${name}`
         : isBlockFamily
           ? ''
           : isFailedMove
@@ -1029,7 +1034,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       const armourMods = armourModifierSuffix(r.armorModifiers, broke);
       const armourPart = `${armourTag('armour')} ${d6Pair(ar)}${armourMods}${broke ? ' broken!' : ''}`;
       parts.push(armourPart);
-      const attributedArmour = `${name} | ${armourCause} | ${armourPart}`;
+      const attributedArmour = foulerId ? `${lead} | ${armourPart}` : `${name} | ${armourCause} | ${armourPart}`;
       // An armour roll that held never has an injury phase. Preserve that normal
       // report grammar even if a malformed payload happens to carry extra dice.
       if (!broke || !ir) return attributedArmour;
@@ -1055,8 +1060,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       ? `${name} is ${r.seriousInjury ? casualtyResultLabel(r.seriousInjury) : titleCase(outcome ?? 'a casualty')}!`
       : '';
     parts.push(`Injury: ${d6Pair(ir)}${injuryMods}`);
-    const body = parts.join('; ');
-    const head = ar ? `${name} | ${armourCause} | ${body}` : lead ? `${lead} | ${body}` : body;
+    const body = parts.join(foulerId ? ' | ' : '; ');
+    const head = ar && !foulerId ? `${name} | ${armourCause} | ${body}` : lead ? `${lead} | ${body}` : body;
     return [head, effect, casualtyLine].filter(Boolean).join('\n');
   },
   // Owner 2026-07-06 (finding C): the apothecary report is NOT a pass/fail d6 — it

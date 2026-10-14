@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
+import { allBlockDiceIndices, BlockTumbleRun, handBlockTumbleTo3d, type BlockTumbleFrame } from '../game/blockRerollTumble';
 import { measuredRefreshHz, resolveFpsCap, trackDisplayRate } from '../game/displayRefreshRate';
 import {
   cachedBundledFumbblAsset,
@@ -2391,25 +2392,19 @@ const bpSelectedDice = ref(new Set<number>());
 // Owner 09-05: dice TUMBLE — when new block dice land (the roll, and every re-roll) the faces cycle at random
 // for BLOCK_TUMBLE_MS before the real result is revealed; the dice are inert while tumbling.
 // owner 09-06: tumble length is the settings slider (default 250 ms); it is a lead-in, not a reveal — the 450 ms rule applies to the settled dice
+// Owner 10-13: a REROLL re-tumbles only the dice it replaced (blockPartial.rerolledDice, from the server's reroll
+// report): a team reroll / Mascot all of them, Pro / Brawler / Hatred / single-die skills the one die; the kept dice stay
+// settled. Same length, same 3D clip and the same gate (dice inert until they settle) as the first roll.
 const BLOCK_TUMBLE_STEP_MS = 70;
-const bpTumble = ref<{ key: string; faces: number[] } | null>(null);
-let bpTumbleTimer: ReturnType<typeof setInterval> | null = null;
-let bpTumbleEnd: ReturnType<typeof setTimeout> | null = null;
-function clearBlockTumbleTimers() {
-  if (bpTumbleTimer) clearInterval(bpTumbleTimer);
-  if (bpTumbleEnd) clearTimeout(bpTumbleEnd);
-  bpTumbleTimer = null; bpTumbleEnd = null;
-}
+const bpTumble = ref<BlockTumbleFrame | null>(null);
+const bpTumbleRun = new BlockTumbleRun((frame) => { bpTumble.value = frame; });
 function stopBlockTumble() {
-  clearBlockTumbleTimers();
-  bpTumble.value = null;
+  bpTumbleRun.stop();
 }
-function randomBlockFaces(n: number, avoid?: readonly number[]): number[] {
-  return Array.from({ length: n }, (_v, i) => {
-    let f = 1 + Math.floor(Math.random() * 6);
-    if (avoid && avoid[i] === f) f = (f % 6) + 1; // always visibly changes between steps
-    return f;
-  });
+/** The die indexes this card's dice tumble: the rerolled ones, none after a failed use (an empty list: the server
+ *  resent the unchanged roll), or every die on the block's first roll (null). */
+function blockTumbleIndices(bp: { dice: readonly number[]; rerolledDice?: readonly number[] | null }): number[] {
+  return bp.rerolledDice ? [...bp.rerolledDice] : allBlockDiceIndices(bp.dice.length);
 }
 const bpDiceHost = ref<HTMLElement | null>(null);
 const bpDice3dLive = ref(false);
@@ -2504,8 +2499,9 @@ async function presentBlockDice3d(key: string, results: readonly number[], durat
   bpDice3dPresentedKey = key;
   bpDice3dLive.value = true;
   if (bpTumble.value?.key === key) {
-    clearBlockTumbleTimers();
-    row.play(results, durationMs);
+    // Owner 10-13: the row spins only the tumbling dice; the gate holds until it settles, or until the timer backstop
+    // when frames are paused (hidden tab), so the chooser always wakes.
+    handBlockTumbleTo3d(bpTumbleRun, row, results, durationMs);
   } else {
     // A first GLB load may outlive the short PNG tumble. Switch only to the
     // already-settled authoritative result; never replay a stale animation.
@@ -2525,12 +2521,8 @@ watch(() => gameStore.state.blockPartial?.tumbleKey, (key) => {
   if (key && !gameStore.playbackCatchingUp.value) bpReplaySeekFallback = false;
   const bp = gameStore.state.blockPartial;
   if (gameStore.spectatorPublishedPosition.value?.snap || !key || !bp || bp.dice.length === 0 || gameStore.playbackCatchingUp.value || settings.spectatorClean || bpReducedMotion.value) return;
-  bpTumble.value = { key, faces: randomBlockFaces(bp.dice.length) };
-  bpTumbleTimer = setInterval(() => {
-    if (bpTumble.value) bpTumble.value = { key, faces: randomBlockFaces(bp.dice.length, bpTumble.value.faces) };
-  }, BLOCK_TUMBLE_STEP_MS);
   const durationMs = presentationMs(settings.blockTumbleMs ?? 250);
-  bpTumbleEnd = setTimeout(stopBlockTumble, durationMs);
+  bpTumbleRun.start(key, bp.dice, blockTumbleIndices(bp), durationMs, BLOCK_TUMBLE_STEP_MS);
   void presentBlockDice3d(key, [...bp.dice], durationMs);
 });
 watch(() => gameStore.state.blockPartial, (bp) => {
@@ -2587,6 +2579,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopBlockTumble();
   disposeBlockDice3d();
+  stopMultiBlockTumbles();
   if (bpMotionListener) bpMotionQuery?.removeEventListener('change', bpMotionListener);
   bpMotionListener = null;
   bpMotionQuery = null;
@@ -2597,6 +2590,10 @@ const bpDiceShown = computed(() => {
   return bpTumble.value && bpTumble.value.key === bp.tumbleKey ? bpTumble.value.faces : bp.dice;
 });
 const bpTumbling = computed(() => !!gameStore.state.blockPartial && !!bpTumble.value && bpTumble.value.key === gameStore.state.blockPartial.tumbleKey);
+/** Owner 10-13: the die at `i` is tumbling (a reroll's kept dice show their settled face, never the tumble art). */
+function bpDieTumbling(i: number): boolean {
+  return bpTumbling.value && !!bpTumble.value?.tumbling.includes(i);
+}
 const blockChooserSeat = computed<BlockChooserSide | null>(() => gameStore.blockPresentationSeat.value);
 const blockChooserSpectator = computed(() => !gameStore.isPlaying.value);
 const liveBlockChoiceDialog = computed(() => isCurrentBlockChoiceDialog(gameStore.game.value));
@@ -2715,6 +2712,7 @@ const mbrDieMode = ref<{ targetId: string; kind: 'pro' | 'consummate' } | null>(
 watch(() => gameStore.state.multiBlockResolution?.seq, () => { mbrDieMode.value = null; }); // a fresh dialog clears the arm
 function multiBlockPickDie(targetId: string, dieIndex: number, pickable: boolean) {
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
+  if (mbrTumbles.value[targetId]) return; // owner 10-13: a rerolled target's dice are inert while they tumble
   const dm = mbrDieMode.value;
   if (dm && dm.targetId === targetId) { // armed Pro/Consummate → re-roll THIS die (sel=-1; the fresh dialog drives the pick)
     gameStore.sendMultiBlockChoiceForTarget(targetId, -1, dm.kind === 'pro' ? 'Pro' : 'Consummate Professional', dieIndex);
@@ -2750,6 +2748,44 @@ function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDi
   //   Enumerate EVERY die index [0..nrOfDice-1] to reroll the WHOLE pool. (wire key `reRolledDice`, server :437.)
   const allDice = Array.from({ length: nrOfDice }, (_, i) => i);
   gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0, allDice);
+}
+// Owner 10-13: Multiple Block card - a per-target reroll re-tumbles that target's rerolled dice (row.rerolledDice), with
+// the first roll's tumble length; the row's dice stay inert until they settle. A target's first roll does not tumble.
+const mbrTumbles = ref<Record<string, BlockTumbleFrame>>({});
+const mbrTumbleRuns = new Map<string, BlockTumbleRun>();
+const mbrSeenTumbleKeys = new Map<string, string>();
+function stopMultiBlockTumbles() {
+  for (const run of mbrTumbleRuns.values()) run.stop();
+  mbrTumbleRuns.clear();
+  mbrSeenTumbleKeys.clear();
+  mbrTumbles.value = {};
+}
+watch(() => (gameStore.state.multiBlockResolution?.rolls ?? []).map((r) => `${r.targetId}=${r.tumbleKey}`).join('|'), () => {
+  const mb = gameStore.state.multiBlockResolution;
+  if (!mb) { stopMultiBlockTumbles(); return; }
+  for (const row of mb.rolls) {
+    if (mbrSeenTumbleKeys.get(row.targetId) === row.tumbleKey) continue;
+    mbrSeenTumbleKeys.set(row.targetId, row.tumbleKey);
+    if (!row.rerolledDice || row.rerolledDice.length === 0 || gameStore.playbackCatchingUp.value || settings.spectatorClean || bpReducedMotion.value) continue;
+    const targetId = row.targetId;
+    let run = mbrTumbleRuns.get(targetId);
+    if (!run) {
+      run = new BlockTumbleRun((frame) => {
+        const next = { ...mbrTumbles.value };
+        if (frame) next[targetId] = frame; else delete next[targetId];
+        mbrTumbles.value = next;
+      });
+      mbrTumbleRuns.set(targetId, run);
+    }
+    run.start(row.tumbleKey, row.dice, row.rerolledDice, presentationMs(settings.blockTumbleMs ?? 250), BLOCK_TUMBLE_STEP_MS);
+  }
+}, { immediate: true });
+function mbrRowTumble(row: { targetId: string; tumbleKey: string }): BlockTumbleFrame | null {
+  const frame = mbrTumbles.value[row.targetId];
+  return frame && frame.key === row.tumbleKey ? frame : null;
+}
+function mbrDiceShown(row: { targetId: string; tumbleKey: string; dice: number[] }): number[] {
+  return mbrRowTumble(row)?.faces ?? row.dice;
 }
 /** #58: enrich each resolution roll with the target's display name for the surface labels. */
 const multiBlockRows = computed(() => {
@@ -4402,14 +4438,14 @@ watch(
   },
 );
 
-// Owner 2026-07-03: crowd surf — a player pushed out of bounds. Fans rush from the
-// nearest stand, bounce on them, then run back. Fired by the store BEFORE the
-// injury animation (pumpInjuries sequences the casualty/KO after CROWD_SURF_MS).
+// Owner 2026-07-03 / 10-13: crowd stomp on a surfed player. His held token lies one
+// square off the pitch (`square`); fans step in from the stand, stomp, step back.
+// The store raises it overlapping the injury presentation (pumpInjuries).
 watch(
   () => gameStore.state.crowdSurf?.seq,
   () => {
     const c = gameStore.state.crowdSurf;
-    if (c && renderer) renderer.playCrowdSurf(c.square);
+    if (c && renderer) renderer.playCrowdSurf(c.square, c.playerId ?? null);
   },
 );
 
@@ -15679,7 +15715,7 @@ function sendChat() {
           </div>
           <div ref="bpDiceHost" class="bp-dice">
             <button v-for="(d, i) in bpDiceShown" :key="i"
-              class="bp-die" :class="{ 'bp-die-art': settings.order66, 'bp-die-tumbling': bpTumbling, 'bp-die-3d': bpDice3dLive, 'bp-die-selected': !bpTumbling && bpSelectedDice.has(i), 'bp-die-choice': !bpTumbling && gameStore.state.blockPartial.choiceIndex === i }" :data-armed="!!bpDieMode"
+              class="bp-die" :class="{ 'bp-die-art': settings.order66, 'bp-die-tumbling': bpDieTumbling(i), 'bp-die-3d': bpDice3dLive, 'bp-die-selected': !bpTumbling && bpSelectedDice.has(i), 'bp-die-choice': !bpTumbling && gameStore.state.blockPartial.choiceIndex === i }" :data-armed="!!bpDieMode"
               :aria-pressed="bpDieMode === 'multiBlockDice' ? bpSelectedDice.has(i) : undefined"
               :data-readonly="!blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
               :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
@@ -15771,11 +15807,11 @@ function sendChat() {
           <div v-for="row in multiBlockRows" :key="row.targetId" class="mbr-row">
             <span class="mbr-name">{{ row.name }}</span>
             <div class="mbr-dice">
-              <button v-for="(d, i) in row.dice" :key="i" class="bp-die"
-                :class="{ 'bp-die-art': settings.order66, 'mbr-picked': row.selectedIndex === i }"
+              <button v-for="(d, i) in mbrDiceShown(row)" :key="i" class="bp-die"
+                :class="{ 'bp-die-art': settings.order66, 'bp-die-tumbling': !!mbrRowTumble(row)?.tumbling.includes(i), 'mbr-picked': row.selectedIndex === i }"
                 :data-armed="mbrDieMode?.targetId === row.targetId"
                 :data-readonly="!multiBlockDialogMine || row.isOwnChoice !== true || (!row.pickable && mbrDieMode?.targetId !== row.targetId)"
-                :disabled="!multiBlockDialogMine || (mbrDieMode?.targetId !== row.targetId && (row.isOwnChoice !== true || !row.pickable))"
+                :disabled="!!mbrRowTumble(row) || !multiBlockDialogMine || (mbrDieMode?.targetId !== row.targetId && (row.isOwnChoice !== true || !row.pickable))"
                 :title="mbrDieMode?.targetId === row.targetId ? 'Reroll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
                 @click="multiBlockPickDie(row.targetId, i, row.isOwnChoice === true && row.pickable)">
                 <img v-if="settings.order66" :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />

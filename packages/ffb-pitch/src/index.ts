@@ -5,7 +5,7 @@ export { KICK_ARC_GATE_CAP_MS, KICK_ARC_LONGEST_LEGIT_MS, KICK_FLYIN_MS, KICKOFF
 export { blockDicePreview, type BlockPreview } from './blocks';
 export { BLOCK_DIE_SURFACE_COLOURS, BLOCK_GLYPH_RECT, COMPOSED_FACE_PX, blockGlyphRectPx, blockGlyphUrls, blockPlateUrl, composeBlockFacePixels, composeBlockFaces, composedBlockFaceUrls, blockFacesReady, setBlockFaceComposerForTests, setBlockFaceDecoderForTests, evictComposedBlockFaces, resetComposedBlockFacesForTests, composedStorageKey, COMPOSED_STORAGE_PREFIX, nativeBlockDieSurface, normalizeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, isTeamBlockDieSurface, BLOCK_GLYPH_TINTS, HOME_BLUE_GLYPH_TINT, blockGlyphTint, tintGlyphPixels, type BlockGlyphTint, blockGlyphOutline, glyphOutlinePixels, KRISB_BLACK_OUTLINE, type BlockDieGlyphFamily, type BlockDieSurface, type BlockDieSurfaceSetting, type BlockDieSide } from './blockDieSurface';
 export { displayDiceSide, teamServerSide, playerServerSide, type ServerSide } from './diceSide';
-export { BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, HALF_BEAT_MS, type StageSpec, type PipelineTier, type PipelineHooks } from './blockPipeline';
+export { BlockPipeline, PIPELINE_TIMINGS, CROWD_STOMP_FANS, CROWD_STOMP_STAGGER_MS, BEAT_MS, HALF_BEAT_MS, type StageSpec, type PipelineTier, type PipelineHooks } from './blockPipeline';
 export { bundledFumbblAsset, cachedBundledFumbblAsset, knockdownFrameInfo, loadIconsetManifest, loadShadowlessManifest, setClassicIconTextureResolver, setClassicIconUrlRewriter } from './classicIcons';
 export type { ClassicIconTextureSource } from './classicIcons';
 export {
@@ -70,3 +70,4 @@ export const loadBlockDice3d = () => import('./blockDice3d');
 export { ACTION_DIE_TUMBLE_MS } from './actionDice3d';
 export type { BlockDiceRow } from './blockDice3d';
 export { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayCapsWords, sentenceCaseLine, type DisplayCapsPart, type DisplayCapsRun, type DisplayCapsWord } from './displayCaps';
+export { surfLandingSquare, surfOutward, isSurfLanding } from './crowdSurf';

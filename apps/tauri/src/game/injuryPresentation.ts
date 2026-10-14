@@ -20,7 +20,7 @@ export interface InjuryEvent {
   /** #64: split injury taxonomy — `injuryRoll` = the INJURY-ROLL result (STUNNED/KO/CASUALTY); `casualty` = the D16 CASUALTY-ROLL tier/label (+D6 stat for a Lasting Injury). Display-only, derived from injuryBase + seriousInjury. */
   injuryRoll: string;
   casualty?: { tier: string; label: string; stat: string | null } | null;
-  /** Owner 07-03: CROWD-PUSH injury (injuryType crowdpush/crowdpushForSpp/ktmCrowd) — crowd-surf cinematic plays BEFORE the injury anim. */
+  /** Owner 07-03 / 10-13: CROWD-PUSH injury (injuryType crowdpush/crowdpushForSpp/ktmCrowd): the crowd stomp overlaps the injury presentation. The server has already taken him off the pitch, so it never needs `square`. */
   crowdSurf?: boolean;
   /** Owner 07-04: THROW-A-ROCK injury (injuryType throwARock) — rock-throw cinematic plays BEFORE the injury anim. */
   rockThrow?: boolean;
@@ -77,7 +77,7 @@ export function injuryPresentation(report: Record<string, unknown>, game: GameJs
   return { type: INJURY_LABELS[base] ?? 'INJURED', injuryRoll: injuryRollLabel(base), casualty: casualty ? casualtyTierLabel(seriousInjury, base) : null,
     player: player?.playerName ?? '', playerId, side, logoUrl: (team.roster as { logoUrl?: string }).logoUrl ?? null,
     teamName: team.teamName ?? '', square, foul, isCasualty: casualty, injuryBase: base, seriousInjury,
-    crowdSurf: kind.includes('crowd') && !!square, rockThrow, rockImpactOnly: rockThrow && !armorBroke, bitten: kind.includes('bitten') && !!square };
+    crowdSurf: kind.includes('crowd'), rockThrow, rockImpactOnly: rockThrow && !armorBroke, bitten: kind.includes('bitten') && !!square };
 }
 
 export function armourPresentation(report: Record<string, unknown>, coordinate: readonly number[] | null | undefined) {

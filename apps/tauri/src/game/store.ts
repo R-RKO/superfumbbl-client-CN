@@ -31,6 +31,7 @@ import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseH
 import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
 import { blockProCompositeOptions, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption } from './blockDecisionProjection';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
+import { blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
 import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
 import { casualtyRollLabel, casualtyRollBase, injuryTypeName, createCasualtyRollProjection, reduceCasualtyRollProjection, casualtyRollFor } from './casualtyRollProjection';
 import { buildApothecaryDecision, buildApothecaryResult } from './apothecaryDecisionProjection';
@@ -59,7 +60,7 @@ import {
   type ServerCommand,
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
-import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
+import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createReportLogContext, formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
@@ -728,7 +729,10 @@ const legacyState = reactive({
              proComposite: BlockProCompositeOption[];
              singleBlockDie: string | null; singleBlockDieLabel: string | null;
              multiBlockDice: string | null; multiBlockDiceLabel: string | null;
-             singleSkull: string | null; singleSkullLabel: string | null }[];
+             singleSkull: string | null; singleSkullLabel: string | null;
+             /** Owner 10-13: changes when this target's dice are rerolled (stable across the dialog's other resends);
+              *  the card tumbles `rerolledDice` on each change. Null rerolledDice = the target's first roll (no tumble). */
+             tumbleKey: string; rerolledDice: number[] | null }[];
     seq: number;
   } | null,
   /** BB2025 Multiple Block, uphill target: the server's `opponentBlockSelectionProperties` dialog asks MY team (the
@@ -884,6 +888,9 @@ const legacyState = reactive({
     /** Owner 09-05: changes whenever NEW dice land for this block (the roll, then each re-roll) — the surface
      *  tumbles the faces on every change. Stable across the uphill phase flip (same dice re-armed). */
     tumbleKey: string;
+    /** Owner 10-13: the die indexes a reroll replaced (rerolledBlockDiceIndices): the surface tumbles ONLY these and
+     *  the kept dice stay settled. Null = the block's first roll (every die tumbles). */
+    rerolledDice?: number[] | null;
     teamRR: boolean; pro: boolean; brawler: boolean; consummate: boolean; consummateLabel: string | null;
     singleBlockDie: string | null; singleBlockDieLabel: string | null;
     multiBlockDice: string | null; multiBlockDiceLabel: string | null;
@@ -1194,8 +1201,8 @@ const legacyState = reactive({
   } | null,
   /** Doctor-animation trigger (r6f) → renderer.playApothecary (runs in, bounces, exits per `outcome`). */
   apothecaryAnim: null as { playerId: string; square: [number, number] | null; outcome: 'stay' | 'reserves' | 'building'; side: 'home' | 'away'; medic: boolean; seq: number } | null,
-  /** Owner 07-03: crowd-surf trigger (pushed OUT OF BOUNDS) → renderer.playCrowdSurf, fired BEFORE the crowd-push injury anim; `square` = last on-pitch edge square. */
-  crowdSurf: null as { square: [number, number]; side: 'home' | 'away'; seq: number } | null,
+  /** Owner 07-03 / 10-13: crowd stomp trigger (pushed OUT OF BOUNDS) → renderer.playCrowdSurf, overlapping the crowd-push injury presentation; `square` = the surf landing (off the pitch) his held token lies on. */
+  crowdSurf: null as { square: [number, number]; side: 'home' | 'away'; seq: number; playerId?: string } | null,
   /** THROW-A-ROCK cinematic. A miss still arcs to the named target square, then reports MISS without injury. */
   rockThrow: null as { square: [number, number]; miss: boolean; seq: number } | null,
   /** Owner 07-04: INTERACTIVE team-setup phase — non-null while MY setup turn (reserve box, zone shading, Done/Concede). Home-relative coords (server transforms away). */
@@ -3780,13 +3787,17 @@ function noteInjuryTokenHoldProgress(alsoPlayerId?: string): void {
   }
   planInjuryTokenHoldTimer();
 }
-function armInjuryTokenHold(playerId: string, square: readonly number[], priorState: number): void {
+function armInjuryTokenHold(playerId: string, square: readonly number[], priorState: number, surf?: readonly number[] | null): void {
   if (!playerId || !isPitchSquare(square) || injuryEscortOwns(playerId, true)) return;
   // The fallen pose: the server's own state bits with the base set to PRONE (it sends PRONE one frame ahead of a
   // block injury anyway; a crowd-pushed or coalesced player is drawn down the same way).
   const playerState = (priorState & ~0xff) | PlayerStateBase.PRONE;
+  // Owner 10-13: a crowd push lands him one square off the pitch (surf); a re-arm from the same square keeps it.
+  const prior = state.injuryTokenHolds.find((hold) => hold.playerId === playerId);
+  const landing = isSurfLanding(surf) ? surf
+    : prior?.surf && prior.square[0] === square[0] && prior.square[1] === square[1] ? prior.surf : null;
   state.injuryTokenHolds = [...state.injuryTokenHolds.filter((hold) => hold.playerId !== playerId),
-    { playerId, square: [square[0]!, square[1]!], playerState }];
+    { playerId, square: [square[0]!, square[1]!], playerState, ...(landing ? { surf: [landing[0]!, landing[1]!] as [number, number] } : {}) }];
   const now = Date.now();
   injuryTokenHoldClocks.set(playerId, { armedAt: now, progressAt: now });
   planInjuryTokenHoldTimer();
@@ -4042,6 +4053,31 @@ export function installInjuryPillBeatTestHarness() {
 function crowdPushedInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
   return reports.some((report) => String(report.reportId) === 'pushback' && String(report.defenderId ?? '') === playerId);
 }
+/** Astra 10-13: a CROWD injury of his in these reports (crowdpush / crowdpushForSpp / ktmCrowd). A thrown team-mate who
+ *  leaves the pitch gets a plain crowdpush (upstream TtmToCrowdHandler) and a kicked one ktmCrowd
+ *  (StepKickTeamMateDoubleRolled), with no `pushback` report naming him. */
+function crowdInjuredInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
+  return reports.some((report) => String(report.reportId) === 'injury' && String(report.defenderId ?? report.playerId ?? '') === playerId
+    && injuryTypeName(report.injuryType).toLowerCase().includes('crowd'));
+}
+/** Astra 10-13: the last in-bounds square of a thrown / kicked team-mate's flight - the `endCoordinate` of the wire's
+ *  throwTeamMate / kickTeamMate animation (upstream StepInitScatterPlayer: scatterResult.getLastValidCoordinate()),
+ *  which reaches the client a sync BEFORE the crowd injury. Kept for a few arming passes only (flightLandingFresh). */
+const flightLandings = new Map<string, { square: [number, number]; pass: number }>();
+let flightLandingPass = 0;
+const FLIGHT_LANDING_PASSES = 3;
+function noteFlightLanding(cmd: Record<string, unknown> | null | undefined): void {
+  const anim = (cmd as { animation?: { animationType?: unknown; thrownPlayerId?: unknown; endCoordinate?: unknown } | null } | null | undefined)?.animation;
+  if (!anim || !['throwTeamMate', 'kickTeamMate'].includes(String(anim.animationType ?? '')) || anim.thrownPlayerId == null) return;
+  const end = anim.endCoordinate as readonly number[] | null | undefined;
+  if (isPitchSquare(end)) flightLandings.set(String(anim.thrownPlayerId), { square: [end[0]!, end[1]!], pass: flightLandingPass });
+}
+function flightLandingFresh(playerId: string): [number, number] | null {
+  const hit = flightLandings.get(playerId);
+  if (!hit) return null;
+  if (flightLandingPass - hit.pass > FLIGHT_LANDING_PASSES) { flightLandings.delete(playerId); return null; }
+  return hit.square;
+}
 /** @internal The ONE arming rule, shared by the live applier and the live-review publication (Astra P2 10-10: review
  *  had its own approximation and lost both crowd pushes). Who does this model transition + its reports take off the
  *  pitch with an injury still to be presented?
@@ -4057,17 +4093,36 @@ export function injuryTokenHoldArms(
   reports: readonly Record<string, unknown>[],
   eventPending: (playerId: string) => boolean,
   squareOf: (playerId: string) => readonly number[] | null = () => null,
-): { playerId: string; square: [number, number]; priorState: number }[] {
+  lastValidOf: (playerId: string) => readonly number[] | null = () => null,
+): { playerId: string; square: [number, number]; priorState: number; surf?: [number, number] | null }[] {
   if (INJURY_TOKEN_HOLD_BOARD_RESET_MODES.has(String(model.turnMode ?? ''))) return [];
-  const arms: { playerId: string; square: [number, number]; priorState: number }[] = [];
+  const arms: { playerId: string; square: [number, number]; priorState: number; surf?: [number, number] | null }[] = [];
+  // Owner 10-13: the pusher, for the direction a crowd-pushed player leaves the pitch in (crowdSurf.ts).
+  const actingId = String((model.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const pusher = actingId ? (before.get(actingId) ?? model.fieldModel.playerDataArray.find((d) => d.playerId === actingId)?.playerCoordinate ?? null) : null;
   for (const data of model.fieldModel.playerDataArray) {
-    const was = before.get(data.playerId);
-    if (!isPitchSquare(was) || isPitchSquare(data.playerCoordinate)) continue;
+    if (isPitchSquare(data.playerCoordinate)) continue;
+    const crowdPushed = crowdPushedInReports(reports, data.playerId);
+    // Astra 10-13: a crowd injury without a pushback (a thrown / kicked team-mate) - from his last in-bounds square
+    const crowdInjured = !crowdPushed && crowdInjuredInReports(reports, data.playerId);
+    const lastValid = crowdInjured ? lastValidOf(data.playerId) : null;
+    const prior = before.get(data.playerId);
+    const was = isPitchSquare(prior) ? prior : isPitchSquare(lastValid) ? lastValid : null;
+    if (!was) continue;
     const injured = INJURY_TOKEN_HOLD_STATES.has((data.playerState ?? 0) & 0xff) && (eventPending(data.playerId)
       || reports.some((report) => String(report.defenderId ?? report.playerId ?? '') === data.playerId && injuryPresentation(report, model, was, false) !== null));
-    if (!injured && !crowdPushedInReports(reports, data.playerId)) continue;
+    if (!injured && !crowdPushed) continue;
     const square = squareOf(data.playerId);
-    arms.push({ playerId: data.playerId, square: isPitchSquare(square) ? [square[0], square[1]] : [was[0], was[1]], priorState: beforeStates.get(data.playerId) ?? PlayerStateBase.PRONE });
+    const held: [number, number] = isPitchSquare(square) ? [square[0], square[1]]
+      : isPitchSquare(lastValid) ? [lastValid[0], lastValid[1]] : [was[0], was[1]];
+    // Owner 10-13: a crowd push is drawn pushed OFF the pitch, one square beyond the edge he left (the surf landing).
+    // The acting player only GUESSES the push direction (a chained push is not his, and the coach may have chosen one
+    // of several squares): a wrong guess lands him one square along the edge, and a corner can go either way.
+    // Astra 10-13: a thrown / kicked team-mate's crowd injury lands him off the NEAREST edge from his last in-bounds
+    // square - the thrower is no pusher (the renderer does not slide him across the pitch from an interior square).
+    const surf = crowdPushed && data.playerId !== actingId ? surfLandingSquare(held, pusher)
+      : crowdInjured ? surfLandingSquare(held, null) : null;
+    arms.push({ playerId: data.playerId, square: held, priorState: beforeStates.get(data.playerId) ?? PlayerStateBase.PRONE, ...(surf ? { surf } : {}) });
   }
   return arms;
 }
@@ -4079,7 +4134,7 @@ function armInjuryTokenHoldsForTransition(
   squareOf?: (playerId: string) => readonly number[] | null,
 ): void {
   if (playback.catchingUp) return;
-  for (const arm of injuryTokenHoldArms(model, before, beforeStates, reports, injuryEventPendingFor, squareOf)) armInjuryTokenHold(arm.playerId, arm.square, arm.priorState);
+  for (const arm of injuryTokenHoldArms(model, before, beforeStates, reports, injuryEventPendingFor, squareOf, flightLandingFresh)) armInjuryTokenHold(arm.playerId, arm.square, arm.priorState, arm.surf);
 }
 /** The model-moved-on wakes (see the hold's header). Runs on every applied frame / published position. */
 function reconcileInjuryTokenHolds(model: GameJson | null): void {
@@ -4090,7 +4145,8 @@ function reconcileInjuryTokenHolds(model: GameJson | null): void {
   const players = model.fieldModel.playerDataArray;
   for (const hold of [...state.injuryTokenHolds]) {
     const data = players.find((d) => d.playerId === hold.playerId);
-    const occupied = players.some((d) => d.playerCoordinate?.[0] === hold.square[0] && d.playerCoordinate?.[1] === hold.square[1]);
+    // Owner 10-13: a surfed player lies OFF the pitch, so the follow-up into the square he left does not wake him.
+    const occupied = !hold.surf && players.some((d) => d.playerCoordinate?.[0] === hold.square[0] && d.playerCoordinate?.[1] === hold.square[1]);
     if (!data || isPitchSquare(data.playerCoordinate) || occupied || injuryEscortOwns(hold.playerId)) releaseInjuryTokenHold(hold.playerId);
   }
 }
@@ -4116,6 +4172,7 @@ function resetCasualtySppPacing(): void {
   casualtySppGeneration += 1;
   injuryPresenting = null;
   clearInjuryTokenHolds(); // owner 10-10: the pump that would have released them is void from here
+  flightLandings.clear(); // Astra 10-13: no flight of an earlier game / position lands a later crowd injury
   injuryEscorts.clear();
   casualtyPresentationsOutstanding = 0;
   pendingCasualtySpp = [];
@@ -4136,8 +4193,6 @@ function injuryStepMs(base: number): number {
   if (base === 0x05) return PIPELINE_TIMINGS.injury.koMs; // KNOCKED_OUT
   return PIPELINE_TIMINGS.injury.casualtyMs; // BADLY_HURT and worse (+ direct-injury)
 }
-// Owner 2026-07-03: how long the crowd-surf cinematic runs before the injury animation follows (matches renderer.playCrowdSurf's rush + bounce + return).
-const crowdSurfMs = () => PIPELINE_TIMINGS.crowdSurf.ms;
 // Owner 2026-08-05: renderer-matched throw-a-rock flight + post-impact beat. Both
 // derive from the shared, owner-tunable PIPELINE_TIMINGS.rockThrow family.
 const rockThrowFlightMs = () => PIPELINE_TIMINGS.rockThrow.flightMs;
@@ -4165,14 +4220,47 @@ const FOLLOWUP_DECISION_HOLD_MS = 900;
 const FOLLOWUP_ARMOUR_GAP_MS = 450;
 const FOLLOWUP_ARMOUR_BACKSTOP_MS = 3000;
 let armourAfterFollow: (() => void) | null = null;
+/** Owner 10-13: the history position (spectatorCursorKey) of the event whose follow/stay indicator the review already
+ *  showed ahead of an injury event's armour dice; that event skips its own indicator. */
+let reviewFollowPresentedAt: string | null = null;
+/** Owner 10-13 (spectator / live armour parity): the outcome of a pending passive follow/stay as the frames already
+ *  received but not yet applied (the spectator drain queue) will show it, by the live rule (the attacker reaches the
+ *  vacated square = followed; a third frame past the question without that = stayed). null = not decidable from the
+ *  queue (frames not received yet, or a fresh question), or not a spectator drain at all. Presentation only. */
+function followupFromQueuedFrames(pending: { attackerId: string; vacated: [number, number]; resolvingAge: number }): boolean | null {
+  if (play.active || replay.active || playback.queue.length === 0) return null;
+  let age = pending.resolvingAge;
+  for (const frame of playback.queue) {
+    if (frame.serverPush) continue;
+    const changes = ((frame.cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray) ?? [];
+    for (const change of changes) {
+      if (change.modelChangeId === 'gameSetDialogParameter' && (change.modelChangeValue as { dialogId?: unknown } | null)?.dialogId === 'followupChoice') return null;
+      if (change.modelChangeId === 'fieldModelSetPlayerCoordinate' && String(change.modelChangeKey ?? '') === pending.attackerId) {
+        const square = change.modelChangeValue as number[] | null;
+        if (Array.isArray(square) && square[0] === pending.vacated[0] && square[1] === pending.vacated[1]) return true;
+      }
+    }
+    if (++age > 2) return false;
+  }
+  return null;
+}
 /** Release the withheld armour dice `afterMs` from now (idempotent; no-op when none). */
 function releaseArmourAfterFollow(afterMs: number): void {
   const show = armourAfterFollow;
   if (!show) return;
   armourAfterFollow = null;
-  if (afterMs > 0) scheduleGameTimeout(show, afterMs);
-  else show();
+  if (afterMs > 0) {
+    // Owner 10-13 (Astra): the dice stay PENDING through the stagger, so the pill guard cannot open in the gap.
+    armourRevealScheduled++;
+    const generation = armourRevealGeneration;
+    scheduleGameTimeout(() => { if (generation === armourRevealGeneration) armourRevealScheduled = Math.max(0, armourRevealScheduled - 1); show(); }, afterMs);
+  } else show();
 }
+/** Owner 10-13: released armour dice still waiting out their stagger (counted; reset with the presentation). */
+let armourRevealScheduled = 0;
+let armourRevealGeneration = 0;
+/** Owner 10-13 (Astra): re-checks a pending passive follow/stay against the drain queue when a frame arrives. */
+let pendingFollowupWake: (() => void) | null = null;
 
 type RockImpactGate = {
   seq: number;
@@ -4243,7 +4331,9 @@ function pumpInjuries() {
     const started = Date.now();
     const tick = () => {
       if (sppGeneration !== casualtySppGeneration) return;
-      if (armourDiceShowing() && Date.now() - started < presentationMs(INJURY_AFTER_ARMOUR_CAP_MS)) { scheduleGameTimeout(tick, 50); return; }
+      // Owner 10-13: nor while this frame's armour dice are still WITHHELD behind a follow/stay (not drawn yet, so the
+      // renderer probe cannot see them): the pill never pops before its dice, on any seat.
+      if ((armourDiceShowing() || armourAfterFollow !== null || armourRevealScheduled > 0) && Date.now() - started < presentationMs(INJURY_AFTER_ARMOUR_CAP_MS)) { scheduleGameTimeout(tick, 50); return; }
       presentInjury();
     };
     tick();
@@ -4280,15 +4370,13 @@ function pumpInjuries() {
       plannerOnInjuryBeatReleased(); // the injury slot holds the planner's Animal Savagery resend: every hold needs a wake
     }, stepMs);
   };
-  // Owner 2026-07-03: a crowd push plays its fans-rush cinematic FIRST — the crowd bounces on the out-of-bounds player, then runs back — and only then does the injury animation (casualty/KO) play at the same square.
+  // Owner 10-13: a crowd push no longer waits on a fans cinematic first (it never ran: the server has him off the pitch
+  // before his injury report, so the event had no square); the crowd stomp overlaps the ordinary timing below.
   if (event.bitten && event.square) {
     // Owner 2026-07-08: a VAMPIRE FEED — pop the 🧛 over the bitten Thrall, hold a beat so it reads, THEN play the injury roll. (marker reads first, then the injury — like crowd-surf.)
     state.vampireBite = { playerId: event.playerId, square: event.square, seq: (state.vampireBite?.seq ?? 0) + 1 };
     holdPlayback(presentationMs(VAMPIRE_BITE_MS));
     scheduleGameTimeout(startInjury, presentationMs(VAMPIRE_BITE_MS));
-  } else if (event.crowdSurf && event.square) {
-    state.crowdSurf = { square: event.square, side: event.side, seq: (state.crowdSurf?.seq ?? 0) + 1 };
-    scheduleGameTimeout(startInjury, crowdSurfMs());
   } else if (event.rockThrow && event.square) {
     // SR-272: catch-up never waits on presentation. Normal playback is completion-
     // gated at renderer impact, then holds the shared impact beat before injury.
@@ -4328,12 +4416,28 @@ function pumpInjuries() {
     // Phase 3a ARMOUR→INJURY HARD GATE (D5b §4-2): the 2d6 armour dice get their own beat first (crowd-surf/rock bypass above).
     const armourGate = Math.max(0, armourGateUntil - Date.now());
     const delay = Math.max(cineRemaining, followDelay, armourGate);
+    // Owner 10-13: a crowd push gets the crowd stomp, OVERLAPPED with this timing (no new hold, no beat moves): it
+    // starts its step-in before the pill is due so the fans arrive as the result is revealed (at once when it is due
+    // sooner), and it is over before his slot ends (stomp + step-out < the shortest crowd slot, KO).
+    if (event.crowdSurf && !playback.catchingUp) scheduleCrowdStomp(event, Math.max(0, delay - PIPELINE_TIMINGS.crowdStomp.stepInMs), sppGeneration);
     if (delay > 0) {
       // Hold the spectator drain until the injury reads, so a burst (turnover in the same frame group) can't fast-forward past the roll → armour → injury beats.
       holdPlayback(delay);
       scheduleGameTimeout(startInjury, delay);
     } else startInjury();
   }
+}
+/** Owner 10-13: raise the crowd stomp (state.crowdSurf -> renderer.playCrowdSurf) on the square the surfed player's
+ *  token lies on - the surf landing of his injury token hold. No hold drawing him off the pitch (it was dropped,
+ *  catch-up, a seek) = no stomp: the fans never stomp an empty square. Presentation only. */
+function scheduleCrowdStomp(event: InjuryEvent, inMs: number, generation: number): void {
+  const fire = () => {
+    if (generation !== casualtySppGeneration) return;
+    const hold = state.injuryTokenHolds.find((candidate) => candidate.playerId === event.playerId);
+    if (!hold?.surf) return;
+    state.crowdSurf = { square: [hold.surf[0], hold.surf[1]], side: event.side, seq: (state.crowdSurf?.seq ?? 0) + 1, playerId: event.playerId };
+  };
+  if (inMs > 0) scheduleGameTimeout(fire, inMs); else fire();
 }
 
 /** Wire `injuryType` is a {name} object or bare string — pull the name for classification. */
@@ -4931,6 +5035,7 @@ async function pauseSpectatorView(): Promise<void> {
           ? ((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []) : null;
         if (playedReports) {
           const priorStates = new Map(previous.model.fieldModel.playerDataArray.map((player) => [player.playerId, player.playerState ?? 0]));
+          flightLandingPass++; noteFlightLanding(played?.command); // Astra 10-13: as the live applier
           armInjuryTokenHoldsForTransition(position.model, coordinates, priorStates, playedReports);
           // Owner 10-12: the same played transition arms the pill beats (present() queues the event a little later and
           // pops its pill; a seek / snapshot / multi-step jump arms none and draws + sounds at once).
@@ -5047,6 +5152,7 @@ async function pauseSpectatorView(): Promise<void> {
           ...transitionBlockCard,
           defenderSquare: transitionBlockDefenderSquare ?? position.durableProjection.block.defenderSquare ?? undefined,
           tumbleKey: `review:${position.cursor.sequence}`,
+          rerolledDice: [], // owner 10-13: the chosen-die reveal is not a roll: nothing tumbles (as the live reveal)
           mine: false,
           choiceIndex: blockOutcome.choiceIndex,
           seq: (state.blockPartial?.seq ?? 0) + 1,
@@ -5354,7 +5460,14 @@ async function pauseSpectatorView(): Promise<void> {
         () => { state.kickoffVictimSplash = { ...kickoffWeather.victims!,
           seq: (state.kickoffVictimSplash?.seq ?? 0) + 1 }; },
         () => { state.kickoffVictimSplash = null; })) return;
-      if (follow) {
+      // Owner 10-13: the indicator of a follow/stay the injury event already showed (see below) is not shown twice.
+      const followShownAhead = !!follow && reviewFollowPresentedAt === spectatorCursorKey(event.cursor);
+      if (followShownAhead) {
+        reviewFollowPresentedAt = null;
+        // its follow MOVE was deferred at publication: release it now (the indicator has long read)
+        if (follow.followed) state.deferMove = { playerId: follow.attackerId, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 };
+      }
+      if (follow && !followShownAhead) {
         const releaseDelay = follow.followed ? presentationMs(FOLLOWUP_MOVE_RELEASE_MS) : 0;
         const followed = await presentStages([
           { delayBefore: PIPELINE_TIMINGS.followStay.afterPushMs, present: () => {
@@ -5380,6 +5493,47 @@ async function pauseSpectatorView(): Promise<void> {
       if (stabCue) {
         state.skillUsed = { playerId: stabCue.playerId, skill: 'Stab', square: stabCue.square, name: stabCue.name, toast: `${stabCue.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
         if (!await presentStages([{ delayBefore: presentationMs(STAB_CUE_MS), present: () => {} }], signal)) return;
+      }
+      // Owner 10-13 (spectator / live armour parity): a live seat withholds these armour dice until the passive
+      // follow/stay before the knockdown has resolved and its indicator has read FOLLOWUP_ARMOUR_GAP_MS; the review
+      // used to put them up at once and show the indicator only with the later event that resolves it - after the
+      // pill. The review now finds that resolving event in the history, shows the indicator first (afterPushMs), then
+      // the dice after the same stagger; that event later skips its own indicator. Not resolvable from the history yet
+      // (the live edge): it waits for the event, at most the live backstop (FOLLOWUP_ARMOUR_BACKSTOP_MS x the factor).
+      const pendingFollow = follow ? null : position.durableProjection.followup.pending;
+      const armourInEvent = reports.some((report) => String(report.reportId) === 'injury' && Array.isArray(report.armorRoll) && report.armorRoll.length === 2);
+      if (pendingFollow && armourInEvent && history) {
+        const resolving = () => {
+          let cursor = event.cursor;
+          for (let step = 0; step < 6; step++) {
+            const next = history.eventAfter(cursor);
+            if (!next) return null;
+            const checkpoint = history.checkpointAt(next.cursor);
+            if (!checkpoint) return null;
+            const outcome = checkpoint.durableProjection.followup.outcome;
+            if (outcome && outcome.attackerId === pendingFollow.attackerId) return { outcome, key: spectatorCursorKey(next.cursor) };
+            if (!checkpoint.durableProjection.followup.pending) return null;
+            cursor = next.cursor;
+          }
+          return null;
+        };
+        let found = resolving();
+        const waitStarted = Date.now();
+        while (!found && Date.now() - waitStarted < presentationMs(FOLLOWUP_ARMOUR_BACKSTOP_MS)) {
+          if (!await presentStages([{ delayBefore: 50, present: () => {} }], signal)) return;
+          found = resolving();
+        }
+        if (found) {
+          const ahead = found.outcome;
+          reviewFollowPresentedAt = found.key;
+          if (!await presentStages([{ delayBefore: PIPELINE_TIMINGS.followStay.afterPushMs, present: () => {
+            state.followupIndicator = { playerName: playerName(position.model, ahead.attackerId), square: ahead.square,
+              followed: ahead.followed, seq: (state.followupIndicator?.seq ?? 0) + 1 };
+          } }], signal)) return;
+          const shownSeq = state.followupIndicator?.seq;
+          scheduleGameTimeout(() => { if (state.followupIndicator?.seq === shownSeq) state.followupIndicator = null; }, PIPELINE_TIMINGS.followStay.holdMs);
+          if (!await presentStages([{ delayBefore: presentationMs(FOLLOWUP_ARMOUR_GAP_MS), present: () => {} }], signal)) return;
+        }
       }
       const armourSeen = new Set<string>();
       const armour = reports.flatMap((report) => {
@@ -8665,10 +8819,10 @@ function applyFrameContents(frame: QueuedFrame) {
     // Phase-4: a TEAM block re-roll arrives as generic `reRoll` (NOT blockReRoll) in the same frame (g1920221) — detect either, else team rerolls skip the gate and play as a disconnected 2nd block.
     // Hoisted out of the `sq`/`rolls` gate below (it used to live there) so the epoch bump on the next line
     // fires for EVERY re-roll frame, not only the ones whose defender square resolved.
-    const isBlockReroll = reports.some((r) => {
-      const id = String(r.reportId);
-      return id === 'blockReRoll' || (id === 'reRoll' && (r as { reRollSource?: unknown }).reRollSource != null);
-    });
+    // Owner 10-13 (Astra): a plain Mascot reroll can send only `mascotUsed` (RollMechanic.useMascot), with neither
+    // blockReRoll nor reRoll; it is a reroll event too, else an identical-faces resend would reuse the old key.
+    const rerollOutcome = blockRerollOutcome(reports);
+    const isBlockReroll = rerollOutcome !== null;
     // dedup-key-too-coarse (the #185 class, and [[dedup-key-too-coarse]]): `surfaceBlockPartial`'s key is
     // `blockPartial:${blockChoiceEpoch}:${JSON.stringify(dp.blockRoll)}`, i.e. CONTENT-keyed on the dice. A
     // re-roll that lands the SAME faces ([3] → [3]) therefore reproduces the key of the offer it replaces and
@@ -8676,6 +8830,18 @@ function applyFrameContents(frame: QueuedFrame) {
     // re-roll IS the per-instance disambiguator: bump the epoch alongside its detection so the re-rolled offer
     // carries a fresh key whatever the faces come back as. (Same reason the g313 dialog-resolve sites bump.)
     if (isBlockReroll) blockChoiceEpoch++;
+    // Owner 10-13: remember this reroll so the resent card re-tumbles what it replaced (rerolledBlockDiceIndices) - or
+    // nothing, when the use failed (`successful: false`: the server resent the unchanged roll). The dice before it are
+    // the last surfaced card's; the next surfaceBlockPartial consumes this.
+    if (rerollOutcome) {
+      pendingBlockReroll = { ...rerollOutcome, previous: lastSurfacedBlockDice, own: ownBlockRerollIndices };
+      ownBlockRerollIndices = null;
+    } else if (rollReport) {
+      // A fresh block roll: never tumble it as a partial reroll of an earlier block, and a die the coach chose for a
+      // reroll whose answer never came (disconnect, a server refusal) dies with that block.
+      pendingBlockReroll = null;
+      ownBlockRerollIndices = null;
+    }
     if (source) {
       const rolls = Array.isArray(source.blockRoll) ? (source.blockRoll as number[]) : [];
       const defenderId = String(rollReport?.defenderId ?? choiceReport?.defenderId ?? visibleBlockContext.defenderId ?? '');
@@ -8749,6 +8915,7 @@ function applyFrameContents(frame: QueuedFrame) {
     }
   }
   // Owner 10-10: whoever this frame took off the pitch with his injury still to be presented keeps his token there.
+  flightLandingPass++; noteFlightLanding(cmd); // Astra 10-13: a thrown / kicked team-mate's last in-bounds square
   armInjuryTokenHoldsForTransition(game.value, preCoords, preStates, reports, failedMovementDestination);
   reconcileInjuryTokenHolds(game.value);
   reconcileInjuryPillBeats(game.value); // owner 10-12: a player no longer STUNNED has no decoration to wait for
@@ -9875,23 +10042,45 @@ function applyFrameContents(frame: QueuedFrame) {
       }
     } else if (pendingFollowup) {
       const at = coordOf(pendingFollowup.attackerId);
-      const followed = !!at && at[0] === pendingFollowup.vacated[0] && at[1] === pendingFollowup.vacated[1];
-      if (followed || ++pendingFollowup.resolvingAge > 2) {
-        // Owner 2026-07-05 FIX: the indicator belongs over the BLOCKER (attacker), not the blocked player. The attacker's LIVE square is the blocker wherever they ended up. Prefer the live coordinate; fall back to the tracked squares if the token has already been cleared.
-        const square = at ?? (followed ? pendingFollowup.vacated : pendingFollowup.attackerFrom);
-        if (pendingFollowup.mine) {
+      const arrived = !!at && at[0] === pendingFollowup.vacated[0] && at[1] === pendingFollowup.vacated[1];
+      const resolvedHere = arrived || ++pendingFollowup.resolvingAge > 2;
+      // Owner 10-13 ("Let's bring Spectator and Live into the same backstop wait for armour dice ... Get the ordering
+      // to match"): a live seat applies the frames that resolve a passive follow/stay a few ms apart, so it resolves on
+      // them at once. A spectator applies them through the paced drain, which the withheld armour dice of this very
+      // frame hold - so they waited out FOLLOWUP_ARMOUR_BACKSTOP_MS and the pill beat the dice. The spectator now reads
+      // the SAME rule from the frames already received (followupFromQueuedFrames) and resolves in this frame; only when
+      // they have not arrived yet does the backstop (the same 3000 ms x the spectator factor) apply.
+      // Only while the knockdown's armour dice are WITHHELD behind this follow/stay (armourAfterFollow): that frame has
+      // already applied, so the indicator's drain read only delays the frames after it, as before.
+      const ahead = resolvedHere || !armourAfterFollow ? null : followupFromQueuedFrames(pendingFollowup);
+      const resolveFollowup = (pending: NonNullable<typeof pendingFollowup>, followed: boolean, square: [number, number]) => {
+        pendingFollowupWake = null;
+        if (pending.mine) {
           // my chosen follow: a small gold flash at the arrival square
           if (followed) state.followupFlash = { square, seq: (state.followupFlash?.seq ?? 0) + 1 };
         } else {
           // Owner 2026-07-07 (queue #1): the move-next-frame path. The attacker's arrival tweens THIS frame, so when `followed` defer it behind the indicator too (same ordering as the batched path above). A stay (followed=false) has no move.
-          if (followed) deferFollowMove(pendingFollowup.attackerId);
-          emitPassiveFollow(
-            playerName(game.value, pendingFollowup.attackerId), square, followed,
-            followed ? pendingFollowup.attackerId : null,
-          );
+          if (followed) deferFollowMove(pending.attackerId);
+          emitPassiveFollow(playerName(game.value, pending.attackerId), square, followed, followed ? pending.attackerId : null);
         }
         pendingFollowup = null;
         if (state.followupChoice) state.followupChoice = null;
+      };
+      if (resolvedHere || ahead !== null) {
+        const followed = arrived || ahead === true;
+        // Owner 2026-07-05 FIX: the indicator belongs over the BLOCKER (attacker), not the blocked player. The attacker's LIVE square is the blocker wherever they ended up. Prefer the live coordinate; fall back to the tracked squares if the token has already been cleared.
+        const square = ahead === true ? pendingFollowup.vacated : at ?? (followed ? pendingFollowup.vacated : pendingFollowup.attackerFrom);
+        resolveFollowup(pendingFollowup, followed, square);
+      } else if (armourAfterFollow && !play.active && !replay.active) {
+        // Owner 10-13 (Astra): the resolving frame has not been received yet - it resolves on ARRIVAL (enqueue wakes
+        // this), not when the drain finally applies it behind the withheld dice. The backstop stays the last wake.
+        const pending = pendingFollowup;
+        pendingFollowupWake = () => {
+          if (pendingFollowup !== pending || !armourAfterFollow) { pendingFollowupWake = null; return; }
+          const later = followupFromQueuedFrames(pending);
+          if (later === null) return;
+          resolveFollowup(pending, later, later ? pending.vacated : coordOf(pending.attackerId) ?? pending.attackerFrom);
+        };
       }
     } else if (state.followupChoice) {
       state.followupChoice = null; // dialog resolved without a pending question
@@ -10055,7 +10244,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // Relocate block, footstep, and ball sounds to their presentation beats; suppress apply-time duplicates.
   // Owner 10-12: an injury-type sound a pill beat took over plays when the pill pops (or its fallback), never here too.
   { const s = cmd.sound as string | null | undefined; if (s !== 'block' && !(relocatedStepSound && s === 'step' && soundCueActive) && !(!!s && relocatedBeatSounds.has(s)) && !frameInjurySoundClaimed) playSound(s); }
-  updateFieldFlip(game.value); // owner 2026-07-06: spectator drive-north orientation
+  updateFieldFlip(game.value, reports); // owner 2026-07-06: spectator drive-north orientation; 10-13: the frame's reports settle a drive-end setup reading
   playback.lastReceivedAt = frame.receivedAt;
   pendingReserveSlots.clear(); // g807: reserve-slot claims resolve at each applied frame (the echo carries the occupancy)
   // retire-gap hook 2: LAST, after every applier on this frame has run (so the model coordinate read here is the
@@ -11467,6 +11656,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
     return;
   }
   playback.queue.push(frame);
+  pendingFollowupWake?.(); // owner 10-13: the frame that resolves a pending follow/stay may just have arrived
   syncMoveRollHeldBacklog(); // Astra P2-1 / R2: held from here until the whole queue has drained
   // Astra 10-09: a server prompt queued behind a movement-roll hold shortens it (queuedPromptSince) - re-evaluate now.
   if (playback.timer && moveRollHoldActive() && frameSetsDialog(frame)) {
@@ -11501,6 +11691,12 @@ function forceSnapshotTick() {
   state.snapshotEpoch += 1;
 }
 function resetPlayback() {
+  // Owner 10-13 (Astra): the block reroll re-tumble state never crosses a reset (disconnect, reconnect, a fresh game or
+  // seat: SERVER_GAME_STATE resets here), so a die chosen before it cannot steer a later observed reroll.
+  ownBlockRerollIndices = null;
+  pendingBlockReroll = null;
+  lastSurfacedBlockDice = null;
+  lastMultiBlockDialog = null;
   rockThrowResolveStartedAt = null;
   bombFlightHoldUntil = 0;
   clearTtmPresentationHold(); // owner 10-13: the TTM flight / bounce hold never crosses a reset / seek / snapshot
@@ -11705,6 +11901,8 @@ function clearCinematics(hardGameBoundary = false) {
   state.onTheBallMover = null;
   state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
+  pendingFollowupWake = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
+  reviewFollowPresentedAt = null; // owner 10-13
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
   turnoverTimer = turnoverClearTimer = weatherTimer = kickoffTimer = fanFactorTimer = null;
@@ -14903,7 +15101,7 @@ export function installBlockPartialTestHarness(
   applyBlockDialog(extra: Record<string, unknown>, reports?: readonly Record<string, unknown>[]): void;
   surfaceReadOnlyBlockDialog(extra: Record<string, unknown>, reports?: readonly Record<string, unknown>[]): void;
   applyAuthoritativeFrame(command: Record<string, unknown>): void;
-  applyMultiBlockDialog(extra: Record<string, unknown>): void;
+  applyMultiBlockDialog(extra: Record<string, unknown>, reports?: readonly Record<string, unknown>[]): void;
   partial(): typeof state.blockPartial;
   stamp(): typeof state.blockResultStamp;
   multi(): typeof state.multiBlockResolution;
@@ -14973,13 +15171,13 @@ export function installBlockPartialTestHarness(
         },
       });
     },
-    applyMultiBlockDialog(extra) {
+    applyMultiBlockDialog(extra, reports = []) {
       if (game.value) {
         game.value.dialogParameter = {
           dialogId: 'reRollBlockForTargetsProperties', playerId: blockerId, ...extra,
         } as GameJson['dialogParameter'];
       }
-      resolvePlayFollowups();
+      resolvePlayFollowups(reports);
     },
     partial: () => state.blockPartial,
     stamp: () => state.blockResultStamp,
@@ -18282,8 +18480,8 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
 
 // Owner 2026-07-06: SPECTATOR drive-north flip helpers. Best-effort read of which team is on offense when JOIN mid-game (no kickoff observed): ball carrier's team if held, else first-offense/half rule (home receives first drive of first half iff homeFirstOffense; swaps at second half); half rule is first guess, self-corrects at next kickoff.
 /** Recompute state.fieldFlip from current drive offense + play mode. Flip is SPECTATOR-ONLY (play mode keeps active/home at bottom), true only when the team to draw at the bottom is AWAY. Under the default 'drive' view that is the driving team being away (attacks near/south natively, mirror to send drive north); owner 10-11: 'home' / 'away' / 'mine' fix it for the game. seq bumps only on real change. */
-function updateFieldFlip(g: GameJson): void {
-  visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, [], g);
+function updateFieldFlip(g: GameJson, reports: readonly Record<string, unknown>[] = []): void {
+  visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, reports, g);
   const flip = !play.active && automaticFieldFlip(visibleDriveProjection.offenseIsHome, g);
   if (flip !== state.fieldFlip.flip) {
     state.fieldFlip = { flip, seq: state.fieldFlip.seq + 1 };
@@ -19263,6 +19461,15 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
 /** Surface every block-roll variant to the chooser; derive sources from reRollProperties/action map and keep unverified skill commands disabled. */
 // Include a per-choice epoch in block-roll dedup keys so identical later rolls still surface.
 let blockChoiceEpoch = 0;
+/** Owner 10-13 (reroll re-tumble): the dice of the last surfaced single-block card, the die indexes the local coach
+ *  chose for its own reroll (Pro / single-die / Savage Blow), and the reroll seen in the current frame, waiting for
+ *  the resent card to surface. */
+let lastSurfacedBlockDice: number[] | null = null;
+let ownBlockRerollIndices: number[] | null = null;
+let pendingBlockReroll: (BlockRerollOutcome & { previous: number[] | null; own: number[] | null }) | null = null;
+/** Owner 10-13: the multi-block card's last surfaced dialog and a tumble counter. */
+let lastMultiBlockDialog: unknown = null;
+let multiBlockTumbleSeq = 0;
 /** Owner 09-05: de-dup key of the last o66 block whose dice thud played (same key as surfaceBlockPartial's). */
 let lastBlockThudKey = '';
 /** @returns true when this call actually armed a NEW offer; false when the de-dup key swallowed it (the
@@ -19284,6 +19491,14 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
   if (followupHandled.has(key)) return false;
   followupHandled.add(key);
   const card = buildBlockDecision(game.value, dp, readOnly);
+  // Owner 10-13: a card resent after a reroll tumbles only the dice the reroll replaced ([] after a failed use: no
+  // tumble); a fresh roll tumbles all (null).
+  const reroll = pendingBlockReroll;
+  pendingBlockReroll = null;
+  const rerolledDice = !reroll ? null : !reroll.rolled ? [] : rerolledBlockDiceIndices({
+    previous: reroll.previous, next: card.dice, rerolledFaces: reroll.faces, source: reroll.source, ownIndices: reroll.own,
+  });
+  lastSurfacedBlockDice = [...card.dice];
   // Owner 10-10 (Astra P1): a spent Pro the dialog still lists is never offered - plain Pro or with a fallback.
   const proWithheld = card.pro && playerProSpent(game.value, String(dp.playerId ?? game.value?.actingPlayer?.playerId ?? ''));
   // Owner 09-14 UAT / Astra: the anchor square is read NOW (the block's own frame), never when a drain-deferred prompt
@@ -19307,6 +19522,7 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
   state.blockPartial = {
     ...card,
     tumbleKey: `${blockChoiceEpoch}:${JSON.stringify(dp.blockRoll)}`,
+    rerolledDice,
     mine: !readOnly,
     pro: card.pro && !proWithheld,
     proComposite: readOnly || proWithheld ? [] : blockProCompositeOptions(dp.dialogId, dp),
@@ -19325,8 +19541,19 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
 }
 
 /** Build synchronous multi-block target choices from the combined dialog arrays; presentation emits nothing. */
-function surfaceMultiBlockResolution(dp: Record<string, unknown>) {
+function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: readonly Record<string, unknown>[] = []) {
   const blockerId = String(dp.playerId ?? '');
+  // Owner 10-13: a resent dialog after a SUCCESSFUL per-target reroll re-tumbles that target's rerolled dice. The
+  // dialog is re-surfaced on every followups pass, so a row keeps its tumbleKey unless the NEW dialog's frame rerolled
+  // it: the reroll outcome rolled dice (blockRerollOutcome) and the frame's blockRoll report names this target
+  // (StepBlockRollMultiple: ReportBlockRoll(team, roll, targetId) after the reroll, sent even when the use failed).
+  const previousRows = state.multiBlockResolution?.rolls ?? [];
+  const freshDialog = dp !== lastMultiBlockDialog;
+  lastMultiBlockDialog = dp;
+  const outcome = freshDialog ? blockRerollOutcome(reports) : null;
+  const rerolledTargets = new Set(outcome?.rolled
+    ? reports.filter((r) => String(r.reportId) === 'blockRoll' && r.defenderId != null).map((r) => String(r.defenderId))
+    : []);
   const blockerSkillValues = playerById(game.value, blockerId)?.skillDisplayValuesMap;
   const rollsRaw = Array.isArray(dp.blockRolls) ? (dp.blockRolls as Record<string, unknown>[]) : [];
   // Owner 10-10 (Astra P1): the blocker's Pro is spent per the server's own player state though the dialog may still
@@ -19350,8 +19577,21 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>) {
     // decline for such a row, answering the listed source is the way on, and there is no other reroll to lose.
     const proOnlyExit = r.isOwnChoice !== true && !(srcTeam || srcBrawler || srcConsummate || !!singleBlockDieSrc || !!multiBlockDiceSrc || !!singleSkullSrc);
     const proHidden = proSpent && !proOnlyExit;
+    const targetId = String(r.playerId ?? '');
+    const prevRow = previousRows.find((p) => p.targetId === targetId);
+    const rerolledHere = !!prevRow && !!outcome && rerolledTargets.has(targetId);
+    const wireDice = Array.isArray(r.reRolledDice) ? (r.reRolledDice as unknown[]).map(Number) : null;
+    const tumble = !prevRow
+      ? { tumbleKey: `mb:${++multiBlockTumbleSeq}`, rerolledDice: null }
+      : rerolledHere
+        ? { tumbleKey: `mb:${++multiBlockTumbleSeq}`, rerolledDice: rerolledBlockDiceIndices({
+          previous: prevRow.dice, next: dice, rerolledFaces: outcome!.faces, source: outcome!.source,
+          wire: { reRolledDice: wireDice, proIndex: typeof r.proIndex === 'number' ? r.proIndex : null },
+        }) }
+        : { tumbleKey: prevRow.tumbleKey, rerolledDice: prevRow.rerolledDice };
     return {
-      targetId: String(r.playerId ?? ''),
+      targetId,
+      ...tumble,
       dice, nrOfDice,
       isOwnChoice: typeof r.isOwnChoice === 'boolean' ? r.isOwnChoice : null,
       selectedIndex: Number(r.selectedIndex ?? -1),
@@ -20659,7 +20899,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   if (dlg === 'reRollBlockForTargetsProperties') {
     const blocker = String(dp?.playerId ?? '');
     if (!blocker || !mine.has(blocker)) return; // not my dialog
-    if (decisionSurfaceDeclared('reRollBlockForTargetsProperties')) { surfaceMultiBlockResolution(dp as Record<string, unknown>); return; }
+    if (decisionSurfaceDeclared('reRollBlockForTargetsProperties')) { surfaceMultiBlockResolution(dp as Record<string, unknown>, reports); return; }
     // headless: pick die 0 for the FIRST still-unselected target and let the server's re-send drive the next
     // (robust whether the server applies choices sequentially or in a batch — sending all at once could dedup-wedge
     // a sequential server on its re-send). dedup per target+epoch guards a transient re-send before the model updates.
@@ -25314,6 +25554,10 @@ export const gameStore = {
       case 'consummate': cmd = { netCommandId: NetCommandId.CLIENT_USE_CONSUMMATE_RE_ROLL_FOR_BLOCK, proIndex: dieIndex }; break;
       case 'singleBlockDie': cmd = state.blockPartial.singleBlockDie ? { netCommandId: NetCommandId.CLIENT_USE_SINGLE_BLOCK_DIE_RE_ROLL, blockDieIndex: dieIndex, reRollSource: state.blockPartial.singleBlockDie } : null; break;
     }
+    // Owner 10-13: the dice this coach chose to reroll (the resent card re-tumbles exactly these); other sources are
+    // derived from the server's reroll report (Brawler / Hatred / a full reroll).
+    ownBlockRerollIndices = kind === 'pro' || kind === 'consummate' || kind === 'singleBlockDie' ? [dieIndex]
+      : kind === 'multiBlockDice' && Array.isArray(dieSelection) ? [...dieSelection] : null;
     if (cmd) sendCommand(cmd);
     state.blockPartial = null;
     blockChoiceEpoch++; // g313: the NEXT block-choice offer gets a fresh de-dup key even on identical dice

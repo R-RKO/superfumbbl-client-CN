@@ -5,7 +5,8 @@ import 'pixi.js/gif';
 import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZONE_LETTERING, composeDisplayLettering, displayFontState, fitInkInBand, loadDisplayFonts, type DisplayLetteringStyle } from './displayLettering';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
-import { PIPELINE_TIMINGS } from './blockPipeline';
+import { CROWD_STOMP_FANS, CROWD_STOMP_STAGGER_MS, PIPELINE_TIMINGS } from './blockPipeline';
+import { isSurfLanding, surfLandingSquare, surfOutward } from './crowdSurf';
 import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSide, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 import { RING_TYPE_COLORS, ringTypeForName } from './positionTypes';
 import { displayDiceSide, playerServerSide, type ServerSide } from './diceSide';
@@ -400,15 +401,15 @@ type MovementOverlayEntry = {
 };
 
 /** Uncommitted Rush costs on reachable squares should inform without competing with players or a queued path. */
-/** Owner 10-13: a step owing BOTH a rush and a dodge stacks them vertically, rush die on top and the dodge chip
- *  directly below on the same x. The gap is the die's half height (~6.5) + 2 px + the chip's half height (~4.25),
- *  times the depth scale so the stack stays attached at every depth and zoom. */
-export const ROLL_STACK_GAP = 13;
+/** Owner 10-13: a step owing BOTH a rush and a dodge stacks them vertically, rush tag on top and the dodge tag
+ *  directly below on the same x. Every tag is one 17 px plate drawn at 0.5 scale (8.5 px), so the gap is one plate
+ *  height + 1.5 px, times the depth scale so the stack stays attached at every depth and zoom. */
+export const ROLL_STACK_GAP = 10;
 const REACHABLE_RUSH_DIE_ALPHA = 1; // owner 09-09: the rest die keeps the moving die's opacity (was 0.6) // owner 09-08: 0.3 read too faint on the board
 /** Owner 2026-07-06 / 09-09: a Jump/Leap/Pogo lifts the sprite in one whole-flight arc, paced a touch slower than a
  *  step so it reads as a spring; a pending flag older than the TTL is dropped rather than arcing a later move. */
 const LEAP_ARC_PX = 26;
-const leapSegmentMs = (): number => presentationMs(210); // read per use: the spectator pacing factor is live
+const leapSegmentMs = (): number => presentationMs(350); // owner 10-13: 350 ms per square crossed (was 210); read per use: the spectator pacing factor is live
 const LEAP_PENDING_TTL_MS = 2500;
 /** Owner 09-07: the chest target ring's drawn height in decor-1 units (target-ring-thick-v5 visible bounds). */
 const TARGET_H = 18;
@@ -1343,11 +1344,26 @@ export const GROUND_BALL_HOLD_STALL_MS = 4000;
 export const GROUND_BALL_HOLD_CAP_MS = 6000;
 /** Owner 10-10: a player the injury took off the pitch whose armour roll / injury pill is still to be shown. `square`
  *  is his last server-confirmed pitch square, `playerState` the pose he is drawn in there (see injuryTokenHoldsProbe). */
-export interface InjuryTokenHold { playerId: string; square: [number, number]; playerState: number }
+export interface InjuryTokenHold {
+  playerId: string; square: [number, number]; playerState: number;
+  /** Owner 10-13: a CROWD-PUSHED player is drawn here instead, one square off the pitch beyond `square` (crowdSurf.ts);
+   *  the token slides there from `square` at the pushback pace and lies there for the crowd stomp. */
+  surf?: [number, number] | null;
+}
+/** Astra 10-13: one crowd stomp on screen (renderer.playCrowdSurf) and what retires it. */
+interface CrowdStompRun { landing: [number, number]; fans: Container[]; startedAt: number; rings: Container[]; playerId: string | null; cleanup: () => void }
+/** The first refresh draws the victim's held token; a stomp whose victim is not drawn by then retires. */
+const CROWD_STOMP_VICTIM_GRACE_MS = 250;
+/** Where a hold draws its token: the surf landing square of a crowd push, else his last pitch square. */
+export function injuryTokenHoldDrawSquare(hold: InjuryTokenHold): [number, number] {
+  return hold.surf && isSurfLanding(hold.surf) ? hold.surf : hold.square;
+}
 /** The holds that are DRAWN for this model: the player is off the pitch in it, his square is a pitch square and nobody
  *  stands on it in the model (two tokens never share a square because of a hold), one per player and per square.
  *  The renderer draws exactly these on the pitch and leaves exactly these out of the dugout; every count of "who is in
- *  the dugout" (the dugout labels here, the coach-corner RES / OUT tabs) excludes exactly these too. */
+ *  the dugout" (the dugout labels here, the coach-corner RES / OUT tabs) excludes exactly these too.
+ *  Owner 10-13: a surf hold lies OFF the pitch (injuryTokenHoldDrawSquare), so the square he was pushed from may be
+ *  taken (the follow-up) without disturbing him; off-pitch squares are never occupied by the model's pitch players. */
 export function injuryTokenHoldsDrawn(
   game: { fieldModel?: { playerDataArray?: readonly { playerId: string; playerCoordinate?: readonly number[] | null }[] } } | null | undefined,
   holds: readonly InjuryTokenHold[] | null | undefined,
@@ -1359,8 +1375,10 @@ export function injuryTokenHoldsDrawn(
     if (!hold || !isOnPitch(hold.square) || out.some((other) => other.playerId === hold.playerId)) continue;
     const data = players.find((d) => d.playerId === hold.playerId);
     if (!data || isOnPitch(data.playerCoordinate as [number, number] | null | undefined)) continue;
-    if (players.some((d) => d.playerCoordinate?.[0] === hold.square[0] && d.playerCoordinate?.[1] === hold.square[1])) continue;
-    if (out.some((other) => other.square[0] === hold.square[0] && other.square[1] === hold.square[1])) continue;
+    const [sx, sy] = injuryTokenHoldDrawSquare(hold);
+    const surf = sx !== hold.square[0] || sy !== hold.square[1];
+    if (!surf && players.some((d) => d.playerCoordinate?.[0] === sx && d.playerCoordinate?.[1] === sy)) continue;
+    if (out.some((other) => { const [ox, oy] = injuryTokenHoldDrawSquare(other); return ox === sx && oy === sy; })) continue;
     out.push(hold);
   }
   return out;
@@ -6057,7 +6075,9 @@ export class PitchRenderer {
       if (!data || !player) continue;
       const isHome = homeIds.has(hold.playerId);
       const team = isHome ? this.game.teamHome : this.game.teamAway;
-      const [x, y] = hold.square;
+      // Owner 10-13: a crowd-pushed player is drawn one square off the pitch (the surf landing); his slide there from
+      // the edge square is the ordinary pushback tween below (lastSquares still holds the edge square).
+      const [x, y] = injuryTokenHoldDrawSquare(hold);
       let token: Container | undefined;
       try {
         token = this.buildPlayerToken(player, { ...data, playerCoordinate: [x, y], playerState: hold.playerState }, isHome, team, baselines.get(player.positionId));
@@ -6081,7 +6101,10 @@ export class PitchRenderer {
           this.moveTweens.set(hold.playerId, { ...carried.tween, token });
           token.position.set(carried.x, carried.y);
         } else this.continueMoveTween(hold.playerId, token, carried, [x, y]);
-      } else if (previous && (previous[0] !== x || previous[1] !== y)) {
+      } else if (previous && (previous[0] !== x || previous[1] !== y)
+          // Astra 10-13: a surfed token slides one square off the pitch; from anywhere further (a kicked team-mate's
+          // interior square, a thrower's square) it is put down on the landing, never slid across the pitch
+          && (!hold.surf || Math.max(Math.abs(previous[0] - x), Math.abs(previous[1] - y)) <= 1)) {
         this.startMoveTween(hold.playerId, token, previous, [x, y]);
       }
       this.lastSquares.set(hold.playerId, [x, y]);
@@ -6266,6 +6289,7 @@ export class PitchRenderer {
   /** Snap one non-presented replay render without erasing persistent same-game projections. */
   snapReplayFrame(): void {
     this.resetAutoDirectorCamera(true);
+    this.retireCrowdStomp(); // Astra 10-13: a seek never leaves the crowd stomping (fans + rings)
     this.clearActionDice(); // Owner 09-28 (S7 v3): a seek / live-review snap leaves no die behind, held or not.
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
@@ -8759,7 +8783,7 @@ export class PitchRenderer {
           () => new Graphics().poly(quad.points.flat()).fill({ color: 0x9a9a9a, alpha: 0.3 }),
         );
         const a = this.tokenPos(sx, sy);
-        const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere — 0.8 x depth, fully opaque
+        const dieScale = depthScale(sx, sy) * 0.5; // owner 10-13: one R<N>+ rush tag everywhere, 0.5 x depth like the D<N>+ tag
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
           'reach',
@@ -8893,11 +8917,11 @@ export class PitchRenderer {
         }
         if (rolls.gfi > 0) {
           this.pathLayer.addChild(
-            this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
+            this.buildReachableRushDie(a.x, a.y, ds * 0.5, rolls.gfi || fallbackRushTarget),
           );
         }
       } else if (legacyRush) {
-        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.8, fallbackRushTarget));
+        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.5, fallbackRushTarget));
       }
     }
   }
@@ -9102,11 +9126,11 @@ export class PitchRenderer {
                   a.x,
                   cy,
                   1,
-                  () => this.buildRollDie(0, 0, ds * 0.8, target), // owner 09-09: 0.8 x depth like the reach dice
+                  () => this.buildRushChip(0, 0, ds * 0.5, target), // owner 10-13: R<N>+ tag, same size as the D<N>+ tag
                 );
               } else {
-                const die = this.buildRollDie(a.x, cy, ds * 0.8, target);
-                die.alpha = 1; this.pathLayer.addChild(die); // owner 09-08: planned rush die fully opaque
+                const die = this.buildRushChip(a.x, cy, ds * 0.5, target);
+                die.alpha = 1; this.pathLayer.addChild(die); // owner 09-08: planned rush tag fully opaque
               }
             }
             if (pickup) {
@@ -9322,7 +9346,7 @@ export class PitchRenderer {
       if (used + cost <= info.normal) continue;
       const [sx, sy] = key.split(',').map(Number) as [number, number];
       const a = squareAnchor(sx, sy);
-      const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere — 0.8 x depth, fully opaque
+      const dieScale = depthScale(sx, sy) * 0.5; // owner 10-13: one R<N>+ rush tag everywhere, 0.5 x depth like the D<N>+ tag
       if (persistentReach) {
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
@@ -9909,11 +9933,11 @@ export class PitchRenderer {
     return die;
   }
 
-  /** A reachable/unselected Rush cost. Owner 09-09: the SAME die as the planned path (buildRollDie face + '+',
-   *  target 2+ when the caller has none) at the shared 60% — a token at rest and a token mid-plan showed two
-   *  different rush markers. Planned and resolved dice intentionally use their brighter surfaces. */
+  /** A reachable/unselected Rush cost. Owner 09-09: the SAME marker as the planned path (the R<N>+ tag, target 2
+   *  when the caller has none) - a token at rest and a token mid-plan must show one rush marker. Owner 10-13: the
+   *  marker is the R<N>+ text plate, no longer a die face. */
   private buildReachableRushDie(x: number, y: number, scale: number, target?: number): Container {
-    const die = this.buildRollDie(x, y, scale, target ?? 2);
+    const die = this.buildRushChip(x, y, scale, target ?? 2);
     die.alpha = REACHABLE_RUSH_DIE_ALPHA;
     return die;
   }
@@ -9948,7 +9972,7 @@ export class PitchRenderer {
     const [x, y] = square!;
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
-    const die = this.buildRollDie(anchor.x, anchor.y - TILE_H * 0.18 * scale, scale * 0.5, rushTarget);
+    const die = this.buildRushChip(anchor.x, anchor.y - TILE_H * 0.18 * scale, scale * 0.5, rushTarget);
     die.alpha = 1; // owner 09-08
     this.pathLayer.addChild(die);
   }
@@ -10254,74 +10278,54 @@ export class PitchRenderer {
     return roll?.jump && roll.dodge > 0 ? roll.dodge : null;
   }
 
-  /** Orange jump chip: "J" plus the modified agility face needed (RC4). */
+  /** Owner 10-13: every planner path cost tag is a TEXT plate "<letter><target>+" (R2+ / D4+ / J6+ / P3+), never a
+   *  die face, so a rush reads as a rush. One geometry for all four (17 px tall at scale 1, width = text + 8) so a
+   *  stack of two or three tags on one square stays aligned. */
+  private buildRollTag(
+    x: number, y: number, scale: number, letter: string, target: number, fill: number, stroke: number,
+  ): Container {
+    const chip = new Container();
+    const text = new Text({ text: `${letter}${target}+`, style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    text.anchor.set(0.5, 0.5);
+    // Measuring needs a canvas; headless (node) hosts without a DOM fall back to ~7 px per glyph at 11 px bold.
+    const textW = typeof document === 'undefined' ? text.text.length * 7 : text.width;
+    const w = (textW + 8) * scale;
+    const h = 17 * scale;
+    chip.addChild(
+      new Graphics()
+        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
+        .fill({ color: fill })
+        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
+        .stroke({ color: stroke, width: 1.4 * scale }),
+    );
+    text.scale.set(scale);
+    chip.addChild(text);
+    chip.position.set(x, y);
+    return chip;
+  }
+
+  /** Orange jump tag "J6+". */
   private buildJumpChip(x: number, y: number, scale: number, target: number): Container {
-    const chip = new Container();
-    const content = this.buildD6Requirement(target, 'J');
-    const w = Math.max(30, content.width + 8) * scale;
-    const h = 17 * scale;
-    chip.addChild(
-      new Graphics()
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .fill({ color: 0xe08a2a })
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .stroke({ color: 0x6a3c10, width: 1.4 * scale }),
-    );
-    content.scale.set(scale);
-    chip.addChild(content);
-    chip.position.set(x, y);
-    return chip;
+    return this.buildRollTag(x, y, scale, 'J', target, 0xe08a2a, 0x6a3c10);
   }
 
-  /** Yellow dodge chip: big "D" plus the modified D6 face needed. */
+  /** Yellow dodge tag "D4+". */
   private buildDodgeChip(x: number, y: number, scale: number, target: number): Container {
-    const chip = new Container();
-    const content = this.buildD6Requirement(target, 'D');
-    const w = Math.max(30, content.width + 8) * scale;
-    const h = 17 * scale;
-    chip.addChild(
-      new Graphics()
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .fill({ color: 0xe0c832 })
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .stroke({ color: 0x6a5a10, width: 1.4 * scale }),
-    );
-    content.scale.set(scale);
-    chip.addChild(content);
-    chip.position.set(x, y);
-    return chip;
+    return this.buildRollTag(x, y, scale, 'D', target, 0xe0c832, 0x6a5a10);
   }
 
-  /** Owner o66 #14 (canonical parity): a PICKUP chip — an orange plate with a small ball glyph and the
-   *  minimum roll to pick the loose ball up on this square. Distinct from the yellow "D N+" dodge chip so the
-   *  coach reads pickup vs dodge at a glance. The target is computed client-side from the SAME bb2025 server
+  /** Bone rush tag "R2+" (R3+ under Blizzard / Drunkard / opposing Moles; the caller passes the existing target).
+   *  Light bone plate so it reads against the gold roll-coloured path segment and apart from the yellow dodge tag. */
+  private buildRushChip(x: number, y: number, scale: number, target: number): Container {
+    return this.buildRollTag(x, y, scale, 'R', target, 0xf0ead6, 0x6a5a10);
+  }
+
+  /** Owner o66 #14 (canonical parity): a PICKUP tag "P3+" on an orange plate. Distinct from the yellow dodge tag so
+   *  the coach reads pickup vs dodge at a glance. The target is computed client-side from the SAME bb2025 server
    *  formula (AgilityMechanic.minimumRollPickup: max(2, AG + Pouring-Rain + opposing tackle zones on the ball
-   *  square); Big Hand ignores TZ) — a state READ, not a prediction of the die (like the block-dice preview). */
+   *  square); Big Hand ignores TZ) - a state READ, not a prediction of the die (like the block-dice preview). */
   private buildPickupChip(x: number, y: number, scale: number, target: number): Container {
-    const chip = new Container();
-    const content = this.buildD6Requirement(target);
-    const w = Math.max(38, content.width + 20) * scale;
-    const h = 17 * scale;
-    chip.addChild(
-      new Graphics()
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .fill({ color: 0xd98836 })
-        .roundRect(-w / 2, -h / 2, w, h, 4 * scale)
-        .stroke({ color: 0x6a3a10, width: 1.4 * scale }),
-    );
-    // small ball glyph on the left
-    chip.addChild(
-      new Graphics()
-        .circle(-w / 2 + 6 * scale, 0, 4 * scale)
-        .fill({ color: 0x8a5a20 })
-        .circle(-w / 2 + 6 * scale, 0, 4 * scale)
-        .stroke({ color: 0x3a2408, width: 1 * scale }),
-    );
-    content.scale.set(scale);
-    content.position.set(4 * scale, 0);
-    chip.addChild(content);
-    chip.position.set(x, y);
-    return chip;
+    return this.buildRollTag(x, y, scale, 'P', target, 0xd98836, 0x6a3a10);
   }
 
   /** Owner o66 #14 (canonical parity): a small PASS-roll face for a throw range tile. Amber like the
@@ -15665,79 +15669,123 @@ export class PitchRenderer {
   }
 
   /**
-   * Owner 2026-07-03: crowd-surf cinematic — a player was pushed OUT OF BOUNDS.
-   * A handful of angry fans leave the nearest stand, RUSH onto the field to the
-   * player's last (edge) square, BOUNCE on them, then RUN BACK to the stands and
-   * fade. The injury animation (casualty/KO) follows once this clears (the store
-   * sequences it after CROWD_SURF_MS). Play-mode/live flourish only — the real
-   * state change (removal + injury) rides the wire; this just animates it.
+   * Owner 2026-07-03 / 10-13: the CROWD STOMP on a surfed player ("When this occurs, we should render sprites from the
+   * crowd coming in to stomp on them"). The token lies one square off the pitch (the injury token hold's surf landing,
+   * crowdSurf.ts); CROWD_STOMP_FANS fans step in to it from the stand behind, stomp on him (the batch-5 foul-stomp
+   * amber rings mark the stomps), then step back and fade. PIPELINE_TIMINGS.crowdStomp paces it (presentationMs, so
+   * spectator / replay run the same beats at their pace). Pure flourish: the push, the injury roll and its result are
+   * the server's, and the store overlaps this with the injury presentation (no beat waits on it).
+   * `square` is the landing square (off the pitch); an on-pitch edge square is taken as the square he left.
+   * Astra 10-13: the stomp lives no longer than the victim it stomps on. With `playerId` it retires as soon as his held
+   * token is no longer drawn (an apothecary escort / Regeneration answer releases the hold early: the server allows
+   * both on a crowd injury), a replay snap retires it (snapReplayFrame), and a new stomp retires the previous one.
    */
-  playCrowdSurf(square: [number, number]): void {
-    if (!this.app || !isOnPitch(square)) return;
-    const [px, py] = square;
-    const scale = depthScale(px, py);
-    const player = squareAnchor(px, py);
-    // nearest sideline → the crowd rushes from that edge
-    const dLeft = px, dRight = PITCH_COLS - 1 - px, dTop = py, dBottom = PITCH_ROWS - 1 - py;
-    const nearest = Math.min(dLeft, dRight, dTop, dBottom);
-    // a point `d` squares beyond the nearest edge, aligned with the player's column/row
-    const beyond = (d: number) => {
-      if (nearest === dTop) return squareAnchor(px, -1 - d);
-      if (nearest === dBottom) return squareAnchor(px, PITCH_ROWS + d);
-      if (nearest === dLeft) return squareAnchor(-1 - d, py);
-      return squareAnchor(PITCH_COLS + d, py);
-    };
-    const stand = beyond(2); // fans start from / return to the stand front
-
-    const N = 4;
-    const fans: { c: Container; ox: number; delay: number }[] = [];
+  playCrowdSurf(square: [number, number], playerId?: string | null): void {
+    this.retireCrowdStomp();
+    if (!this.app) return;
+    const landing = isSurfLanding(square) ? square : surfLandingSquare(square);
+    if (!landing) return;
+    const [ox, oy] = surfOutward(landing);
+    const scale = depthScale(Math.min(Math.max(landing[0], 0), PITCH_COLS - 1), Math.min(Math.max(landing[1], 0), PITCH_ROWS - 1));
+    const target = this.tokenPos(landing[0], landing[1]);
+    const anchor = squareAnchor(landing[0], landing[1]);
+    // the stand front behind him: one more square outward
+    const standAnchor = squareAnchor(landing[0] + ox, landing[1] + oy);
+    const stand = { x: target.x + (standAnchor.x - anchor.x) * 1.4, y: target.y + (standAnchor.y - anchor.y) * 1.4 };
+    // lateral spread runs along the edge (perpendicular to the outward step)
+    const along = squareAnchor(landing[0] + (oy !== 0 ? 1 : 0), landing[1] + (ox !== 0 ? 1 : 0));
+    const lateral = { x: (along.x - anchor.x) * 0.42, y: (along.y - anchor.y) * 0.42 };
+    const N = CROWD_STOMP_FANS;
+    const fans: { c: Container; spread: number; delay: number }[] = [];
     for (let i = 0; i < N; i++) {
       const f = this.buildFan();
       const spread = i - (N - 1) / 2;
-      const ox = spread * TILE_W * 0.5 * scale; // stagger across the stand front
-      f.position.set(stand.x + ox, stand.y);
-      f.scale.set(scale * 0.9);
+      f.position.set(stand.x + lateral.x * spread * 1.6, stand.y + lateral.y * spread * 1.6);
+      f.scale.set(scale * 0.85);
       f.zIndex = 100000; // above everything
       f.alpha = 0;
       this.effectsLayer.addChild(f);
-      fans.push({ c: f, ox, delay: i * presentationMs(90) });
+      fans.push({ c: f, spread, delay: presentationMs(CROWD_STOMP_STAGGER_MS) * i });
     }
-
-    const RUN_MS = presentationMs(620);
-    const BOUNCE_MS = presentationMs(900);
-    const EXIT_MS = presentationMs(700);
-    const total = RUN_MS + BOUNCE_MS + EXIT_MS + (N - 1) * presentationMs(90);
+    const { stepInMs: IN_MS, stompMs: STOMP_MS, stepOutMs: OUT_MS, totalMs: total } = PIPELINE_TIMINGS.crowdStomp;
     const t0 = performance.now();
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    const run: CrowdStompRun = { landing: [landing[0], landing[1]], fans: fans.map((fan) => fan.c), startedAt: t0, rings: [], playerId: playerId ?? null, cleanup: () => {} };
+    this.crowdStompRun = run;
+    let ringsDone = false;
+    let victimSeen = false;
     const app = this.app;
     let cleanup: () => void = () => {};
     const tick = () => {
       const now = performance.now() - t0;
       if (now >= total || this.app !== app) { cleanup(); return; }
+      // no fans on an empty square: the victim's held token must still be drawn (a short grace covers the first refresh)
+      if (run.playerId) {
+        if (this.injuryHeldDrawn.has(run.playerId)) victimSeen = true;
+        else if (victimSeen || now >= presentationMs(CROWD_STOMP_VICTIM_GRACE_MS)) { this.retireCrowdStomp(run); return; }
+      }
+      if (!ringsDone && now >= IN_MS) {
+        ringsDone = true;
+        // batch 5 (B5-7) foul stomp: three staggered amber shock rings on the victim
+        for (let i = 0; i < 3; i++) {
+          const ring = new Graphics().ellipse(0, -3, TILE_W * 0.4, TILE_H * 0.3).stroke({ color: 0xe0a020, width: 4, alpha: 0.95 });
+          ring.position.set(anchor.x, anchor.y);
+          ring.visible = false; // hidden until its stagger delay elapses
+          (ring as { __crowdStomp?: boolean }).__crowdStomp = true;
+          this.effectsLayer.addChild(ring);
+          run.rings.push(ring);
+          this.flashRings.push({ g: ring, x: anchor.x, y: anchor.y, scale: scale * (0.7 + i * 0.15), start: performance.now() + i * presentationMs(170) });
+        }
+      }
       for (const fan of fans) {
         const e = now - fan.delay;
         if (e < 0) continue;
-        const targetX = player.x + fan.ox * 0.4;
-        const targetY = player.y;
-        if (e < RUN_MS) {
-          const t = e / RUN_MS;
+        const home = { x: stand.x + lateral.x * fan.spread * 1.6, y: stand.y + lateral.y * fan.spread * 1.6 };
+        const spot = { x: target.x + lateral.x * fan.spread, y: target.y + lateral.y * fan.spread };
+        if (e < IN_MS) {
+          const t = e / IN_MS;
           fan.c.alpha = Math.min(1, t * 2);
-          fan.c.position.set(lerp(stand.x + fan.ox, targetX, t), lerp(stand.y, targetY, t));
-        } else if (e < RUN_MS + BOUNCE_MS) {
-          const t = (e - RUN_MS) / BOUNCE_MS;
+          fan.c.position.set(lerp(home.x, spot.x, t), lerp(home.y, spot.y, t));
+        } else if (e < IN_MS + STOMP_MS) {
+          // two stomps each: up, then down hard on him
+          const t = (e - IN_MS) / STOMP_MS;
           fan.c.alpha = 1;
-          const hop = Math.abs(Math.sin(t * Math.PI * 3 + fan.delay)) * TILE_H * 0.4 * scale;
-          fan.c.position.set(targetX, targetY - hop);
-        } else if (e < RUN_MS + BOUNCE_MS + EXIT_MS) {
-          const t = (e - RUN_MS - BOUNCE_MS) / EXIT_MS;
-          fan.c.position.set(lerp(targetX, stand.x + fan.ox, t), lerp(targetY, stand.y, t));
+          const hop = Math.abs(Math.sin(t * Math.PI * 2)) * TILE_H * 0.35 * scale;
+          fan.c.position.set(spot.x, spot.y - hop);
+        } else if (e < IN_MS + STOMP_MS + OUT_MS) {
+          const t = (e - IN_MS - STOMP_MS) / OUT_MS;
+          fan.c.position.set(lerp(spot.x, home.x, t), lerp(spot.y, home.y, t));
           fan.c.alpha = 1 - t;
         } else {
           fan.c.alpha = 0;
         }
       }
     };
-    cleanup = this.registerEffectTicker(app, tick, fans.map((fan) => fan.c));
+    cleanup = this.registerEffectTicker(app, tick, fans.map((fan) => fan.c), () => { if (this.crowdStompRun === run) this.crowdStompRun = null; });
+    run.cleanup = cleanup;
+  }
+  /** The crowd stomp on screen (playCrowdSurf), if any. */
+  private crowdStompRun: CrowdStompRun | null = null;
+  /** Astra 10-13: take the stomp (or only `run`, when given and still current) off the screen now: fans and amber rings. */
+  private retireCrowdStomp(run: CrowdStompRun | null = this.crowdStompRun): void {
+    if (!run || (this.crowdStompRun && this.crowdStompRun !== run)) return;
+    this.crowdStompRun = null;
+    run.cleanup();
+    for (const fan of run.fans) if (!fan.destroyed) { fan.parent?.removeChild(fan); fan.destroy({ children: true }); }
+    const rings = new Set<Container>(run.rings);
+    this.flashRings = this.flashRings.filter((flash) => !rings.has(flash.g));
+    for (const ring of rings) if (!ring.destroyed) { ring.parent?.removeChild(ring); ring.destroy(); }
+  }
+  /** Test / rig inspection: the amber stomp rings still on screen. */
+  crowdStompRingsProbe(): number {
+    return this.flashRings.filter((flash) => !flash.g.destroyed && flash.g.parent != null && (flash.g as { __crowdStomp?: boolean }).__crowdStomp === true).length;
+  }
+  /** Test / rig inspection: the stomp's landing square and how many of its fans are visible right now. */
+  crowdStompProbe(): { landing: [number, number]; fansVisible: number; fans: { x: number; y: number }[] } | null {
+    const run = this.crowdStompRun;
+    if (!run) return null;
+    const live = run.fans.filter((fan) => !fan.destroyed);
+    return { landing: run.landing, fansVisible: live.filter((fan) => fan.visible && fan.alpha > 0.05).length, fans: live.map((fan) => ({ x: fan.x, y: fan.y })) };
   }
 
   /** A lumpy grey stone, drawn procedurally (no asset). Origin-centred. */

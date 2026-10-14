@@ -141,4 +141,6 @@ export function buildBlockDecision(game: GameJson | null, dp: Record<string, unk
     singleSkullLabel: readOnly ? null : (singleSkullSrc ? valuedSkillLabel(singleSkullSrc, actingSkillValues) : null),
   };
 }
-export type BlockDecisionProjection = ReturnType<typeof buildBlockDecision>;
+/** `rerolledDice` (owner 10-13, the reroll re-tumble): set on a card the server resent after a block reroll - the die
+ *  indexes the reroll replaced, or [] after a failed use (nothing tumbles). Absent on a fresh roll (every die tumbles). */
+export type BlockDecisionProjection = ReturnType<typeof buildBlockDecision> & { rerolledDice?: number[] };

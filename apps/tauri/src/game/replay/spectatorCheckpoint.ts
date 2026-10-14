@@ -11,6 +11,7 @@ import { INJURY_RESULT_NAMES } from '../skillUseCardPresentation';
 import { pushPresentation, type PendingPush } from '../pushPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, type SkillDecisionProjection } from '../skillDecisionProjection';
 import { buildBlockDecision, createBlockContext, reduceBlockContext, type BlockContextProjection, type BlockDecisionProjection } from '../blockDecisionProjection';
+import { blockRerollOutcome, rerolledBlockDiceIndices } from '../blockRerollTumble';
 import { createInjuryOutcomeProjection, reduceInjuryOutcomes, type InjuryOutcomeProjection } from '../injuryOutcomeProjection';
 import { createCasualtyRollProjection, reduceCasualtyRollProjection, type CasualtyRollProjection } from '../casualtyRollProjection';
 import { apothecaryDecisionFromModel, buildApothecaryResult, type ApothecaryResultProjection, type ApothecaryDecisionProjection } from '../apothecaryDecisionProjection';
@@ -305,6 +306,9 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
       projection.log.push(...lines.map((line) => ({ ...line, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
     }
   }
+  // Owner 10-13 (reroll re-tumble, Astra): the card before this frame and its roll occurrence, for rerolledDice below.
+  const priorBlockCard = projection.blockCard;
+  const priorBlockRollOccurrence = projection.block.rollOccurrence;
   projection.block = reduceBlockContext(projection.block, next.model, reports, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])));
   projection.log = projection.log.slice(-500);
   projection.drive = reduceDriveProjection(projection.drive, reports, next.model);
@@ -343,7 +347,22 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   projection.casualtyRolls = reduceCasualtyRollProjection(projection.casualtyRolls, reports, model);
   projection.apothecaryResult = model.dialogParameter?.dialogId === 'apothecaryChoice' ? buildApothecaryResult(model, model.dialogParameter, projection.casualtyRolls) : null;
   projection.apothecaryCard = projection.pendingDecision?.state === 'offered' ? apothecaryDecisionFromModel(model) : null;
-  projection.blockCard = ['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll'].includes(String(model.dialogParameter?.dialogId)) ? buildBlockDecision(model, model.dialogParameter!, true) : null;
+  const blockCard: BlockDecisionProjection | null = ['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll'].includes(String(model.dialogParameter?.dialogId)) ? buildBlockDecision(model, model.dialogParameter!, true) : null;
+  // Owner 10-13 (Astra): the published review re-tumbles exactly what live does. A card resent after a block reroll
+  // carries the dice it replaced, [] after a failed use (the unchanged roll is resent with a blockRoll report, which
+  // advances rollOccurrence); the same card keeps its value while it stands; a fresh roll carries none (all tumble).
+  // Observer rules: no chooser command index here (rerolledBlockDiceIndices without ownIndices).
+  if (blockCard) {
+    const outcome = blockRerollOutcome(reports);
+    if (outcome) {
+      blockCard.rerolledDice = outcome.rolled ? rerolledBlockDiceIndices({
+        previous: priorBlockCard?.dice ?? null, next: blockCard.dice, rerolledFaces: outcome.faces, source: outcome.source,
+      }) : [];
+    } else if (projection.block.rollOccurrence === priorBlockRollOccurrence && priorBlockCard?.rerolledDice) {
+      blockCard.rerolledDice = [...priorBlockCard.rerolledDice];
+    }
+  }
+  projection.blockCard = blockCard;
   projection.reRollCard = projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence) : null;
   projection.endGameHud = reduceEndGameHud(projection.endGameHud, reports, model);
   projection.endGame = reduceEndGame(projection.endGame, endGameFrameFromServer(model, command));
@@ -554,12 +573,20 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     }
   }
   const blockCard = p.blockCard;
+  // owner 10-13 (Astra): rerolledDice = distinct integer die indexes within the card's dice
+  const validRerolledDice = (value: unknown, dice: unknown) => Array.isArray(value) && Array.isArray(dice)
+    && value.every((i) => Number.isInteger(i) && i >= 0 && i < dice.length) && new Set(value).size === value.length;
   if (blockCard !== null) {
     const bools = ['pickable', 'opponentRerollPending', 'chooserTeamRerollAvailable', 'teamRR', 'mascot', 'mascotTrr', 'pro', 'brawler', 'consummate'] as const;
     const labels = ['consummateLabel', 'singleBlockDie', 'singleBlockDieLabel', 'multiBlockDice', 'multiBlockDiceLabel', 'singleSkull', 'singleSkullLabel'] as const;
     // owner 10-13: `choosingTeamId` (the dice owner) is optional so checkpoints written before it existed still validate
+    // owner 10-13: `rerolledDice` (the reroll re-tumble) is optional too: absent on a fresh roll and in older checkpoints
     const cardKeys = ['dice', 'nrOfDice', ...bools, ...labels];
-    if (!object(blockCard) || !(keys(blockCard, cardKeys) || (keys(blockCard, [...cardKeys, 'choosingTeamId']) && nullableString((blockCard as { choosingTeamId?: unknown }).choosingTeamId)))
+    const optionalCardKeys = ['choosingTeamId', 'rerolledDice'];
+    const cardKeySet = object(blockCard) ? Object.keys(blockCard) : [];
+    if (!object(blockCard) || cardKeys.some((k) => !cardKeySet.includes(k)) || cardKeySet.some((k) => !cardKeys.includes(k) && !optionalCardKeys.includes(k))
+      || ('choosingTeamId' in blockCard && !nullableString((blockCard as { choosingTeamId?: unknown }).choosingTeamId))
+      || ('rerolledDice' in blockCard && !validRerolledDice((blockCard as { rerolledDice?: unknown }).rerolledDice, blockCard.dice))
       || !numbers(blockCard.dice) || !finite(blockCard.nrOfDice)
       || !bools.every((k) => typeof blockCard[k] === 'boolean') || !labels.every((k) => nullableString(blockCard[k]))) fail(40);
   }

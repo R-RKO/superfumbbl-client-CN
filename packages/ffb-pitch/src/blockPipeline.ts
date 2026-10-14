@@ -310,6 +310,9 @@ export const HALF_BEAT_MS = 500;
  * `readMs`/`minMs` = the read window (opens the next gate); `holdMs`/`lifeMs` = the
  * teardown/pixels window (never gates).
  */
+/** Owner 10-13: crowd stomp cast (the brief: "2 or 3 small crowd figures") and their stagger (live ms). */
+export const CROWD_STOMP_FANS = 3;
+export const CROWD_STOMP_STAGGER_MS = 50;
 export const PIPELINE_TIMINGS = {
   /** D1 block dice: tumble→settle, then the dice hold on screen. Owner 2026-07-08:
    *  trimmed ~15% (2300→1950) so the block driver reads a touch snappier (550+1150+250;
@@ -355,8 +358,16 @@ export const PIPELINE_TIMINGS = {
      *  OUT 300), not just the read beat; they overlapped by ~700 ms in spectator mode. */
     get tearDownMs() { return presentationMs(180 + 1150 + 300); },
   },
-  /** Crowd-surf / rock-throw alternate entries (pre-delay before the injury). */
-  crowdSurf: { get ms() { return presentationMs(2600); } },
+  /** Owner 10-13: the crowd stomp on a surfed player (renderer.playCrowdSurf). The fans step in from the stand, stomp
+   *  on the token lying one square off the pitch, then step back. It overlaps the injury presentation: the store
+   *  starts it `stepInMs` before the pill is due, so the fans arrive as the result is revealed; no beat waits on it. */
+  crowdStomp: {
+    get stepInMs() { return presentationMs(500); },
+    get stompMs() { return presentationMs(600); },
+    get stepOutMs() { return presentationMs(500); },
+    /** The stomp's whole run, the fans' stagger included. */
+    get totalMs() { return presentationMs(500 + 600 + 500 + CROWD_STOMP_STAGGER_MS * (CROWD_STOMP_FANS - 1)); },
+  },
   /** Owner-tunable throw-a-rock pacing: flight to contact, then the impact hold
    *  before the injury presentation. Renderer and store both derive from here. */
   rockThrow: {
