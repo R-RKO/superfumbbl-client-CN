@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect, defineAsyncComponent, type Component, type ShallowRef } from 'vue';
+import { createIntroWatchdog } from './introWatchdog';
 import SpectateView from './views/SpectateView.vue';
 import WaitingBoardView from './views/WaitingBoardView.vue';
 // Owner 09-12: FUMBBL Classic is a fork-edition feature. The public export omits ClassicView.vue entirely (see
@@ -385,9 +386,44 @@ const INTRO_VIDEO_URL = '/intro.mp4';
 const introVideo = ref<HTMLVideoElement | null>(null);
 const introDone = ref(false);
 const introNeedsGesture = ref(false);
+// Launch flags (owner 10-14): `--skip-intro` / `--skipintro` or SUPER_FUMBBL_SKIP_INTRO=1 (read by the Tauri shell,
+// `launch_flags` command); the web/dev build reads `?skipIntro`. Read ONCE at startup; the intro waits for the read
+// so it can never flash open first. Skips the VIDEO only: the legal acknowledgement stays unskippable.
+const introFlagsReady = ref(false);
+const LAUNCH_FLAGS_TIMEOUT_MS = 1500;
+function readLaunchFlags(): void {
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('skipIntro')) {
+    introDone.value = true;
+    introFlagsReady.value = true;
+    return;
+  }
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) { introFlagsReady.value = true; return; }
+  // Bounded at 1500 ms (timeout = no flag; a late answer is ignored) so the intro/legal ordering is deterministic.
+  let settled = false;
+  const settle = (skip: boolean): void => {
+    if (settled) return;
+    settled = true;
+    if (skip) introDone.value = true;
+    introFlagsReady.value = true;
+  };
+  setTimeout(() => settle(false), LAUNCH_FLAGS_TIMEOUT_MS);
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke<{ skipIntro?: boolean; skip_intro?: boolean }>('launch_flags'))
+    .then((flags) => settle(!!(flags?.skipIntro || flags?.skip_intro)))
+    .catch(() => settle(false));
+}
+readLaunchFlags();
 // Held behind the beta splash: no autoplay, and no window Esc/Enter/Space listener that could skip it.
-const introOpen = computed(() => !betaSplashOpen.value && legalNoticeOpen.value && !introDone.value);
+const introOpen = computed(() => !betaSplashOpen.value && legalNoticeOpen.value && !introDone.value && introFlagsReady.value);
+// Playback watchdog (owner 10-14, src/introWatchdog.ts): fails OPEN to the legal notice on 4 s of true inactivity
+// (no load/decode activity before playback, no currentTime advance during it; 15 s total cap on a dead load).
+// Suspended while the gesture (play) button shows; the Play click re-arms it.
+const introWatchdog = createIntroWatchdog(() => { if (introOpen.value) finishIntro(); });
+function clearIntroTimers(): void { introWatchdog.stop(); }
+function onIntroActivity(): void { introWatchdog.activity(); }
+function onIntroProgress(): void { introWatchdog.sample(introVideo.value?.currentTime ?? 0); }
 function finishIntro(): void {
+  clearIntroTimers();
   introDone.value = true;
   introNeedsGesture.value = false;
 }
@@ -397,7 +433,16 @@ function startIntroPlayback(): void {
   video.volume = INTRO_VOLUME;
   // Autoplay with sound is allowed in the shipped WebView (autoplay policy relaxed in tauri.conf);
   // a browser preview that blocks it gets an explicit play control instead of a silent hang.
-  video.play().then(() => { introNeedsGesture.value = false; }).catch(() => { introNeedsGesture.value = true; });
+  // Optimistic: a Play click hides the button and re-arms the watchdog; a second NotAllowedError re-shows it.
+  if (introNeedsGesture.value) { introNeedsGesture.value = false; introWatchdog.setGesture(false); }
+  video.play().then(() => { introNeedsGesture.value = false; }).catch((err: unknown) => {
+    if ((err as { name?: string } | null)?.name === 'NotAllowedError') {
+      introNeedsGesture.value = true;
+      introWatchdog.setGesture(true);
+    } else {
+      finishIntro();
+    }
+  });
 }
 function onIntroKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
@@ -408,9 +453,11 @@ function onIntroKeydown(event: KeyboardEvent): void {
 watch(introOpen, (open) => {
   if (open) {
     window.addEventListener('keydown', onIntroKeydown);
+    introWatchdog.start();
     void nextTick(() => startIntroPlayback());
   } else {
     window.removeEventListener('keydown', onIntroKeydown);
+    clearIntroTimers();
     introVideo.value?.pause();
   }
 }, { immediate: true });
@@ -3257,6 +3304,12 @@ onBeforeUnmount(() => {
             </label>
             <p class="hint">A small tab on each coach panel showing how many players are in Reserves and how many are
               out of the game (KO, injured, dead or sent off). Right-click a tab to hide them.</p>
+            <label class="row">
+              <input v-model="settings.skipArmourDiceOnCasualty" type="checkbox" />
+              <span>Skip armour rolls if a casualty occurs</span>
+            </label>
+            <p class="hint">When a knockdown ends in a casualty, the armour roll is not shown; the casualty result, its
+              sound and the apothecary offer follow the knockdown directly. The knockdown sound still plays.</p>
             <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
                  a centred "Confirm Layout" button on the game screen exits it (SpectateView). -->
             <div class="actions" style="justify-content: flex-start">
@@ -3782,7 +3835,7 @@ onBeforeUnmount(() => {
       :colorblind-filter="colorblindFilterStyle?.filter" />
   </main>
   <BetaLaunchSplash v-else-if="betaSplashOpen" @dismiss="betaSplashOpen = false" />
-  <div v-else-if="introOpen" class="intro-splash" role="dialog" aria-label="Super FUMBBL intro">
+  <div v-else-if="introOpen" class="intro-splash" role="dialog" aria-label="Super FUMBBL intro" @click="finishIntro">
     <video
       ref="introVideo"
       class="intro-video"
@@ -3790,9 +3843,15 @@ onBeforeUnmount(() => {
       playsinline
       @ended="finishIntro"
       @error="finishIntro"
+      @playing="onIntroActivity"
+      @loadedmetadata="onIntroActivity"
+      @loadeddata="onIntroActivity"
+      @canplay="onIntroActivity"
+      @progress="onIntroActivity"
+      @timeupdate="onIntroProgress"
     ></video>
-    <button v-if="introNeedsGesture" class="intro-play" type="button" aria-label="Play intro" @click="startIntroPlayback">▶</button>
-    <button class="intro-skip" type="button" @click="finishIntro">Skip ▸</button>
+    <button v-if="introNeedsGesture" class="intro-play" type="button" aria-label="Play intro" @click.stop="startIntroPlayback">▶</button>
+    <button class="intro-skip" type="button" @click.stop="finishIntro">Skip ▸</button>
   </div>
   <FirstOpenLegalNotice
     v-else-if="legalNoticeOpen"
@@ -3828,6 +3887,8 @@ onBeforeUnmount(() => {
   position: absolute;
   right: 24px;
   bottom: 20px;
+  z-index: 2; /* above the video layer (WebKitGTK composites video over the DOM) */
+  pointer-events: auto;
   padding: 8px 18px;
   color: var(--ui-text);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1rem);
@@ -3840,6 +3901,8 @@ onBeforeUnmount(() => {
 .intro-skip:hover { color: var(--ui-heading); border-color: var(--ui-heading); }
 .intro-play {
   position: absolute;
+  z-index: 2;
+  pointer-events: auto;
   width: 96px;
   height: 96px;
   color: var(--ui-text);

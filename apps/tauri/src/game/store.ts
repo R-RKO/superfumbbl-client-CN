@@ -6,7 +6,7 @@ import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWe
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
 import { apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
-import { injuryPresentation, armourPresentation, type InjuryEvent } from './injuryPresentation';
+import { injuryPresentation, armourPresentation, skipsArmourDiceOnCasualty, type InjuryEvent } from './injuryPresentation';
 import { rerollPresentation } from './rerollPresentation';
 export { reportedAutomaticRerollSkill } from './rerollPresentation';
 import { presentStages } from './replay/presentationStages';
@@ -4259,6 +4259,17 @@ function releaseArmourAfterFollow(afterMs: number): void {
 /** Owner 10-13: released armour dice still waiting out their stagger (counted; reset with the presentation). */
 let armourRevealScheduled = 0;
 let armourRevealGeneration = 0;
+/** Owner 10-14 (Settings > UI "Skip armour rolls if a casualty occurs"): injury events whose armour dice that setting left off.
+ *  Their pill cannot lean on the armour beat to land after a passive follow/stay indicator, so it waits for the
+ *  indicator itself (passiveFollowPillAfter). */
+const armourSkippedEvents = new WeakSet<InjuryEvent>();
+/** Owner 10-14: until when a skipped-armour casualty pill waits for a passive follow/stay indicator: the live backstop
+ *  while the indicator is scheduled (emitPassiveFollow), then the live armour gap once it shows (where the dice would
+ *  have been released). A deadline, never a count: it expires by itself, so a dropped indicator cannot strand a pill. */
+let passiveFollowPillAfter = 0;
+/** Owner 10-14 (Astra): the indicator behind passiveFollowPillAfter has LANDED. Its gap is then honoured in full: the
+ *  pill's polling cap is a fail-open for a missing indicator, never a cut of a present one's read. */
+let passiveFollowIndicatorLanded = false;
 /** Owner 10-13 (Astra): re-checks a pending passive follow/stay against the drain queue when a frame arrives. */
 let pendingFollowupWake: (() => void) | null = null;
 
@@ -4334,9 +4345,13 @@ function pumpInjuries() {
       // Owner 10-13: nor while this frame's armour dice are still WITHHELD behind a follow/stay (not drawn yet, so the
       // renderer probe cannot see them): the pill never pops before its dice, on any seat.
       if ((armourDiceShowing() || armourAfterFollow !== null || armourRevealScheduled > 0) && Date.now() - started < presentationMs(INJURY_AFTER_ARMOUR_CAP_MS)) { scheduleGameTimeout(tick, 50); return; }
+      // Owner 10-14: a casualty whose armour dice were skipped still never pops before the follow/stay indicator.
+      if (armourSkippedEvents.has(event) && Date.now() < passiveFollowPillAfter && (passiveFollowIndicatorLanded || Date.now() - started < presentationMs(INJURY_AFTER_ARMOUR_CAP_MS))) { scheduleGameTimeout(tick, 50); return; }
       presentInjury();
     };
-    tick();
+    // Owner 10-14: a skipped-armour casualty first lets its own frame finish, so a follow/stay that frame resolves
+    // (emitPassiveFollow, applied after the injury pump) is known before the pill can pop.
+    if (armourSkippedEvents.has(event)) scheduleGameTimeout(tick, 0); else tick();
   };
   const presentInjury = () => {
     if (sppGeneration !== casualtySppGeneration) return;
@@ -5543,6 +5558,8 @@ async function pauseSpectatorView(): Promise<void> {
         const pid = String(report.defenderId ?? report.playerId ?? '');
         const coordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? priorCoordinates.get(pid);
         const cue = armourPresentation(report, coordinate);
+        // Owner 10-14: Settings > UI "Skip armour rolls if a casualty occurs" - the review goes straight to the casualty result too.
+        if (cue && skipsArmourDiceOnCasualty(settings.skipArmourDiceOnCasualty, report, position.model)) return [];
         return cue ? [cue] : [];
       });
       if (armour.length) {
@@ -8675,6 +8692,8 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 07-05: FFB emits each `injury` TWICE per frame (skipInjuryParts twins) — collapse so log + armour dice fire ONCE; the armour 2d6 lives INSIDE the injury report (no standalone armour report).
   const seenInjuryKeys = new Set<string>();
   const armorRolls: { square: [number, number]; rolls: [number, number]; broken: boolean }[] = [];
+  /** Owner 10-14: armour rolls of casualty reports left off the pitch by Settings > UI "Skip armour rolls if a casualty occurs". */
+  const skippedArmourRolls: typeof armorRolls = [];
   const onPitchSq = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
   // Finding B (07-06): the LIVE blockRoll omits defenderId ("block dice vs ?") — prime the formatter from a same-frame report that carries it.
   {
@@ -8725,7 +8744,8 @@ function applyFrameContents(frame: QueuedFrame) {
           ?? null;
         if (raw && onPitchSq(raw)) {
           const cue = armourPresentation(report, raw);
-          if (cue) armorRolls.push(cue);
+          if (cue && skipsArmourDiceOnCasualty(settings.skipArmourDiceOnCasualty, report, game.value)) skippedArmourRolls.push(cue);
+          else if (cue) armorRolls.push(cue);
         }
       }
     }
@@ -8756,15 +8776,18 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 09-14: STAB — "<Player> uses Stab!" over the stabber first; the target's armour roll follows a beat later.
   const stab = playback.catchingUp ? null : stabPresentation(reports, game.value);
   if (stab) state.skillUsed = { playerId: stab.playerId, skill: 'Stab', square: stab.square, name: stab.name, toast: `${stab.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
-  if (armorRolls.length > 0 && !playback.catchingUp) {
+  // Owner 10-14: a frame whose only armour rolls are skipped casualties still runs the cue branches below (the follow/stay
+  // indicator, the Stab toast, the foul boot keep reading before the result) with nothing to publish and no armour read.
+  if ((armorRolls.length > 0 || skippedArmourRolls.length > 0) && !playback.catchingUp) {
     const broken = armorRolls.some((a) => a.broken);
+    const diceShown = armorRolls.length > 0;
     // Phase 3a HARD GATE (event-priority D5b): a BROKEN armour roll opens the armour read
     // window — the injury result (pumpInjuries) may not begin until it elapses, so the 2d6
     // armour dice read + settle in their own beat first (no overlap).
     // Astra 09-14: a DELAYED reveal (stab / foul beat) must not publish against a REPLACED model — a reconnect snapshot
     // inside the beat swaps game.value; the old roll/square then belongs to nothing on screen.
     const modelAtSchedule = game.value;
-    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
+    const showArmour = () => { if (game.value !== modelAtSchedule || !diceShown) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
     const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
       && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
     if (fireballInjury && pendingFireballBeats > 0) {
@@ -8788,14 +8811,16 @@ function applyFrameContents(frame: QueuedFrame) {
     } else if (stab) {
       holdPlayback(presentationMs(STAB_CUE_MS) + (broken ? armourReadMs() : 0));
       if (broken) armourGateUntil = Date.now() + presentationMs(STAB_CUE_MS) + armourReadMs();
+      else if (!diceShown) armourGateUntil = Date.now() + presentationMs(STAB_CUE_MS); // owner 10-14: the toast reads first
       scheduleGameTimeout(showArmour, presentationMs(STAB_CUE_MS));
     } else if (foulInFrame) {
       // Owner 2026-07-09: a FOUL surfaces the 🥾 boot over the fouled player FIRST — it reads a
       // beat, THEN the armour roll renders (the foul analogue of the blitz target crosshair:
       // target reads before the hit). The injury waits the cue beat + the armour read.
-      state.foulTargetCue = { square: armorRolls[0]!.square, seq: (state.foulTargetCue?.seq ?? 0) + 1 };
+      state.foulTargetCue = { square: (armorRolls[0] ?? skippedArmourRolls[0])!.square, seq: (state.foulTargetCue?.seq ?? 0) + 1 };
       holdPlayback(presentationMs(FOUL_CUE_MS) + (broken ? armourReadMs() : 0));
       if (broken) armourGateUntil = Date.now() + presentationMs(FOUL_CUE_MS) + armourReadMs();
+      else if (!diceShown) armourGateUntil = Date.now() + presentationMs(FOUL_CUE_MS); // owner 10-14: the boot reads first
       scheduleGameTimeout(showArmour, presentationMs(FOUL_CUE_MS));
     } else {
       showArmour();
@@ -8905,6 +8930,7 @@ function applyFrameContents(frame: QueuedFrame) {
     injuredThisFrame.add(playerId);
     if (!playback.catchingUp) {
       if (event.isCasualty) casualtyPresentationsOutstanding++;
+      if (Array.isArray(report.armorRoll) && report.armorRoll.length === 2 && skipsArmourDiceOnCasualty(settings.skipArmourDiceOnCasualty, report, game.value)) armourSkippedEvents.add(event); // owner 10-14
       injuryQueue.push(event);
       holdApothecaryCardForPill(playerId, cmd); // owner 10-13: an apothecary card offering him shows when his pill pops
       // Owner 10-12: his stunned decoration / the frame's injury sound wait for this event's pill (armed only for a
@@ -9976,9 +10002,11 @@ function applyFrameContents(frame: QueuedFrame) {
         playerName: name, square, followed,
         seq: (state.followupIndicator?.seq ?? 0) + 1,
       };
+      passiveFollowPillAfter = Date.now() + presentationMs(FOLLOWUP_ARMOUR_BACKSTOP_MS); passiveFollowIndicatorLanded = false; // owner 10-14
       // Owner 2026-07-06 (pacing 1): the indicator lands +500 behind the push arrow; keep subsequent frames held until it's had airtime (delay + 1400). Phase 2: the driver owns this beat's schedule + the single holdPlayback.
       blockPipeline.scheduleResolved(() => {
         state.followupIndicator = ind;
+        passiveFollowPillAfter = Date.now() + presentationMs(FOLLOWUP_ARMOUR_GAP_MS); passiveFollowIndicatorLanded = true; // owner 10-14: as the dice would
         // 08-19: withheld armour dice (this frame's injury report) follow the indicator after a breath.
         releaseArmourAfterFollow(presentationMs(FOLLOWUP_ARMOUR_GAP_MS));
         // queue #1: release the withheld move a readable beat after the indicator shows, so the slide plays AFTER the callout rather than under it. (setTimeout, so a synchronous scheduleResolved still separates defer from release across ticks.)
@@ -11902,6 +11930,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   pendingFollowupWake = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
+  passiveFollowPillAfter = 0; passiveFollowIndicatorLanded = false; // owner 10-14
   reviewFollowPresentedAt = null; // owner 10-13
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);

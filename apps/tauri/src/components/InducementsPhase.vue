@@ -70,8 +70,10 @@ export interface PanelView {
   role: InducementRole;
   /** Field seat for spectator/replay color stability; independent of overdog/underdog. */
   seat: 'home' | 'away';
-  /** The team's name, shown beside its crest at the top of the panel (owner 10-11: no coach name on this screen). */
+  /** The team's name, shown beside its crest at the top of the panel (owner 10-14: the coach name sits under it). */
   teamName: string;
+  /** Owner 10-14: the coach's name exactly as the server sent it, on its own muted line under the team name. Absent/empty = no line. */
+  coachName?: string;
   /** The crest the coach panels show for this team (pack logo, else the bundled race crest). Null = none resolved. */
   logo: string | null;
   /** What the team OWNS BEFORE inducements (roster values off the team model). Never moves with the selection. */
@@ -526,8 +528,11 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
             <div class="ind-team">
               <img v-if="logoFor(panel)" class="ind-team-logo" :src="logoFor(panel)!" alt="" @error="onLogoError(panel)">
               <span v-else class="ind-team-logo ind-team-logo-fallback" aria-hidden="true">{{ teamInitial(panel) }}</span>
-              <div class="ind-team-name" :data-testid="`team-${panel.role}`">
-                <template v-for="(w, i) in words(panel.teamName)" :key="i"><template v-if="i">{{ ' ' }}</template><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
+              <div class="ind-team-text">
+                <div class="ind-team-name" :data-testid="`team-${panel.role}`">
+                  <template v-for="(w, i) in words(panel.teamName)" :key="i"><template v-if="i">{{ ' ' }}</template><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
+                </div>
+                <div v-if="panel.coachName" class="ind-team-coach" :data-testid="`coach-${panel.role}`">{{ panel.coachName }}</div>
               </div>
             </div>
             <!-- Owner 10-11: the tiles are headed "Staff". The heading names the group; each tile keeps its own name. -->
@@ -912,6 +917,13 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
   color: var(--ind-seat-accent); font-size: max(var(--ui-min-primary-text-size, 16px), 1.6rem);
 }
 /* Long names wrap between words, then anywhere; they are never clipped or shrunk. */
+.ind-team-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* Owner 10-14: the coach, one muted line under the team name; smaller than it, never bold. */
+.ind-team-coach {
+  min-width: 0; overflow-wrap: anywhere; font-weight: 400; line-height: 1.2; letter-spacing: .03em;
+  font-size: max(var(--ui-min-text-size, 13px), 0.8125rem);
+  color: color-mix(in srgb, var(--ind-seat-accent) 10%, #9aa3ad);
+}
 .ind-team-name {
   flex: 1; min-width: 0; overflow-wrap: anywhere;
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.0625rem); line-height: 1.2; letter-spacing: .05em;

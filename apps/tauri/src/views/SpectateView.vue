@@ -5671,9 +5671,10 @@ function induceTeamForRole(role: InducementRole): InducementCardTeam | null {
 /** Owner 10-11 side panels: the team's name, the crest the coach corners show for it (pack logo, else the bundled race
  *  crest in that field seat's kit), and what it owns BEFORE inducements - the roster counts off the team model, never
  *  TurnData and never the pick map (game/inducementsPhase.ts `ownedResources`). */
-function inducePanelIdentity(team: InducementCardTeam | null, seat: 'home' | 'away'): Pick<PanelView, 'teamName' | 'logo' | 'owned'> {
+function inducePanelIdentity(team: InducementCardTeam | null, seat: 'home' | 'away'): Pick<PanelView, 'teamName' | 'coachName' | 'logo' | 'owned'> {
   return {
     teamName: team?.teamName || '—',
+    coachName: team?.coach || undefined, // exactly as the server sent it; empty = no line
     logo: team ? teamLogo(team, seat) : null,
     owned: ownedResources(team, { fanFactorRuleset: usesFanFactor(gameStore.game.value) }), // BB2016: the fans are the Fan Factor
   };

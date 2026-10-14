@@ -96,8 +96,8 @@ const state = reactive({
 /** Mock TEAM models: the side panels' owned-resource tiles read these roster fields through the real projection
  *  (`ownedResources`), exactly as the mount does. Zero and two-digit counts are in here on purpose. */
 const TEAMS = {
-  overdog: { teamName: 'Deathskull Ladz', race: 'Orc', reRolls: 3, apothecaries: 1, dedicatedFans: 7, assistantCoaches: 2, cheerleaders: 1 },
-  underdog: { teamName: 'Penguin Academy', race: 'Human', reRolls: 2, apothecaries: 0, dedicatedFans: 12, assistantCoaches: 0, cheerleaders: 10 },
+  overdog: { teamName: 'Deathskull Ladz', coach: 'Grimgor_the_Coach', race: 'Orc', reRolls: 3, apothecaries: 1, dedicatedFans: 7, assistantCoaches: 2, cheerleaders: 1 },
+  underdog: { teamName: 'Penguin Academy', coach: 'IceFloeIvan', race: 'Human', reRolls: 2, apothecaries: 0, dedicatedFans: 12, assistantCoaches: 0, cheerleaders: 10 },
 };
 const LONG_NAME = 'The Extraordinarily Longwinded Gentlemen of Altdorf-upon-Reik';
 
@@ -162,6 +162,7 @@ function panelFor(role: InducementRole): PanelView {
   return {
     role, seat: role === 'overdog' ? 'home' : 'away',
     teamName: state.longName ? LONG_NAME : TEAMS[role].teamName,
+    coachName: TEAMS[role].coach,
     logo: state.logo === 'none' ? null : state.logo === 'broken' ? '/missing-team-logo.png'
       : crestDataUrl(TEAMS[role].race, role === 'overdog' ? 'home' : 'away'),
     owned: state.roster === 'bb2016'

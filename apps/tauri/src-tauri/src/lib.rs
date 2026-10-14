@@ -501,6 +501,46 @@ mod jnlp_assoc {
     }
 }
 
+// --- Launch flags (owner 10-14) ------------------------------------------------
+// `--skip-intro` (also `--skipintro`) or SUPER_FUMBBL_SKIP_INTRO=1 skips the first-open intro VIDEO only (a Linux
+// WebKitGTK without H.264 plugins can show a black frame); the legal acknowledgement is never skippable.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchFlags {
+    skip_intro: bool,
+}
+
+fn skip_intro_requested<I: IntoIterator<Item = String>>(args: I, env: Option<String>) -> bool {
+    let env_on = env
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "0" || v == "false" || v == "no" || v == "off")
+        })
+        .unwrap_or(false);
+    env_on || args.into_iter().any(|a| a == "--skip-intro" || a == "--skipintro")
+}
+
+#[tauri::command]
+fn launch_flags() -> LaunchFlags {
+    LaunchFlags {
+        skip_intro: skip_intro_requested(std::env::args(), std::env::var("SUPER_FUMBBL_SKIP_INTRO").ok()),
+    }
+}
+
+#[cfg(test)]
+mod launch_flag_tests {
+    use super::skip_intro_requested;
+    fn a(v: &[&str]) -> Vec<String> { v.iter().map(|s| s.to_string()).collect() }
+    #[test]
+    fn flag_and_env() {
+        assert!(skip_intro_requested(a(&["app", "--skip-intro"]), None));
+        assert!(skip_intro_requested(a(&["app", "--skipintro"]), None));
+        assert!(skip_intro_requested(a(&["app"]), Some("1".into())));
+        assert!(!skip_intro_requested(a(&["app"]), Some("0".into())));
+        assert!(!skip_intro_requested(a(&["app"]), None));
+    }
+}
+
 #[tauri::command]
 fn jnlp_association_supported() -> bool {
     cfg!(windows)
@@ -733,6 +773,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
+            launch_flags,
             app_patch::app_patch_status,
             app_patch::app_patch_check,
             app_patch::app_patch_install_part,

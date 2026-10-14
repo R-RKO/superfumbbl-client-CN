@@ -401,6 +401,9 @@ export interface AppSettings extends ConfirmationSettings {
   setupZoneHelpers: boolean;
   /** Owner 10-06: the "N RES / N OUT" tab hanging off each coach corner panel. Default ON; right-click on it hides it. */
   coachCornerCounts: boolean;
+  /** Owner 10-14: when a knockdown ends in a CASUALTY (the server's injury report says so), skip the armour dice and go
+   *  straight from the knockdown to the casualty result, its sound and the apothecary offer. Default OFF. Presentation only. */
+  skipArmourDiceOnCasualty: boolean;
   /** Owner 10-10: the roster panes (H pop-out, post-game Roster / MVP tabs, MVP nomination, Assign Touchdown) list only
    *  the skills a player GAINED; position (innate) skills are left out. Default ON; the panes' own checkbox flips it. */
   rosterHideInnateSkills: boolean;
@@ -754,6 +757,7 @@ const DEFAULTS: AppSettings = {
   setupFormationsPanel: true,
   setupZoneHelpers: true,
   coachCornerCounts: true,
+  skipArmourDiceOnCasualty: false,
   rosterHideInnateSkills: true,
   endZoneLabel: 'team',
   endZoneTint: true,
@@ -1113,6 +1117,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.setupFormationsPanel = raw.setupFormationsPanel !== false; // owner 10-13: on unless the user turned it off
     merged.setupZoneHelpers = raw.setupZoneHelpers !== false; // owner 10-13: on unless the user turned it off
     merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
+    merged.skipArmourDiceOnCasualty = raw.skipArmourDiceOnCasualty === true; // owner 10-14: off unless the user turned it on
     merged.rosterHideInnateSkills = raw.rosterHideInnateSkills !== false; // owner 10-10: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
     merged.pitchFlipped = raw.pitchFlipped === true; // owner 10-12: only an explicit true flips the view

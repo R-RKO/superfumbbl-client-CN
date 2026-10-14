@@ -7,6 +7,7 @@ import type { LogTagToken } from './logTags';
 import { quickSnapAllowanceText, quickSnapCountText, quickSnapExhaustedText } from './quickSnapController';
 import { prayerForRoll } from './prayerCatalog';
 import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
+import { casualtyTierLabel } from './injuryOutcomeProjection';
 
 /**
  * First-pass port of the FFB report texts (upstream: ffb-client-logic
@@ -1073,9 +1074,25 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const name = pn(g, r.playerId);
     if (!casualty.length) return `${name} is not treated by the apothecary.`;
     const version = rulesVersion(g);
-    const d6Index = version === 'BB2016' ? 0 : version === 'BB2020' || version === 'BB2025' ? 1 : -1;
+    // BB2020/25 use the injury line's casualtyResultLabel ("Seriously Hurt (MNG)"); BB2016 keeps its label.
+    const bandVersion = version === 'BB2020' || version === 'BB2025';
+    const injury = r.seriousInjury
+      ? (bandVersion ? casualtyResultLabel(r.seriousInjury) : seriousInjuryLabel(r.seriousInjury))
+      : (bandVersion ? titleCase(playerStateResult(r.playerState)) : playerStateResult(r.playerState));
+    if (bandVersion || version === 'BB2025') {
+      // Owner 10-14: the D16 alone; the second die (a D6) only picks a lasting injury (modified D16
+      // 13-14), never MNG, NI or death. Decide from the server-sent injury names: the final one, or
+      // seriousInjuryOld when the BB2025 stat floor resolved a D6-selected injury down to MNG.
+      const usedD6 = [r.seriousInjury, r.seriousInjuryOld].some((si) =>
+        typeof si === 'string' && si !== '' && casualtyTierLabel(si, 6)?.tier === 'LASTING_INJURY');
+      const lasting = usedD6 && casualty.length > 1 ? `, lasting injury ${d6(casualty[1])}` : '';
+      // Casualty modifiers: names as sent (their values are not on the wire), never recomputed.
+      const mods = modifierNameList(r.casualtyModifiers);
+      const modText = mods.length ? ` (${mods.join(', ')})` : '';
+      return `${name} is treated by the apothecary | casualty roll ${String(casualty[0])}${modText}${lasting}: ${injury}`;
+    }
+    const d6Index = version === 'BB2016' ? 0 : -1;
     const dice = casualty.map((roll, index) => index === d6Index ? d6(roll) : String(roll)).join(', ');
-    const injury = r.seriousInjury ? seriousInjuryLabel(r.seriousInjury) : playerStateResult(r.playerState);
     return `${name} is treated by the apothecary | casualty roll [${dice}]: ${injury}`;
   },
   // Upstream ffb-server/.../bb2025/shared/StepApothecary.java:528-537 converts KO to STUNNED and emits

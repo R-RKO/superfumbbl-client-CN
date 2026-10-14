@@ -86,3 +86,11 @@ export function armourPresentation(report: Record<string, unknown>, coordinate: 
   return { square: [coordinate[0]!, coordinate[1]!] as [number, number],
     rolls: [Number(report.armorRoll[0]), Number(report.armorRoll[1])] as [number, number], broken: !!report.armorBroken };
 }
+
+/** Owner 10-14 (Settings > UI, "Skip armour rolls if a casualty occurs"): with the setting on, an injury report whose
+ *  server-stated outcome is a CASUALTY (the same classification as its result pill, injuryPresentation().isCasualty,
+ *  never recomputed from the dice) shows no armour dice: the knockdown goes straight to the casualty result. The log and
+ *  the dice statistics still take the dice from the report. Off = false for every report. */
+export function skipsArmourDiceOnCasualty(enabled: boolean, report: Record<string, unknown>, game: GameJson): boolean {
+  return enabled && injuryPresentation(report, game, null, false)?.isCasualty === true;
+}

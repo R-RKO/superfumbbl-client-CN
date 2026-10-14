@@ -47,6 +47,7 @@
     "keychain_get",
     "keychain_set",
     "launch_args",
+    "launch_flags",
     "list_asset_packs",
     "load_account_session",
     "read_bug_report_log",
