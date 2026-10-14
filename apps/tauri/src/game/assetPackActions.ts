@@ -11,7 +11,7 @@ import {
   type InstalledAssetPack,
 } from './assetMods';
 
-/** The assignable capability slots, in Settings → Assets order. Shared by AssetPackSettings.vue and the first-launch
+/** The assignable capability slots, in Settings → Art order. Shared by AssetPackSettings.vue and the first-launch
  *  setup wizard (owner 10-06) so a pack imported from either surface is applied the same way. */
 export const ASSET_ASSIGNMENT_CAPABILITIES: ReadonlyArray<{ key: AssetAssignmentCapability; label: string }> = [
   { key: 'skillIcons', label: 'Skill icons' },
@@ -44,7 +44,7 @@ export async function useWholeAssetPack(pack: InstalledAssetPack, intent = begin
 }
 
 /**
- * Import a .f40kmod through the native picker (the same importer Settings → Assets uses). Returns the installed pack
+ * Import a .f40kmod through the native picker (the same importer Settings → Art uses). Returns the installed pack
  * when it can be applied (assignable + supplies at least one slot), plus a status line for the surface to show.
  * A cancelled picker returns `{ pack: null, status: '' }`.
  */
@@ -55,7 +55,7 @@ export async function importAssetPackForApply(): Promise<{ pack: InstalledAssetP
     const applicable = isAssignableAssetPack(pack) && packCapabilityLabels(pack).length > 0;
     return {
       pack: applicable ? pack : null,
-      status: applicable ? `${pack.name} ${pack.version} installed.` : `${pack.name} installed. Choose capabilities in Settings → Assets to use it.`,
+      status: applicable ? `${pack.name} ${pack.version} installed.` : `${pack.name} installed. Choose capabilities in Settings → Art to use it.`,
       error: '',
     };
   } catch (error) {

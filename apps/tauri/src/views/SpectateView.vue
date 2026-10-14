@@ -181,7 +181,7 @@ import { reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
-import { buildInducementChips } from '../game/logic/coachPanelChips';
+import { buildInducementChips, hideZeroRerollChips } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
 import { armedRerollHintText, rerollOptionLabelForKind } from '../game/logic/rerollOptionPresentation';
@@ -1132,7 +1132,9 @@ function measureTopPanel() {
       left: sr.left - hr.left,
       top: sr.top - hr.top,
       center: (sr.left + sr.right) / 2 - hr.left,
-      bottom: sr.bottom - hr.top,
+      // Owner 10-13: hanging badges (the pitch-flip badge) count as part of the centre panel, so the notices that
+      // dock under it clear them (same reading as measureHudTopDom).
+      bottom: Math.max(sr.bottom, ...Array.from(sb.querySelectorAll<HTMLElement>('[data-panel-overhang]')).filter((el) => el.getClientRects().length).map((el) => el.getBoundingClientRect().bottom)) - hr.top,
     };
   } else {
     centerPanelBox.value = null;
@@ -4053,6 +4055,11 @@ const reactivePromptStyle = (key: ReactivePromptDragKey, anchored?: { x: number;
   return anchored ? { left: `${anchored.x}px`, top: `${anchored.y}px`, ...(anchored.leftEdge ? { transform: 'none' } : {}) } : undefined;
 };
 // Owner 09-06: the On the Ball waiting notice docks under the top-centre panel at that panel's width; a drag wins.
+// Owner 10-13: the kick-off aim card sits under the scoreboard; with the pitch-flip badge hanging there it drops below
+// the badge (centerPanelBox.bottom includes the scoreboard's overhang). The CSS 76px stays the default.
+const kickAimModalStyle = computed(() => (settings.pitchFlipped && centerPanelBox.value
+  ? { top: `${Math.max(76, Math.round(centerPanelBox.value.bottom + 8))}px` }
+  : undefined));
 const onTheBallWaitingStyle = computed(() => {
   const box = centerPanelBox.value;
   const base = reactivePromptStyle('onTheBallWaiting', box ? { x: box.left, y: box.bottom + 8, leftEdge: true } : undefined);
@@ -11512,6 +11519,8 @@ onMounted(async () => {
       !!hud.value,
       inducePhaseOpen.value, // bug 10-13: the coach plates hide during the inducement phase
       settings.modernHudStyle,
+      settings.pitchFlipped, // owner 10-13: the flip badge hangs off the scoreboard (no parent resize to observe)
+      !!gameStore.state.kickPlacement, // the kick-off aim card moves below the badge
       settings.uiTextSize, // Astra P2-4: text size / font reflow the plates (the ResizeObserver also catches it)
       settings.uiFont,
       timerPos.value,
@@ -12453,7 +12462,7 @@ function panelFor(side: 'home' | 'away') {
   if (!game) return null;
   const team = side === 'home' ? game.teamHome : game.teamAway;
   const turnData = side === 'home' ? game.turnDataHome : game.turnDataAway;
-  const chips = buildInducementChips(turnData);
+  const chips = hideZeroRerollChips(buildInducementChips(turnData), settings.hideZeroRerolls);
   return {
     coach: team.coach,
     teamName: team.teamName,
@@ -13706,7 +13715,7 @@ function sendChat() {
           <div class="coach-lines">
             <div class="coach-name">{{ homePanel.coach }}</div>
             <div class="team-title">{{ homePanel.teamName }}</div>
-            <div class="inducements" aria-label="Team resources and inducements">
+            <div v-if="homePanel.chips.length" class="inducements" aria-label="Team resources and inducements">
               <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
                 <img :src="resourceIcon(chip.icon)" alt="" />
                 <b class="inducement-quantity">{{ chip.count }}</b>
@@ -13740,7 +13749,7 @@ function sendChat() {
           <div class="coach-lines">
             <div class="coach-name">{{ awayPanel.coach }}</div>
             <div class="team-title">{{ awayPanel.teamName }}</div>
-            <div class="inducements" aria-label="Team resources and inducements">
+            <div v-if="awayPanel.chips.length" class="inducements" aria-label="Team resources and inducements">
               <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
                 <img :src="resourceIcon(chip.icon)" alt="" />
                 <b class="inducement-quantity">{{ chip.count }}</b>
@@ -13786,6 +13795,10 @@ function sendChat() {
             @click="endTurn()">{{ endTurnButtonText }}<PadGlyph name="View" class="end-turn-glyph" /></button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
             :title="`${awayPanel?.coach ?? 'Away'} — turn ${awayPanel?.turnNr ?? 0}`">Turn {{ awayPanel?.turnNr ?? 0 }}</span>
+          <!-- Owner 10-13: pitch flip badge, hangs under the scoreboard (moves/scales with it); counted by the HUD clearance. -->
+          <span v-if="settings.pitchFlipped" class="pitch-flip-badge" data-panel-overhang
+            title="The pitch view is flipped (Settings > Display, or the Pitch flip key)"
+            aria-label="The pitch view is flipped (Settings > Display, or the Pitch flip key)"><i class="pfb-glyph" aria-hidden="true">&#8645;</i><span class="pfb-full">PITCH FLIPPED</span><span class="pfb-short">FLIPPED</span></span>
         </div>
         <!-- #18a (owner tester): passive "opponent reviewing dice" indicator near the scorebar. Bound
              directly to state.opponentReviewingDice — DERIVED each frame in-store (keyed on the block
@@ -14069,7 +14082,7 @@ function sendChat() {
           :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
 
         <!-- Server-derived single/multiple Apothecary election. -->
-        <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice" v-pad-focus="gameStore.state.apothecaryChoice.mine ? {} : false" :key="gameStore.state.apothecaryChoice.seq"
+        <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice && gameStore.apothecaryCardRevealed.value" v-pad-focus="gameStore.state.apothecaryChoice.mine ? {} : false" :key="gameStore.state.apothecaryChoice.seq"
           :prompt="gameStore.state.apothecaryChoice" :icon-url="apothecaryIconUrl"
           :portrait="apoChoicePortrait" :skills="apoChoiceSkills"
           :skill-mode="skillMode" :skill-icon-style="effectiveIconStyle"
@@ -15353,7 +15366,7 @@ function sendChat() {
 
         <!-- Owner o66aj/o66an: interactive kick placement — a top-centre MODAL tells the kicking coach to aim
              (the ball crosshair then follows the pointer over eligible squares). -->
-        <div v-if="gameStore.state.kickPlacement" class="kick-aim-modal">
+        <div v-if="gameStore.state.kickPlacement" class="kick-aim-modal" :style="kickAimModalStyle">
           <span class="kick-aim-modal-title">KICK-OFF</span>
           <span class="kick-aim-modal-text">Select Target Square</span>
         </div>
@@ -16417,6 +16430,36 @@ function sendChat() {
   box-shadow: 0 4px 0 #050607, 0 7px 18px #000b, inset 0 1px 0 #68717d, inset 0 0 0 3px #13161a;
 }
 .sb-cell { display: flex; align-items: center; justify-content: center; }
+/* Owner 10-13: badge hanging below the scoreboard; absolute inside it so it scales and moves with the panel. */
+.pitch-flip-badge {
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 2px;
+  white-space: nowrap;
+  pointer-events: none;
+  font-size: max(var(--ui-min-text-size, 12px), 0.5rem);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  color: #d9dde3;
+  background: linear-gradient(180deg, rgb(35 39 45 / var(--hud-scoreboard-opacity, 0.9)), rgb(8 10 12 / var(--hud-scoreboard-opacity, 0.9)));
+  border: 2px solid #373d46;
+  border-top: 0;
+  border-radius: 0 0 5px 5px;
+  box-shadow: 0 3px 0 #050607, 0 5px 10px #0008;
+}
+.pitch-flip-badge .pfb-glyph { font-style: normal; color: #e8b84a; }
+.pitch-flip-badge .pfb-short { display: none; }
+@media (max-width: 1299px) {
+  .pitch-flip-badge .pfb-full { display: none; }
+  .pitch-flip-badge .pfb-short { display: inline; }
+}
 .scoreboard:not(.flat-hud) .sb-half { grid-column: 1; grid-row: 1; }
 .scoreboard:not(.flat-hud) .sb-score { grid-column: 2; grid-row: 1; }
 .scoreboard:not(.flat-hud) .sb-weather { grid-column: 3; grid-row: 1; }
@@ -21449,6 +21492,8 @@ function sendChat() {
   box-shadow: 0 4px 0 #080a0d, 0 9px 19px #000b, inset 0 2px 0 #9aa2ab, inset 0 -3px 0 #1a1f25;
 }
 .pitch-host.hud-chrome .hud-center.scoreboard > * { position: relative; z-index: 1; }
+/* Owner 10-13: the pitch-flip badge hangs below the panel in Chrome too (beats the `> *` rule above). */
+.pitch-host.hud-chrome .hud-center.scoreboard > .pitch-flip-badge { position: absolute; z-index: 1; }
 .pitch-host.hud-chrome .hud-center.scoreboard::before {
   content: '';
   position: absolute;

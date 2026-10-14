@@ -168,7 +168,12 @@ export function measureHudTopDom(
     if (!el || !el.getClientRects().length) continue;
     elements.push(el);
     const r = el.getBoundingClientRect();
-    boxes.push({ top: r.top - hostRect.top, bottom: r.bottom - hostRect.top, scale: 1, originY: r.top - hostRect.top, id });
+    // Hanging badges (`[data-panel-overhang]`, e.g. the pitch-flip badge) are part of the scoreboard's reach.
+    let bottom = r.bottom;
+    for (const child of Array.from(el.querySelectorAll<HTMLElement>('[data-panel-overhang]'))) {
+      if (child.getClientRects().length) bottom = Math.max(bottom, child.getBoundingClientRect().bottom);
+    }
+    boxes.push({ top: r.top - hostRect.top, bottom: bottom - hostRect.top, scale: 1, originY: r.top - hostRect.top, id });
   }
   const { clearance, included } = measureHudTop(boxes, host.clientHeight, o.previous);
   // Host px -> canvas px: the pitch canvas need not start at the host's top edge (it sits 12 px down today).

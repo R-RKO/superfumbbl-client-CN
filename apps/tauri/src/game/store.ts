@@ -3883,6 +3883,67 @@ function injuryPillHoldsSoundOf(command: object): boolean {
 }
 /** Players whose stunned decoration waits for their pill (the renderer's probe). Outside the spectator state proxy on purpose. */
 const stunDecorationHolds = shallowRef<readonly string[]>([]);
+/** Owner 10-13 ("Casualty sound is still not playing at the right time ... 5. Casualty sound plays 6. Pill token pops
+ *  with casualty result 7. Apothecary panel displays", clarified: 5, 6 and 7 are SIMULTANEOUS). The injury / casualty
+ *  result is first revealed by the injury pill, and its sound already plays as the pill pops (the 1.0.188 pill beat).
+ *  The apothecary panel (useApothecary / useApothecaries) used to appear with the injury frame, ahead of both. Now the
+ *  Modern view shows it at that same moment: a player whose injury pill has not popped yet holds back every apothecary
+ *  card that offers him (apothecaryCardRevealed). Presentation only: the store still arms the offer at once
+ *  (state.apothecaryChoice, injuryDecisionPending, the controller gates), the server simply waits for the answer a
+ *  little longer. No beat length changes. Classic keeps its own panel timing.
+ *  OCCURRENCE (Astra 10-13): a hold belongs to one injury occurrence - the player + the command that carried it, the
+ *  same key as his pill beat. A newer injury of the same player replaces the hold; only that occurrence's own pill or
+ *  slot end releases it, so an older, delayed pill of his cannot reveal a newer card early.
+ *  Two players on ONE card (useApothecaries): the card waits for the LAST of their pills, so the first player's sound
+ *  (with his own pill) comes before the shared panel - the owner's simultaneity holds per card, not per injury.
+ *  Clocks while the card is held: the game clock runs on; the server's TURN clock is already stopped for the open
+ *  dialog (g1951643 #715 -> #716: gameTime +1376 ms, turnTime +1 ms), so the hold costs the deciding coach no turn time.
+ *  Wakes (every hold needs one): his occurrence's pill pops (presentInjury), its slot ends, the pump is voided
+ *  (settleAllInjuryPillBeats: reset, snapshot, catch-up, presentation cancel, game end), a published event ends with
+ *  no injury of his still to present, and a plain-timer cap (INJURY_PILL_BEAT_CAP_MS) that survives
+ *  clearAllGameTimeouts. */
+const apothecaryCardPillHolds = shallowRef<ReadonlySet<string>>(new Set());
+const apothecaryCardPillHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** The occurrence (carrying command) each held player waits for; null = no command known (released by any pill of his). */
+const apothecaryCardPillHoldOccurrence = new Map<string, object | null>();
+function holdApothecaryCardForPill(playerId: string, occurrence: object | null): void {
+  if (!playerId || playback.catchingUp) return;
+  const prior = apothecaryCardPillHoldTimers.get(playerId);
+  if (prior) clearTimeout(prior);
+  apothecaryCardPillHoldTimers.set(playerId, setTimeout(() => releaseApothecaryCardHold(playerId), INJURY_PILL_BEAT_CAP_MS));
+  apothecaryCardPillHoldOccurrence.set(playerId, occurrence);
+  if (!apothecaryCardPillHolds.value.has(playerId)) apothecaryCardPillHolds.value = new Set([...apothecaryCardPillHolds.value, playerId]);
+}
+/** Release `event`'s own hold (its occurrence only - a newer hold of the same player is left alone). */
+function releaseApothecaryCardHoldOf(event: InjuryEvent): void {
+  if (!apothecaryCardPillHolds.value.has(event.playerId)) return;
+  const held = apothecaryCardPillHoldOccurrence.get(event.playerId) ?? null;
+  const occurrence = injuryEventOccurrence.get(event) ?? null;
+  if (held && occurrence && held !== occurrence) return;
+  releaseApothecaryCardHold(event.playerId);
+}
+function releaseApothecaryCardHold(playerId: string): void {
+  const timer = apothecaryCardPillHoldTimers.get(playerId);
+  if (timer) { clearTimeout(timer); apothecaryCardPillHoldTimers.delete(playerId); }
+  apothecaryCardPillHoldOccurrence.delete(playerId);
+  if (!apothecaryCardPillHolds.value.has(playerId)) return;
+  const next = new Set(apothecaryCardPillHolds.value);
+  next.delete(playerId);
+  apothecaryCardPillHolds.value = next;
+}
+function clearApothecaryCardHolds(): void {
+  for (const timer of apothecaryCardPillHoldTimers.values()) clearTimeout(timer);
+  apothecaryCardPillHoldTimers.clear();
+  apothecaryCardPillHoldOccurrence.clear();
+  if (apothecaryCardPillHolds.value.size) apothecaryCardPillHolds.value = new Set();
+}
+/** Owner 10-13: is the apothecary card on screen yet (Modern)? False while a player it offers waits for his pill. */
+const apothecaryCardRevealed = computed(() => {
+  const card = state.apothecaryChoice;
+  if (!card) return false;
+  const holds = apothecaryCardPillHolds.value;
+  return !holds.size || !card.injuries.some((injury) => holds.has(injury.playerId));
+});
 const INJURY_PILL_SOUND_BASES: Readonly<Record<string, readonly number[]>> = {
   ko: [PlayerStateBase.KNOCKED_OUT],
   injury: [PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY],
@@ -3926,6 +3987,7 @@ function settleInjuryPillBeatOf(event: InjuryEvent): void {
   if (beat && occurrence && beat.command === occurrence) settleInjuryPillBeat(event.playerId);
 }
 function settleAllInjuryPillBeats(withSound = true): void {
+  clearApothecaryCardHolds(); // owner 10-13: no pill is coming for a held apothecary card either
   for (const playerId of [...injuryPillBeats.keys()]) settleInjuryPillBeat(playerId, withSound);
 }
 /** The pill of `event` popped: its beat resolves now (decoration on, sound played). */
@@ -3972,10 +4034,9 @@ export function installInjuryPillBeatTestHarness() {
     /** Arm a beat with no injury event behind it (its own cap must still resolve it). */
     arm: (playerId: string, base: number, stun: boolean, sound: string | null) => armInjuryPillBeat(playerId, base, stun, sound, null),
     reset: () => settleAllInjuryPillBeats(false),
-    /** Astra 10-13: the apothecary first-result release and its armour-dice marker. */
-    releaseForApothecaryOffer: (playerIds: readonly string[]) => releaseInjurySoundsForApothecaryOffer(playerIds),
-    markArmourPending: () => { armourRevealPendingSince = Date.now(); },
-    armourPending: () => armourRevealPendingSince !== 0,
+    /** Owner 10-13: the apothecary card pill holds (hold one with no injury event behind it: its cap must release it). */
+    holdCard: (playerId: string) => holdApothecaryCardForPill(playerId, null),
+    cardHolds: () => [...apothecaryCardPillHolds.value],
   };
 }
 function crowdPushedInReports(reports: readonly Record<string, unknown>[], playerId: string): boolean {
@@ -4104,52 +4165,6 @@ const FOLLOWUP_DECISION_HOLD_MS = 900;
 const FOLLOWUP_ARMOUR_GAP_MS = 450;
 const FOLLOWUP_ARMOUR_BACKSTOP_MS = 3000;
 let armourAfterFollow: (() => void) | null = null;
-/** Owner 10-13: a frame's armour dice are scheduled but not yet on screen (a stab / foul cue, a follow/stay
- *  indicator or a fireball still ahead of them) since this time; 0 = none pending. */
-let armourRevealPendingSince = 0;
-/** Owner 10-13 ("When a player has an apothecary, the audio cue for the injury result is happening after the user
- *  selects the apothecary result. That's too late. It should happen on the first result."): the apothecary offer card
- *  (useApothecary / useApothecaries, every seat that shows it, spectators included) is where the FIRST injury result
- *  is shown, at the injury frame, while the injury pill waits out the armour dice (~1.7 s) - a coach who answered
- *  quickly heard the result only after his choice. So raising the card resolves the offered players' pill beats at
- *  once (the result sound plays once: the pill that follows finds no beat and stays silent, and the event's apply-time
- *  wire sound is skipped - the live applier through frameInjurySoundClaimed, the published present() through
- *  apothecarySoundTakenBy), but never ahead
- *  of the armour roll that broke: while that frame's dice are still scheduled the sound waits for them (polled, capped
- *  at APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS; the beat's own INJURY_PILL_BEAT_CAP_MS stays the last wake). The pill
- *  itself keeps its timing. Two routes raise the card: armApothecaryPrompt (live seats, legacy spectator playback) and
- *  the published spectator publication (position.durableProjection.apothecaryCard); both release here. A resolved
- *  review occurrence is recorded as for a popped pill (settleInjuryPillBeat), so a rewind does not ARM it again; the
- *  rewind's present() still plays the event's wire sound at apply time, as it does for any injury today (unchanged
- *  base behaviour). The apothecary's own result (the apothecaryChoice card / the final frame) is unchanged: it is no
- *  injury report, so it arms no beat; whatever sound the server puts on that frame plays when it applies. No beat
- *  length changes. */
-const APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS = 4000;
-/** Astra 10-13: the commands whose wire sound an apothecary offer took early. The published present() checks (and
- *  clears) this before its apply-time wire sound, so an offer released before present() ran (no armour dice to wait
- *  for) does not sound twice. The claim lives for ONE presentation pass: the publication of the event clears any old
- *  claim, a release after present() already passed its wire-sound check claims nothing (apothecaryWireSoundChecked),
- *  and the event end clears it - so a rewind through the event behaves exactly as without the claim. */
-const apothecarySoundTakenBy = new WeakSet<object>();
-/** Commands whose published present() has already passed its apply-time wire-sound check in the current pass. */
-const apothecaryWireSoundChecked = new WeakSet<object>();
-function releaseInjurySoundsForApothecaryOffer(playerIds: readonly string[]): void {
-  if (!playerIds.some((id) => injuryPillBeats.get(id)?.sound)) return;
-  const started = Date.now();
-  const release = () => {
-    if (armourRevealPendingSince) {
-      if (Date.now() - started < APOTHECARY_SOUND_ARMOUR_WAIT_CAP_MS) { scheduleGameTimeout(release, 50); return; }
-      armourRevealPendingSince = 0; // the dice never came (no on-pitch square, a dropped cue): a stale marker would hold the next offer
-    }
-    for (const id of playerIds) {
-      const beat = injuryPillBeats.get(id);
-      if (!beat?.sound) continue;
-      if (beat.command && !apothecaryWireSoundChecked.has(beat.command)) apothecarySoundTakenBy.add(beat.command);
-      settleInjuryPillBeat(id);
-    }
-  };
-  release();
-}
 /** Release the withheld armour dice `afterMs` from now (idempotent; no-op when none). */
 function releaseArmourAfterFollow(afterMs: number): void {
   const show = armourAfterFollow;
@@ -4237,6 +4252,7 @@ function pumpInjuries() {
     if (sppGeneration !== casualtySppGeneration) return;
     state.injurySplash = event;
     popInjuryPillBeat(event); // owner 10-12: his pill is up - the stunned decoration and the injury sound land now
+    releaseApothecaryCardHoldOf(event); // owner 10-13: ...and his apothecary panel, at the same moment
     noteInjuryTokenHoldProgress(event.playerId); // owner 10-10: his pill is up - his own slot has started
     // Owner 07-08: KO/casualty removal frame lands a frame later and yanked the token mid-toast — HOLD the spectator drain for the splash window (no-op in play).
     if (event.isCasualty || event.injuryBase === 0x05 || event.injuryBase === 0x09) holdPlayback(stepMs); // 0x09: crowd-surf -> reserves removal (owner 09-15)
@@ -4253,6 +4269,7 @@ function pumpInjuries() {
       if (!injuryQueue.some((queued) => queued.playerId === event.playerId)) {
         releaseInjuryTokenHold(event.playerId);
         settleInjuryPillBeatOf(event); // owner 10-12: his slot is over - this occurrence's beat, if his pill did not take it
+        releaseApothecaryCardHoldOf(event); // owner 10-13: his slot is over - a card this occurrence held shows now
       }
       noteInjuryTokenHoldProgress(); // the queue moved on: progress for the holds still waiting in it
       if (event.isCasualty) {
@@ -4890,6 +4907,17 @@ async function pauseSpectatorView(): Promise<void> {
           spectatorLandingDieShown = (batch) => whenActionDiceShown(batch, null, (msUntilShown) => shown(msUntilShown));
         }
       }
+      // Owner 10-13: an apothecary card this position offers shows with the injury pill present() pops a little later:
+      // hold it BEFORE the position (and with it the card) is published, so it never flashes up ahead of the pill.
+      if (!snap && previous && previous.cursor.sequence !== position.cursor.sequence && !playback.catchingUp) {
+        const upcoming = history.eventAfter(previous.cursor);
+        if (upcoming && upcoming.cursor.sequence === position.cursor.sequence) {
+          for (const report of (upcoming.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []) {
+            const pid = String(report.defenderId ?? report.playerId ?? '');
+            if (pid && injuryPresentation(report, position.model, coordinates.get(pid), false)) holdApothecaryCardForPill(pid, upcoming.command);
+          }
+        }
+      }
       spectatorPublication.publish(position, snap);
       // Owner 10-10: the injury token hold on the review path. A seek / snapshot draws the model as it is; a played
       // transition arms here, in the synchronous publication boundary (the model watcher has not flushed yet).
@@ -4908,8 +4936,6 @@ async function pauseSpectatorView(): Promise<void> {
           // pops its pill; a seek / snapshot / multi-step jump arms none and draws + sounds at once).
           // A beat of an EARLIER event is stale: present() runs one event at a time, so that event's presentation is over.
           for (const [pid, beat] of [...injuryPillBeats]) if (beat.command !== played?.command) settleInjuryPillBeat(pid);
-          // Astra 10-13: a new presentation pass of this event (first play or a rewind) starts with no apothecary claim.
-          if (played) { apothecarySoundTakenBy.delete(played.command); apothecaryWireSoundChecked.delete(played.command); }
           if (!playback.catchingUp && played) {
             const armed = new Set<string>();
             for (const report of playedReports) {
@@ -4923,19 +4949,6 @@ async function pauseSpectatorView(): Promise<void> {
               const beat = injuryPillBeatFor(event, priorStates.get(pid), position.model, played.command.sound,
                 !injuryPillHoldsSoundOf(played.command), settings.uiMode === 'classic');
               armInjuryPillBeat(pid, event.injuryBase, beat.stun, beat.sound, played.command, occurrence);
-            }
-            // Owner 10-13 (Astra 10-13 item 1): a PUBLISHED spectator builds the apothecary card from the position
-            // (spectatorHud's apothecaryChoice), never through armApothecaryPrompt, so the first-result sound is released
-            // here, when the card first appears for these players. This event's armour dice are put up by present() a
-            // little later: while they are still to come the release waits for them (the same marker, wait and cap).
-            const card = position.durableProjection.apothecaryCard;
-            const shownBefore = new Set((previous.durableProjection.apothecaryCard?.injuries ?? []).map((injury) => injury.playerId));
-            const offered = (card?.injuries ?? []).map((injury) => injury.playerId).filter((id) => !shownBefore.has(id));
-            if (offered.length) {
-              const armourComing = playedReports.some((report) => String(report.reportId) === 'injury' && Array.isArray(report.armorRoll)
-                && report.armorRoll.length === 2 && offered.includes(String(report.defenderId ?? report.playerId ?? '')));
-              if (armourComing) armourRevealPendingSince = Date.now(); // cleared where present() puts the dice up
-              releaseInjurySoundsForApothecaryOffer(offered);
             }
           }
         }
@@ -5196,10 +5209,7 @@ async function pauseSpectatorView(): Promise<void> {
         || (!!projectile.fireball && wireSound === projectile.fireball.sound)
       );
       // Owner 10-12: an injury-type sound the publication handed to a pill beat plays when the pill pops instead.
-      // Astra 10-13: an apothecary offer that already played this event's result sound (no dice to wait for) owns it.
-      apothecaryWireSoundChecked.add(event.command);
-      const apothecaryTookSound = apothecarySoundTakenBy.delete(event.command);
-      if (!projectileOwnsWireSound && !apothecaryTookSound && !injuryPillHoldsSoundOf(event.command)) playSound(wireSound);
+      if (!projectileOwnsWireSound && !injuryPillHoldsSoundOf(event.command)) playSound(wireSound);
       // The pin was raised at publication (see transitionRerollPin). No rerolled result in this transition means
       // the offer was declined: drop the pin now so the die fades with the answer.
       const reviewRerollPin = transitionRerollPin;
@@ -5383,7 +5393,6 @@ async function pauseSpectatorView(): Promise<void> {
       });
       if (armour.length) {
         state.armorDice = { rolls: armour, seq: (state.armorDice?.seq ?? 0) + 1 };
-        armourRevealPendingSince = 0; // owner 10-13: a published apothecary first-result sound waits for these dice
         if (armour.some((roll) => roll.broken) && !await presentStages([{ delayBefore: armourReadMs(), present: () => {} }], signal)) return;
       }
       const injured = new Set<string>();
@@ -5410,9 +5419,11 @@ async function pauseSpectatorView(): Promise<void> {
       });
       // Owner 10-12: the event's injury presentation is over - a beat of its own that no pill took resolves now.
       for (const [pid, beat] of [...injuryPillBeats]) if (beat.command === event.command) settleInjuryPillBeat(pid);
-      armourRevealPendingSince = 0; // Astra 10-13: this event's armour, shown or not, is no longer pending
-      apothecarySoundTakenBy.delete(event.command); // Astra 10-13: the claim expires with this presentation pass
       if (signal.aborted) return;
+      // Owner 10-13: a card hold THIS event armed and its pill no longer owes shows now (Astra 10-13: checked after the
+      // abort, and only this presentation's own occurrence - a cancelled presentation must never release a hold that a
+      // later one armed; the cancellation itself already cleared this one's holds).
+      for (const pid of [...apothecaryCardPillHolds.value]) if (apothecaryCardPillHoldOccurrence.get(pid) === event.command) releaseApothecaryCardHold(pid);
       if (apothecaryOutcome) {
         state.apothecaryAnim = {
           playerId: apothecaryOutcome.playerId, square: apothecaryOutcome.square,
@@ -8599,8 +8610,7 @@ function applyFrameContents(frame: QueuedFrame) {
     // Astra 09-14: a DELAYED reveal (stab / foul beat) must not publish against a REPLACED model — a reconnect snapshot
     // inside the beat swaps game.value; the old roll/square then belongs to nothing on screen.
     const modelAtSchedule = game.value;
-    const showArmour = () => { armourRevealPendingSince = 0; if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
-    armourRevealPendingSince = Date.now(); // owner 10-13: cleared by showArmour (at once below, or after its cue)
+    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
     const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
       && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
     if (fireballInjury && pendingFireballBeats > 0) {
@@ -8730,6 +8740,7 @@ function applyFrameContents(frame: QueuedFrame) {
     if (!playback.catchingUp) {
       if (event.isCasualty) casualtyPresentationsOutstanding++;
       injuryQueue.push(event);
+      holdApothecaryCardForPill(playerId, cmd); // owner 10-13: an apothecary card offering him shows when his pill pops
       // Owner 10-12: his stunned decoration / the frame's injury sound wait for this event's pill (armed only for a
       // queued event - a fast-forwarded frame draws and sounds as before).
       injuryEventOccurrence.set(event, cmd);
@@ -11694,7 +11705,6 @@ function clearCinematics(hardGameBoundary = false) {
   state.onTheBallMover = null;
   state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
-  armourRevealPendingSince = 0; // owner 10-13: no armour reveal is pending past a reset
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
   turnoverTimer = turnoverClearTimer = weatherTimer = kickoffTimer = fanFactorTimer = null;
@@ -18677,7 +18687,7 @@ function armApothecaryPrompt(g: GameJson, dialog: Record<string, unknown>): void
   if (state.apothecaryChoice?.key === prompt.key && state.apothecaryChoice.mine === prompt.mine) return;
 
   state.apothecaryChoice = { ...buildApothecaryDecision(g, prompt), key: prompt.key, mine: prompt.mine, seq: (state.apothecaryChoice?.seq ?? 0) + 1 };
-  releaseInjurySoundsForApothecaryOffer(prompt.injuries.map((injury) => injury.playerId)); // owner 10-13: the first result sounds with its card
+
 }
 /** Owner 2026-07-10 (g350 #1, Foul Appearance): wire sometimes carries skill as FULLY-QUALIFIED Java class (e.g. com.fumbbl.ffb.skill.bb2025.FoulAppearance) which leaked RAW into reroll/skill modal; strip class path to leaf+space CamelCase→human label. #214 prettySkillName extracted to ./logic/prettySkillName.ts (Echo item-①ruling 08-03—pure display-label seam, imported above so ffb-protocol rig can pin no-com.fumbbl/Title-Case invariant without store reach). */
 /** Owner 2026-07-14: map RAW skillUse skill (leaf class name or plain name—e.g. com.fumbbl.ffb.skill.bb2025.StandFirm, SideStep, Fend) to AUTOMATIC SKILL USAGE toggle key; returns null for any skill without auto-use toggle (those always surface interactively). */
@@ -23899,6 +23909,8 @@ export const gameStore = {
   game,
   /** Owner 10-12: players whose stunned decoration waits for their injury pill (renderer.stunDecorationHoldsProbe). */
   stunDecorationHolds,
+  /** Owner 10-13: the apothecary card shows with the injury pill (Modern; see apothecaryCardPillHolds). */
+  apothecaryCardRevealed,
   reportMovementPresentationRecoveryDiagnostic(message: string, error: unknown): void {
     log('system', `⚠ ${message}: ${error instanceof Error ? error.message : String(error)}`);
   },

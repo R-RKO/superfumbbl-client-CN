@@ -75,7 +75,7 @@ export function raceDefaultLogo(race: string | undefined): string | null {
  */
 export function teamLogoUrl(entry: TeamLogoSource): string | null {
   // Owner 10-01 (S82): the pack bindings read below live in plain module maps, so a list drawn before the mods finish
-  // loading (the Play blade at launch) or before a Settings > Mods change kept its first answer. Reading the reactive
+  // loading (the Play blade at launch) or before a Settings > Art change kept its first answer. Reading the reactive
   // revision + assignments makes every caller re-resolve when they change (same idiom as gameStatRows).
   void assetMods.logoRevision; void assetMods.activeAssignments;
   const race = entry.race?.toLowerCase().replace(/[^a-z]/g, '');

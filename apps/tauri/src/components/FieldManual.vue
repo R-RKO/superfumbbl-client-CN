@@ -37,7 +37,7 @@ const RAILS = [
 
 const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> = [
   { tab: 'general', name: 'Declare Blitz', blurb: 'FUMBBL (default): blitz from the context menu. Modern: select your player, click a distant enemy, click again to commit the previewed route.' },
-  { tab: 'mods', name: 'Mods', blurb: 'Import .f40kmod packs for skill icons, sprites and sounds — or build and export your own (PNG images, OGG/WAV/MP3 sounds).' },
+  { tab: 'mods', name: 'Art', blurb: 'Import .f40kmod packs for skill icons, sprites and sounds — or build and export your own (PNG images, OGG/WAV/MP3 sounds).' },
   { tab: 'accessibility', name: 'Accessibility', blurb: 'Minimum text size, colourblind remap, click echoes, pitch grid width and colour, brightness, UI font.' },
 ];
 </script>

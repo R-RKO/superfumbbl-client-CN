@@ -122,3 +122,14 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
   if (cards > 0) chips.push({ icon: 'card', count: cards, label: 'Cards' });
   return chips;
 }
+
+/**
+ * Owner 10-13 (`settings.hideZeroRerolls`): drop the BASE team-reroll chip when its count is 0. The temporary
+ * pools (Brilliant Coaching / Pump Up / Star of the Show / single-use) are already only pushed above 0, so the base
+ * chip is the only reroll chip that can read "0". Pure view filter: the count is re-derived from turn data on
+ * every build, so the chip returns the moment the count is above 0 again (next half resets the Team Rerolls).
+ */
+export function hideZeroRerollChips(chips: InducementChip[], hide: boolean): InducementChip[] {
+  if (!hide) return chips;
+  return chips.filter((c) => !(c.icon === 're_roll' && c.count <= 0));
+}

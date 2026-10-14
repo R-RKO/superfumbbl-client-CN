@@ -122,7 +122,7 @@ async function choose(s: SetupStep, option: SetupOption): Promise<void> {
         return;
       }
       if (!result) {
-        choiceError.value = assetMods.error || 'The installed pack could not be switched off; change it in Settings → Assets.';
+        choiceError.value = assetMods.error || 'The installed pack could not be switched off; change it in Settings → Art.';
         return; // family + selection unchanged
       }
     } finally {
@@ -190,7 +190,7 @@ function flushPasswords(): void {
   void flushFumbblPassword();
 }
 
-// Step 9: "Import Mod Pack" — the same native importer Settings → Assets uses, result inline (packBusy is above).
+// Step 9: "Import Mod Pack" — the same native importer Settings → Art uses, result inline (packBusy is above).
 const packStatus = ref('');
 const packError = ref('');
 // Owner 10-06: every pack imported during this run stays listed (it used to be replaced by the next import).

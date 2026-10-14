@@ -2940,45 +2940,6 @@ onBeforeUnmount(() => {
             </label>
           </fieldset>
 
-          <fieldset class="settings-group">
-            <legend>Dice</legend>
-            <label class="row">
-              <input v-model="settings.blockDice3d" type="checkbox" />
-              <span>3D dice (block dice + on-pitch action dice)</span>
-            </label>
-            <label class="row">
-              <span>D6 style</span>
-              <select v-model="settings.d6FaceVariant">
-                <option value="brushed-metal">Black (default)</option>
-                <option value="black">White</option>
-                <option value="team">Brushed metal, home and away</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>Block die surface</span>
-              <select v-model="settings.blockDiceSurface">
-                <option value="auto">Match the face set (default)</option>
-                <option value="black">Black</option>
-                <option value="white">White</option>
-                <option value="team">Brushed metal, home and away</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>Dice tumble ({{ settings.blockTumbleMs }}ms)</span>
-              <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
-            </label>
-            <label class="row">
-              <span>Die-roll tag position</span>
-              <select v-model="settings.dieTagPosition">
-                <option value="corner">On die — top-right corner (default)</option>
-                <option value="top">On die — top</option>
-                <option value="side">To the side of the die</option>
-                <option value="bottom">On die — bottom</option>
-                <option value="off">Off</option>
-              </select>
-            </label>
-          </fieldset>
-
           <!-- Owner 09-16: every log APPEARANCE setting lives here (moved from UI > Log window) + the dice toggles. -->
           <fieldset class="settings-group">
             <legend>Log</legend>
@@ -3153,6 +3114,7 @@ onBeforeUnmount(() => {
               <span>Show on-field team logos</span>
             </label>
             <label class="row"><input v-model="settings.dugoutCounts" type="checkbox" /> <span>Player counts on dugout labels (e.g. "2 RESERVES")</span></label>
+            <label class="row"><input v-model="settings.hideZeroRerolls" type="checkbox" /> <span>Hide reroll chips at zero</span></label>
             <!-- Owner 08-19: showPlayerNumbers + showBlockDice rows RETIRED from Settings > UI
                  (settings keep their defaults; toggles no longer surfaced). -->
             <!-- owner 2026-07-08: end-zone label — team name (FUMBBL) or TOUCHDOWN -->
@@ -3202,8 +3164,47 @@ onBeforeUnmount(() => {
           <!-- Owner 09-14: the Injury results group (Stun display banner/tag) is cut — the stun reads as the token toast like a KO; the 'tag' variant only swapped toast styles. -->
         </section>
 
-        <!-- ============================ MODS ============================ -->
+        <!-- ============================ ART (id 'mods') ============================ -->
         <section v-if="settingsTab === 'mods'">
+          <fieldset class="settings-group">
+            <legend>Dice</legend>
+            <label class="row">
+              <input v-model="settings.blockDice3d" type="checkbox" />
+              <span>3D dice (block dice + on-pitch action dice)</span>
+            </label>
+            <label class="row">
+              <span>D6 style</span>
+              <select v-model="settings.d6FaceVariant">
+                <option value="brushed-metal">Black (default)</option>
+                <option value="black">White</option>
+                <option value="team">Brushed metal, home and away</option>
+              </select>
+            </label>
+            <label class="row">
+              <span>Block die surface</span>
+              <select v-model="settings.blockDiceSurface">
+                <option value="auto">Match the face set (default)</option>
+                <option value="black">Black</option>
+                <option value="white">White</option>
+                <option value="team">Brushed metal, home and away</option>
+              </select>
+            </label>
+            <label class="row">
+              <span>Dice tumble ({{ settings.blockTumbleMs }}ms)</span>
+              <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
+            </label>
+            <label class="row">
+              <span>Die-roll tag position</span>
+              <select v-model="settings.dieTagPosition">
+                <option value="corner">On die — top-right corner (default)</option>
+                <option value="top">On die — top</option>
+                <option value="side">To the side of the die</option>
+                <option value="bottom">On die — bottom</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+          </fieldset>
+
           <AssetPackSettings :live-game="gameStore.game.value" />
         </section>
 
@@ -3403,7 +3404,7 @@ onBeforeUnmount(() => {
                 <option value="footsteps">Footsteps by weather</option>
               </select>
             </label>
-            <p class="hint">Event-specific sound packs are managed in Mods.</p>
+            <p class="hint">Event-specific sound packs are managed in Art.</p>
           </fieldset>
         </section>
 

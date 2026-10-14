@@ -391,6 +391,8 @@ export interface AppSettings extends ConfirmationSettings {
   showFieldLogos: boolean;
   /** Owner 10-06: prefix dugout band labels with the box's player count ("2 RESERVES"). Default OFF. */
   dugoutCounts: boolean;
+  /** Owner 10-13: drop a coach-corner reroll chip once its count is 0 (no empty "0" chip). Default OFF. */
+  hideZeroRerolls: boolean;
   /** Owner 10-13: show the Setup rules card when a setup phase starts. Default ON; off = starts closed, the reopen tab stays. */
   setupRulesCard: boolean;
   /** Owner 10-13: show the Formations panel when a setup phase starts. Default ON; off = starts closed, the reopen tab stays. */
@@ -747,6 +749,7 @@ const DEFAULTS: AppSettings = {
   showSweetSpot: true,
   showFieldLogos: true,
   dugoutCounts: false,
+  hideZeroRerolls: false,
   setupRulesCard: true,
   setupFormationsPanel: true,
   setupZoneHelpers: true,
@@ -1104,6 +1107,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       : DEFAULTS.spectatorTackleZoneMode;
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' || raw.d6FaceVariant === 'team' ? raw.d6FaceVariant : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
+    merged.hideZeroRerolls = raw.hideZeroRerolls === true; // owner 10-13: off unless the user turned it on
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
     merged.setupRulesCard = raw.setupRulesCard !== false; // owner 10-13: on unless the user turned it off
     merged.setupFormationsPanel = raw.setupFormationsPanel !== false; // owner 10-13: on unless the user turned it off
