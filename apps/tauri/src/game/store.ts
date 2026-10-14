@@ -3955,6 +3955,54 @@ const apothecaryCardRevealed = computed(() => {
   const holds = apothecaryCardPillHolds.value;
   return !holds.size || !card.injuries.some((injury) => holds.has(injury.playerId));
 });
+/** Astra 10-14 (viewer-visible 450 ms): a revealed apothecary card that the viewer is only WATCHING (spectator / replay /
+ *  the opposing coach: `mine` false) stays on screen at least presentationMs(APOTHECARY_CARD_MIN_VISIBLE_MS) after it
+ *  appeared, even when the server answers it sooner. Presentation only: state.apothecaryChoice (the authoritative
+ *  election, the controller gates, injuryDecisionPending) closes at once; this is a visual copy that never takes input
+ *  (resolveApothecary matches state.apothecaryChoice only), is replaced by any newer card, and is never made for the
+ *  coach's own card (they are answering it). Plain timer, dropped on reset. */
+const APOTHECARY_CARD_MIN_VISIBLE_MS = 450;
+const apothecaryCardLinger = shallowRef<NonNullable<typeof state.apothecaryChoice> | null>(null);
+let apothecaryCardLingerTimer: ReturnType<typeof setTimeout> | null = null;
+let apothecaryCardVisibleSince: { key: string; at: number } | null = null;
+function clearApothecaryCardLinger(): void {
+  if (apothecaryCardLingerTimer) { clearTimeout(apothecaryCardLingerTimer); apothecaryCardLingerTimer = null; }
+  apothecaryCardVisibleSince = null;
+  if (apothecaryCardLinger.value) apothecaryCardLinger.value = null;
+}
+watch(
+  () => (state.apothecaryChoice && apothecaryCardRevealed.value ? state.apothecaryChoice : null),
+  (card, prev) => {
+    if (card) {
+      if (apothecaryCardLingerTimer) { clearTimeout(apothecaryCardLingerTimer); apothecaryCardLingerTimer = null; }
+      apothecaryCardLinger.value = null;
+      if (apothecaryCardVisibleSince?.key !== card.key) apothecaryCardVisibleSince = { key: card.key, at: Date.now() };
+      return;
+    }
+    const since = apothecaryCardVisibleSince;
+    apothecaryCardVisibleSince = null;
+    if (!prev || prev.mine || !since || since.key !== prev.key || state.apothecaryChoice) return; // a newer election is armed (or this one is only held): no linger
+    const remaining = presentationMs(APOTHECARY_CARD_MIN_VISIBLE_MS) - (Date.now() - since.at);
+    if (remaining <= 0) return;
+    const held = { ...prev };
+    apothecaryCardLinger.value = held;
+    apothecaryCardLingerTimer = setTimeout(() => {
+      apothecaryCardLingerTimer = null;
+      if (apothecaryCardLinger.value === held) apothecaryCardLinger.value = null;
+    }, remaining);
+  },
+  { flush: 'sync' },
+);
+// Astra 10-14: any newer election, even one still held back for its pill, supersedes a lingering copy of an older card.
+watch(() => state.apothecaryChoice, (card) => {
+  if (!card) return;
+  if (apothecaryCardLingerTimer) { clearTimeout(apothecaryCardLingerTimer); apothecaryCardLingerTimer = null; }
+  if (apothecaryCardLinger.value) apothecaryCardLinger.value = null;
+}, { flush: 'sync' });
+/** The apothecary card the Modern view should draw: the armed + revealed election, else a lingering watched card. */
+const apothecaryCardVisible = computed(() => (state.apothecaryChoice && apothecaryCardRevealed.value ? state.apothecaryChoice : apothecaryCardLinger.value));
+/** Astra 10-14: the displayed card is only a lingering copy (pointer-inert in the view). */
+const apothecaryCardLingering = computed(() => !!apothecaryCardLinger.value && apothecaryCardVisible.value === apothecaryCardLinger.value);
 const INJURY_PILL_SOUND_BASES: Readonly<Record<string, readonly number[]>> = {
   ko: [PlayerStateBase.KNOCKED_OUT],
   injury: [PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY],
@@ -4217,7 +4265,7 @@ const FOLLOWUP_DECISION_HOLD_MS = 900;
 // knockdown's fall/armour — capture corpus-standupblitz cmds 69→72), so the 2d6 armour dice are
 // WITHHELD while a passive follow/stay is still resolving and released a breath after the indicator
 // lands (emitPassiveFollow); a backstop fails open so a dropped resolve can't strand the roll.
-const FOLLOWUP_ARMOUR_GAP_MS = 450;
+const FOLLOWUP_ARMOUR_GAP_MS = 450; // owner 10-14: stays 450 (Astra: the follow/stay indicator reads >= 450 ms before the dice)
 const FOLLOWUP_ARMOUR_BACKSTOP_MS = 3000;
 let armourAfterFollow: (() => void) | null = null;
 /** Owner 10-13: the history position (spectatorCursorKey) of the event whose follow/stay indicator the review already
@@ -4321,7 +4369,7 @@ watch(() => state.apothecaryAnim?.seq, () => {
 }, { flush: 'sync' });
 /** Astra round 2: the end-of-game board clear draws no pitch token and no dugout at all - nobody is "held on the pitch"
  *  then, so no count may leave a held player out (the renderer skips its hold pass under boardCleared). */
-watch(() => state.endGame.finalPresentationReady, (ready) => { if (ready) clearInjuryTokenHolds(); }, { flush: 'sync' });
+watch(() => state.endGame.finalPresentationReady, (ready) => { if (ready) { clearInjuryTokenHolds(); clearApothecaryCardLinger(); } }, { flush: 'sync' }); // Astra 10-14: the lingering apothecary copy ends with the game
 
 function pumpInjuries() {
   if (injuryPlaying) return;
@@ -11908,6 +11956,7 @@ function clearCinematics(hardGameBoundary = false) {
 
   state.gazeVictims = []; // owner 2026-07-08: fresh game — clear gaze-victim markers
   state.fanFactorCine = null; state.inducementReveal = null; state.apothecaryChoice = null;
+  clearApothecaryCardLinger();
   pendingApothecaryResult = null;
   clearApothecaryResult();
   if (hardGameBoundary) { apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); }
@@ -24180,6 +24229,9 @@ export const gameStore = {
   stunDecorationHolds,
   /** Owner 10-13: the apothecary card shows with the injury pill (Modern; see apothecaryCardPillHolds). */
   apothecaryCardRevealed,
+  /** Astra 10-14: the card to draw = revealed election, else a watched card lingering to its 450 ms floor. */
+  apothecaryCardVisible,
+  apothecaryCardLingering,
   reportMovementPresentationRecoveryDiagnostic(message: string, error: unknown): void {
     log('system', `⚠ ${message}: ${error instanceof Error ? error.message : String(error)}`);
   },

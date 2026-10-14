@@ -42,6 +42,8 @@ const props = defineProps<{
   positionId?: string | null;
   playerSide?: 'home' | 'away' | null;
   positionStyle?: CSSProperties;
+  /** Astra 10-14: a card that only lingers to its 450 ms floor (the election already closed) takes no pointer input. */
+  lingering?: boolean;
 }>();
 
 const title = computed(() => props.prompt.kind === 'single' ? 'Use Apothecary?' : 'Choose an Injury to Treat');
@@ -62,8 +64,8 @@ defineEmits<{
 </script>
 
 <template>
-  <PitchConfirmationPanel class="apothecary-prompt" :class="[seatClass, { readonly: !prompt.mine }]"
-    :title="title" label="Apothecary decision" :position-style="panelStyle" draggable
+  <PitchConfirmationPanel class="apothecary-prompt" :class="[seatClass, { readonly: !prompt.mine, lingering }]"
+    :title="title" label="Apothecary decision" :position-style="panelStyle" :draggable="!lingering" :inert="lingering || undefined"
     test-id="apothecary-prompt" @drag-start="$emit('dragStart', $event)">
     <span class="apo-icon-frame" aria-hidden="true"><img :src="iconUrl" alt="" /></span>
     <div class="apo-layout">
@@ -105,6 +107,7 @@ defineEmits<{
 </template>
 
 <style scoped>
+.apothecary-prompt.lingering { pointer-events: none; }
 .apothecary-prompt {
   z-index: 48;
   top: 42%;

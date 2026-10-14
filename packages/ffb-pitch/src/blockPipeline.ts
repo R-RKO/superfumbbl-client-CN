@@ -338,7 +338,7 @@ export const PIPELINE_TIMINGS = {
     get afterPushMs() { return presentationMs(500); },
     get holdMs() { return presentationMs(1560); },
     get minReadMs() { return presentationMs(1000); },
-    get injuryHoldMs() { return presentationMs(1200); },
+    get injuryHoldMs() { return presentationMs(1100); }, // owner 10-14: -100
   },
   /** D5a knockdown-fall (rides the injury cinematic). Owner 2026-07-09: both tightened to 800
    *  (block floor 1100→800 snappier; non-block 350→800 unified) so the armour break plays sooner
@@ -351,12 +351,13 @@ export const PIPELINE_TIMINGS = {
    *  their OWN beat BEFORE the injury result — no overlap. `readMs` floors the gate
    *  (armour dice settled); `holdMs` is how long they linger past the read. */
   armour: {
-    get readMs() { return presentationMs(900); },
-    get holdMs() { return presentationMs(450); }, // owner 09-09: 600→450 linger past the read
+    get readMs() { return presentationMs(800); }, // owner 10-14: -100
+    get holdMs() { return presentationMs(350); }, // owner 09-09: 600→450 linger past the read; owner 10-14: -100
     /** Owner 09-06: the injury result (KO / Stunned / casualty toast) may not surface until the armour dice + the
-     *  'ARMOR BREAKS!' stencil are TORN DOWN — the full action-die life (renderer ACTION_DIE_IN 180 + HOLD 1150 +
+     *  'ARMOR BREAKS!' stencil are TORN DOWN — the full action-die life (renderer ACTION_DIE_IN 180 + ACTION_DIE_HOLD 750 +
      *  OUT 300), not just the read beat; they overlapped by ~700 ms in spectator mode. */
-    get tearDownMs() { return presentationMs(180 + 1150 + 300); },
+    /** Owner 10-14: -100 (hold 1150 -> 750). readMs/holdMs above are documentary; THIS is the gate the store reads. */
+    get tearDownMs() { return presentationMs(180 + 750 + 300); },
   },
   /** Owner 10-13: the crowd stomp on a surfed player (renderer.playCrowdSurf). The fans step in from the stand, stomp
    *  on the token lying one square off the pitch, then step back. It overlaps the injury presentation: the store

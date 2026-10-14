@@ -3250,6 +3250,14 @@ onBeforeUnmount(() => {
                 <option value="off">Off</option>
               </select>
             </label>
+            <label class="row">
+              <span>Planner roll tags</span>
+              <select v-model="settings.plannerTagStyle">
+                <option value="dieWord">Die and word (&#9857;+ RUSH) (default)</option>
+                <option value="letter">Letter and number (R2+)</option>
+              </select>
+            </label>
+            <p class="hint">Marks the rush, dodge and pickup rolls on a planned path.</p>
           </fieldset>
 
           <AssetPackSettings :live-game="gameStore.game.value" />

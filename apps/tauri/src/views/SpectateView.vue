@@ -2201,6 +2201,10 @@ watch(
   (pos) => renderer?.setDieTagPosition(pos),
 );
 watch(
+  () => settings.plannerTagStyle,
+  (style) => renderer?.setPlannerTagStyle(style),
+);
+watch(
   () => settings.d6FaceVariant,
   (variant) => renderer?.setD6FaceVariant(variant),
 );
@@ -4015,7 +4019,7 @@ watchDecisionSurface(
       if (p.roll && isBreatheFireReRollAction(p.reRolledAction)) {
         if (!renderer.hasOfferHeldFailedDieAt(sq, p.roll, true)) renderer.showBreatheFirePromptDie(sq, p.roll, !p.thresholdless, p.needed);
       } else
-      if (p.roll && !renderer.hasOfferHeldFailedDieAt(sq, p.roll)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
+      if (p.roll && !renderer.hasOfferHeldFailedDieAt(sq, p.roll)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed, undefined, undefined, undefined, true); // Astra 10-14: held by state while the prompt is open (rerollOfferPending)
     }
     const follow = () => {
       if (!gameStore.state.reRollPrompt) { rerollMenuPos.ready = false; return; }
@@ -4356,7 +4360,8 @@ const apoChoiceSkills = ref<ReturnType<typeof playerDetailSkills>>([]);
 const apoChoicePositionId = ref<string | null>(null);
 const apoChoiceSide = ref<'home' | 'away' | null>(null);
 function refreshApothecarySubject(): void {
-  const injury = gameStore.state.apothecaryChoice?.injuries[0];
+  // Astra 10-14: the subject follows the card that is DISPLAYED (a lingering copy keeps its own player)
+  const injury = (gameStore.apothecaryCardVisible.value ?? gameStore.state.apothecaryChoice)?.injuries[0];
   const entry = playerSideById(injury?.playerId);
   apoChoicePortrait.value = injury?.playerId && renderer ? renderer.playerPortrait(injury.playerId) : null;
   const apoTeam = entry ? (entry.side === 'home' ? gameStore.game.value?.teamHome : gameStore.game.value?.teamAway) : null;
@@ -4370,7 +4375,7 @@ watchDecisionSurface(
   () => {
     refreshApothecarySubject();
     cancelAnimationFrame(apoChoiceRaf);
-    apoChoicePos.ready = false;
+    if (!gameStore.apothecaryCardVisible.value) apoChoicePos.ready = false; // a lingering watched card keeps its place
     const c = gameStore.state.apothecaryChoice;
     if (!c || !renderer) return;
     if (c.square) {
@@ -4394,7 +4399,7 @@ watchDecisionSurface(
       return { x: left, y: r.bottom - h.top + 12 };
     };
     const follow = () => {
-      if (!gameStore.state.apothecaryChoice || !renderer) { apoChoicePos.ready = false; return; }
+      if (!gameStore.state.apothecaryChoice || !renderer) { if (!gameStore.apothecaryCardVisible.value) apoChoicePos.ready = false; return; }
       const under = belowCoachPanel();
       const p = under ?? (c.square ? renderer.screenPosOf(c.square) : null) ?? renderer.playerScreenPos(c.playerId, c.square ?? undefined);
       if (p && reactivePromptHeld.value !== 'apothecaryChoice') { apoChoicePos.x = p.x; apoChoicePos.y = under ? p.y : p.y - 54; apoChoicePos.leftEdge = !!under; apoChoicePos.ready = true; }
@@ -10379,6 +10384,7 @@ onMounted(async () => {
   // ran (and returned) while `renderer` was still null, so nothing seeded it. A mount mid-splash must suspend the backstop.
   actionDiceLifecycle.seedSplashShowing(!!gameStore.state.turnover);
   mountedRenderer.setD6FaceVariant(settings.d6FaceVariant);
+  mountedRenderer.setPlannerTagStyle(settings.plannerTagStyle); // owner 10-14
   // Astra review: seed at MOUNT - a saved "off" must hold from the very first paint (applyMarkings only runs from watchers).
   mountedRenderer.bloodDecalsEnabled = settings.bloodSplatters;
   mountedRenderer.actionDecorationStyle = settings.actionDecorations;
@@ -14119,8 +14125,8 @@ function sendChat() {
           :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
 
         <!-- Server-derived single/multiple Apothecary election. -->
-        <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice && gameStore.apothecaryCardRevealed.value" v-pad-focus="gameStore.state.apothecaryChoice.mine ? {} : false" :key="gameStore.state.apothecaryChoice.seq"
-          :prompt="gameStore.state.apothecaryChoice" :icon-url="apothecaryIconUrl"
+        <ApothecaryPrompt v-if="gameStore.apothecaryCardVisible.value" v-pad-focus="gameStore.apothecaryCardVisible.value.mine ? {} : false" :key="gameStore.apothecaryCardVisible.value.seq"
+          :prompt="gameStore.apothecaryCardVisible.value" :lingering="gameStore.apothecaryCardLingering.value" :icon-url="apothecaryIconUrl"
           :portrait="apoChoicePortrait" :skills="apoChoiceSkills"
           :skill-mode="skillMode" :skill-icon-style="effectiveIconStyle"
           :position-id="apoChoicePositionId" :player-side="apoChoiceSide"

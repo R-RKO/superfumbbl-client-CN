@@ -450,6 +450,9 @@ export interface AppSettings extends ConfirmationSettings {
    *  skill-icon pickup/catch/…, reroll ↻) sits on the action d6 — 'corner'
    *  (default, top-right offset to the edge), 'top', 'side', 'bottom', or 'off'. */
   dieTagPosition: DieTagPosition;
+  /** Owner 10-14: planned-path roll tags. 'dieWord' (default) = D6 face + "+" over RUSH / DODGE / PICKUP;
+   *  'letter' = the 1.0.204 plates R2+ / D4+ / P3+. */
+  plannerTagStyle: 'dieWord' | 'letter';
   /** Visual treatment for every D6 surface. Brushed metal is the install default;
    *  the original black set remains available as a local presentation choice. */
   d6FaceVariant: 'brushed-metal' | 'black' | 'team'; // owner 10-13: 'team' = blue home / red away D6s (d6.ts)
@@ -770,6 +773,7 @@ const DEFAULTS: AppSettings = {
   iconPosition: 'head',
   markerPosition: 'feet',
   dieTagPosition: 'corner',
+  plannerTagStyle: 'dieWord',
   d6FaceVariant: 'brushed-metal',
   auraDisturbingPresence: 'selected',
   auraPickMeUp: 'selected',
@@ -1109,6 +1113,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.spectatorTackleZoneMode = typeof raw.spectatorTackleZoneMode === 'string' && (SPECTATOR_TACKLE_ZONE_MODES as readonly string[]).includes(raw.spectatorTackleZoneMode)
       ? raw.spectatorTackleZoneMode as SpectatorTackleZoneMode
       : DEFAULTS.spectatorTackleZoneMode;
+    merged.plannerTagStyle = raw.plannerTagStyle === 'letter' ? 'letter' : 'dieWord'; // owner 10-14: die + word unless the letter plates were chosen
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' || raw.d6FaceVariant === 'team' ? raw.d6FaceVariant : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.hideZeroRerolls = raw.hideZeroRerolls === true; // owner 10-13: off unless the user turned it on

@@ -64,6 +64,9 @@ import { budgetAfterPlannedSteps, pathRollCost, planPath, reachableSquares, rout
 export type PassDestinationKind = 'ball' | 'bomb' | 'stunty';
 /** Owner 10-12: the shared empty stun-decoration hold list (no allocation per refresh when nothing is held). */
 const NO_STUN_DECORATION_HOLDS: ReadonlySet<string> = Object.freeze(new Set<string>());
+/** A press that travels less than this (screen px) before release is a tap, not a drag. One threshold for the camera
+ *  drag and the undecided Shift press on a dugout token (owner 10-14 / Astra pass 2). */
+const TAP_SLOP_PX = 5;
 /** Owner 09-28 (S16): Hail Mary Pass scatter squares, derived by the host from received frames only. `decision.square`
  *  is null when the rolled direction leads off the pitch. */
 export interface HmpScatterMarksState {
@@ -408,6 +411,18 @@ export const ROLL_STACK_GAP = 10;
 /** Owner 10-13: the go-for-it squares keep the D6 rush die (0.8 x depth, ~14 px tall), so the reach stack keeps the
  *  wider gap the die needs; the planned-path stack (uniform text plates) uses ROLL_STACK_GAP. */
 export const REACH_STACK_GAP = 13;
+/** Owner 10-14: a die + word JUMP plate (14 px tall) stacked under the reach rush die (14 px face): half of each + 1.5 px. */
+export const REACH_PLATE_STACK_GAP = 16;
+/** Owner 10-14: a die + word tag is a small plate (D6 face + "+" with the word to its right, 14 px tall at depth 1).
+ *  A square owing several rolls lays the tags side by side (rush, dodge, pickup); the group is scaled down to the
+ *  square width (44 px at depth 1) but never below this, so the lettering stays legible and a crowded group spills
+ *  sideways (across the path, not along it) instead of shrinking to nothing. */
+export const PLANNER_TAG_MIN_SCALE = 0.75;
+export const PLANNER_TAG_GAP = 1.5;
+export const PLANNER_TAG_HARD_FLOOR = 0.62;
+/** Owner 10-14: Settings > Art > Dice "Planner roll tags". 'dieWord' (default) = D6 face + "+" over the word RUSH /
+ *  DODGE / JUMP / PICKUP; 'letter' = the 1.0.204 text plates R2+ / D4+ / J6+ / P3+. */
+export type PlannerTagStyle = 'dieWord' | 'letter';
 const REACHABLE_RUSH_DIE_ALPHA = 1; // owner 09-09: the rest die keeps the moving die's opacity (was 0.6) // owner 09-08: 0.3 read too faint on the board
 /** Owner 2026-07-06 / 09-09: a Jump/Leap/Pogo lifts the sprite in one whole-flight arc, paced a touch slower than a
  *  step so it reads as a spring; a pending flag older than the TTL is dropped rather than arcing a later move. */
@@ -1009,7 +1024,7 @@ export function isServerKickoffScatterTransition(
 // duration of the walk tween.
 const STEP_BEAT_MS = 150;
 const ACTION_DIE_IN_MS = 180;
-const ACTION_DIE_HOLD_MS = 1150;
+const ACTION_DIE_HOLD_MS = 750; // owner 10-14: 1150 -> 750 for EVERY action die (armour dice are no longer special)
 const ACTION_DIE_OUT_MS = 300;
 /** The on-pitch action d6 edge in world px (buildD6's S); the 3D cube parks at this size times the node's world scale. */
 const ACTION_DIE_SIZE = 28;
@@ -1645,6 +1660,17 @@ const BLOCK_CHOICE_STYLE = new TextStyle({
   stroke: { color: 0x14161a, width: 3 },
   align: 'center',
 });
+/** Owner 10-14: the planner tag word is the client's Graduate C lettering (Nuffle lead letter, Graduate small caps; the
+ *  dugout label style via composeDisplayLettering), drawn dark on the tag plate. */
+const PLANNER_TAG_LETTERING: DisplayLetteringStyle = { ...DUGOUT_LETTERING, fill: '#1a1a1a', letterSpacing: 1 };
+/** Do two tag plate rectangles meet (within `margin` px)? */
+function tagRectsMeet(a: { x0: number; y0: number; x1: number; y1: number }, b: { x0: number; y0: number; x1: number; y1: number }, margin = 0.5): boolean {
+  return a.x0 < b.x1 + margin && a.x1 > b.x0 - margin && a.y0 < b.y1 + margin && a.y1 > b.y0 - margin;
+}
+const PLANNER_TAG_PLATES: Record<'rush' | 'dodge' | 'jump' | 'pickup', { fill: number; stroke: number }> = {
+  rush: { fill: 0xf0ead6, stroke: 0x6a5a10 }, dodge: { fill: 0xe0c832, stroke: 0x6a5a10 },
+  jump: { fill: 0xe08a2a, stroke: 0x6a3c10 }, pickup: { fill: 0xd98836, stroke: 0x6a3a10 },
+};
 const ROLL_DIE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: 0x8a2a2a });
 // Owner 2026-07-07: the spectator-reach rush "2+" label — styled to MATCH the rush die
 // (cream 0xf2efe6 plate, dark-red 0x8a2a2a border). Dark-red fill + a soft
@@ -2322,6 +2348,8 @@ export class PitchRenderer {
       canvas.style.cursor = '';
     }
     this.pointers.clear();
+    this.shiftSetupPress = null;
+    this.pressModifiers = null;
     this.dragging = false;
     this.dragDistance = 0;
     this.pinchDistance = 0;
@@ -2411,7 +2439,7 @@ export class PitchRenderer {
   private letteringFontLoadAsked: string | null = null;
   private letteringFontListener: (() => void) | null = null;
   private letteringFailureWarned = false;
-  private letteringFor(surface: 'endzone' | 'dugout' | 'apothecary', label: string, style: DisplayLetteringStyle, fontState: string, used: Set<string>): LetteringArt | null {
+  private letteringFor(surface: 'endzone' | 'dugout' | 'apothecary' | 'plantag', label: string, style: DisplayLetteringStyle, fontState: string, used: Set<string>): LetteringArt | null {
     const key = `${surface}|${fontState}|${label}`;
     const cached = this.letteringArt.get(key);
     if (cached) { used.add(key); return cached; }
@@ -2461,6 +2489,7 @@ export class PitchRenderer {
         this.drawPitch();
         this.redrawDugoutsWithArrows();
         this.drawTurnTrack();
+        this.redrawOverlays(); // Astra pass 3: the planner tag lettering (path + reach plates) is rebuilt too
       };
       settle = listener;
       this.letteringFontListener = listener;
@@ -3736,6 +3765,8 @@ export class PitchRenderer {
    *  'corner' (default) = top-right corner, offset to the die edge; 'top' = top
    *  centre; 'side' = right centre; 'bottom' = bottom centre; 'off' hides it. */
   private dieTagPosition: 'corner' | 'top' | 'side' | 'bottom' | 'off' = 'corner';
+  /** Owner 10-14: planned-path roll tag style (Settings > Art > Dice > Planner roll tags). */
+  private plannerTagStyle: PlannerTagStyle = 'dieWord';
   /** Transient effect sprites (F-5) — survives token-layer rebuilds. */
   private effectsLayer = new Container();
   /** Owner 2026-07-04f: persistent square MARKS (gold light columns). Toggled via
@@ -3915,6 +3946,9 @@ export class PitchRenderer {
    *  destination while the coach confirms (2nd click). Drawn OUTSIDE the legacy plannerEnabled gate (that
    *  gate is off in o66). Set via setO66Path; cleared on confirm / re-plan / a fresh overlay. */
   private o66PathSquares: [number, number][] = [];
+  /** Owner 10-14: screen rectangles of the die + word tag plates drawn this frame (reset by redrawOverlays); the move
+   *  number badge picks a corner that meets none of them. */
+  private o66TagRects: { x0: number; y0: number; x1: number; y1: number }[] = [];
   /** owner o66m+: the mover whose reach this path belongs to — lets the preview stamp per-step dodge/rush
    *  chips (client geometry), so #9/#10 "Dodge N+" reads on the exact squares along the auto-path. */
   private o66PathMover: string | null = null;
@@ -4148,8 +4182,11 @@ export class PitchRenderer {
     const [sx, sy] = worldToSquare(worldX, worldY);
     const pid = this.playersBySquare.get(`${sx},${sy}`);
     if (pid && this.playerPickIds.has(pid)) return pid;
-    const dh = this.dugoutHits.find((h) => Math.hypot(h.x - worldX, h.y - worldY) <= h.r);
-    if (dh && this.playerPickIds.has(dh.playerId)) return dh.playerId;
+    // Owner 10-14 / Astra pass 2: the topmost PICKABLE token - an ineligible token drawn over an eligible one never
+    // makes a dead click area in a crowded box (marks and plain selection stay topmost-wins).
+    const pickIds = this.playerPickIds;
+    const dh = this.dugoutHitAt(worldX, worldY, (playerId) => pickIds.has(playerId));
+    if (dh) return dh.playerId;
     return null;
   }
 
@@ -4561,6 +4598,46 @@ export class PitchRenderer {
    *  columns beyond the sidelines), so a square lookup can't reach them. Their world anchor +
    *  hit radius is registered here (rebuilt in drawDugouts) for a direct proximity hit-test. */
   private dugoutHits: { x: number; y: number; r: number; playerId: string }[] = [];
+  /** Owner 10-14 (Astra): a Shift press on a dugout token during setup is undecided until the pointer moves - released
+   *  under the tap threshold it is a mark (tapAt), moved past it it becomes the ordinary setup drag (never a pan). */
+  private shiftSetupPress: { playerId: string; pointerId: number; clientX: number; clientY: number; ctrl: boolean; alt: boolean } | null = null;
+  /** Astra pass 2: the modifiers of the primary press, taken at pointerdown. A tap is decided at the press, so letting
+   *  go of Shift before the button can never turn a mark into a selection or a setup action. */
+  private pressModifiers: { pointerId: number; shift: boolean; ctrl: boolean; alt: boolean } | null = null;
+
+  /** Astra pass 2: drop an undecided Shift press (and its pointer record) - blur, cancel, capture loss, leave, a second
+   *  pointer. Nothing is sent and nothing is marked; the gesture simply ends. */
+  private cancelShiftSetupPress(pointerId?: number): void {
+    const press = this.shiftSetupPress;
+    if (!press || (pointerId !== undefined && press.pointerId !== pointerId)) return;
+    this.shiftSetupPress = null;
+    if (this.pressModifiers?.pointerId === press.pointerId) this.pressModifiers = null;
+    if (this.pointers.delete(press.pointerId)) {
+      this.dragging = this.pointers.size === 1;
+      this.dragDistance = 0;
+    }
+  }
+
+  /** Owner 10-14 (Astra): the dugout token under a world point. Neighbouring hit circles overlap, and dugoutHits is in
+   *  build order, not paint order, so overlapping hits resolve to the token drawn on TOP (higher zIndex; on a tie the
+   *  later child of the sorted dugout layer). A hit without a live token ranks below every live one. */
+  private dugoutHitAt(
+    worldX: number, worldY: number, accept?: (playerId: string) => boolean,
+  ): { x: number; y: number; r: number; playerId: string } | null {
+    let best: { x: number; y: number; r: number; playerId: string } | null = null;
+    let bestZ = -Infinity;
+    let bestIndex = -1;
+    for (const hit of this.dugoutHits) {
+      if (Math.hypot(hit.x - worldX, hit.y - worldY) > hit.r) continue;
+      if (accept && !accept(hit.playerId)) continue; // Astra pass 2: e.g. the topmost PICKABLE token
+      const token = this.dugoutTokensById.get(hit.playerId);
+      const parent = token && !token.destroyed ? token.parent : null;
+      const z = parent ? token!.zIndex : -Infinity;
+      const index = parent ? parent.getChildIndex(token!) : -1;
+      if (!best || z > bestZ || (z === bestZ && index > bestIndex)) { best = hit; bestZ = z; bestIndex = index; }
+    }
+    return best;
+  }
 
   // --- selection & path planning (Match10 / activation_logic.md O1+O8) ---
   private selectedPlayerId: string | null = null;
@@ -5858,6 +5935,7 @@ export class PitchRenderer {
     this.retirePassBallFlight(undefined, false);
     this.cancelAllTimers();
     this.clearEffects();
+    this.clearViewerMarks();
     if (this.onRendererResize) this.app?.renderer?.off('resize', this.onRendererResize);
     this.onRendererResize = null;
     this.clearHoverSquareMarker();
@@ -5956,6 +6034,7 @@ export class PitchRenderer {
       this.clearHoverSquareMarker();
       this.focusArrow = null; // owner 10-12: the Intensive Training arrow never crosses a game change
       this.clearEffects();
+      this.clearViewerMarks(); // owner 10-14: manual marks belong to one game - a game change drops them
       if (seededKickoffScatter && seededKickoffReveal) {
         this.pendingServerKickoffScatter = seededKickoffScatter;
         this.serverKickoffScatterReveal = seededKickoffReveal;
@@ -6189,6 +6268,14 @@ export class PitchRenderer {
     );
   }
 
+  /** Owner 10-14: drop the viewer's manual marks (players and squares, with their labels). Client-local only; called
+   *  on a game change and on teardown, never by a spectator pause / seek / go-live or a same-game snapshot. */
+  private clearViewerMarks(): void {
+    this.persistentPlayerArrowIds.clear(); this.persistentPlayerArrows = [];
+    this.playerMarkLabels.clear(); this.destroyPlayerMarkLabelNodes();
+    this.marks.clear(); this.markLabels.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
+  }
+
   clearEffects(): void {
     this.resetAutoDirectorCamera(true);
     this.kickFollow = null;
@@ -6225,9 +6312,12 @@ export class PitchRenderer {
     this.moveTweens.clear();
     this.activationFades.clear(); this.activationFadePaint.clear(); // item3
     this.pushOptionPulse = []; this.pushCrosshairs = []; this.pushOptionCoords = []; this.pickCrosshairs = []; this.quickSnapCrosshairs = []; this.pickArrows = [];
-    this.persistentPlayerArrowIds.clear(); this.persistentPlayerArrows = [];
-    this.playerMarkLabels.clear(); this.destroyPlayerMarkLabelNodes();
-    this.marks.clear(); this.markLabels.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
+    // Owner 10-14: the viewer's manual marks (Shift+click players / squares and their labels) are NOT presentation
+    // transients - a spectator pause / seek / go-live (cancelSpectatorPresentation) keeps them. Only their drawn
+    // nodes go here (the next refresh redraws them from the id sets); clearViewerMarks drops the marks themselves.
+    this.persistentPlayerArrows = [];
+    this.destroyPlayerMarkLabelNodes();
+    for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
     for (const c of this.bloodLayer.removeChildren()) c.destroy(); // owner 10-03: a new game starts with a clean pitch
     // reset movement/ball baselines so the new game doesn't tween from stale squares
     this.lastSquares.clear();
@@ -6946,6 +7036,7 @@ export class PitchRenderer {
     this.revalidatePath();
     this.redrawOverlays();
     this.drawDugouts();
+    this.drawDugoutPlayerMarkLabels(); // owner 10-14: marked players in the reserve / KO / injured boxes
     this.drawDugoutPlayerPickArrows();
     this.drawTurnTrack();
 
@@ -8785,6 +8876,7 @@ export class PitchRenderer {
           1,
           () => new Graphics().poly(quad.points.flat()).fill({ color: 0x9a9a9a, alpha: 0.3 }),
         );
+        if (this.o66PathSquares.some(([px, py]) => px === sx && py === sy)) continue; // Astra pass 5: the path tags price this step
         const a = this.tokenPos(sx, sy);
         const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere, 0.8 x depth, fully opaque (owner 10-13: the D6 stays on the go-for-it squares)
         this.syncMovementOverlayNode(
@@ -8898,6 +8990,10 @@ export class PitchRenderer {
     const presentationOwnsMoveArt = this.movementPresentationCursor?.playerId === actorId;
     if (presentationOwnsMoveArt) return;
     const fallbackRushTarget = rushTargetForPlayer(this.game, actorId);
+    // Astra pass 5: a square ON the planned path is priced by the path's own tags, so the reach-square cost chips (dodge
+    // plate, rush die) are not drawn there. A server-priced JUMP plate stays: the path draws no jump tag, so without it
+    // the leap's price would vanish.
+    const pathKeys = new Set(this.o66PathSquares.map(([px, py]) => `${px},${py}`));
     for (const key of this.tilePickEligible) {
       const rolls = this.tilePickRolls?.get(key);
       const legacyRush = this.tilePickGfi?.has(key) ?? false;
@@ -8905,25 +9001,38 @@ export class PitchRenderer {
       const [sx, sy] = key.split(',').map(Number) as [number, number];
       const a = this.tokenPos(sx, sy);
       const ds = depthScale(sx, sy);
+      const onPath = pathKeys.has(key);
       if (rolls) {
-        const both = rolls.dodge > 0 && rolls.gfi > 0;
-        if (rolls.dodge > 0 && rolls.jump) {
+        const both = rolls.dodge > 0 && rolls.gfi > 0 && !onPath;
+        if (rolls.dodge > 0 && rolls.jump && !(onPath && this.plannerTagStyle === 'dieWord')) { // dieWord: the path draws it
           // JLeav 10-13: the server's jump price (AG + jump modifiers), not a walk-reach rush die. Stacked under the
           // rush die like the dodge chip when the square owes both.
-          const chip = this.buildJumpChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+          // Owner 10-14: in the die + word style it is the same JUMP plate as the path tags (lone tag shrinks to the square).
+          const plate = this.plannerTagStyle === 'dieWord';
+          const jumpScale = plate ? this.plannerTagGroupLayout(['jump'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
+          if (plate) this.registerReachPlate('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, jumpScale);
+          const chip = plate
+            ? this.buildPlannerTag('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * jumpScale, rolls.dodge)
+            : this.buildJumpChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
-        } else if (rolls.dodge > 0) {
-          const chip = this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+        } else if (rolls.dodge > 0 && !onPath) {
+          // Owner 10-14: the reach-square dodge chip is the die + DODGE plate in the die + word style too.
+          const plate = this.plannerTagStyle === 'dieWord';
+          const dodgeScale = plate ? this.plannerTagGroupLayout(['dodge'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
+          if (plate) this.registerReachPlate('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, dodgeScale);
+          const chip = plate
+            ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, rolls.dodge)
+            : this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         }
-        if (rolls.gfi > 0) {
+        if (rolls.gfi > 0 && !onPath) {
           this.pathLayer.addChild(
             this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
           );
         }
-      } else if (legacyRush) {
+      } else if (legacyRush && !onPath) {
         this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.8, fallbackRushTarget));
       }
     }
@@ -8964,6 +9073,7 @@ export class PitchRenderer {
   }
 
   private redrawOverlays(): void {
+    this.o66TagRects = [];
     // owner 10-12: a token-reuse setGame paints here instead of refresh(). Mid-refresh this runs BEFORE drawDugouts
     // has re-registered the dugout tokens, so an unresolved anchor is left alone here (refresh syncs again at its end).
     this.syncFocusArrow(true);
@@ -9075,6 +9185,15 @@ export class PitchRenderer {
           // DEPARTED (k=0..n-1, label k+1) — the opposite anchor, and deliberately so. A COST chip belongs on
           // the square entered (the roll is owed for moving in); a move NUMBER rides the square left. Don't
           // reconcile the two indexings.
+          // Astra pass 5: the plotted destination's crosshair (as drawn: ticks to 0.8 x TILE_W x 0.26 x depth, plus half the
+          // stroke, scaled 0.8) is an obstacle for the tag placement.
+          if (this.plannerTagStyle === 'dieWord') {
+            const destSq = this.o66PathSquares[this.o66PathSquares.length - 1]!;
+            const ca = this.tokenPos(destSq[0], destSq[1]);
+            const cd = depthScale(destSq[0], destSq[1]);
+            const reachPx = 0.8 * (TILE_W * 0.26 * cd + Math.max(1.4, 2.2 * cd) / 2);
+            this.o66TagRects.push({ x0: ca.x - reachPx, x1: ca.x + reachPx, y0: ca.y - reachPx, y1: ca.y + reachPx });
+          }
           for (let k = 1; k < this.o66PathSquares.length; k++) {
             const [dx, dy] = this.o66PathSquares[k]!;
             const [fx, fy] = this.o66PathSquares[k - 1]!;
@@ -9082,13 +9201,44 @@ export class PitchRenderer {
             const rush = k > b.normal; // steps beyond normal MA need a Go-For-It (2+, 3+ blizzard)
             const stepKey = `${dx},${dy}`;
             const pickup = ballKey === stepKey; // this step lands on the loose ball → pickup roll
-            if (!dodge && !rush && !pickup) continue;
+            // Astra pass 6: the server's price for this square (tilePickRolls) wins over the local derivation; a server-priced
+            // JUMP on a path square is drawn here as the first tag of its group (die + word style), so it respects the rows
+            // and the crosshair like the other tags.
+            const srvRolls = this.tilePickRolls?.get(stepKey);
+            const isJumpStep = !!srvRolls?.jump && srvRolls.dodge > 0; // a server-priced leap, in either style
+            const jumpPlate = this.plannerTagStyle === 'dieWord' && isJumpStep; // dieWord: the path draws the plate; letter: the reach J6+ chip is the one jump tag
+            if (!dodge && !rush && !pickup && !jumpPlate) continue;
             const a = this.tokenPos(dx, dy);
             const ds = depthScale(dx, dy);
             const both = dodge && rush;
+            const dieWord = this.plannerTagStyle === 'dieWord';
+            const stackGap = ROLL_STACK_GAP * ds; // letter style only
+            const tagStyle = this.plannerTagStyle;
+            // Owner 10-14: die + word tags sit SIDE BY SIDE (rush, dodge, pickup) when a square owes several rolls.
+            const pickupPt = this.pickupTarget;
+            const pickupHere = pickup && !!pickupPt && pickupPt.square[0] === dx && pickupPt.square[1] === dy;
+            const groupKinds = dieWord ? (['jump', 'rush', 'dodge', 'pickup'] as const).filter((k) => (k === 'jump' ? jumpPlate : k === 'rush' ? rush : k === 'dodge' ? dodge && !isJumpStep : pickupHere)) : [];
+            const grouped = groupKinds.length > 1;
+            let gs = 1;
+            const slotX = new Map<string, number>(); // centre of each tag, in depth-scale units from the square's x
+            // Astra pass 3 rule (cannot overlap): see plannerTagPlacement.
+            let placeY = a.y - TILE_H * 0.5 * ds;
+            if (groupKinds.length > 0) {
+              const placed = this.plannerTagPlacement(groupKinds, a, ds, this.o66TagRects);
+              gs = placed.layout.scale;
+              placeY = placed.y;
+              groupKinds.forEach((kk, i) => slotX.set(kk, placed.layout.centres[i]!));
+              if (dieWord) this.o66TagRects.push(...placed.rects); // for later squares and the badge placement
+            }
+            const tagX = (k: string): number => a.x + (slotX.get(k) ?? 0) * ds;
+            const tagSig = `${tagStyle}:${gs.toFixed(3)}:${displayFontState()}`; // font state: late-arriving lettering rebuilds the tags
             // Owner o66p #8: lift the cost chips ABOVE the square's top edge (were sitting ON the square).
             const cy = a.y - TILE_H * 0.5 * ds;
-            if (dodge) {
+            if (jumpPlate && srvRolls) {
+              const chip = this.buildPlannerTag('jump', tagX('jump'), placeY, ds * gs, srvRolls.dodge);
+              chip.alpha = 0.9; this.pathLayer.addChild(chip);
+            }
+            if (dodge && !isJumpStep) { // a jump replaces the dodge: one jump tag, never J6+ together with D4+
               // Upstream BB2025 citations:
               // ffb-common/src/main/java/com/fumbbl/ffb/factory/DodgeModifierFactory.java
               // (DodgeModifierFactory#numberOfTacklezones/#isAffectedByTackleZones) counts destination marks
@@ -9097,10 +9247,12 @@ export class PitchRenderer {
               // supplies it. ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Titchy.java
               // (Titchy#postConstruct) registers the mover's -1 DodgeModifier.
               const destMarks = oppDodgeMarks.get(`${dx},${dy}`) ?? 0;
-              const target = Math.min(
+              const localDodge = Math.min(
                 6,
                 Math.max(2, agility + (moverHasStunty ? 0 : destMarks) - (moverHasTitchy ? 1 : 0)),
               );
+              // Astra pass 6 (server-derived law): the server's dodge price for the square, when it sent one, is shown.
+              const target = srvRolls && !srvRolls.jump && srvRolls.dodge > 0 ? srvRolls.dodge : localDodge;
               // Owner o66aq: the path COST chips (dodge / rush) belong ABOVE the tokens (pathLayer), not overlayLayer
               // (which sits UNDER tokenLayer — the chips were being occluded by players/shading; "rushes don't
               // surface"). pathLayer is the same over-tokens layer the block-dice dots already use, cleared each frame.
@@ -9108,31 +9260,31 @@ export class PitchRenderer {
                 this.syncMovementOverlayNode(
                   `o66-path:dodge:${stepKey}`,
                   'path',
-                  `${target}:${ds}`,
-                  a.x,
-                  cy + (both ? ROLL_STACK_GAP * ds : 0),
+                  `${target}:${ds}:${tagSig}`,
+                  tagX('dodge'),
+                  dieWord ? placeY : cy + (both ? stackGap : 0),
                   0.95,
-                  () => this.buildDodgeChip(0, 0, ds * 0.5, target),
+                  () => this.buildPlannerTag('dodge', 0, 0, ds * gs, target),
                 );
               } else {
-                const chip = this.buildDodgeChip(a.x, cy + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, target);
+                const chip = this.buildPlannerTag('dodge', tagX('dodge'), dieWord ? placeY : cy + (both ? stackGap : 0), ds * gs, target);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
             }
             if (rush) {
-              const target = rushTarget;
+              const target = srvRolls && srvRolls.gfi > 0 ? srvRolls.gfi : rushTarget; // Astra pass 6: the server's GFI price wins
               if (persistentPath) {
                 this.syncMovementOverlayNode(
                   `o66-path:rush:${stepKey}`,
                   'path',
-                  `${target}:${ds}`,
-                  a.x,
-                  cy,
+                  `${target}:${ds}:${tagSig}`,
+                  tagX('rush'),
+                  dieWord ? placeY : cy,
                   1,
-                  () => this.buildRushChip(0, 0, ds * 0.5, target), // owner 10-13: R<N>+ tag, same size as the D<N>+ tag
+                  () => this.buildPlannerTag('rush', 0, 0, ds * gs, target), // owner 10-13: R<N>+ tag; owner 10-14: die + RUSH by default
                 );
               } else {
-                const die = this.buildRushChip(a.x, cy, ds * 0.5, target);
+                const die = this.buildPlannerTag('rush', tagX('rush'), dieWord ? placeY : cy, ds * gs, target);
                 die.alpha = 1; this.pathLayer.addChild(die); // owner 09-08: planned rush tag fully opaque
               }
             }
@@ -9140,10 +9292,12 @@ export class PitchRenderer {
               // #77: draw the pickup chip using the view's authoritative pickupTargetAtBall (setPickupTarget),
               // not a local calc — and only when it matches THIS ball square (the mover is planning this pickup).
               const pt = this.pickupTarget;
-              if (pt && pt.square[0] === dx && pt.square[1] === dy) {
+              if (pickupHere && pt) {
                 // sits below the square (opposite the dodge/rush chips above) so a ball-square with both reads clearly.
-                const py2 = a.y + TILE_H * 0.5 * ds;
-                const chip = this.buildPickupChip(a.x, py2, ds * 0.5, pt.target);
+                // Owner 10-14: in the die+word style a pickup that shares the square joins the side-by-side group on
+                // the top edge (rush, dodge, pickup); alone it keeps the bottom-edge spot.
+                const py2 = dieWord ? placeY : a.y + TILE_H * 0.5 * ds;
+                const chip = this.buildPlannerTag('pickup', tagX('pickup'), py2, ds * gs, pt.target);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
             }
@@ -9175,8 +9329,8 @@ export class PitchRenderer {
       for (let k = 0; k < this.o66PathSquares.length; k++) {
         const [nx, ny] = this.o66PathSquares[k]!;
         if (this.playersBySquare.has(`${nx},${ny}`)) continue; // occupied in the model → no digit under the piece
-        const num = this.buildPlotStepNumber(nx, ny, used + k);
-        this.pathLayer.addChild(num);
+        const num = this.buildPlotStepNumber(nx, ny, used + k, k === this.o66PathSquares.length - 1);
+        if (num) this.pathLayer.addChild(num); // null: no room even at 60% size, the dot and tags carry the step
       }
       // Owner g478: the plotted destination is the CONFIRM target — mark it with the crosshair reticle
       // (a 2nd click on this square commits the move). This is the only crosshair in o66 automove.
@@ -10278,6 +10432,167 @@ export class PitchRenderer {
   private serverJumpRoll(sx: number, sy: number): number | null {
     const roll = this.tilePickRolls?.get(squareKey(sx, sy)) ?? serverMoveSquareRolls(this.game).get(squareKey(sx, sy));
     return roll?.jump && roll.dodge > 0 ? roll.dodge : null;
+  }
+
+  /** Owner 10-14: setting hook. Redraws the path tags (the persistent-path signatures include the style). */
+  setPlannerTagStyle(style: PlannerTagStyle): void {
+    const next: PlannerTagStyle = style === 'letter' ? 'letter' : 'dieWord';
+    if (next === this.plannerTagStyle) return;
+    this.plannerTagStyle = next;
+    if (this.app) this.redrawOverlays();
+  }
+
+  /** Owner 10-14: the tag word as Graduate C lettering (cached art, 4x + mipmaps); a Sprite centred on its own origin. The
+   *  fallback (no 2D canvas, i.e. a headless test) is a 4x mipmapped Text. `label` carries the plain word either way. */
+  private plannerWordArt(kind: string): LetteringArt | null {
+    return this.letteringFor('plantag', kind.toUpperCase(), PLANNER_TAG_LETTERING, displayFontState(), new Set<string>());
+  }
+  private buildPlannerWord(kind: string, u: number): Container {
+    const art = this.plannerWordArt(kind);
+    if (art) {
+      const sprite = new Sprite(art.texture);
+      sprite.anchor.set(0.5);
+      sprite.scale.set((6.5 * u) / art.fitHeight);
+      sprite.label = kind.toUpperCase();
+      return sprite;
+    }
+    const text = new Text({ text: kind.toUpperCase(), style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    text.anchor.set(0.5, 0.5);
+    text.scale.set(0.5 * u);
+    text.label = kind.toUpperCase();
+    return text;
+  }
+  /** Astra review: the width (px) a tagged square's group may take before it runs into the tag group of the next/previous
+   *  tagged path square. Tags ride each square's top edge, so two squares collide only when their tag rows share
+   *  height; then their anchors' horizontal distance is what separates the two plates (a sideways path on a far row is
+   *  ~35 px apart under "uniform figures" while a plate is ~43 px wide). null = no neighbour in the way. */
+  private plannerTagNeighbourLimit(ax: number, topY: number, ds: number, bx: number, bTopY: number, dsB: number): number | null {
+    if (Math.abs(topY - bTopY) >= 7 * ds + 7 * dsB + 1) return null; // their rows do not share height
+    return Math.max(0, Math.abs(ax - bx) - PLANNER_TAG_GAP);
+  }
+  /** Astra pass 3/4 rule (a group of plates cannot overlap what is already placed): the group goes on its preferred row
+   *  (top edge; a lone PICKUP the bottom edge) at the normal scale; if its ACTUAL plate rectangles would meet a placed
+   *  plate (`obstacles`: the previous path squares, reach plates) or the intermediate path dot, it shrinks step by step
+   *  down to PLANNER_TAG_HARD_FLOOR on that row; failing that it moves to the next row. Rows: top edge; a second row
+   *  whose plate starts one margin below the FIRST row's actual plate bottom (and below the path dot); the bottom
+   *  edge. The collision margin scales with depth (0.5 x ds, never under 0.25 px). Only when every row at every scale
+   *  collides is the least-overlapping row kept, at the hard floor (nothing is logged). */
+  private plannerTagPlacement(kinds: readonly string[], a: { x: number; y: number }, ds: number, obstacles: readonly { x0: number; y0: number; x1: number; y1: number }[]):
+    { layout: { scale: number; centres: number[]; widths: number[] }; y: number; rects: { x0: number; y0: number; x1: number; y1: number }[]; row: 'top' | 'bottom' | 'second' } {
+    type R = { x0: number; y0: number; x1: number; y1: number };
+    const margin = Math.max(0.25, 0.5 * ds);
+    const topY = a.y - TILE_H * 0.5 * ds;
+    const loneBottom = kinds.length === 1 && kinds[0] === 'pickup';
+    const rows: ('top' | 'bottom' | 'second')[] = loneBottom ? ['bottom', 'top', 'second'] : ['top', 'second', 'bottom'];
+    const dot: R = { x0: a.x - 4, x1: a.x + 4, y0: a.y - 4, y1: a.y + 4 }; // the intermediate path dot (radius 4, not depth scaled)
+    const all: R[] = [...obstacles, dot];
+    const half = (sc: number): number => 7.5 * ds * sc;
+    const rowY = (row: 'top' | 'bottom' | 'second', sc: number): number => {
+      if (row === 'bottom') return a.y + TILE_H * 0.5 * ds;
+      if (row === 'top') return topY;
+      // second row: its plate top = the first row's plate bottom + margin, and never above the dot's bottom + margin
+      return Math.max(topY + half(sc) + margin + half(sc), a.y + 4 + margin + half(sc));
+    };
+    const base = this.plannerTagGroupLayout(kinds).scale;
+    const scales: number[] = [];
+    for (let sc = base; sc > PLANNER_TAG_HARD_FLOOR + 1e-9; sc -= 0.04) scales.push(sc);
+    scales.push(PLANNER_TAG_HARD_FLOOR);
+    const rectsOf = (lay: { centres: number[]; widths: number[]; scale: number }, y: number): R[] =>
+      lay.centres.map((c, i) => ({ x0: a.x + (c - lay.widths[i]! / 2) * ds, x1: a.x + (c + lay.widths[i]! / 2) * ds, y0: y - half(lay.scale), y1: y + half(lay.scale) }));
+    for (const row of rows) {
+      for (const sc of scales) {
+        const layout = this.plannerTagGroupLayout(kinds, undefined, sc);
+        const y = rowY(row, sc);
+        const rects = rectsOf(layout, y);
+        if (!rects.some((r) => all.some((o) => tagRectsMeet(r, o, margin)))) return { layout, y, rects, row };
+      }
+    }
+    // Every option collides: keep the one that overlaps least, at the hard floor.
+    let best: { layout: { scale: number; centres: number[]; widths: number[] }; y: number; rects: R[]; row: 'top' | 'bottom' | 'second'; area: number } | null = null;
+    for (const row of rows) {
+      const layout = this.plannerTagGroupLayout(kinds, undefined, PLANNER_TAG_HARD_FLOOR);
+      const y = rowY(row, layout.scale);
+      const rects = rectsOf(layout, y);
+      let area = 0;
+      for (const r of rects) for (const o of all) area += Math.max(0, Math.min(r.x1, o.x1) - Math.max(r.x0, o.x0)) * Math.max(0, Math.min(r.y1, o.y1) - Math.max(r.y0, o.y0));
+      if (!best || area < best.area) best = { layout, y, rects, row, area };
+    }
+    return { layout: best!.layout, y: best!.y, rects: best!.rects, row: best!.row };
+  }
+  /** Astra pass 3: the width (px) a reach-square plate may take: the tightest horizontal room the neighbouring priced reach
+   *  squares (their anchors, projected) leave; Infinity when none shares its height. */
+  private reachPlateRoom(sx: number, sy: number, a: { x: number; y: number }, ds: number): number {
+    let room = Infinity;
+    for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const key = `${sx + ox},${sy + oy}`;
+      const nr = this.tilePickRolls?.get(key);
+      if (!this.tilePickEligible?.has(key) || !nr || !(nr.dodge > 0)) continue;
+      const an = this.tokenPos(sx + ox, sy + oy);
+      const lim = this.plannerTagNeighbourLimit(a.x, a.y, ds, an.x, an.y, depthScale(sx + ox, sy + oy));
+      if (lim !== null) room = Math.min(room, lim);
+    }
+    return room;
+  }
+  /** Astra pass 3: record a reach-square plate's rectangle so the move-number badge avoids it. */
+  private registerReachPlate(kind: string, x: number, y: number, ds: number, scale: number): void {
+    const lay = this.plannerTagGroupLayout([kind], undefined, scale);
+    this.o66TagRects.push({ x0: x - (lay.widths[0]! * ds) / 2, x1: x + (lay.widths[0]! * ds) / 2, y0: y - 7.5 * ds * scale, y1: y + 7.5 * ds * scale });
+  }
+  /** Side-by-side layout of several tags (in the order given) centred on the square's x: the common scale (shrunk to the
+   *  44 px square, floored at PLANNER_TAG_MIN_SCALE; `maxWidth` may cut it to PLANNER_TAG_HARD_FLOOR), each tag's centre
+   *  and width in depth-scale units. */
+  private plannerTagGroupLayout(kinds: readonly string[], maxWidth?: number, forceScale?: number): { scale: number; centres: number[]; widths: number[] } {
+    const raw = kinds.map((k) => this.plannerTagMetrics(k, 2, 1).width);
+    const total = raw.reduce((sum, w) => sum + w, 0) + PLANNER_TAG_GAP * (raw.length - 1);
+    let scale = Math.min(1, Math.max(PLANNER_TAG_MIN_SCALE, TILE_W / total));
+    // Astra review: the 0.75 floor is the normal scale; only where the next tagged square on the path would be run
+    // into (`maxWidth`, depth-scale units, from the projected anchors) may a group go below it, never under 0.62.
+    if (maxWidth !== undefined) scale = Math.min(scale, Math.max(PLANNER_TAG_HARD_FLOOR, maxWidth / total));
+    if (forceScale !== undefined) scale = forceScale;
+    let cursor = -(total * scale) / 2;
+    const centres: number[] = [];
+    for (const w of raw) { centres.push(cursor + (w * scale) / 2); cursor += (w + PLANNER_TAG_GAP) * scale; }
+    return { scale, centres, widths: raw.map((w) => w * scale) };
+  }
+  /** Geometry of one die + word tag at scale `u` (px; u = depth scale at full size): plate left edge, word position and
+   *  the plate's width. Shared by the builder and the group layout so the two cannot disagree. */
+  private plannerTagMetrics(kind: string, target: number, u: number): { left: number; wordX: number; wordW: number; width: number; centre: number } {
+    const d6 = isD6FaceValue(target);
+    const left = (d6 ? -5.65 : -5.85) * u;
+    const dieRight = (d6 ? 11.05 : 5.85) * u;
+    const art = this.plannerWordArt(kind);
+    const wordW = art ? (art.fitWidth * 6.5 * u) / art.fitHeight : kind.length * 7 * 0.5 * u;
+    const wordX = dieRight + 1 * u; // owner 10-14: the '+' to word gap halved (1.5 -> 1 px x depth, never touching)
+    const width = wordX + wordW - left + 4 * u; // 2 u of padding either side
+    const centre = (left + wordX + wordW) / 2;
+    return { left, wordX, wordW, width, centre };
+  }
+
+  /** Owner 10-14: one planned-path cost tag in the chosen style. `ds` is the square's depth scale. 'letter' = the
+   *  1.0.205 plate at 0.5 x depth; 'dieWord' = the reach-square die (0.8 x depth) with the word beneath, centred on (x, y). */
+  private buildPlannerTag(kind: 'rush' | 'dodge' | 'jump' | 'pickup', x: number, y: number, ds: number, target: number): Container {
+    if (this.plannerTagStyle === 'letter') {
+      if (kind === 'rush') return this.buildRushChip(x, y, ds * 0.5, target);
+      if (kind === 'dodge') return this.buildDodgeChip(x, y, ds * 0.5, target);
+      if (kind === 'jump') return this.buildJumpChip(x, y, ds * 0.5, target);
+      return this.buildPickupChip(x, y, ds * 0.5, target);
+    }
+    // Owner 10-14: a small plate (die + "+" then the word to its right), centred on (x, y). `ds` here is the tag scale.
+    const m = this.plannerTagMetrics(kind, target, ds);
+    const tag = new Container();
+    const plate = PLANNER_TAG_PLATES[kind];
+    const h = 14 * ds;
+    const plateG = new Graphics()
+      .roundRect(m.left - 2 * ds, -h / 2, m.width, h, 3 * ds)
+      .fill({ color: plate.fill, alpha: 0.92 })
+      .roundRect(m.left - 2 * ds, -h / 2, m.width, h, 3 * ds)
+      .stroke({ color: plate.stroke, width: 1 * ds });
+    const die = this.buildRollDie(0, 0, ds * 0.65, target); // owner 10-14: face 1.3x the first cut, spans -5.65..+5.65 ds; the '+' (or 'N+') follows
+    const word = this.buildPlannerWord(kind, ds);
+    word.position.set(m.wordX + m.wordW / 2, 0);
+    for (const child of [plateG, die, word]) { child.x -= m.centre; tag.addChild(child); }
+    tag.position.set(x, y);
+    return tag;
   }
 
   /** Owner 10-13: every planner path cost tag is a TEXT plate "<letter><target>+" (R2+ / D4+ / J6+ / P3+), never a
@@ -12540,9 +12855,15 @@ export class PitchRenderer {
 
   private requestPlayerMarkLabel(playerId: string): void {
     if (!this.onMarkLabelRequest) return;
-    const token = this.tokensById.get(playerId);
-    const at = token && !token.destroyed
-      ? this.tokenLayer.toGlobal({ x: token.position.x, y: token.position.y - 18 * Math.abs(token.scale.y || 1) })
+    // Owner 10-14: a player in a dugout box (reserves / KO / injured / sent off) is marked from his dugout token, so
+    // the field opens over that token (the dugout layer shares the world transform with the token layer).
+    const pitchToken = this.tokensById.get(playerId);
+    const dugoutToken = this.dugoutTokensById.get(playerId);
+    const onPitch = !!pitchToken && !pitchToken.destroyed;
+    const token = onPitch ? pitchToken : dugoutToken && !dugoutToken.destroyed ? dugoutToken : null;
+    const layer = onPitch ? this.tokenLayer : this.dugoutLayer;
+    const at = token
+      ? layer.toGlobal({ x: token.position.x, y: token.position.y - 18 * Math.abs(token.scale.y || 1) })
       : null;
     this.onMarkLabelRequest({ kind: 'player', playerId, screenX: at?.x ?? 0, screenY: at?.y ?? 0 });
   }
@@ -12574,6 +12895,29 @@ export class PitchRenderer {
     if (!label || !token || token.destroyed || !data) return;
     const coordinate = this.effectiveCoordinate(data);
     if (!coordinate || !isOnPitch(coordinate)) return;
+    this.paintPlayerMarkLabel(token, playerId, label, isDown(data.playerState));
+  }
+
+  /** Owner 10-14: "manually mark players while they're in either the Casualty/Reserve box". A marked player keeps his
+   *  mark (keyed by player id) when he leaves the pitch; drawDugouts rebuilds every dugout token, so the label is
+   *  painted on the fresh dugout token after each dugout draw. KO / casualty tokens lie down in the box. */
+  private drawDugoutPlayerMarkLabels(): void {
+    this.playerMarkLabelNodes = this.playerMarkLabelNodes.filter((node) => !node.destroyed);
+    if (!this.game) return;
+    for (const playerId of this.persistentPlayerArrowIds) {
+      const label = this.playerMarkLabels.get(playerId);
+      const token = this.dugoutTokensById.get(playerId);
+      if (!label || !token || token.destroyed) continue;
+      if (token.children.some((child) => child.label === 'playerMarkLabel')) continue;
+      const data = this.game.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
+      const base = data ? baseState(data.playerState) : null;
+      const lying = base === PlayerStateBase.KNOCKED_OUT || base === PlayerStateBase.BADLY_HURT
+        || base === PlayerStateBase.SERIOUS_INJURY || base === PlayerStateBase.RIP;
+      this.paintPlayerMarkLabel(token, playerId, label, lying);
+    }
+  }
+
+  private paintPlayerMarkLabel(token: Container, playerId: string, label: string, down: boolean): void {
     const group = new Container();
     group.label = 'playerMarkLabel';
     // Owner 10-08: a line of 4-6 characters shrinks the text (width-preserving, 3 / n) instead of breaking early.
@@ -12605,7 +12949,7 @@ export class PitchRenderer {
       else group.position.set(0, this.markingCentreY(token));
     } else {
       text.anchor.set(0.5, 0);
-      const feetY = this.markingFeetY(token, playerId, isDown(data.playerState));
+      const feetY = this.markingFeetY(token, playerId, down);
       if (walker) placeWalkerDecor(token, group, 0, feetY, 1);
       else group.position.set(0, feetY);
     }
@@ -12832,6 +13176,7 @@ export class PitchRenderer {
   /** drawDugouts() destroys every dugoutLayer child, pick arrows included - so any standalone redraw must rebuild them. */
   private redrawDugoutsWithArrows(): void {
     this.drawDugouts();
+    this.drawDugoutPlayerMarkLabels(); // owner 10-14: the rebuilt dugout tokens carry their marks again
     this.pickArrows = this.pickArrows.filter((a) => !a.node.destroyed);
     this.drawDugoutPlayerPickArrows();
   }
@@ -15168,7 +15513,7 @@ export class PitchRenderer {
    *  and nothing else - replaces it. */
   showBreatheFirePromptDie(square: [number, number], value: number, failed?: boolean, needed?: number): void {
     const before = this.actionDice[this.actionDice.length - 1];
-    this.showActionDie(square, value, undefined, failed, needed);
+    this.showActionDie(square, value, undefined, failed, needed, undefined, undefined, undefined, true); // Astra 10-14: held while the prompt is open
     const added = this.actionDice[this.actionDice.length - 1];
     if (added && added !== before && added.cause === undefined) added.breatheFirePromptCopy = true;
   }
@@ -16618,7 +16963,10 @@ export class PitchRenderer {
       for (const [id, kind] of [...this.pressedPointers]) if (kind === 'mouse') this.pressedPointers.delete(id);
     };
     const onContextMenu = (): void => { this.contextMenuDueUntil = 0; }; // the menu is resolving now
-    const lost = (): void => { this.pressedPointers.clear(); this.contextMenuDueUntil = 0; };
+    const lost = (): void => {
+      this.pressedPointers.clear(); this.contextMenuDueUntil = 0;
+      this.cancelShiftSetupPress(); // Astra pass 2: a blurred window never resumes an undecided Shift press
+    };
     const hidden = (): void => { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') lost(); };
     const pointerTypes = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerover', 'pointerout',
       'pointerenter', 'pointerleave', 'gotpointercapture', 'lostpointercapture'] as const;
@@ -19097,7 +19445,7 @@ export class PitchRenderer {
    *  plot affordance: the caller draws it each redrawOverlays into pathLayer (cleared each pass),
    *  so no clear bookkeeping is owed. Coloured to the plot trail (0x66ccff) with a dark stroke for
    *  contrast on any tile; corner offset is depth-scaled so it tracks the tile size in perspective. */
-  private buildPlotStepNumber(sx: number, sy: number, n: number): Text {
+  private buildPlotStepNumber(sx: number, sy: number, n: number, isDestination = false): Text | null {
     const a = this.tokenPos(sx, sy);
     const ds = depthScale(sx, sy);
     // Owner 09-25: 4x raster + linear filtering + mipmaps (the marking-text rule) — the planner digits read low-res
@@ -19108,8 +19456,44 @@ export class PitchRenderer {
     });
     label.anchor.set(0.5, 0.5);
     // bottom-right corner of the tile, pulled slightly inward (0.4) so the glyph stays on the square
+    // Owner 10-14: with the die + word tags the badge rides the square's middle on the right, so the next square's
+    // tag row (which sits on the shared edge) never meets it.
     label.position.set(a.x + TILE_W * 0.4 * ds, a.y + TILE_H * 0.4 * ds);
     label.scale.set(ds);
+    if (this.plannerTagStyle === 'dieWord') {
+      // Astra review: pick the corner (right then left, middle then bottom) whose badge box meets no tag plate and,
+      // on the destination, not the crosshair (about 11 ds around the anchor).
+      const obstacles = [...this.o66TagRects];
+      if (isDestination) obstacles.push({ x0: a.x - 10.5 * ds, x1: a.x + 10.5 * ds, y0: a.y - 10.5 * ds, y1: a.y + 10.5 * ds });
+      // Final rule: find a spot for the badge at full size; if none is free, once more at 60% size; if none again the
+      // badge is OMITTED on this square (the dot and the tags carry the step; a number never covers a word).
+      const findSpot = (f: number): [number, number] | null => {
+        const halfW = ((String(n).length * 7.5 + 4) / 2) * ds * f;
+        const halfH = 7.5 * ds * f;
+        // only spots inside the square's own tile (plus a 3 ds margin; 9 on the destination, whose crosshair may push a
+        // two-digit badge out) and on the pitch; preferred corners first
+        const tileMargin = isDestination ? 9 : 3;
+        const reach = TILE_W / 2 + tileMargin - halfW / ds; // furthest centre offset (ds units) that keeps the box in tile + margin
+        const maxY = TILE_H / 2 + 3 - 7.5 * f;
+        const spots: [number, number][] = [[17.6, 1.9], [17.6, 15.2], [-17.6, 1.9], [-17.6, 15.2], [17.6, 8.5], [-17.6, 8.5]];
+        // then the tile bottom-centre (box bottom 3 px past the tile edge, clear of a centred plate), then left- / right-centre just inside the tile
+        spots.push([0, maxY], [-(TILE_W / 2 - halfW / ds), 1.9], [TILE_W / 2 - halfW / ds, 1.9]);
+        for (const oy of [1.9, 8.5, 14.5, -5, -11]) for (const ox of [12, -12, 6, -6, 0]) spots.push([ox, oy]);
+        spots.push([20.5, 1.9], [20.5, 8.5], [-20.5, 1.9], [-20.5, 8.5]);
+        const inTile = ([ox, oy]: [number, number]): boolean => Math.abs(ox) <= reach && Math.abs(oy) <= maxY + 1e-9;
+        // the FULL badge box (all four corners, so a two-digit width counts) must be on the pitch
+        const onPitch = ([ox, oy]: [number, number]): boolean => [[-halfW, -halfH], [halfW, -halfH], [-halfW, halfH], [halfW, halfH]]
+          .every(([cx, cy]) => isOnPitch(worldToSquare(a.x + ox * ds + cx!, a.y + oy * ds + cy!) as [number, number] | null));
+        const free = (px: number, py: number): boolean => obstacles.every((r) => px + halfW <= r.x0 || px - halfW >= r.x1 || py + halfH <= r.y0 || py - halfH >= r.y1);
+        return spots.find((sp) => inTile(sp) && onPitch(sp) && free(a.x + sp[0] * ds, a.y + sp[1] * ds)) ?? null;
+      };
+      let size = 1;
+      let spot = findSpot(1);
+      if (!spot) { size = 0.6; spot = findSpot(0.6); }
+      if (!spot) { label.destroy(); return null; }
+      label.scale.set(ds * size);
+      label.position.set(a.x + spot[0] * ds, a.y + spot[1] * ds);
+    }
     label.alpha = 0.95;
     return label;
   }
@@ -21244,13 +21628,19 @@ export class PitchRenderer {
         const wx = (event.offsetX - this.world.position.x) / this.world.scale.x;
         const wy = (event.offsetY - this.world.position.y) / this.world.scale.y;
         const [sx, sy] = worldToSquare(wx, wy);
-        const shiftAnnotation = event.shiftKey
-          && sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
+        const dh = this.dugoutHitAt(wx, wy);
+        const shiftAnnotation = event.shiftKey && sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
         // Shift annotations own on-pitch presses, including those over a placed token. Register the pointer
         // below so pointerup can toggle the player arrow / square row / square column without beginning setup.
-        // Off-pitch reserve drags and every unmodified setup drag retain their existing callback path.
-        if (!shiftAnnotation) {
-          const dh = this.dugoutHits.find((h) => Math.hypot(h.x - wx, h.y - wy) <= h.r);
+        // Owner 10-14 (Astra): a Shift press on a dugout token waits for movement - a release under the tap
+        // threshold marks the player (tapAt), a move past it starts this same setup drag (pointermove), never a pan.
+        // Every unmodified setup drag retains its existing callback path.
+        if (event.shiftKey && dh) {
+          this.shiftSetupPress = {
+            playerId: dh.playerId, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+            ctrl: event.ctrlKey, alt: event.altKey,
+          };
+        } else if (!shiftAnnotation) {
           if (dh) { this.onDugoutSetupDragStart(dh.playerId, event.clientX, event.clientY, event.pointerId); return; }
           // Owner 2026-07-14 (setup overhaul #3): a pointerdown on a PLACED on-pitch player also starts a
           // drag-to-move (same callback); a stationary release is routed back to select/swap by the host.
@@ -21258,12 +21648,16 @@ export class PitchRenderer {
           if (pid) { this.onDugoutSetupDragStart(pid, event.clientX, event.clientY, event.pointerId); return; }
         }
       }
+      // Astra pass 2: a second pointer ends an undecided Shift press at once (pinch, never a later setup drag).
+      if (this.shiftSetupPress && this.shiftSetupPress.pointerId !== event.pointerId) this.shiftSetupPress = null;
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 1) {
         this.dragging = true;
         this.dragDistance = 0;
         this.lastPointer = { x: event.clientX, y: event.clientY };
+        this.pressModifiers = { pointerId: event.pointerId, shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey };
       } else if (this.pointers.size === 2) {
+        this.pressModifiers = null; // Astra pass 3: the surviving pointer's press is consumed - never a tap later
         this.dragging = false;
         this.pinchDistance = this.currentPinchDistance();
       }
@@ -21280,6 +21674,26 @@ export class PitchRenderer {
       if (this.pointers.size === 0 && !(this.virtualPointerActive && syntheticMove)) this.lastHoverOffset = { x: event.offsetX, y: event.offsetY };
       if (this.pointers.size === 0 && !(this.virtualPointerActive && syntheticMove)) this.hoverAt(canvas, event.offsetX, event.offsetY);
       if (!this.pointers.has(event.pointerId)) return;
+      const shiftPress = this.shiftSetupPress;
+      if (shiftPress && shiftPress.pointerId === event.pointerId && this.pointers.size === 1) {
+        // Astra pass 2: a move with no button held is no drag (a press whose release was lost) - end the gesture.
+        if ((event.buttons ?? 1) === 0) { this.cancelShiftSetupPress(event.pointerId); return; }
+        // Owner 10-14 (Astra): an undecided Shift press on a dugout token never pans. Past the tap threshold it
+        // becomes the setup drag, handed over from the press point exactly as an unmodified press would have been.
+        if (Math.hypot(event.clientX - shiftPress.clientX, event.clientY - shiftPress.clientY) < TAP_SLOP_PX) return;
+        this.shiftSetupPress = null;
+        try {
+          if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        } catch { /* capture may already have been released by the browser */ }
+        this.pointers.delete(event.pointerId);
+        this.dragging = false;
+        this.dragDistance = 0;
+        if (this.setupActive && this.onDugoutSetupDragStart) {
+          this.onDugoutSetupDragStart(shiftPress.playerId, shiftPress.clientX, shiftPress.clientY, event.pointerId);
+        }
+        return;
+      }
+      if (shiftPress && this.pointers.size !== 1) this.shiftSetupPress = null; // a second finger: pinch, not a press
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
         const distance = this.currentPinchDistance();
@@ -21305,14 +21719,31 @@ export class PitchRenderer {
     this.listenCanvas(canvas, 'pointerup', (event) => {
       if (event.button === 2) return; // B2-5: right-clicks never tap-select
       // Owner 10-10: a middle click the host has bound (Player cards on / off) is the host's, not a tap.
-      if (event.button === 1 && this.pointers.size === 1 && this.dragDistance < 5 && this.onMiddleClick?.()) return;
-      this.tapAt(event.offsetX, event.offsetY, { shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey }, this.pointers.size === 1 && this.dragDistance < 5);
+      // Astra pass 3: a tap needs the press record of THIS pointer. A second pointer consumes it (the gesture became a
+      // pinch), so the surviving pointer's release can pan but never qualifies as a gameplay tap, and there is no
+      // fallback to the release-time modifiers.
+      const press = this.pressModifiers?.pointerId === event.pointerId ? this.pressModifiers : null;
+      const isTap = !!press && this.pointers.size === 1 && this.dragDistance < TAP_SLOP_PX;
+      if (event.button === 1 && isTap && this.onMiddleClick?.()) return;
+      // Astra pass 2: the gesture was decided at the PRESS. An undecided Shift press on a dugout token released under
+      // the threshold marks the player it was pressed on, whatever the modifiers or the exact point at release.
+      const shiftPress = this.shiftSetupPress;
+      if (shiftPress && shiftPress.pointerId === event.pointerId && isTap) {
+        this.shiftSetupPress = null;
+        this.markPlayerByShift(shiftPress.playerId, { ctrl: shiftPress.ctrl, alt: shiftPress.alt });
+        return;
+      }
+      this.tapAt(event.offsetX, event.offsetY, press
+        ? { shift: press.shift, ctrl: press.ctrl, alt: press.alt }
+        : { shift: false, ctrl: false, alt: false }, isTap);
     });
     const release = (event: PointerEvent) => {
       try {
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       } catch { /* capture may already have been released by the browser */ }
       this.pointers.delete(event.pointerId);
+      if (this.shiftSetupPress?.pointerId === event.pointerId) this.shiftSetupPress = null;
+      if (this.pressModifiers?.pointerId === event.pointerId) this.pressModifiers = null;
       this.dragging = this.pointers.size === 1;
       if (this.dragging) {
         const p = [...this.pointers.values()][0]!;
@@ -21332,7 +21763,12 @@ export class PitchRenderer {
         this.onSquareHover?.(null);
       }
     };
-    this.listenCanvas(canvas, 'pointerleave', clearPointerHover);
+    this.listenCanvas(canvas, 'pointerleave', (event) => {
+      this.cancelShiftSetupPress(event.pointerId); // Astra pass 2: a press that left the canvas never resumes
+      clearPointerHover();
+    });
+    // Astra pass 2: capture lost mid-press (the browser or another element took it) ends an undecided Shift press.
+    this.listenCanvas(canvas, 'lostpointercapture', (event) => this.cancelShiftSetupPress(event.pointerId));
     this.listenCanvas(canvas, 'pointercancel', (event) => {
       release(event);
       clearPointerHover();
@@ -21440,6 +21876,13 @@ export class PitchRenderer {
     }
   }
 
+  /** Owner 10-14: the plain-Shift player mark (toggle; a NEW mark opens its label field). Ctrl / Alt+Shift are row /
+   *  column marks, which are pitch-only, so they do nothing to a dugout player. Client-local only. */
+  private markPlayerByShift(playerId: string, mods: { ctrl: boolean; alt: boolean }): void {
+    if (mods.ctrl || mods.alt) return;
+    if (this.togglePersistentPlayerArrow(playerId)) this.requestPlayerMarkLabel(playerId);
+  }
+
   /** The primary TAP body (a press that barely moved), shared by the canvas pointerup and the pad crosshair's A. */
   private tapAt(offsetX: number, offsetY: number, mods: { shift: boolean; ctrl: boolean; alt: boolean }, isTap: boolean): void {
     // Shift-click annotations take priority over every gameplay surface and never select, plan, or send.
@@ -21448,6 +21891,15 @@ export class PitchRenderer {
     if (mods.shift && isTap) {
       const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
       const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      // Owner 10-14: a dugout token (reserves / KO / injured / sent off) is marked with the same gesture as a pitch
+      // token, for either team, in play, spectate and replay alike. Dugout tokens sit outside the pitch bands, so they
+      // are hit-tested first (as the plain tap does); a Shift press there never selects. Row / column marks are
+      // pitch-only, so Ctrl / Alt+Shift over a dugout token does nothing.
+      const dugoutHit = this.dugoutHitAt(worldX, worldY); // Astra: the TOP token where hit circles overlap
+      if (dugoutHit) {
+        this.markPlayerByShift(dugoutHit.playerId, mods);
+        return;
+      }
       const [sx, sy] = worldToSquare(worldX, worldY);
       if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
         if (mods.ctrl) this.markRow([sx, sy]); // Ctrl+Shift = row
@@ -21462,6 +21914,9 @@ export class PitchRenderer {
         }
         return;
       }
+      // Astra pass 2: a Shift tap that hits neither a dugout token nor the pitch is no annotation and no gameplay
+      // click either - it never falls through to a selection or a setup action (setupRemove would reach the wire).
+      return;
     }
     // PUNT UX v2: cone-side re-aim owns its pixels before pitch-square interaction.
     if (this.puntReaimHits.length > 0 && isTap) {
@@ -21577,7 +22032,7 @@ export class PitchRenderer {
       // click there can't resolve to a square (and used to fall through to a deselect). Hit-
       // test the dugout tokens directly by world proximity → select them so their card
       // (portrait + injury) surfaces, exactly like an on-pitch player.
-      const dh = this.dugoutHits.find((h) => Math.hypot(h.x - worldX, h.y - worldY) <= h.r);
+      const dh = this.dugoutHitAt(worldX, worldY); // owner 10-14: the token drawn on top
       if (dh) {
         this.selectPlayer(dh.playerId);
         this.onPlayerClick?.(dh.playerId, offsetX, offsetY);
@@ -21795,7 +22250,7 @@ export class PitchRenderer {
       const wx = (at.x - this.world.position.x) / this.world.scale.x;
       const wy = (at.y - this.world.position.y) / this.world.scale.y;
       const [sx, sy] = worldToSquare(wx, wy);
-      const dh = this.dugoutHits.find((h) => Math.hypot(h.x - wx, h.y - wy) <= h.r);
+      const dh = this.dugoutHitAt(wx, wy); // owner 10-14: the token drawn on top
       const pid = dh?.playerId ?? this.playersBySquare.get(`${sx},${sy}`);
       // A mouse press here starts the setup drag; its stationary release is the host's tap. The pad reports that tap.
       if (pid && this.onSetupTokenTap) {
