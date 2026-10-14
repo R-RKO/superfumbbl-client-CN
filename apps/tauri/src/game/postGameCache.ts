@@ -120,6 +120,7 @@ export async function loadPostGameSnapshot(key: string): Promise<PostGameSnapsho
   try {
     const row = await store().get(key);
     if (!row) return null;
+    if ((row as { version?: number }).version !== 2) { await store().delete(key); return null; } // owner 10-13: re-tallied, never shown under the new one-sided labels
     if (!(row.savedAt > Date.now() - POST_GAME_MAX_AGE_MS)) { await store().delete(key); return null; }
     return row;
   } catch { return null; }

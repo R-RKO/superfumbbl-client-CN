@@ -405,6 +405,9 @@ type MovementOverlayEntry = {
  *  directly below on the same x. Every tag is one 17 px plate drawn at 0.5 scale (8.5 px), so the gap is one plate
  *  height + 1.5 px, times the depth scale so the stack stays attached at every depth and zoom. */
 export const ROLL_STACK_GAP = 10;
+/** Owner 10-13: the go-for-it squares keep the D6 rush die (0.8 x depth, ~14 px tall), so the reach stack keeps the
+ *  wider gap the die needs; the planned-path stack (uniform text plates) uses ROLL_STACK_GAP. */
+export const REACH_STACK_GAP = 13;
 const REACHABLE_RUSH_DIE_ALPHA = 1; // owner 09-09: the rest die keeps the moving die's opacity (was 0.6) // owner 09-08: 0.3 read too faint on the board
 /** Owner 2026-07-06 / 09-09: a Jump/Leap/Pogo lifts the sprite in one whole-flight arc, paced a touch slower than a
  *  step so it reads as a spring; a pending flag older than the TTL is dropped rather than arcing a later move. */
@@ -8783,7 +8786,7 @@ export class PitchRenderer {
           () => new Graphics().poly(quad.points.flat()).fill({ color: 0x9a9a9a, alpha: 0.3 }),
         );
         const a = this.tokenPos(sx, sy);
-        const dieScale = depthScale(sx, sy) * 0.5; // owner 10-13: one R<N>+ rush tag everywhere, 0.5 x depth like the D<N>+ tag
+        const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere, 0.8 x depth, fully opaque (owner 10-13: the D6 stays on the go-for-it squares)
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
           'reach',
@@ -8907,21 +8910,21 @@ export class PitchRenderer {
         if (rolls.dodge > 0 && rolls.jump) {
           // JLeav 10-13: the server's jump price (AG + jump modifiers), not a walk-reach rush die. Stacked under the
           // rush die like the dodge chip when the square owes both.
-          const chip = this.buildJumpChip(a.x, a.y + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+          const chip = this.buildJumpChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         } else if (rolls.dodge > 0) {
-          const chip = this.buildDodgeChip(a.x, a.y + (both ? ROLL_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+          const chip = this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         }
         if (rolls.gfi > 0) {
           this.pathLayer.addChild(
-            this.buildReachableRushDie(a.x, a.y, ds * 0.5, rolls.gfi || fallbackRushTarget),
+            this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
           );
         }
       } else if (legacyRush) {
-        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.5, fallbackRushTarget));
+        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.8, fallbackRushTarget));
       }
     }
   }
@@ -9346,7 +9349,7 @@ export class PitchRenderer {
       if (used + cost <= info.normal) continue;
       const [sx, sy] = key.split(',').map(Number) as [number, number];
       const a = squareAnchor(sx, sy);
-      const dieScale = depthScale(sx, sy) * 0.5; // owner 10-13: one R<N>+ rush tag everywhere, 0.5 x depth like the D<N>+ tag
+      const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere, 0.8 x depth, fully opaque (owner 10-13: the D6 stays on the go-for-it squares)
       if (persistentReach) {
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
@@ -9933,11 +9936,10 @@ export class PitchRenderer {
     return die;
   }
 
-  /** A reachable/unselected Rush cost. Owner 09-09: the SAME marker as the planned path (the R<N>+ tag, target 2
-   *  when the caller has none) - a token at rest and a token mid-plan must show one rush marker. Owner 10-13: the
-   *  marker is the R<N>+ text plate, no longer a die face. */
+  /** A reachable/unselected Rush cost: the D6 face + '+' (target 2 when the caller has none). Owner 10-13: the
+   *  go-for-it squares KEEP the die; only the planned-path tags moved to the R<N>+ text plate. */
   private buildReachableRushDie(x: number, y: number, scale: number, target?: number): Container {
-    const die = this.buildRushChip(x, y, scale, target ?? 2);
+    const die = this.buildRollDie(x, y, scale, target ?? 2);
     die.alpha = REACHABLE_RUSH_DIE_ALPHA;
     return die;
   }
@@ -9972,7 +9974,7 @@ export class PitchRenderer {
     const [x, y] = square!;
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
-    const die = this.buildRushChip(anchor.x, anchor.y - TILE_H * 0.18 * scale, scale * 0.5, rushTarget);
+    const die = this.buildRollDie(anchor.x, anchor.y - TILE_H * 0.18 * scale, scale * 0.5, rushTarget);
     die.alpha = 1; // owner 09-08
     this.pathLayer.addChild(die);
   }

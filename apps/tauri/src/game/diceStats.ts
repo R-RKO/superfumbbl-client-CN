@@ -6,13 +6,17 @@
 // Attribution: a roll belongs to the team (and player) that ROLLED it. Armour and injury dice are rolled by the
 // attacking side, so they ride the attacker latched from the opening `block` report (or the acting player, as the
 // log formatter does); dodge / rush / pickup / catch rolls belong to their playerId.
+// Owner 10-13: armour and injury stats are ONLY the rolls a team made against its opponent. A roll with no attacker
+// on the other team (a failed dodge / rush / jump, a crowd push, Ball & Chain, a team-mate landing on a player, a
+// Stab or Chainsaw kickback on oneself) is nobody's attack, so it counts for neither team: no totals, no faces, no
+// luck trial, and the victim's team gets no inverted trial for it.
 import { reactive } from 'vue';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveArmour, effectiveStat, playerSkillValue } from '@fumbbl40k/ffb-protocol';
 import { dodgeSkillCancelledAt, hasSkill as hasSkillWithGrants } from './logic/availableActions';
 import { breatheFirePassed } from './breatheFireOutcome';
 import {
-  actionTrial, addCount, addTrial, armourBreakThreshold, binaryKey, blockFaceScores, blockRollKey, blockRollScore, emptyLuck, injuryKey,
+  actionTrial, injuryTypeFamily, addCount, addTrial, armourBreakThreshold, binaryKey, blockFaceScores, blockRollKey, blockRollScore, emptyLuck, injuryKey,
   injuryScore6, injuryTrial, koWeight6, likelihoodOf, parseDist, twoD6AtLeast, type DiceLuck, type Likelihood, type LuckBucket, type LuckRow,
 } from './diceLuck';
 
@@ -384,22 +388,78 @@ function currentBlocker(stats: DiceStats, actingId: string | null): string | nul
   return stats.lastBlockAttacker ?? actingId;
 }
 
-/**
- * The armour roll and the injury roll of one `injury` report, as luck trials. PERSPECTIVE is by the DEFENDER's team:
- * the other team scores the roll as it fell (a break / a removal is good), the defender's own team scores it
- * inverted - whoever caused it (a block, its own failed dodge, the crowd). Each roll is a trial for both teams, for
- * the defender, and for the attacker when one is stated on the other team.
+/*
+ * WHICH injury reports are an attack roll (owner 10-13: only the rolls you made against your opponent count).
+ * Audited against upstream fumbbl40k-server (every InjuryType in ffb-common/.../injury and every handleInjury call
+ * site; wire names, "ForSpp" / "WithChainsaw" stripped by injuryTypeFamily). An opposing `attackerId` alone is NOT
+ * proof: upstream passes the BLOCK DEFENDER as "attacker" when the blocker himself falls and on a failed Blitz rush
+ * (bb2025/shared/StepDropFallingPlayers.java:192, :202), and the acting player as "attacker" for Wrestle on a
+ * Ball & Chain player (WrestleBehaviour.java:95; the roll is the hard-coded [5,5] of InjuryTypeBallAndChain).
+ *
+ *  COUNTS for the attacker's team (stated attacker, on the other team from the victim):
+ *    block, blockProne, blockStunned (+ForSpp)  EXCEPT the blocker's own fall (Skull / Both Down): the stated "attacker"
+ *                                               is the model's block DEFENDER and the victim the acting player
+ *    saboteur, sabotaged                        sabotage by the opposing player (victim may be the acting player)
+ *    foul (+ForSpp, +WithChainsaw), chainsaw, stab, breatheFire, projectileVomit, quickBite, bitten,
+ *    pilingOnArmor, pilingOnInjury   (pilingOnKnockedOut passes a null attacker and rolls no dice, so it never counts)
+ *    (a kickback on oneself names a same-team victim, so the team test drops it)
+ *  COUNTS for the ACTING player when the victim is on the other team: the thrower of record at the moment of the
+ *    hit. The stated attacker is NEVER used: it names the SPP / skill beneficiary, not the owner: bombForSpp = the
+ *    ORIGINAL bombardier (StepPass.java:165, StepSpecialEffect.java:178), who is not the thrower once a catcher
+ *    re-throws or fumbles (StepEndBomb.java:154); ttmHitPlayerForSpp = the thrown player (Lethal Flight) or the
+ *    thrower / kicker for the KTM SPP property (StepInitScatterPlayer.java:310, :318-322);
+ *    a victim on the acting player's own team counts for nobody. The acting player is not always the original
+ *    thrower either (Swoop re-actors to the swooper, StepSwoop.java:233), and that is the intent:
+ *    bomb (+ForSpp), ttmHitPlayer (+ForSpp), startedBlastin, kegHit
+ *  COUNTS for NOBODY (no opposing attack, or environmental):
+ *    dropDodge, dropDodgeForSpp (Arm Bar supplies the opposing player but it is a failed dodge), dropGfi, dropLeap,
+ *    crowdpush, crowdpushForSpp, ktmCrowd, trapdoorFall (+ForSpp: environmental), ttmLanding, eatPlayer,
+ *    ktmInjury, ktmFumbleInjury, ktmFumbleApoKoInjury, fireball, lightning, throwARock (inducement / spell /
+ *    fan: no player in the report to credit)
+ *  SYNTHETIC dice, ignored: ballAndChain (a fixed [5,5], not rolled)
+ *  Anything unknown: nobody.
  */
-function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, armour: [number, number] | null, injury: [number, number] | null): void {
+const ATTACK_FAMILIES = new Set(['block', 'blockProne', 'blockStunned', 'saboteur', 'sabotaged', 'foul', 'chainsaw', 'stab', 'breatheFire',
+  'projectileVomit', 'quickBite', 'bitten', 'pilingOnArmor', 'pilingOnInjury']);
+const BLOCK_FALL_FAMILIES = new Set(['block', 'blockProne', 'blockStunned']);
+const ACTING_ATTACK_FAMILIES = new Set(['bomb', 'ttmHitPlayer', 'startedBlastin', 'kegHit']);
+
+/**
+ * The attacker whose armour / injury roll an `injury` report is, or null when it is nobody's attack (see the table
+ * above). Always on the OTHER team from the defender.
+ */
+function inflictingAttacker(stats: DiceStats, game: GameJson | null, r: Report, actingId: string | null): string | null {
+  const type = String(r.injuryType ?? '');
+  const family = injuryTypeFamily(type);
+  const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
+  const stated = typeof r.attackerId === 'string' ? r.attackerId : null;
+  let attacker: string | null = null;
+  if (family === '' || BLOCK_FALL_FAMILIES.has(family) || family === 'foul') {
+    // a block / foul report that names no attacker: the latched blocker / acting player, as the log formatter does
+    attacker = stated ?? stats.lastBlockAttacker ?? actingId;
+    // the blocker's own fall: upstream names the block defender as the attacker and the acting player as the victim
+    // Upstream's fall is the exact mirror of a block: the "attacker" is the model's block DEFENDER and the victim is the
+    // acting player; a real block has the acting player as the attacker. (Victim = acting alone proves nothing: a stale
+    // actor can be blocked. Game 1949262 command 1363 is a genuine Skull fall, rejected correctly by this rule.)
+    if (family !== 'foul' && stated && defenderId && defenderId === (actingId ?? stats.lastBlockAttacker) && stated === (game as { defenderId?: string } | null)?.defenderId) return null;
+  } else if (ATTACK_FAMILIES.has(family)) attacker = stated;
+  else if (ACTING_ATTACK_FAMILIES.has(family)) attacker = actingId;
+  const a = teamOf(game, attacker), d = teamOf(game, defenderId);
+  return attacker && a && d && a.teamId !== d.teamId ? attacker : null;
+}
+
+/**
+ * The armour roll and the injury roll of one `injury` report, as luck trials for the ATTACKER's team (and the
+ * attacker) only: the roll as it fell (a break / a removal is good). The defender's team gets no inverted trial.
+ */
+function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, attackerId: string, armour: [number, number] | null, injury: [number, number] | null): void {
   const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
   const own = teamOf(game, defenderId);
   const them = otherTeam(game, own);
   const defender = playerJson(game, defenderId);
   if (!game || !own || !them || !defender) return; // nobody to score it for
-  const attackerId = typeof r.attackerId === 'string' ? r.attackerId : null;
   const attackerTeam = teamOf(game, attackerId);
-  const theirs = tallyFor(stats, them.teamId, attackerTeam?.teamId === them.teamId ? attackerId : null);
-  const ours = tallyFor(stats, own.teamId, defenderId);
+  const theirs = tallyFor(stats, them.teamId, attackerId);
   const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
   const armourModifiers = names(r.armorModifiers), injuryModifiers = names(r.injuryModifiers);
   const mightyBlow = mightyBlowValue(game, attackerId);
@@ -420,18 +480,13 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       });
       // UNMEASURED: see armourBreakThreshold - an unvalued modifier, a result that disagrees with this client's
       // armour value, or a break whose left-over modifiers cannot be read
-      if (threshold == null) { for (const t of [...theirs, ...ours]) luckOf(t, 'armour').unmeasured += 1; }
+      if (threshold == null) { for (const t of theirs) luckOf(t, 'armour').unmeasured += 1; }
       else {
         const breaks = twoD6AtLeast(threshold); // of 36
         for (const t of theirs) {
           const b = luckOf(t, 'armour');
           addTrial(b, binaryKey(breaks, 36), r.armorBroken ? 6 : 0);
           addCount(b, 'theirRolls', 1); addCount(b, 'theirBroken', r.armorBroken ? 1 : 0); addCount(b, 'theirExpected', breaks / 36);
-        }
-        for (const t of ours) {
-          const b = luckOf(t, 'armour');
-          addTrial(b, binaryKey(36 - breaks, 36), r.armorBroken ? 0 : 6);
-          addCount(b, 'ownRolls', 1); addCount(b, 'ownBroken', r.armorBroken ? 1 : 0); addCount(b, 'ownExpected', breaks / 36);
         }
       }
     }
@@ -443,11 +498,11 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       stats.lastInjuryTrial = key;
       const trial = injuryTrial({ dice: injury, modifiers: injuryModifiers, thickSkull: has(game, defenderId, 'Thick Skull'), mightyBlow, statedState: Number(r.injury) & 0xff });
       // UNMEASURED: an unvalued modifier, or a stated result that is not this table's for the roll
-      if (!trial) { for (const t of [...theirs, ...ours]) luckOf(t, 'injury').unmeasured += 1; }
+      if (!trial) { for (const t of theirs) luckOf(t, 'injury').unmeasured += 1; }
       else {
         const ko6 = koWeightFor(game, own); // the VICTIM's team's kegs
         const expected6 = parseDist(injuryKey(trial.counts, ko6, false)).mean6;
-        for (const [list, mine, side] of [[theirs, false, 'their'], [ours, true, 'own']] as const) {
+        for (const [list, mine, side] of [[theirs, false, 'their']] as const) {
           for (const t of list) {
             const b = luckOf(t, 'injury');
             addTrial(b, injuryKey(trial.counts, ko6, mine), injuryScore6(trial.level, ko6, mine));
@@ -648,7 +703,8 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       continue;
     }
     if (id === 'injury') {
-      const attacker = typeof r.attackerId === 'string' ? r.attackerId : stats.lastBlockAttacker ?? actingId;
+      const attacker = inflictingAttacker(stats, game, r, actingId);
+      if (!attacker) continue; // owner 10-13: not a roll made against an opponent - counted for neither team
       const team = teamOf(game, attacker);
       const tallies = tallyFor(stats, team?.teamId ?? null, attacker);
       // Owner 10-09: BB2025 reports one injury TWICE (server/mechanic/bb2025/StateMechanic.java:122-171): first with
@@ -661,7 +717,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       for (const v of injury) pushD6(tallies, v, 'injuryFaces');
       if (armour.length === 2) for (const t of tallies) t.armour.push(armour[0]! + armour[1]!);
       if (injury.length === 2) for (const t of tallies) t.injury.push(injury[0]! + injury[1]!);
-      noteInjuryReportLuck(stats, game, commandNr, r, armour.length === 2 ? [armour[0]!, armour[1]!] : null, injury.length === 2 ? [injury[0]!, injury[1]!] : null);
+      noteInjuryReportLuck(stats, game, commandNr, r, attacker, armour.length === 2 ? [armour[0]!, armour[1]!] : null, injury.length === 2 ? [injury[0]!, injury[1]!] : null);
       continue;
     }
     if (id === 'dodgeRoll') {

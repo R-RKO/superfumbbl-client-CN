@@ -113,11 +113,6 @@ function tally(seed: number): DiceTally {
     addTrial(luck.armour, binaryKey(10, 36), broken ? 6 : 0);
     addCount(luck.armour, 'theirRolls', 1); addCount(luck.armour, 'theirBroken', broken ? 1 : 0); addCount(luck.armour, 'theirExpected', 10 / 36);
   }
-  for (let i = 0; i < 5; i++) { // armour on its own players: an 8+ armour, broken twice
-    const broken = i < 2;
-    addTrial(luck.armour, binaryKey(21, 36), broken ? 0 : 6);
-    addCount(luck.armour, 'ownRolls', 1); addCount(luck.armour, 'ownBroken', broken ? 1 : 0); addCount(luck.armour, 'ownExpected', 15 / 36);
-  }
   for (const level of odd ? [0, 1, 2] : [0, 0, 1]) { // injuries on the opponents: stunned / knocked out / casualty
     addTrial(luck.injury, injuryKey([21, 9, 6], 3, false), level === 2 ? 6 : level === 1 ? 3 : 0);
     addCount(luck.injury, 'theirRolls', 1); addCount(luck.injury, 'theirKos', level === 1 ? 1 : 0); addCount(luck.injury, 'theirCasualties', level === 2 ? 1 : 0);
@@ -140,7 +135,7 @@ export function exampleSnapshot(now: number = Date.now()): PostGameSnapshot {
   const home = team('EXH', 'Riverside Reavers', 'ExampleCoach', 'Human', HUMAN_POSITIONS, HUMANS);
   const away = team('EXA', 'Ironjaw Krumpaz', 'AnotherCoach', 'Orc', ORC_POSITIONS, ORCS);
   return {
-    version: 1,
+    version: 2,
     key: EXAMPLE_KEY,
     server: 'example',
     gameId: EXAMPLE_GAME_ID,

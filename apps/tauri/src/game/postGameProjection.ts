@@ -19,7 +19,8 @@ import type { RosterInjuryBadge } from './rosterLevelArt';
 export type Side = 'home' | 'away';
 
 export interface PostGameSnapshot {
-  version: 1;
+  /** 2 (owner 10-13): armour / injury luck trials became attacker-only; a version-1 snapshot holds two-sided trial distributions. */
+  version: 2;
   /** `${server}|${gameId}` — the Play blade looks a FUMBBL replay id up as `fumbbl|<id>`. */
   key: string;
   server: string;
@@ -460,24 +461,15 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
   const n = (v: number | undefined) => v ?? 0;
   const all = allDiceLikelihood(t);
   const armour = c('armour'), injury = c('injury'), action = c('action'), block = c('block');
-  // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled lines.
-  const sides = (their: string, own: string): PgLikelihoodStat[] =>
-    [{ label: 'Opponents', value: their }, { label: 'Own', value: own }].filter((s) => s.value);
-  const armourSides = sides(
-    n(armour.theirRolls) ? `${n(armour.theirBroken)} broken of ${n(armour.theirRolls)} (${exp1(armour.theirExpected)} expected)` : '',
-    n(armour.ownRolls) ? `${n(armour.ownBroken)} broken of ${n(armour.ownRolls)} (${exp1(armour.ownExpected)} expected)` : '',
-  );
-  const armourParts = armourSides.map((s) => `${s.label}: ${s.value}`);
-  const armourStats = armourSides.map((s) => ({ label: s.label === 'Own' ? 'Own armour' : "Opponents' armour", value: s.value }));
-  const injurySide = (rolls: number | undefined, cas: number | undefined, kos: number | undefined) =>
-    (n(rolls) ? `${plural(n(cas), 'casualty', 'casualties')} · ${plural(n(kos), 'KO', 'KOs')} of ${plural(n(rolls), 'roll', 'rolls')}` : '');
-  const injurySides = sides(injurySide(injury.theirRolls, injury.theirCasualties, injury.theirKos), injurySide(injury.ownRolls, injury.ownCasualties, injury.ownKos));
-  const injuryParts = injurySides.map((s) => `${s.label}: ${s.value}`);
-  const injuryStats = injurySides.map((s) => ({ label: s.label === 'Own' ? 'Own injuries' : "Opponents' injuries", value: s.value.replace(' · ', ', ') }));
-  const injuryValue = [
-    n(injury.theirRolls) ? `opponents ${exp1(injury.theirValue)} (${exp1(injury.theirExpected)} expected)` : '',
-    n(injury.ownRolls) ? `own ${exp1(injury.ownValue)} (${exp1(injury.ownExpected)} expected)` : '',
-  ].filter(Boolean).join(' · ');
+  // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled line.
+  // Owner 10-13: armour and injury cover only the rolls the team made against its opponent, so there is one figure per row.
+  const armourValue = n(armour.theirRolls) ? `${n(armour.theirBroken)} broken of ${n(armour.theirRolls)} (${exp1(armour.theirExpected)} expected)` : '';
+  const armourParts = armourValue ? [armourValue] : [];
+  const armourStats = armourValue ? [{ label: 'Armour', value: armourValue }] : [];
+  const injuryValueLine = n(injury.theirRolls) ? `${plural(n(injury.theirCasualties), 'casualty', 'casualties')} · ${plural(n(injury.theirKos), 'KO', 'KOs')} of ${plural(n(injury.theirRolls), 'roll', 'rolls')}` : '';
+  const injuryParts = injuryValueLine ? [injuryValueLine] : [];
+  const injuryStats = injuryValueLine ? [{ label: 'Injuries', value: injuryValueLine.replace(' · ', ', ') }] : [];
+  const injuryValue = n(injury.theirRolls) ? `${exp1(injury.theirValue)} (${exp1(injury.theirExpected)} expected)` : '';
   const blockLike = blockLikelihood(t);
   const actionLike = actionLikelihood(t);
   const blockGood = `${n(block.good)} (${exp1(block.goodExpected)} expected)`;
