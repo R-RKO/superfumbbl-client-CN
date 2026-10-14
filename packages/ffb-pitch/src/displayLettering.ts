@@ -30,8 +30,12 @@ export interface DisplayLetteringStyle {
   fontPx: number;
   /** How much larger than `fontPx` the lead letter is drawn. */
   leadScale: number;
-  /** CSS font weight for both faces (each ships one weight; the browser emboldens). */
+  /** CSS font weight for both faces. Each face ships ONE regular weight: 600+ is synthesised faux bold, which smears
+   *  the glyphs; 'normal' is the real weight. */
   fontWeight: string;
+  /** Per-face overrides of `fontWeight` (default: `fontWeight`): the Nuffle lead letter and the Graduate rest. */
+  leadWeight?: string;
+  restWeight?: string;
   /** Extra advance after every character. */
   letterSpacing: number;
   /** CSS colour of the letters. */
@@ -50,12 +54,13 @@ export interface DisplayLetteringStyle {
 export const PITCH_REST_GROWTH = 1.15;
 export const PITCH_LEAD_SCALE = DISPLAY_CAPS_LEAD_SCALE / PITCH_REST_GROWTH;
 
-/** End zones. B2-16/UI11 + owner 09-16: heavy, bold WHITE at full alpha; sized at render time to span the end-zone
+/** End zones (owner 10-13: weight reduced slightly: the Nuffle lead stays bold, the Graduate rest is its real regular
+ *  weight instead of a faux bold). B2-16/UI11 + owner 09-16: heavy, bold WHITE at full alpha; sized at render time to span the end-zone
  *  length. The lead is 35 px (as approved), the rest 28 * 1.15 = 32.2 px. The old all-Nuffle capitals filled 0.69 of
  *  their line box (cap 25 of a 36 line at 28 px); the lead is taken higher (0.88, and the renderer gives the box 85%
  *  of the band). */
 export const ENDZONE_LETTERING: DisplayLetteringStyle = {
-  fontPx: 28 * PITCH_REST_GROWTH, leadScale: PITCH_LEAD_SCALE, fontWeight: '900', letterSpacing: 6, fill: '#ffffff', restOutline: 0, capFill: 0.88, resolution: 4,
+  fontPx: 28 * PITCH_REST_GROWTH, leadScale: PITCH_LEAD_SCALE, fontWeight: 'bold', restWeight: 'normal', letterSpacing: 6, fill: '#ffffff', restOutline: 0, capFill: 0.88, resolution: 4,
 };
 /** Dugout box labels (INJURED / RESERVES) and the APOTHECARY caption. Owner 2026-07-02: bold white, no dark outline;
  *  they were 11 px Nuffle bold with 2 px tracking (capitals 9.8 px tall). The lead is 17.5 px, the rest
@@ -69,8 +74,8 @@ export const DUGOUT_LETTERING: DisplayLetteringStyle = {
 export function displayLetteringFonts(style: DisplayLetteringStyle): { rest: string; lead: string } {
   const leadPx = style.fontPx * style.leadScale;
   return {
-    rest: `${style.fontWeight} ${style.fontPx}px ${DISPLAY_REST_FONT_FAMILY}`,
-    lead: `${style.fontWeight} ${leadPx}px ${DISPLAY_LEAD_FONT_FAMILY}`,
+    rest: `${style.restWeight ?? style.fontWeight} ${style.fontPx}px ${DISPLAY_REST_FONT_FAMILY}`,
+    lead: `${style.leadWeight ?? style.fontWeight} ${leadPx}px ${DISPLAY_LEAD_FONT_FAMILY}`,
   };
 }
 
