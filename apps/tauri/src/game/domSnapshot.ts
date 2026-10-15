@@ -169,18 +169,49 @@ function sameOrigin(url: string, doc: Document): boolean {
   }
 }
 
-/** One loaded <img> as a data URL via a 2D canvas; null when it is not loaded or cannot be read back (taint). */
-function imageToDataUrl(img: HTMLImageElement, doc: Document): string | null {
+/** Total characters of <img> data URLs embedded in one capture, every occurrence counted (a data: URL is ASCII, so
+ *  characters = bytes). Past it, further images keep their box as a transparent pixel. */
+export const IMG_BYTES_CAP = 16 * 1024 * 1024;
+
+/**
+ * drunkenmonkey 10-15 (1.0.214): a report from the end-of-game screen came without a screenshot. Each <img> used to be
+ * inlined at its NATURAL size, once per element: a log die face is a large PNG drawn at about 16 px, so a full game
+ * log (the 400-line match ring, two faces per roll) made the SVG hundreds of MB (measured in Chromium: 7.8 MB with the
+ * demo log, 106 MB at 150 lines, 282 MB at 400), and decoding it alone overran the 1.5 s time-box. The picture never
+ * needs more pixels than the box shows at the capture scale, so the image is redrawn at that size: one uniform factor
+ * (the aspect ratio is kept, so object-fit lays it out as before), large enough to cover the box in both directions,
+ * never above the natural size. Null when the box paints nothing.
+ */
+export function inlineImageSize(naturalWidth: number, naturalHeight: number, boxWidth: number, boxHeight: number,
+  scale: number): { width: number; height: number } | null {
+  if (!(naturalWidth > 0) || !(naturalHeight > 0)) return null;
+  if (!(boxWidth > 0) || !(boxHeight > 0)) return null;
+  const s = scale > 0 && Number.isFinite(scale) ? scale : 1;
+  const factor = Math.min(1, Math.max((boxWidth * s) / naturalWidth, (boxHeight * s) / naturalHeight));
+  return {
+    width: Math.max(1, Math.min(naturalWidth, Math.ceil(naturalWidth * factor))),
+    height: Math.max(1, Math.min(naturalHeight, Math.ceil(naturalHeight * factor))),
+  };
+}
+
+/** One loaded <img> as a data URL via a 2D canvas, at `size` px; null when it is not loaded or cannot be read back
+ *  (taint). `pixelated` = the page draws it with image-rendering pixelated / crisp-edges (sprite portraits): the
+ *  redraw then samples nearest too, so the sprite is not blended before the copied CSS renders it (Astra 10-15). A data: source already at that size is used as it is (the end-of-game portraits are data: URLs extracted
+ *  at 3x, so they are redrawn smaller like any other image). */
+function imageToDataUrl(img: HTMLImageElement, doc: Document, size: { width: number; height: number },
+  pixelated: boolean): string | null {
   if (!img.complete || !img.naturalWidth || !img.naturalHeight) return null;
   const src = img.currentSrc || img.src;
-  if (src.startsWith('data:')) return src;
+  if (src.startsWith('data:') && size.width === img.naturalWidth && size.height === img.naturalHeight) return src;
   try {
     const canvas = doc.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
+    canvas.width = size.width;
+    canvas.height = size.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.drawImage(img, 0, 0);
+    ctx.imageSmoothingEnabled = !pixelated;
+    if (!pixelated) ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, size.width, size.height);
     return canvas.toDataURL('image/png');
   } catch {
     return null;
@@ -323,7 +354,8 @@ export async function snapshotDom(options: DomSnapshotOptions): Promise<DomSnaps
   const values = new Map<Element, string[]>(); // clone -> the computed values written (parents for inheritance)
   const shifts = new Map<Element, [number, number]>(); // clone child -> scroll offset of its scrolled parent
   const cssUrls = new Set<string>();
-  const imageCache = new Map<string, string | null>();
+  const imageCache = new Map<string, string | null>(); // `${src}|${w}x${h}|${smoothing}` -> data URL
+  let imgElementBytes = 0;
   const htmlValues = SNAPSHOT_PROPS.map((p) => win.getComputedStyle(doc.documentElement).getPropertyValue(p));
 
   const styleFor = (src: Element, dst: Element, cs: CSSStyleDeclaration, parent: string[] | null, full: boolean,
@@ -429,9 +461,30 @@ export async function snapshotDom(options: DomSnapshotOptions): Promise<DomSnaps
         values.set(img, own);
         removed.add(dst);
       } else if (tag === 'img' && src instanceof win.HTMLImageElement) {
-        const key = src.currentSrc || src.src;
-        if (!imageCache.has(key)) imageCache.set(key, imageToDataUrl(src, doc));
-        dst.setAttribute('src', imageCache.get(key) ?? TRANSPARENT_PIXEL);
+        let url: string | null = null;
+        const natW = src.naturalWidth;
+        const natH = src.naturalHeight;
+        const box = src.getBoundingClientRect();
+        // object-fit: none (and scale-down past the box) paint at the natural size, so those keep every pixel.
+        const fit = cs.getPropertyValue('object-fit');
+        const size = fit === 'none' || fit === 'scale-down'
+          ? (natW > 0 && natH > 0 && box.width > 0 && box.height > 0 ? { width: natW, height: natH } : null)
+          : inlineImageSize(natW, natH, box.width, box.height, scale);
+        if (size) {
+          const rendering = cs.getPropertyValue('image-rendering');
+          const pixelated = rendering === 'pixelated' || rendering === 'crisp-edges';
+          const key = `${src.currentSrc || src.src}|${size.width}x${size.height}|${pixelated ? 'p' : 's'}`;
+          if (!imageCache.has(key)) imageCache.set(key, imageToDataUrl(src, doc, size, pixelated));
+          url = imageCache.get(key) ?? null;
+          if (url && imgElementBytes + url.length > IMG_BYTES_CAP) url = null;
+          if (url) imgElementBytes += url.length;
+        }
+        dst.setAttribute('src', url ?? TRANSPARENT_PIXEL);
+        // The layout size stays the natural one wherever CSS leaves it to the image (the redraw is smaller).
+        if (natW > 0 && natH > 0 && !src.hasAttribute('width') && !src.hasAttribute('height')) {
+          dst.setAttribute('width', String(natW));
+          dst.setAttribute('height', String(natH));
+        }
         dst.removeAttribute('srcset');
         dst.removeAttribute('loading');
       } else if (tag === 'input' && src instanceof win.HTMLInputElement) {

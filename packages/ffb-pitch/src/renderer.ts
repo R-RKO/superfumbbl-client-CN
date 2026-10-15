@@ -11264,13 +11264,14 @@ export class PitchRenderer {
           // players must NOT get the "STUNNED" caption (the X still renders as the down mark).
           // Owner 09-15 (r2): downMark=false — the faked STUNNED stub keeps the lying pose, shadow and stun tint, but
           // the X is not drawn on injured players in the box, whatever the sprite set.
-          token = this.buildPlayerToken(
+          // Owner 10-15 (drunkenmonkey report): box players always face the camera, whatever the idle-facing setting.
+          token = withPortraitFacing(() => this.buildPlayerToken(
             player, stub, isHome, team, dugoutBaseline, true, false, false,
             section.label === 'RESERVES'
               ? renderedReservePlacements.some((other) => other.column === column && other.x > x)
               : undefined,
             false,
-          );
+          ));
           // Dwarfen Wisdom re-setup gate (SR-119-adjacent, 58062c45): the server flips an
           // ineligible reserve's base state RESERVE→PRONE while it sits in the box (self-restores
           // on leave()). Key strictly off that server-sent base — reusing the same inactive

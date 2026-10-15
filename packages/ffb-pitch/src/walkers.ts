@@ -263,6 +263,9 @@ interface WalkerTokenRecord {
   isHome: boolean;
   facingGeometry: FacingGeometry;
   facing: Dir8;
+  /** Owner 10-15 (drunkenmonkey report): built for a portrait or a dugout box - always faces the camera, whatever the
+   *  "idle players face the camera" setting, and every later re-facing keeps it on S. */
+  pinnedSouth?: boolean;
 }
 
 let preparationGeneration = 0;
@@ -771,6 +774,11 @@ export function walkSheetFor(
   return undefined;
 }
 
+/** The idle facing of an existing walker: a pinned (portrait / dugout) walker always faces the camera. */
+function restFacing(record: WalkerTokenRecord): Dir8 {
+  return record.pinnedSouth ? 'S' : defaultFacing(record.isHome, record.facingGeometry, record.facing);
+}
+
 function defaultFacing(isHome: boolean, geometry: FacingGeometry, previous: Dir8): Dir8 {
   if (walkFaceCamera) return 'S'; // toward the camera = screen-south under every orientation/flip
   const forward = isHome ? geometry.homeForward : geometry.awayForward;
@@ -940,6 +948,7 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
     isHome,
     facingGeometry: facing,
     facing: initialFacing,
+    pinnedSouth: portraitFacingDepth > 0,
   };
   walkerTokens.set(token, record);
   syncCastShadow(record);
@@ -1282,8 +1291,12 @@ export function tickWalkers(
     const last = record.lastPos;
     let moved = false;
     if (last && (Math.abs(x - last.x) > 0.01 || Math.abs(y - last.y) > 0.01)) {
-      record.facing = dir8(x - last.x, y - last.y, record.facing);
-      travelFacing.set(record.playerId, record.facing);
+      // Astra 10-15: a pinned (portrait / dugout box) walker sliding between box slots keeps facing the camera and
+      // leaves no travel facing behind for the player's next token.
+      if (!record.pinnedSouth) {
+        record.facing = dir8(x - last.x, y - last.y, record.facing);
+        travelFacing.set(record.playerId, record.facing);
+      }
       record.movingUntil = now + MOTION_HOLD_MS;
       if (record.motionStart == null) record.motionStart = now;
       moved = true;
@@ -1305,7 +1318,7 @@ export function tickWalkers(
     if (!inMotion && activeWalkerByOwner.get(record.ownerId) !== record.playerId
       && (record.wasInMotion || travelFacing.has(record.playerId))) {
       travelFacing.delete(record.playerId);
-      record.facing = defaultFacing(record.isHome, record.facingGeometry, record.facing);
+      record.facing = restFacing(record);
     }
     record.wasInMotion = inMotion;
     if (!inMotion || !walkAnimation) {
@@ -1318,7 +1331,7 @@ export function tickWalkers(
       const segment = Math.min(tween.waypoints.length - 2, Math.floor(elapsed / tween.segmentMs));
       const a = tween.waypoints[segment]!;
       const b = tween.waypoints[segment + 1]!;
-      if (!moved) { record.facing = dir8(b.x - a.x, b.y - a.y, record.facing); travelFacing.set(record.playerId, record.facing); }
+      if (!moved && !record.pinnedSouth) { record.facing = dir8(b.x - a.x, b.y - a.y, record.facing); travelFacing.set(record.playerId, record.facing); }
       const fps = walkFps ?? record.asset.spec.fps;
       setWalkerFrame(record, 1 + Math.floor(elapsed / (1000 / fps)) % (record.asset.spec.columns - 1));
     } else {
@@ -1354,7 +1367,7 @@ export function resetWalkerFacing(playerId: string | null): void {
   if (playerId == null) travelFacing.clear(); else travelFacing.delete(playerId);
   for (const record of liveWalkers.values()) {
     if (playerId != null && record.playerId !== playerId) continue;
-    record.facing = defaultFacing(record.isHome, record.facingGeometry, record.facing);
+    record.facing = restFacing(record);
     setWalkerFrame(record, record.asset.spec.idleColumn);
     dirtyOwners.add(record.ownerId);
   }
@@ -1365,7 +1378,7 @@ export function refreshWalkerFacing(ownerId: symbol, geometry: FacingGeometry): 
   for (const record of liveWalkers.values()) {
     if (record.ownerId !== ownerId) continue;
     record.facingGeometry = geometry;
-    record.facing = defaultFacing(record.isHome, geometry, record.facing);
+    record.facing = restFacing(record);
     setWalkerFrame(record, record.asset.spec.idleColumn);
   }
   if ([...liveWalkers.values()].some((record) => record.ownerId === ownerId)) dirtyOwners.add(ownerId);
@@ -1395,7 +1408,7 @@ export function setWalkFaceCamera(on: boolean): void {
   if (walkFaceCamera === on) return;
   walkFaceCamera = on;
   for (const record of liveWalkers.values()) {
-    record.facing = defaultFacing(record.isHome, record.facingGeometry, record.facing);
+    record.facing = restFacing(record);
     setWalkerFrame(record, record.asset.spec.idleColumn);
     dirtyOwners.add(record.ownerId);
   }
