@@ -77,6 +77,38 @@ Launch "Super FUMBBL" from the application menu. In-app patches install on their
 
 Use the AppImage with the Steam Deck steps above from step 2.
 
+### Troubleshooting: freezes, a blank window or graphics glitches
+
+On Linux the client draws through WebKitGTK. On some combinations of graphics driver and desktop, most often NVIDIA on a Wayland session, WebKitGTK and the driver disagree. The client can then freeze (often once a game or a spectated game is on screen), show a blank or white window, or flicker. Messages in the terminal such as `GLib-GObject-CRITICAL` or `Error 71 (Protocol error)` usually come from this layer.
+
+Try these one at a time, launching from a terminal so you can see the result. Replace the path with wherever your AppImage lives.
+
+1. Turn off WebKit's DMA-BUF renderer. This fixes most freezes and blank windows, at a small cost in drawing speed:
+   ```bash
+   WEBKIT_DISABLE_DMABUF_RENDERER=1 ~/Applications/SuperFUMBBL_*_Linux_amd64.AppImage
+   ```
+2. NVIDIA on Wayland only: turn off explicit sync instead:
+   ```bash
+   __NV_DISABLE_EXPLICIT_SYNC=1 ~/Applications/SuperFUMBBL_*_Linux_amd64.AppImage
+   ```
+3. Last resort, if neither helps: turn off accelerated compositing. Drawing is slower with this one:
+   ```bash
+   WEBKIT_DISABLE_COMPOSITING_MODE=1 ~/Applications/SuperFUMBBL_*_Linux_amd64.AppImage
+   ```
+
+When one of them works, make it permanent. For a menu entry, edit its `.desktop` file (copy it to `~/.local/share/applications/` first) and put `env WEBKIT_DISABLE_DMABUF_RENDERER=1` (or the variable that worked) at the start of the `Exec=` line. For a Steam shortcut, put `WEBKIT_DISABLE_DMABUF_RENDERER=1 %command%` in its Launch Options.
+
+If none of them helps, send a report with the Report button in the client (it attaches the client's logs), and include:
+- your GPU and driver version, and the output of `echo $XDG_SESSION_TYPE`;
+- whether it happens in your own games, when spectating, in replays, or everywhere;
+- what the terminal printed when it froze.
+
+The AppImage bundles its own WebKit, so your system's WebKitGTK version only matters for the `.deb`.
+
+### Troubleshooting: black first-open intro
+
+If the intro video stays black, it gives up by itself after a few seconds, and Esc, Enter, Space or a click skips it. To skip it from the start, launch with `--skip-intro` or set `SUPER_FUMBBL_SKIP_INTRO=1` (installer 1.0.206 or later).
+
 
 ```bash
 pnpm install
