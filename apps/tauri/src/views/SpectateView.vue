@@ -5639,7 +5639,7 @@ function buildInduceCards(options: PhaseOption[], picks: Record<string, number>,
       // Paired stars (Grak/Crumbleberry, Dribl/Drull) are one atomic 0-cost half upstream.
       costLabel: option.available ? (option.cost > 0 ? fmtGold(option.cost) : '—') : '—',
       countLabel: blade === 'stars'
-        ? (taken > 0 ? 'Hired' : '1 available')
+        ? (taken > 0 ? 'Hired' : '') // owner 10-15: no "1 available" line on star cards
         : `${taken} of ${option.max} ${blade === 'mercenaries' ? 'hired' : 'taken'}`,
       portrait: inducePortrait(option.key, team),
       stats: induceStats(pos),

@@ -34,7 +34,7 @@ export interface PickerCard {
   key: string;
   name: string;
   cost: number;
-  /** "N of M taken" / "N of M hired" / "1 available" | "Hired". */
+  /** "N of M taken" / "N of M hired" / "Hired"; empty for an unhired star (no line drawn). */
   countLabel: string;
   /** Paired stars (Grak/Crumbleberry, Dribl/Drull) show "â€”" on the free half. */
   costLabel: string;
@@ -475,7 +475,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
             </div>
             <div class="ind-card-id">
               <div class="ind-card-name">{{ c.name }}</div>
-              <div class="ind-card-count">{{ c.countLabel }}</div>
+              <div v-if="c.countLabel" class="ind-card-count">{{ c.countLabel }}</div>
             </div>
             <span class="ind-card-cost">{{ c.costLabel }}</span>
           </div>

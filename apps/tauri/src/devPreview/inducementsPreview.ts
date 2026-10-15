@@ -116,7 +116,7 @@ function pickerCards(): Record<Blade, PickerCard[]> {
     out[blade].push({
       key: option.key, name: option.label, cost: option.cost,
       costLabel: option.cost > 0 ? `${option.cost / 1000}k` : '—',
-      countLabel: blade === 'stars' ? (taken > 0 ? 'Hired' : '1 available')
+      countLabel: blade === 'stars' ? (taken > 0 ? 'Hired' : '') // owner 10-15: no "1 available" line on star cards
         : `${taken} of ${option.max} ${blade === 'mercenaries' ? 'hired' : 'taken'}`,
       portrait: { url: null, glyph: blade === 'inducements' ? (GLYPH[option.key] ?? '◆') : blade === 'stars' ? '★' : '⚔' },
       stats: statChips(option.key), skills: SKILLS[option.key] ?? [], special: SPECIAL[option.key] ?? null,
