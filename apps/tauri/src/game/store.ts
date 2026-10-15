@@ -12871,8 +12871,8 @@ interface PlannerPlan {
    *    declined, reroll failed, or none on offer). The logged gaze-move then reaches bb2025 StepEndMoving:264-284,
    *    which republishes the squares and pushes a Move sequence with no stack, so StepInitMoving:161-175 waits for a
    *    NEW clientMove. A successful (re)roll clears the mark: the server then performs the original move itself.
-   *  The player has not moved; the same still-offered square must be sent once more, exactly as upstream's coach
-   *  clicks it again.
+   *    The player has not moved. Owner 10-14 (final): the plan is then CLEARED and the coach plans a new move, as
+   *    upstream's coach does (plannerEndForBloodlustReplan); nothing is re-sent (the 10-08 resend is retired).
    *  - `animalSavagery` (owner commission 10-08): a lash-out against an OPPONENT that does not end the activation
    *    (bb2025 AnimalSavageryBehaviour:280-284, bb2020 :227-230) publishes MOVE_STACK = null and USE_ALTERNATE_LABEL,
    *    so the Move sequence jumps to END_MOVING once the victim is fully resolved. The squares are re-offered several
@@ -12914,6 +12914,14 @@ interface PlannerPlan {
   failedGate: string | null;
   /** Astra 10-10: the server echoed this Blitz plan's declare (acting player + blitzMove) at least once. */
   blitzDeclareSeen?: boolean;
+  /** Owner 10-14 (Astra review of the JLeav fix): BB2025 rolls a Blitz's Bloodlust in SelectBlitzTarget's activation
+   *  steps (generator SelectBlitzTarget:20, ActivationSequenceBuilder:96), on the target selection, while this plan is
+   *  still DECLARING. A final failure has no change-action dialog (BLITZ_MOVE is not in BloodLustBehaviour's list),
+   *  and StepSelectBlitzTargetEnd (bb2025 :103-113) then keeps BLITZ_MOVE, marks the Blitz used and re-selects: the
+   *  server is back in blitz move selection with nothing spent. The plan's walk and block were planned before the
+   *  failure, so the plan is cleared there and the coach plans again, exactly as for a spent move step. Set by a
+   *  failed `bloodLustRoll` for the plan's player before any step left, cleared by a successful (re)roll. */
+  blitzBloodlustFailed?: boolean;
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
    *  server republish of that target, never the surviving entry from the prior roll generation. */
   sentOfferRevisions: number[];
@@ -13315,6 +13323,24 @@ function plannerFlush(reason: string) {
   log('system', `⚠ ${text}`);
   state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
 }
+/** Owner 10-14 (JLeav, FUMBBL g1953483): a final failed Bloodlust roll spent the plan's sent step and the server is
+ *  selecting a move again (see the caller in plannerAdvance). The plan ends like any retired plan (its watchdog,
+ *  lash wake and held block / foul choices go with it; plannerSet bumps plannerRevision, so every view overlay bound
+ *  to the plan clears), the spent step's local movement intent is dropped (the server never moved the player, so the
+ *  token settles on its square and nothing reads the actor as mid-walk), and the coach is told to plan again. The
+ *  activation, its action and the server's offered squares are untouched: the player stays the armed mover. Nothing
+ *  is sent. */
+function plannerEndForBloodlustReplan(p: PlannerPlan, spentTarget: [number, number] | null): void {
+  plannerRetireQuietly(spentTarget
+    ? 'a failed Bloodlust roll spent the planned step; the coach plans a new move'
+    : 'Bloodlust failed on the blitz target selection; the coach plans a new move');
+  const intent = state.movementIntent;
+  if (spentTarget && intent && intent.playerId === p.playerId && !intent.failureConfirmed
+      && intent.to[0] === spentTarget[0] && intent.to[1] === spentTarget[1]) state.movementIntent = null;
+  const text = 'Bloodlust: plan a new move.';
+  log('system', `play: ${text}`);
+  state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+}
 function plannerPData(pid: string) { return game.value?.fieldModel.playerDataArray.find((d) => d.playerId === pid); }
 function plannerBase(pid: string): number | null { const d = plannerPData(pid); return d ? (playerStateBase(d.playerState) ?? 0) : null; }
 function plannerCoord(pid: string): [number, number] | null { const c = plannerPData(pid)?.playerCoordinate as [number, number] | undefined; return c ? [c[0], c[1]] : null; }
@@ -13687,6 +13713,16 @@ function plannerAdvance() {
           // until SELECT_BLITZ_TARGET_END has run - the team's Blitz is marked used and, for a walk, the first square
           // is offered afresh. The next applied frame resumes this same plan; a lost activation retires it below.
           if (!actingHasBlocked(g) && !plannerBlitzMoveReady(p, g)) return;
+          // Owner 10-14: a final failed Bloodlust on the target selection (PlannerPlan.blitzBloodlustFailed). The
+          // server is in blitz move selection (the readiness gate above) and says the failure is final in the model
+          // (sufferingBloodlust); the staged rerolled die is shown first (releaseRerollResultPin is the wake). Nothing
+          // of the plan is sent: it is cleared for a re-plan.
+          if (p.blitzBloodlustFailed
+              && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true) {
+            if (state.rerollResultPending) return;
+            plannerEndForBloodlustReplan(p, null);
+            return;
+          }
         }
         // Send one live-coordinate move/blitzMove square per server echo; Blitz must retain blitzMove for its block.
         if (p.moving) {
@@ -13749,23 +13785,38 @@ function plannerAdvance() {
         // resolved, the destination must be freshly offered, and clearing the marker before send prevents a
         // duplicate applied frame from issuing it twice. A refused transport re-arms for the next model frame.
         const rescuedByReRoll = p.retryResolvedIdx === p.sentIdx && (!curRolls || curRolls.size === 0);
-        // Owner 10-08 (fork g1012 seq 74-90, "a declined reroll holds the planner until it fails open"): a FINAL failed
-        // Bloodlust roll spends the move command without moving the player (PlannerPlan.spentMove). The server says
-        // the failure is final in the model itself: bb2025 BloodLustBehaviour:78/102 sets sufferingBloodLust in the
-        // same step execution that drops the move stack (:124); until then (the reroll offer is open, or an accepted
-        // reroll is still to be reported) nothing is sent. The resend is bounded like the rescued-dodge one below:
-        // the player is not at the sent destination, and the server has offered that exact destination AGAIN, from
-        // the player's current square, in a frame after the mark (and after the spent send). Without it the plan sat
-        // here for PLANNER_ABORT_MS.
+        // A FINAL failed Bloodlust roll spends the move command without moving the player (PlannerPlan.spentMove). The
+        // server says the failure is final in the model itself: bb2025 BloodLustBehaviour:78/102 sets sufferingBloodLust
+        // in the same step execution that drops the move stack (:124); until then (the reroll offer is open, or an
+        // accepted reroll is still to be reported) the plan waits.
+        // Owner 10-14 (JLeav, FUMBBL g1953483, final ruling; supersedes the 10-08 resend of g1012): the plan is CLEARED
+        // and the coach re-enters the move, exactly as upstream leaves its coach in move selection with no stack (the
+        // chance to re-plan, e.g. toward a thrall to bite). Nothing is sent on the coach's behalf. The clear waits for
+        // the same proof the old resend did, so the notice never comes up over a server that is not selecting a move:
+        // the player is not at the sent destination, and the server has offered that destination AGAIN, from the
+        // player's current square, in a frame after the mark (bb2025 StepEndMoving:278-284). Wakes: every applied
+        // frame, and releaseRerollResultPin for the staged rerolled die. Without a clear the plan sat for
+        // PLANNER_ABORT_MS (the 10-08 stall).
         const spent = p.spentMove?.idx === p.sentIdx ? p.spentMove : null;
         const spentFinal = !!spent && spent.cause === 'bloodlust' && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true;
+        if (spentFinal && !rescuedByReRoll) {
+          // Astra 10-08: an ACCEPTED reroll that fails again is staged (splash, then the rerolled die); the roll beat
+          // stays, the plan ends only after that result has been shown.
+          if (state.rerollResultPending) return;
+          const spentTarget = p.route[p.sentIdx];
+          const priorRevision = Math.max(p.sentOfferRevisions[p.sentIdx] ?? -1, spent!.offerFloor);
+          if (!spentTarget || !currentMoveOffer(p.playerId, spentTarget, priorRevision)) return;
+          if (!moveSquareInfo(g).has(`${spentTarget[0]},${spentTarget[1]}`)) return;
+          plannerEndForBloodlustReplan(p, spentTarget);
+          return;
+        }
         // Owner commission 10-08: an Animal Savagery lash-out against an opponent spends the move the same way
         // (PlannerPlan.spentMove). Its resend waits for the frame that proves the server is back in move selection
         // (readyRevision, set in plannerOnModelApplied): squares re-offered earlier, while the victim is still being
         // resolved, never release it.
         const lash = !rescuedByReRoll && spent?.cause === 'animalSavagery' ? spent : null;
         const lashReady = !!lash && lash.readyRevision != null;
-        if (rescuedByReRoll || spentFinal || lashReady) {
+        if (rescuedByReRoll || lashReady) {
           // Astra 10-08: an ACCEPTED reroll that fails again is staged (splash, then the rerolled die). The roll
           // beat stays: nothing is re-sent until that result has been shown. releaseRerollResultPin wakes the plan.
           if (!rescuedByReRoll && state.rerollResultPending) return;
@@ -13800,7 +13851,7 @@ function plannerAdvance() {
             : gameStore.o66Move(p.playerId, [retry], priorRevision);
           if (!accepted) {
             if (wasRescued) p.retryResolvedIdx = p.sentIdx;
-            if (spentFinal || lash) p.spentMove = spent;
+            if (lash) p.spentMove = spent;
             plannerClearAbort();
             return;
           }
@@ -17826,14 +17877,22 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     if (r.successful === false) p.failedGate = String(r.confusionSkill ?? '').trim() || 'negatrait';
     else if (r.successful === true) p.failedGate = null;
   }
+  // Owner 10-14: a Blitz's Bloodlust is rolled on the target selection, before any step (PlannerPlan.blitzBloodlustFailed).
+  if (p.phase === 'declaring' && (p.actKind === 'blitz' || p.actKind === 'blitzWalk')) {
+    for (const r of ((cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown }[] } | undefined)?.reports ?? [])) {
+      if (String(r.reportId ?? '') !== 'bloodLustRoll' || String(r.playerId ?? '') !== p.playerId) continue;
+      if (r.successful === false) p.blitzBloodlustFailed = true;
+      else if (r.successful === true) p.blitzBloodlustFailed = false;
+    }
+  }
   // Resolve a square's rolls only after arrival and only on success; failures remain pending for reroll/fall.
   if (p.phase === 'moving' && p.sentIdx >= 0) {
     const cur = p.squareResolutions[p.sentIdx];
     const target = p.route[p.sentIdx];
     const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown; attackerId?: unknown; defenderId?: unknown }[] } | undefined)?.reports ?? [];
     // Owner 10-08: Bloodlust is rolled on the activation's first command, BEFORE the move. A failure marks the sent
-    // square as possibly spent (plannerAdvance resends only once the model says the failure is final); a success,
-    // first roll or reroll, means the server carries the original move out itself.
+    // square as possibly spent (owner 10-14: plannerAdvance clears the plan for a re-plan once the model says the
+    // failure is final); a success, first roll or reroll, means the server carries the original move out itself.
     // Owner commission 10-08: an Animal Savagery lash-out against an OPPONENT (bb2025 AnimalSavageryBehaviour:
     // 280-284, bb2020 :227-230) drops the move stack too. The `animalSavagery` report names the victim; only a
     // rostered player of the OTHER team marks the move as spent. A team-mate lash keeps the stack (the server moves
@@ -17844,7 +17903,7 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     const sentCoord = plannerCoord(p.playerId);
     const atSent = !!sentCoord && !!target && sentCoord[0] === target[0] && sentCoord[1] === target[1];
     // Owner 10-10: an opponent's Shadowing / Diving Tackle choice opened over an unechoed sent square (see
-    // PlannerPlan.opponentPromptOverSend). Marked once, never over a Bloodlust / lash-out mark (their own resend
+    // PlannerPlan.opponentPromptOverSend). Marked once, never over a Bloodlust / lash-out mark (their own clear / resend
     // rules stay in charge); the plan ends on the first frame that leaves no dialog, BEFORE this frame's reports can
     // settle a roll and release any send (a Diving Tackle that forces a reroll of the previous square included).
     if (g && target && !atSent && !p.spentMove && !p.opponentPromptOverSend && plannerOpponentReactionOpened(g, cmd)) p.opponentPromptOverSend = true;
