@@ -165,7 +165,7 @@ import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndCo
 import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
-import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
+import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
@@ -173,6 +173,7 @@ import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
 import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
+import { blitzTargetCostText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
 import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
@@ -6790,6 +6791,25 @@ const targetDeclarePrompt = computed(() => {
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return null;
   return deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET' ? 'Choose a blitz target' : null;
 });
+// Owner 10-15: choosing the target is what spends the team's Blitz (and rolls the player's negatraits), so say so
+// where the target is chosen / confirmed. Server state only: the acting player's skills.
+const blitzCostNote = computed(() => {
+  const g = gameStore.game.value;
+  if (!g) return null;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!actingId) return null;
+  // Already spent (e.g. Catch of the Day set blitzUsed before the target step): choosing the target costs nothing more.
+  if (actingTeamBlitzUsed(g, actingId) === true) return null;
+  return blitzTargetCostText(blitzTargetRollTraits(g, actingId));
+});
+/** The Confirm Blitz bar is up and the team's Blitz is not yet spent: the note sits above it. */
+const blitzConfirmCostNote = computed(() => {
+  if (aggroConfirmLabel.value !== 'Confirm Blitz' && o66PendingConfirmLabel.value !== 'Confirm Blitz') return null;
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (actingTeamBlitzUsed(g, actingId) === true) return null;
+  return blitzCostNote.value;
+});
 function trackTargetDeclaration() {
   cancelAnimationFrame(targetDeclareRaf);
   const step = () => {
@@ -6801,8 +6821,10 @@ function trackTargetDeclaration() {
       .find((d) => d.playerId === actingId)?.playerCoordinate);
     const p = sq ? renderer.squareToCanvas(sq) : null;
     if (p) o66TargetDeclarePos.value = {
-      x: Math.min(Math.max(p.x, 90), Math.max(host.clientWidth - 90, 90)),
-      y: Math.max(p.y - 48, 8),
+      // The cost line makes the prompt up to ~340px wide, so keep its centre half that from each edge.
+      x: Math.min(Math.max(p.x, blitzCostNote.value ? 175 : 90), Math.max(host.clientWidth - (blitzCostNote.value ? 175 : 90), blitzCostNote.value ? 175 : 90)),
+      // The cost line adds up to ~4 wrapped lines above the anchor; keep the whole prompt on screen.
+      y: Math.max(p.y - 48, blitzCostNote.value ? 120 : 8),
     };
     targetDeclareRaf = requestAnimationFrame(step);
   };
@@ -6921,6 +6943,54 @@ watch(() => gameStore.state.plannedPassRetired?.seq, (seq) => {
   passTemplateForced.value = true;
   o66ArmPassTemplate(actingId);
 });
+
+// Owner 10-15 (JLeav: hand-offs "auto handoff when you click the receiver even if you path out another tile"): the
+// pass-at-destination rule applied to hand-offs. With a route plotted, the hand-off is made from its destination.
+/** The plotted route's destination while the acting player is on a declared Hand-off (null = no route). */
+function plannedHandOffDestination(g: NonNullable<typeof gameStore.game.value>): [number, number] | null {
+  const pend = o66PendingMove.value;
+  if (!pend || pend.route.length === 0) return null;
+  if (!plannedHandOffAction(g)) return null;
+  return [pend.dest[0], pend.dest[1]];
+}
+/** The acting player's declared Hand-off action (handOverMove, or the plain handOver), kept by the plan: it walks
+ *  under that declaration and never re-declares it. Null for any other action. */
+function plannedHandOffAction(g: NonNullable<typeof gameStore.game.value>): 'handOverMove' | 'handOver' | null {
+  const action = String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  return action === 'handOverMove' || action === 'handOver' ? action : null;
+}
+/** A teammate click during HAND_OVER with a route plotted: arm the Hand-off card measured from the destination, or
+ *  refuse with a toast when that teammate cannot take a hand-off there (not adjacent to the destination, not
+ *  standing). Never sends. Returns false (the caller keeps today's one-click hand-off from the current square) when
+ *  no route is plotted. */
+function armHandOffAtDestination(g: NonNullable<typeof gameStore.game.value>, actingId: string, receiverId: string): boolean {
+  const dest = plannedHandOffDestination(g);
+  if (!dest || !renderer) return false;
+  swallowBlockTargetSelection(receiverId); // the receiver click is the hand-off's, the acting player stays selected
+  const sq = playerSquareById(receiverId);
+  if (handOffReceiverIdsFrom(g, actingId, dest).includes(receiverId)
+      && renderer.armPlannedHandOff(receiverId, sq ? handOffCatchTargetAt(g, sq) : null)) return true;
+  const p = sq ? renderer.squareToCanvas(sq) : null;
+  showToast(`Not adjacent to ${squareLabel(dest[0], dest[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+  return true;
+}
+/** Confirming a Hand-off card armed from a planned destination: ONE planner plan walks the route one acked square at
+ *  a time (roll holds unchanged), then sends the hand-off from the destination. The store re-checks it at arrival
+ *  (reached the square, holds the ball, receiver still adjacent and standing) and sends nothing otherwise. Never
+ *  falls back to a hand-off from the current square: a stale card (route gone, receiver no longer adjacent to the
+ *  destination) sends nothing. */
+function commitPlannedHandOffFromDestination(actorId: string, receiverId: string, plannedOrigin: [number, number]): void {
+  const g = gameStore.game.value;
+  const pend = o66PendingMove.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!g || !actingId || actorId !== actingId || deriveClientState(g, o66Ctx()) !== 'HAND_OVER') return;
+  const dest = plannedHandOffDestination(g);
+  if (!pend || !dest || dest[0] !== plannedOrigin[0] || dest[1] !== plannedOrigin[1]) return;
+  const declareAction = plannedHandOffAction(g);
+  if (!declareAction || !handOffReceiverIdsFrom(g, actingId, dest).includes(receiverId)) return;
+  gameStore.startPlan({ playerId: actingId, actKind: 'handOver', route: pend.route, targetPlayerId: receiverId, declareAction });
+  o66PendingMove.value = null; renderer?.setO66Path([]);
+}
 
 // A nominated or committed Pass/Bomb/TTM landing drives the authoritative Pass requirement and the
 // optional over-target Catch requirement. The committed bridge matters for empty-square passes: nomination clears
@@ -9522,6 +9592,11 @@ function o66ConfirmPending(): boolean {
     renderer.confirmArmedAction();
     return true;
   }
+  // Owner 10-15: likewise a Hand-off armed over a plotted route confirms walk-then-hand-off.
+  if (st === 'HAND_OVER' && pend && actionModal.value?.mode === 'handoff' && renderer?.hasArmedAction()) {
+    renderer.confirmArmedAction();
+    return true;
+  }
   if (st === 'PASS' && pend && o66PendingThrowKind.value === 'pass' && o66PendingPass.value) {
     const square = o66PendingPass.value;
     o66PendingPass.value = null; o66PendingThrowKind.value = null;
@@ -10681,6 +10756,10 @@ onMounted(async () => {
         const clickState = deriveClientState(g, o66Ctx());
         const clickActingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
         if (playerId === clickActingId && requiresBlitzEndConfirmation(clickState)) return;
+        // Owner 10-15: with a route plotted during a Hand-off, a teammate click arms the Hand-off card from the route's
+        // destination (never the router's one-click hand-off from the current square).
+        if (clickState === 'HAND_OVER' && clickActingId && playerId !== clickActingId && gameStore.iControl(clickActingId)
+            && gameStore.iControl(playerId) && armHandOffAtDestination(g, clickActingId, playerId)) return;
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
         if (ix.kind === 'switchFriendlyActivation') {
           if (requiresBlitzEndConfirmation(clickState)) { requestEndActivation(); return; }
@@ -11161,9 +11240,12 @@ onMounted(async () => {
     // Owner 10-13 (pass at destination): with a route plotted, the armed Pass is thrown from the route's destination
     // after the walk. The card says so and the range ruler runs from that square to the target while it is up.
     const passFrom = req?.mode === 'pass' && settings.order66 ? (renderer?.plannedPassOrigin() ?? null) : null;
+    // Owner 10-15: a Hand-off armed over a plotted route is made from its destination; the card says so too.
+    const handOffFrom = req?.mode === 'handoff' && settings.order66 ? (renderer?.plannedPassOrigin() ?? null) : null;
     actionModal.value = req
       ? { seq: req.seq, mode: req.mode, targetId: req.targetId, rollText: req.rollText,
-          ...(passFrom ? { note: `Pass from ${squareLabel(passFrom[0], passFrom[1])} after moving` } : {}) }
+          ...(passFrom ? { note: `Pass from ${squareLabel(passFrom[0], passFrom[1])} after moving` } : {}),
+          ...(handOffFrom ? { note: `Hand-off from ${squareLabel(handOffFrom[0], handOffFrom[1])} after moving` } : {}) }
       : null;
     if (passFrom && req) { renderer?.setPassRuler(passFrom, req.targetSquare as [number, number]); actionModalPassRuler = true; }
     else if (actionModalPassRuler) { actionModalPassRuler = false; renderer?.setPassRuler(hailMaryPassRulerFrom(), null); }
@@ -11191,13 +11273,19 @@ onMounted(async () => {
     }
     actionTip.visible = false; // the anchored modal replaces the cursor tip once armed
   };
-  renderer.onActionConfirm = ({ mode, actorId, targetId, targetSquare, path }) => {
+  renderer.onActionConfirm = ({ mode, actorId, targetId, targetSquare, path, plannedOrigin }) => {
     actionModal.value = null;
     actionTip.visible = false;
     if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: no throw / foul under an open confirmation
     // Owner 10-13: in Order 66 the receiver click of a declared Pass arms this card. With a route plotted it commits
     // walk-then-pass as ONE planner plan (thrown from the destination once the walk is acked), never a pass from here.
     if (mode === 'pass' && settings.order66 && commitPlannedPassFromDestination(actorId, targetSquare as [number, number], targetId)) return;
+    // Owner 10-15: a Hand-off card armed from a planned destination commits walk-then-hand-off as ONE planner plan
+    // and never falls through to a hand-off from here.
+    if (mode === 'handoff' && settings.order66 && plannedOrigin) {
+      commitPlannedHandOffFromDestination(actorId, targetId, plannedOrigin as [number, number]);
+      return;
+    }
     const p = path as [number, number][];
     // LEGACY ONLY (order66=off): this action-modal hotbar is hidden in Order 66 (template v-if !settings.order66),
     // so o66 play NEVER reaches here — the o66 foul/pass teleport fix lives in onPlayerClick/onTilePick via
@@ -14186,6 +14274,8 @@ function sendChat() {
         <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="confirm-move confirm-aggro" tone="aggressive" :label="aggroConfirmLabel"
           :shortcut-code="settings.confirmKey" @activate="confirmAggroStage()" />
+        <div v-if="blitzConfirmCostNote && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
+          class="blitz-confirm-cost" data-testid="blitz-confirm-cost">{{ blitzConfirmCostNote }}</div>
         <!-- #48 (owner, confirm-bar parity): the same bar for a nominated o66 MOVE route / FOUL (mirrors the
              blitz/block bar; Space also confirms via o66ConfirmPending). Pass/hand-off stay single-click (EX-1). -->
         <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
@@ -15411,7 +15501,7 @@ function sendChat() {
 
         <!-- The blitz target-declaration prompt anchored over the acting player. -->
         <div v-if="o66TargetDeclarePos && targetDeclarePrompt" class="blitz-target-prompt"
-          :style="{ left: o66TargetDeclarePos.x + 'px', top: o66TargetDeclarePos.y + 'px' }">{{ targetDeclarePrompt }}</div>
+          :style="{ left: o66TargetDeclarePos.x + 'px', top: o66TargetDeclarePos.y + 'px' }">{{ targetDeclarePrompt }}<small v-if="blitzCostNote" class="blitz-cost-line" data-testid="blitz-target-cost">{{ blitzCostNote }}</small></div>
 
         <!-- #207/SR-241: NEW pre-roll surface. The planner has already held the chosen target, but no block command
              has fired. Only the four property-derived offers carried by the store are rendered; a plain player never
@@ -18684,6 +18774,16 @@ function sendChat() {
   white-space: nowrap;
   pointer-events: none;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.6);
+}
+.blitz-target-prompt .blitz-cost-line {
+  display: block; width: max-content; max-width: min(320px, 80vw); white-space: normal; text-align: center;
+  font-size: max(var(--ui-min-secondary-text-size, 13px), 0.7rem); font-weight: 600; color: var(--ui-text);
+}
+.blitz-confirm-cost {
+  position: absolute; z-index: 13; left: 50%; bottom: 184px; transform: translateX(-50%);
+  max-width: min(420px, calc(100% - 24px)); padding: 4px 10px; border-radius: 6px; text-align: center;
+  background: rgba(20, 22, 26, 0.92); border: 1px solid var(--ui-accent); color: var(--ui-text);
+  font-size: max(var(--ui-min-secondary-text-size, 13px), 0.75rem); font-weight: 600; pointer-events: none;
 }
 .block-alt-modal {
   position: absolute; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);

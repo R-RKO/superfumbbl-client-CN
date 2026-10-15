@@ -93,7 +93,8 @@ import {
 import { friendlySpectateError, spectateServerStatusError } from './spectateErrorMessage';
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
-import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, type WideRailActivationOption } from './logic/availableActions';
+import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
+import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -13578,6 +13579,20 @@ function plannedPassRefusal(p: NonNullable<typeof plannerPlan>): string | null {
   return null;
 }
 
+/** Owner 10-15 (hand-off at destination, the pass rule applied to hand-offs): why a walk-then-hand-off plan must NOT
+ *  hand off from the square it actually reached (null = hand off). Only plans with a walk are checked; a standing
+ *  plan keeps sendHandOverTarget's own gates unchanged. */
+function plannedHandOffRefusal(p: NonNullable<typeof plannerPlan>): string | null {
+  const g = game.value;
+  if (!g || !p.targetPlayerId || p.route.length === 0) return null;
+  const at = plannerCoord(p.playerId);
+  const dest = p.route[p.route.length - 1]!;
+  if (!at || at[0] !== dest[0] || at[1] !== dest[1]) return 'the player did not reach the planned square';
+  if (!holdsBall(g.fieldModel as unknown as HoldsBallFieldModel, p.playerId)) return 'the player is not holding the ball';
+  if (!handOffReceiverIdsFrom(g, p.playerId).includes(p.targetPlayerId)) return 'the receiver is no longer adjacent and able to take it';
+  return null;
+}
+
 /** Send the trailing act command (leg 3) and retire the plan — the derived act state / server resolution is the ack; we never hang on full resolution (opponent-side interception resolves independently). */
 function plannerFireAct() {
   const p = plannerPlan; if (!p) return;
@@ -13614,6 +13629,15 @@ function plannerFireAct() {
     if (!p.terminalSent) return;
   }
   else if (p.actKind === 'handOver' && p.targetPlayerId) {
+    // Owner 10-15: a walk-then-hand-off plan hands off from where the walk ENDED. Re-check it against the server's
+    // state at that square before the one CLIENT_HAND_OVER; a hand-off from the wrong square is never sent.
+    const refusal = p.terminalSent ? null : plannedHandOffRefusal(p);
+    if (refusal) {
+      log('system', `plan: HAND-OFF ${playerName(game.value!, p.playerId)} retired at the destination (${refusal})`);
+      state.actionNotice = { text: `Hand-off not made: ${refusal}. Pick a receiver again.`, seq: (state.actionNotice?.seq ?? 0) + 1 };
+      plannerSet(null); plannerClearAbort();
+      return;
+    }
     p.terminalSent = gameStore.sendHandOverTarget(p.targetPlayerId);
     if (!p.terminalSent) return;
   }
@@ -21339,9 +21363,11 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       }
       // Owner 2026-07-13 (humanizer review): playerAction is camelCase ('blitzMove') — split it BEFORE lowering, else the prompt read "End the current blitzmove?". Now → "End the current blitz move?".
       const action = String(dp?.playerAction ?? 'action').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+      const endingId = String((g.actingPlayer as { playerId?: string | null } | null | undefined)?.playerId ?? '');
       askYesNo({
         key: `confirmEnd:${String(dp?.playerAction ?? '')}`,
-        text: `End the current ${action}?`,
+        // Owner 10-15: a Blitz is spent when its target is chosen, so name the player and say whether it is used (server turnData only).
+        text: endActionConfirmText(dp?.playerAction, endingId ? playerName(g, endingId) : '', actingTeamBlitzUsed(g, endingId), `End the current ${action}?`),
         onAnswer: (yes) => {
           if (yes) sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef);
           else acknowledgeAnsweredDialogInstance(instanceKey, instanceRef);
@@ -28557,7 +28583,7 @@ export const gameStore = {
   /** ORDER 66 (#6.4): start a PLANNER COMMAND-QUEUE plan — declare→move→act, sequenced ONLY on server model
    *  syncs (no timers), replacing the timer-macro playerPass/playerFoul/playerHandOff. `route` excludes the
    *  start square (empty = a 0-waypoint declare→act, e.g. a standing pass). See plannerStart. */
-  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null; contactChoice?: boolean }): boolean {
+  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null; contactChoice?: boolean; declareAction?: string }): boolean {
     return plannerStart(input);
   },
   /** ORDER 66 (#6.4): is a planner command-queue plan currently in flight? (SpectateView suppresses re-entry

@@ -55,6 +55,7 @@ import {
 } from './geometry';
 import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
 import { markerAnchorFor, type MarkerSpriteSet } from './markerAnchor';
+import { eyeGougeRingColor, eyeGougeSizeBoost, type EyeGougeFit } from './eyeGougeRing';
 
 /** Owner 10-07: a token tagged with its marker sprite set (markerAnchor.ts). */
 type MarkerTaggedToken = Container & { markerSpriteSet?: MarkerSpriteSet };
@@ -88,6 +89,8 @@ import {
   walkerDecorLocalY,
   walkerDrawnFigureHeight,
   walkerFigureRatio,
+  walkerKitColor,
+  walkerFigureBox,
   walkerChestRatio,
   placeWalkerDecor,
   WALKER_REFERENCE_FIGURE_PX,
@@ -3972,8 +3975,9 @@ export class PitchRenderer {
     // Owner 10-13 (pass at destination): an armed Pass card was computed from the throw origin of the moment it was
     // armed (the planned destination, or the thrower's square with no plan). A re-plan, truncation or right-click
     // clear moves that origin, so the card's numbers no longer describe the throw: retire it (the coach re-clicks).
+    // Owner 10-15: the same for a Hand-off card armed from the planned destination (armPlannedHandOff).
     const a = this.armedAction;
-    if (a && a.mode === 'pass') {
+    if (a && (a.mode === 'pass' || (a.mode === 'handoff' && a.plannedOrigin))) {
       const origin = this.plannedPassOrigin();
       if ((origin?.[0] ?? null) !== (a.plannedOrigin?.[0] ?? null) || (origin?.[1] ?? null) !== (a.plannedOrigin?.[1] ?? null)) {
         this.armedAction = null;
@@ -4802,8 +4806,8 @@ export class PitchRenderer {
   onActionTarget: ((req: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; targetSquare: Square; path: Square[]; rollText: string } | null) => void) | null = null;
   /** The armed action was CONFIRMED (second click on the target / modal button /
    *  the movement confirm bar) — the host commits the path + wire command. */
-  onActionConfirm: ((req: { mode: 'foul' | 'handoff' | 'pass'; actorId: string; targetId: string; targetSquare: Square; path: Square[] }) => void) | null = null;
-  private armedAction: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; square: Square; rollText: string; plannedOrigin?: Square | null } | null = null;
+  onActionConfirm: ((req: { mode: 'foul' | 'handoff' | 'pass'; actorId: string; targetId: string; targetSquare: Square; path: Square[]; plannedOrigin?: Square | null }) => void) | null = null;
+  private armedAction: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; square: Square; rollText: string; plannedOrigin?: Square | null; catchTarget?: number | null } | null = null;
   /** Monotonic DOM occurrence for the host confirmation card. A cancelled target selected again is a new card. */
   private armedActionSeq = 0;
   private actionHoverActive = false;
@@ -6613,7 +6617,13 @@ export class PitchRenderer {
       this.activationFadePaint.set(refreshStep.playerId, preservedActivationFadePaint);
     }
     this.preSetupCoords = this.game ? preSetupPlacements(this.game) : new Map();
-    if (!this.game) { refreshCompleted = true; return; }
+    if (!this.game) {
+      // Owner 10-15 (east-west loading): with no game the dugouts and the turn track draw NOTHING (they hide until the first
+      // game state arrives), and a leftover from a previous game must not stay on screen at a stale placement.
+      this.drawDugouts();
+      this.drawTurnTrack();
+      refreshCompleted = true; return;
+    }
     // Owner 2026-07-08: expire a ball throw arc unconditionally after its flight — the per-frame
     // clear lives inside the on-pitch ball branch, so a throw that ends OFF-pitch (incomplete /
     // out of bounds) would otherwise leave `pendingBallThrow` armed and fire a stale arc later.
@@ -6670,7 +6680,7 @@ export class PitchRenderer {
       // data.playerState like CONFUSED always did.
       const acting = this.game.actingPlayer as { playerId?: string | null; sufferingBloodlust?: boolean } | undefined;
       const bloodlust = !!acting?.sufferingBloodlust && acting.playerId === data.playerId;
-      if (!tokenWasPreserved) this.addStateMarkers(token, data.playerState, bloodlust, data.playerId, coordinate);
+      if (!tokenWasPreserved) this.addStateMarkers(token, data.playerState, bloodlust, data.playerId, coordinate, isHome);
       // Owner 08-18 (bullseye unify): the blitz target's ONLY mark is SpectateView's persistent
       // #94 DOM 🎯 badge (token-centred via tokenBodyCenterToCanvas). The renderer's transient
       // SELECTED_BLITZ_TARGET 🎯 (addBlitzTargetCrosshair) doubled it and is retired; the flag
@@ -8693,6 +8703,29 @@ export class PitchRenderer {
     return true;
   }
 
+  /** Owner 10-15 (hand-off at destination): with an Order-66 route plotted for the selected player, arm the Hand-off
+   *  card for `targetId` measured from the route's DESTINATION (the hand-off is made there after the walk). Refuses
+   *  (false, nothing armed) without a plotted route, or when the receiver is not an eligible teammate ADJACENT to the
+   *  destination. Never plots or changes a path. `catchTarget` is the host's full hand-off catch requirement (weather
+   *  and skill modifiers included); the local estimate is only a fallback. */
+  armPlannedHandOff(targetId: string, catchTarget?: number | null): boolean {
+    const g = this.game;
+    const from = this.plannedPassOrigin();
+    if (!g || !from || !this.selectedPlayerId) return false;
+    const data = g.fieldModel.playerDataArray.find((d) => d.playerId === targetId);
+    if (!data || !isOnPitch(data.playerCoordinate)) return false;
+    const at: Square = [data.playerCoordinate![0], data.playerCoordinate![1]];
+    if (Math.max(Math.abs(at[0] - from[0]), Math.abs(at[1] - from[1])) !== 1) return false;
+    const localText = this.actionRollText('handoff', targetId);
+    if (!localText) return false;
+    const rollText = catchTarget != null ? `HAND ${catchTarget}+` : localText;
+    const seq = ++this.armedActionSeq;
+    this.armedAction = { seq, mode: 'handoff', targetId, square: at, rollText, plannedOrigin: from, catchTarget: catchTarget ?? null };
+    this.redrawOverlays();
+    this.onActionTarget?.({ seq, mode: 'handoff', targetId, targetSquare: [at[0], at[1]], path: this.getPlannedPath(), rollText });
+    return true;
+  }
+
   /** True while a foul/handoff/pass target is armed (the confirm bar commits it). */
   hasArmedAction(): boolean {
     return this.armedAction !== null;
@@ -8706,7 +8739,7 @@ export class PitchRenderer {
     const path = this.getPlannedPath();
     const selected = this.selectedPlayerId;
     this.clearSelection();
-    if (selected) this.onActionConfirm?.({ mode: a.mode, actorId: selected, targetId: a.targetId, targetSquare: a.square, path });
+    if (selected) this.onActionConfirm?.({ mode: a.mode, actorId: selected, targetId: a.targetId, targetSquare: a.square, path, plannedOrigin: a.plannedOrigin ?? null });
   }
 
   /** Cancel the armed action (modal Cancel); keeps the selection + path. */
@@ -9838,7 +9871,8 @@ export class PitchRenderer {
       // interceptor tips: ✋ with a prohibited slash + the interference roll
       for (const it of interceptors(this.game, this.selectedPlayerId, from, a.square)) this.overlayLayer.addChild(this.buildInterceptTip(it.square, it.roll));
     } else if (a.mode === 'handoff') {
-      const target = catchTarget(this.game, a.targetId);
+      // Owner 10-15: a destination card's chip shows the same host-supplied requirement as the card.
+      const target = a.catchTarget ?? catchTarget(this.game, a.targetId);
       if (target != null) targetChip('Hand', target, a.square, 1.2, 0x2ec24f);
     } else {
       chip(a.rollText, a.square, 1.2); // Armour is a 2D6 total, not a D6 face.
@@ -11300,7 +11334,7 @@ export class PitchRenderer {
           // on-pitch (confused/rooted/chomped/dodgy-snack/gaze) — reserves never have one, so skip them.
           // Pass the REAL playerState (not the faked-STUNNED lying stub); bloodlust is an acting-player
           // property → false. Markers are token children so they ride the dugout token's scale.
-          if (section.label !== 'RESERVES') this.addStateMarkers(token, data.playerState, false, data.playerId);
+          if (section.label !== 'RESERVES') this.addStateMarkers(token, data.playerState, false, data.playerId, undefined, isHome);
           if (base === PlayerStateBase.EXHAUSTED) this.addHeatExhaustedMarker(token); // owner 10-03: chest mount, like DISTRACTED
           // owner 2026-07-08: register this dugout token for the direct proximity hit-test
           // (it's outside the pitch bands, so the square lookup can't select it → no card).
@@ -17292,6 +17326,10 @@ export class PitchRenderer {
     this.drawStadium();
     this.drawPitch();
     this.redrawSetupZones();
+    // Owner 10-15: the dugouts and the turn track are placed through the projection; redraw them for the new one whether or
+    // not a game is loaded (refresh() returns early with no game, and without one they draw nothing: hidden until it loads).
+    this.redrawDugoutsWithArrows();
+    this.drawTurnTrack();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
     // sweet-spot logos + crosshairs are positioned via squareAnchor, so they go
@@ -19037,6 +19075,7 @@ export class PitchRenderer {
     bloodlust: boolean,
     playerId: string,
     coordinate?: [number, number],
+    isHome?: boolean,
   ): void {
     const markers: { text: string; emoji: boolean; deco: string; scale?: number; art?: 'target' | 'attacker' | 'blitzer' | 'blitzTarget'; icon?: string; dieFace?: Texture }[] = [];
     // A confirmed declaration and a successfully confused victim share the token-local eye.
@@ -19054,7 +19093,7 @@ export class PitchRenderer {
     else if (gazeMarked) this.addGazeVictimMarker(token);
     // Owner 09-07: EYE GOUGE rides the same chest mount as the gaze eye while the server's EYE_GOUGED bit is set
     // (it clears on the victim's activation) — was a DOM overlay floating over the head.
-    if (!isDown(playerState) && (playerState & EYE_GOUGED_BIT) !== 0) this.addEyeGougeMarker(token);
+    const gouged = !isDown(playerState) && (playerState & EYE_GOUGED_BIT) !== 0; // mounted below, once the chest row is known
     if (confused && !gazeMarked && !banner) markers.push({ text: '?', emoji: false, deco: 'confused' });
     // Owner 2026-07-07: TAKE ROOT (the ROOTED state flag) → a roots/sprout emoji, surfaced
     // the same way as CONFUSED.
@@ -19117,6 +19156,15 @@ export class PitchRenderer {
       vom.zIndex = 51;
       token.addChild(vom);
       }
+    }
+    // UAT 10-14: the Eye Gouge mark knows whether the chest already carries something (the gaze / DISTRACTED mark or
+    // any state-row marker: confused, chomped, bloodlust, block result, blitz badges) and steps aside.
+    if (gouged) {
+      this.addEyeGougeMarker(token, isHome, {
+        row: markers.length > 0 || this.gazeTarget === playerId, // the state row (and the gaze target ring) around y -16
+        chest: banner || gazeMarked, // the DISTRACTED banner / gaze eye, centred on the chest
+        feet: this.dodgySnackPlayers.has(playerId) || hasFlag(playerState, PlayerStateFlag.ROOTED) || hasFlag(playerState, PlayerStateFlag.CHOMPED), // word art at the feet
+      });
     }
     if (markers.length === 0) return;
     const spacing = 16;
@@ -19363,15 +19411,85 @@ export class PitchRenderer {
 
   /** Owner 09-07: the Eye Gouge marker — the status PNG (96x64) drawn 14 units tall on the chest, placed exactly
    *  like the gaze eye and kept fully lit through activation shading (label 'eyeGougeMarker'). */
-  private addEyeGougeMarker(token: Container): void {
+  private addEyeGougeMarker(token: Container, isHome?: boolean, occ: { row: boolean; chest: boolean; feet: boolean } = { row: false, chest: false, feet: false }): void {
+    const crowded = occ.row || occ.chest;
     const tex = this.eyeGougeDecoTexture;
-    const node: Container = tex ? new Sprite(tex) : this.buildStateMarkerNode({ text: '👁️', emoji: true, deco: 'eyeGouge' });
-    // Owner 09-07: 14 units tall like the other state markers — the size rides the decor-1 SCALE (placeWalkerDecor
+    const sprite: Container = tex ? new Sprite(tex) : this.buildStateMarkerNode({ text: '👁️', emoji: true, deco: 'eyeGouge' });
+    // Owner 09-07: 14 units tall like the other state markers - the size rides the decor-1 SCALE (placeWalkerDecor
     // owns a child's scale; setting height beforehand was overwritten and the 96 px texture drew full size).
+    // UAT 10-14: ~1.4x that size (eased down for small figures, clamped in width AND height to the token) on an opaque
+    // contrast plate chosen against the TEAM's kit colour: the walk sheet's torso average measured once at load
+    // (walkerKitColor); icon / checker tokens fall back to the seat colour. Eye Gouge only.
+    // When the chest already carries something (`crowded`) the mark shrinks to at most 0.8x and drops to the line under
+    // the state row (and never below the feet), instead of fading.
     let scale = 1;
-    if (node instanceof Sprite && tex) { node.anchor.set(0.5, 0.5); scale = 14 / tex.height; }
+    let node: Container = sprite;
+    let dy = 0;
+    if (sprite instanceof Sprite && tex) {
+      sprite.anchor.set(0.5, 0.5);
+      const walker = isWalkerToken(token);
+      const ratio = walker ? (walkerFigureRatio(token) ?? 1) : 1;
+      const pad = crowded ? 4 : 8;
+      const stroke = 6;
+      const w = tex.width + pad * 2;
+      const h = tex.height + pad * 2;
+      const unit = 14 / tex.height; // texture px -> token-local units at multiplier 1
+      // The room the plate may use, in the marker's own units (decor-1 for walkers, token-local otherwise): the figure's
+      // top / bottom / width, the chest centre, and (crowded) the line under the state row, whose markers span
+      // [-16 - 9, -16 + 9] plus the icon drop. The plate stays inside all of them.
+      let top: number, bottom: number, maxW: number, centre0: number, rowDrop = 0;
+      if (walker) {
+        const box = walkerFigureBox(token) ?? { width: 34, height: 50 };
+        bottom = WALKER_FEET_Y_PX;
+        top = bottom - box.height;
+        maxW = box.width * 0.9;
+        centre0 = WALKER_FEET_Y_PX - (walkerChestRatio(token) ?? ratio) * WALKER_REFERENCE_FIGURE_PX * 0.55;
+      } else {
+        const body = this.markerBodyOf(token);
+        rowDrop = this.markerDropFor(token);
+        if (body) {
+          top = body.position.y - body.height * body.anchor.y;
+          bottom = top + body.height;
+          maxW = Math.abs(body.width) * 0.9;
+          centre0 = this.figureChestY(token, body);
+        } else {
+          top = -44.5; bottom = 0; maxW = 34; centre0 = this.figureChestY(token);
+        }
+      }
+      // Free band for the crowded drop: under the state row (-16 +- 9), under the chest banner / eye (centred on the
+      // chest, 18 x ratio tall), above the feet word art (~11 units up from the feet line). A band under 8 units cannot
+      // hold a readable plate, so the mark then stays on the chest (shrunk, overlap accepted on such a small figure).
+      let lo = top;
+      let hi = bottom;
+      if (occ.row) lo = Math.max(lo, -16 + 9 + 1 + rowDrop);
+      if (occ.chest) lo = Math.max(lo, centre0 + 9 * ratio + 1);
+      if (occ.feet) hi = Math.min(hi, bottom - 11);
+      const drop = crowded && hi - lo >= 8;
+      const plateH1 = (h + stroke) * unit;
+      const halfAvail = drop ? (hi - lo) / 2 : Math.min(centre0 - top, bottom - centre0);
+      const fit: EyeGougeFit = { plateW: (w + stroke) * unit, plateH: plateH1, maxW, maxHalfH: Math.max(0.01, halfAvail) };
+      const boost = crowded ? Math.min(0.8, eyeGougeSizeBoost(ratio, fit)) : eyeGougeSizeBoost(ratio, fit);
+      scale = boost * unit;
+      const halfH = (plateH1 * boost) / 2;
+      dy = drop ? lo + halfH - centre0 : 0;
+      const seat = isHome === false ? COLORS.awayBody : COLORS.homeBody;
+      const ring = eyeGougeRingColor((walker ? walkerKitColor(token) : null) ?? seat);
+      // Vector plate in texture pixels, so it scales with the sprite and stays crisp at every zoom: an opaque pill `pad`
+      // px past the art with an opposite-pole edge.
+      const plate = new Graphics()
+        .roundRect(-w / 2, -h / 2, w, h, h / 2)
+        .fill({ color: ring.fill, alpha: 1 })
+        .stroke({ color: ring.edge, width: stroke, alpha: 1 });
+      plate.label = 'eyeGougeRing';
+      const group = new Container();
+      group.addChild(plate, sprite);
+      node = group;
+    }
     node.label = 'eyeGougeMarker';
-    this.placeChestMarker(token, node, 60, scale);
+    this.placeChestMarker(token, node, 60, scale, dy);
+    // The token may already be shaded (activation shading runs before the state markers): stay fully lit, like the
+    // compensation loop in the shading code does for later refreshes.
+    if (token.alpha > 0 && token.alpha < 1) node.alpha = 1 / token.alpha;
     token.sortableChildren = true;
     token.addChild(node);
   }
@@ -19410,16 +19528,16 @@ export class PitchRenderer {
 
   /** Owner 09-07: shared chest mount for the gaze eye / eye gouge — walkers at 55% up the measured figure, classic
    *  icons just under the head envelope. */
-  private placeChestMarker(token: Container, node: Container, zIndex: number, scale = 1): void {
+  private placeChestMarker(token: Container, node: Container, zIndex: number, scale = 1, dy = 0): void {
     const body = token.children
       .filter((child): child is Sprite => child instanceof Sprite && child.label !== 'castShadow')
       .sort((a, b) => b.height - a.height)[0];
     // Owner 10-02: the centre-line height (walkerChestRatio) - a raised fist / horns no longer lift it onto the face.
     const walkerRatio = isWalkerToken(token) ? walkerChestRatio(token) : null;
     if (walkerRatio) {
-      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55, scale);
+      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55 + dy, scale);
     } else {
-      node.position.set(0, this.figureChestY(token, body));
+      node.position.set(0, this.figureChestY(token, body) + dy);
       node.scale.set(scale);
     }
     node.zIndex = zIndex;

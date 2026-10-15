@@ -4,6 +4,7 @@ import { getOrientation, PITCH_COLS, PITCH_ROWS, squareAnchor, TILE_H, TILE_W } 
 import type { PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import type { AssetSide } from './skillIcons';
 import { resolveBundledWalkRole, rosterRaceKey } from './bundledWalk';
+import { kitColorFromPixels } from './eyeGougeRing';
 
 export type Dir8 = 'S' | 'SE' | 'E' | 'NE' | 'N' | 'NW' | 'W' | 'SW';
 
@@ -45,6 +46,8 @@ export interface WalkerAsset {
   /** Owner 10-02: height of the figure measured down its CENTRE line (feet to the top of the head), ignoring raised
    *  fists / horn tips / weapons at the sides - the chest mount keys to this (64-unit space). */
   headHeight?: number;
+  /** UAT 10-14: average kit colour of the S idle frame's torso band, measured once at load (absent = unreadable). */
+  kitColor?: number;
   /** Owner 09-05: optional HALF-resolution frames (32 px art per 64-unit frame, exact 2x2 box average, source.resolution 1/2) — drawn
    *  1:1 with nearest sampling at the default zoom so the pixel detail survives; the full frames serve zoom-in. */
   displayFrames?: Texture[][];
@@ -372,7 +375,7 @@ function sourcePixels(source: TextureSource, sourceRow: number, frame: number): 
   return null;
 }
 
-export interface FigureMetrics { height: number; width: number; feetWidth: number; headHeight?: number }
+export interface FigureMetrics { height: number; width: number; feetWidth: number; headHeight?: number; kitColor?: number }
 /** Figure metrics of the S idle frame in 64-UNIT space: height, widest span, and the span of the bottom ~8% of the
  *  figure (the FEET). The standing ring/shadow is keyed to the feet, the prone ring to height x width. */
 function measureFigure(source: TextureSource, sourceRow: number, frame = 64): FigureMetrics {
@@ -409,13 +412,15 @@ function measureFigure(source: TextureSource, sourceRow: number, frame = 64): Fi
     }
   }
   const headHeight = bottom - head + 1;
-  return { height: Math.round(height / res), width: Math.round((right - left + 1) / res), feetWidth: Math.round(feet / res), headHeight: Math.round(headHeight / res) };
+  // UAT 10-14: the kit colour = the torso band (35%-70% of the figure above the feet), read once here at load.
+  const kit = kitColorFromPixels(pixels, px, bottom - height * 0.7, bottom - height * 0.35);
+  return { height: Math.round(height / res), width: Math.round((right - left + 1) / res), feetWidth: Math.round(feet / res), headHeight: Math.round(headHeight / res), ...(kit === null ? {} : { kitColor: kit }) };
 }
 function measureFigureHeight(source: TextureSource, sourceRow: number, frame = 64): number {
   return measureFigure(source, sourceRow, frame).height;
 }
-function figureFields(m: FigureMetrics): { figureHeight: number; figureWidth: number; feetWidth: number; headHeight?: number } {
-  return { figureHeight: m.height, figureWidth: m.width, feetWidth: m.feetWidth, headHeight: m.headHeight };
+function figureFields(m: FigureMetrics): { figureHeight: number; figureWidth: number; feetWidth: number; headHeight?: number; kitColor?: number } {
+  return { figureHeight: m.height, figureWidth: m.width, feetWidth: m.feetWidth, headHeight: m.headHeight, kitColor: m.kitColor };
 }
 
 /** Owner 09-05 (round 3): sampling follows the EFFECTIVE on-screen scale — NEAREST when the sheet is magnified (hi-DPI
@@ -1147,6 +1152,19 @@ export function walkerChestRatio(token: Container): number | null {
   if (!record) return null;
   const h = record.asset.headHeight && record.asset.headHeight > 0 ? Math.min(record.asset.headHeight, record.asset.figureHeight) : record.asset.figureHeight;
   return (h * record.asset.spec.visualScale) / WALKER_REFERENCE_FIGURE_PX;
+}
+
+/** UAT 10-14: the walker's measured kit colour (0xRRGGBB), or null for a non-walker / unreadable sheet. */
+export function walkerKitColor(token: Container): number | null {
+  return walkerTokens.get(token)?.asset.kitColor ?? null;
+}
+
+/** UAT 10-14: the walker's drawn figure box in decor-1 units (visual scale applied), or null for a non-walker. */
+export function walkerFigureBox(token: Container): { width: number; height: number } | null {
+  const record = walkerTokens.get(token);
+  if (!record) return null;
+  const { figureHeight, figureWidth, spec } = record.asset;
+  return { width: (figureWidth ?? figureHeight * 0.7) * spec.visualScale, height: figureHeight * spec.visualScale };
 }
 
 export function walkerFigureRatio(token: Container): number | null {

@@ -1590,9 +1590,10 @@ export function hasDownEnemy(game: GameJson, playerId: string): boolean {
 
 /** A.5 HAND-OFF — own standing teammates adjacent to `playerId` (the ball carrier): the legal hand-off catchers
  *  (rules gate; server validates clientHandOver). Exported for the router's HAND_OVER target click. */
-export function adjacentOwnTeammateIds(game: GameJson, playerId: string): string[] {
+export function adjacentOwnTeammateIds(game: GameJson, playerId: string, from?: [number, number] | null): string[] {
   const me = findPlayer(game, playerId);
-  const myPos = normSquare(me?.playerCoordinate);
+  // Owner 10-15 (hand-off at destination): `from` measures adjacency from a planned square instead of the player's own.
+  const myPos = from ? [from[0], from[1]] as [number, number] : normSquare(me?.playerCoordinate);
   const iAmHome = playerSideIsHome(game, playerId);
   if (!myPos || iAmHome === null) return [];
   const out: string[] = [];
@@ -1603,6 +1604,14 @@ export function adjacentOwnTeammateIds(game: GameJson, playerId: string): string
     if (pos && chebyshev(myPos, pos) === 1) out.push(p.playerId);
   }
   return out;
+}
+
+/** Owner 10-15 (hand-off at destination): the teammates a walk-then-hand-off may target from `from` (default: the
+ *  player's square) - adjacent, standing, and still exerting tackle zones (not Confused / Hypnotized), the same
+ *  eligibility the destination Hand-off card arms on. Arming and the arrival re-check share it. */
+export function handOffReceiverIdsFrom(game: GameJson, playerId: string, from?: [number, number] | null): string[] {
+  const states = new Map(((game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]).map((p) => [p.playerId, p.playerState]));
+  return adjacentOwnTeammateIds(game, playerId, from).filter((id) => exertsTacklezone(states.get(id)));
 }
 
 /** HIGH_KICK server floor mirrors `HighKickLogicModule.isPlayerSelectable` (:68-76): ACTIVE + acting team.
@@ -2267,7 +2276,7 @@ export function pickupTargetAtBall(game: GameJson, playerId: string): number | n
   return Math.max(2, ag + negMods + extraArms);
 }
 
-type PreviewCatchMode = 'CATCH_ACCURATE_PASS' | 'CATCH_ACCURATE_BOMB';
+type PreviewCatchMode = 'CATCH_ACCURATE_PASS' | 'CATCH_ACCURATE_BOMB' | 'CATCH_HAND_OFF';
 
 /** Shared accurate-target catch stack. Upstream's CatchModifierFactory applies Disturbing Presence to every catch
  *  and tackle zones unless ignoreTacklezonesWhenCatching is present [ffb-common factory/CatchModifierFactory.java:
@@ -2332,6 +2341,14 @@ export function catchTargetAt(game: GameJson, square: [number, number]): number 
  *  only: an inaccurate bomb uses CATCH_BOMB after it lands elsewhere; the server resolves that later outcome. */
 export function bombCatchTargetAt(game: GameJson, square: [number, number]): number | null {
   return accurateCatchTargetAt(game, square, 'CATCH_ACCURATE_BOMB');
+}
+
+/** Owner 10-15 (hand-off at destination card): the client-DERIVED catch target for a hand-off to the standing player
+ *  on `square`. Same shared stack (tackle zones unless Nerves of Steel, Disturbing Presence, Pouring Rain, Extra Arms);
+ *  Diving Catch does NOT apply to CATCH_HAND_OFF [ffb-common skill/common/DivingCatch.java:35-40], and neither bb2025
+ *  mode-only modifier ("Inaccurate Pass or Scatter", "Blast It!") names the hand-off mode. ⚖ Preview only. */
+export function handOffCatchTargetAt(game: GameJson, square: [number, number]): number | null {
+  return accurateCatchTargetAt(game, square, 'CATCH_HAND_OFF');
 }
 
 export interface FreeSelectPassRollTag {
