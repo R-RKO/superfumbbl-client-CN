@@ -13053,13 +13053,13 @@ function openSetupConfirm(): void {
   setupArrowsActive.value = (setupReview.value?.offenders.length ?? 0) > 0;
   syncSetupArrows();
 }
-/** `anyway` = the coach sends a formation the client's checklist calls illegal; the server referees it. */
-function confirmSetupNow(anyway = false): void {
+/** An illegal setup (checklist problems listed) never submits; the card only offers Go back (owner 10-14). */
+function confirmSetupNow(): void {
   const open = setupConfirm.value;
-  if (!open || (open.problems.length > 0 && !anyway)) return;
+  if (!open || open.problems.length > 0) return;
   setupConfirmOpen.value = false;
   stopSetupArrows();
-  gameStore.setupSubmit(anyway);
+  gameStore.setupSubmit();
 }
 function cancelSetupConfirm(): void {
   setupConfirmOpen.value = false; // the arrows stay up while the coach fixes the formation (syncSetupArrows retires them)
@@ -14842,10 +14842,6 @@ function sendChat() {
           <template #actions>
             <button v-if="!setupConfirm.problems.length" class="rr-use" data-pad-key="View" @click="confirmSetupNow()">Confirm setup</button>
             <button class="rr-decline" data-pad-cancel @click="cancelSetupConfirm()">Go back</button>
-            <!-- The checklist is the standard rules; the server referees league options (Astra review 10-03). -->
-            <button v-if="setupConfirm.problems.length" class="rr-decline" data-testid="setup-submit-anyway"
-              title="Send this setup to the referee as it is. The server decides whether it is legal."
-              @click="confirmSetupNow(true)">Submit anyway</button>
           </template>
         </PitchConfirmationPanel>
 

@@ -111,7 +111,7 @@ export interface SetupValidation {
 export function validateSetup(
   placedCoords: readonly [number, number][],
   available: number,
-  opts: { limits?: SetupLimits; requiredPool?: number } = {},
+  opts: { limits?: SetupLimits; requiredPool?: number; additionalSwarmers?: number } = {},
 ): SetupValidation {
   const limits = opts.limits ?? DEFAULT_SETUP_LIMITS;
   const requiredPool = Math.max(0, opts.requiredPool ?? available);
@@ -126,8 +126,10 @@ export function validateSetup(
   const placed = own.length;
   // SetupMechanic bb2025:83-112: too many = placed > max; too few = placed < max while placed < min(max, pool); the
   // LOS is short only below min(minLos, pool). A fielded Keen Player counts toward placed but never toward the pool.
-  const maxOnPitch = limits.maxPlayersOnField;
-  const required = Math.min(maxOnPitch, requiredPool);
+  // `additionalSwarmers` = the kicking team's Swarming allowance still owed during Solid Defence (SetupMechanic:78-79:
+  // total on field <= maxPlayersOnField + additionalSwarmers). `required` stays at the base limit.
+  const maxOnPitch = limits.maxPlayersOnField + Math.max(0, Math.floor(opts.additionalSwarmers ?? 0));
+  const required = Math.min(limits.maxPlayersOnField, requiredPool);
   const requiredOnLos = Math.min(limits.minPlayersOnLos, requiredPool);
   const losOk = onLos >= requiredOnLos;
   const leftOk = leftWide <= limits.maxPlayersInWideZone;

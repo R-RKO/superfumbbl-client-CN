@@ -11970,7 +11970,7 @@ function clearCinematics(hardGameBoundary = false) {
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
-  state.solidDefenceError = null; solidDefenceSelection = null; solidDefenceErrorNr = -1;
+  state.solidDefenceError = null; solidDefenceSelection = null; solidDefenceEntryField = null; solidDefenceErrorNr = -1;
   state.sendOff = null; state.sendOffResult = null; clearSendOffWaiting(); sendOffKey = ''; sendOffAnsweredKey = null;
   // Owner 2026-07-04 interaction rails (wave 0 + 1.1): pick/yes-no/followup
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
@@ -22121,6 +22121,13 @@ function computeSwarmingPhase(g: GameJson) {
     seq: (prior?.seq ?? 0) + 1,
   };
 }
+let solidDefenceEntryField: { gameId: string; count: number } | null = null;
+function solidDefenceSwarmAllowance(g: GameJson, placedNow: number, baseMax: number): number {
+  if (g.turnMode !== 'solidDefence') { solidDefenceEntryField = null; return 0; }
+  const gameId = String((g as { gameId?: unknown }).gameId ?? '');
+  if (!solidDefenceEntryField || solidDefenceEntryField.gameId !== gameId) solidDefenceEntryField = { gameId, count: placedNow };
+  return Math.max(0, solidDefenceEntryField.count - baseMax);
+}
 /** (Re)build state.setupPhase from the live model for MY team. Placed = own-half
  *  on-pitch; the rest are reserves. Coords are home-relative. */
 function computeSetupPhase(g: GameJson) {
@@ -22180,9 +22187,21 @@ function computeSetupPhase(g: GameJson) {
   // availablePlayers, so they never raise the required LOS / field counts; they stay in the list and may be fielded.
   const keenPlayers = (team.playerArray ?? []).filter((p) => players.some((q) => q.playerId === p.playerId)
     && playerHasSkill(p as Parameters<typeof playerHasSkill>[0], 'Keen Player')).length;
+  const setupLimits = setupLimitsFromGameOptions(g.gameOptions?.gameOptionArray);
+  // Swarming allowance during Solid Defence (server StepApplyKickoffResult:283-293 passes getKickingSwarmers() to
+  // checkSetup, which allows maxPlayersOnField + that many). Server evidence only: the model at Solid Defence entry
+  // already passed the server's own setup check, so its on-field excess over the base limit IS the permitted
+  // swarmers (also correct after a reconnect snapshot). Solid Defence only moves players already on the pitch.
+  const additionalSwarmers = solidDefenceSwarmAllowance(
+    g,
+    // invariant under local re-placement: own-half players on the pitch plus the server-selected movers still boxed
+    placed.filter((c) => c[0] >= 0 && c[0] <= 12).length + players.filter((p) => !p.coord && p.inert === false).length,
+    setupLimits.maxPlayersOnField,
+  );
   const validation = validateSetup(placed, players.length, {
-    limits: setupLimitsFromGameOptions(g.gameOptions?.gameOptionArray),
+    limits: setupLimits,
     requiredPool: players.length - keenPlayers,
+    additionalSwarmers,
   });
   state.setupPhase = {
     side,
@@ -24995,11 +25014,8 @@ export const gameStore = {
   },
 
   /** Submit the completed setup (only sent when the validation is legal). */
-  /** `force` (Astra review 10-03): send the setup even though the client's own checklist calls it illegal. The
-   *  checklist is fixed at the standard 11 / 3 / 2 rules; the SERVER is the referee (maxPlayersOnField, a mandatory
-   *  captain, ...), so the coach can always put the formation in front of it. Never automatic. */
-  setupSubmit(force = false) {
-    if (!state.setupPhase || (!force && !state.setupPhase.validation.valid) || !game.value || !setupSurfaceIsServerArmed(game.value)) return;
+  setupSubmit() {
+    if (!state.setupPhase || !state.setupPhase.validation.valid || !game.value || !setupSurfaceIsServerArmed(game.value)) return;
     // G303-B3: echo the LIVE turnMode — a Solid-Defence re-setup must close with
     // clientEndTurn{turnMode:'solidDefence'}, not a hardcoded 'setup' (the g303 wire
     // shows the server rejects/ignores the wrong phase tag and the game wedges).
