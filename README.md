@@ -36,6 +36,16 @@ https://github.com/flutethecat/superfumbbl-client/releases/latest
 
 Windows: run the `_Windows_x64-setup.exe`. macOS: open the `.dmg` for your chip (`aarch64` = Apple Silicon, `x64` = Intel).
 
+### macOS: "Super FUMBBL is damaged" or "cannot be opened"
+
+The macOS build is not notarized by Apple yet, so macOS blocks it the first time. After dragging Super FUMBBL into Applications, open Terminal and run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Super FUMBBL.app"
+```
+
+Then open Super FUMBBL as normal. You only need to do this once per installer; in-app updates keep working afterwards. If you put the app somewhere other than Applications, use that path instead.
+
 ## Linux and Steam Deck (SteamOS)
 
 Every release carries two Linux downloads for each of amd64 and arm64:
