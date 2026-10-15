@@ -18073,6 +18073,37 @@ function ownedPlaceCarriedCoordinateCommandPermitted(g: GameJson, command: Recor
   return serverMoveSquares(g).some((offered) => offered[0] === x && offered[1] === y);
 }
 
+/** Ham1356 live report (10-14): bb2025 DumpOffBehaviour.java:73 answers the defender's Dump-Off Yes by entering
+ * turnMode `dumpOff` (throwerId = the defender's carrier, throwerAction `dumpOff`) and installing the
+ * `defenderAction` dialog, which stays the model's dialogParameter while the server waits for CLIENT_PASS. The
+ * generic raw-dialog lock refused that pass, so nothing went out and both coaches waited forever. Admit exactly
+ * the upstream DumpOffLogicModule.java answer, re-derived from the received state: CLIENT_PASS carrying the ACTING
+ * (attacking) player's id and a Quick-pass square from the thrower, sent only by the thrower's coach. */
+function ownedDumpOffPassCommandPermitted(g: GameJson, command: Record<string, unknown>): boolean {
+  if (String(command.netCommandId ?? '') !== NetCommandId.CLIENT_PASS) return false;
+  if (String(g.turnMode ?? '') !== 'dumpOff') return false;
+  const dialog = g.dialogParameter as { dialogId?: unknown } | null | undefined;
+  if (String(dialog?.dialogId ?? '') !== 'defenderAction') return false;
+  const dumpOff = g as GameJson & { throwerId?: string | null; throwerAction?: string | null };
+  if (String(dumpOff.throwerAction ?? '') !== 'dumpOff') return false;
+  const throwerId = String(dumpOff.throwerId ?? '');
+  // Off-turn by construction (the defender reacts in the attacker's turn): ownership only, never iControlPlayer's turn test.
+  if (!throwerId || !myPlayIds(g).has(throwerId)) return false;
+  const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
+  if (deriveClientState(g, ctx) !== 'DUMP_OFF') return false;
+  const actingId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+  if (!actingId || String(command.actingPlayerId ?? '') !== actingId) return false;
+  const target = command.targetCoordinate;
+  if (!Array.isArray(target) || target.length < 2) return false;
+  const x = target[0];
+  const y = target[1];
+  if (typeof x !== 'number' || typeof y !== 'number') return false;
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x > 25 || y < 0 || y > 14) return false;
+  const source = normSquare((g.fieldModel?.playerDataArray ?? [])
+    .find((data) => data.playerId === throwerId)?.playerCoordinate);
+  return !!source && passRange(x - source[0], y - source[1]) === 'Q';
+}
+
 /** @internal Exact DialogPuntToCrowd yes/no occurrence seam. */
 /** @internal BB2025 Trickster pickUpChoice: the punt harness with the owner seat keyed off the DEFENDER (the asked player). */
 export function installPickUpChoiceTestHarness(
@@ -18474,6 +18505,7 @@ function ownedDeclarationInsideLiveDialogPermitted(g: GameJson, command: Record<
     || ownedGazeTargetDialogCommandPermitted(g, command)
     || ownedSwoopCoordinateCommandPermitted(g, command)
     || ownedPlaceCarriedCoordinateCommandPermitted(g, command)
+    || ownedDumpOffPassCommandPermitted(g, command)
     || ownedSetupPhaseDialogCommandPermitted(g, command);
 }
 /** #173 boundary gate. Returns true when the command may go out. */
@@ -24494,7 +24526,8 @@ export const gameStore = {
         if (accepted) log('system', `play: I'll Carry You place team-mate → [${coord[0]},${coord[1]}]`);
         break;
       case 'dumpOff':
-        gameStore.sendDumpOffTarget(coord);
+        // A refused send keeps the picker armed so the coach can retry (Ham1356 10-14: it vanished with nothing sent).
+        accepted = gameStore.sendDumpOffTarget(coord);
         break;
       case 'safeHands':
         // StepPlaceBall.java:79-94 accepts CLIENT_FIELD_COORDINATE only for an adjacentSquare;
@@ -28445,21 +28478,25 @@ export const gameStore = {
   },
   /** Dump-Off is a defender-owned, off-turn pass surface, so it must stay separate from sendPassTarget's
    *  acting-side possession and once-per-turn gates (game g805). Upstream DumpOffLogicModule.java sends CLIENT_PASS
-   *  with the ACTING player's id (the blitzer), not the reacting thrower's id. */
-  sendDumpOffTarget(targetCoordinate: [number, number]) {
-    if (!play.active || !game.value || state.squarePick?.kind !== 'dumpOff') return;
+   *  with the ACTING player's id (the blitzer), not the reacting thrower's id. Returns true only when the pass went out. */
+  sendDumpOffTarget(targetCoordinate: [number, number]): boolean {
+    if (!play.active || !game.value || state.squarePick?.kind !== 'dumpOff') return false;
     const g = game.value;
     const mine = deriveClientState(g, {
       mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome,
     }) === 'DUMP_OFF';
     if (!mine || !state.squarePick.squares.some((square) => square[0] === targetCoordinate[0] && square[1] === targetCoordinate[1])) {
       log('system', 'ignored: Dump-Off target is not mine or is no longer eligible');
-      return;
+      return false;
     }
     const actingPlayerId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (!actingPlayerId) { log('system', 'ignored: no acting player for Dump-Off'); return; }
-    sendCommand({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId, targetCoordinate });
+    if (!actingPlayerId) { log('system', 'ignored: no acting player for Dump-Off'); return false; }
+    if (!sendCommand({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId, targetCoordinate })) {
+      log('system', '⚠ Dump-Off pass was not sent; pick a target again.');
+      return false;
+    }
     log('system', `play: DUMP-OFF ${playerName(g, actingPlayerId)} → [${targetCoordinate[0]},${targetCoordinate[1]}] (server resolves)`);
+    return true;
   },
   /** Free-select Pass changes only target surfacing within a live PASS activation; sendPassTarget remains authoritative. */
   armFreeSelectPass() {

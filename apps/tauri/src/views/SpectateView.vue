@@ -11245,6 +11245,10 @@ onMounted(async () => {
       } else {
         renderer?.setTilePick(false);
         gameStore.resolveSquarePick(c);
+        // Ham1356 10-14: a refused Dump-Off send keeps the pick (same seq, so its watch does not re-fire); re-arm
+        // the crosshairs here so the coach can click again.
+        const kept = gameStore.state.squarePick;
+        if (kept?.kind === 'dumpOff') renderer?.setTargetSelectPick(kept.squares, kept.skill);
       }
       return;
     }
