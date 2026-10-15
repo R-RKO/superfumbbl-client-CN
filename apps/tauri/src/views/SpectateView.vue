@@ -182,7 +182,7 @@ import { reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
-import { buildInducementChips, hideZeroRerollChips } from '../game/logic/coachPanelChips';
+import { buildInducementChips, hideZeroRerollChips, cheeringFansChip, CHEERING_FANS_CHIP_ICON } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
 import { armedRerollHintText, rerollOptionLabelForKind } from '../game/logic/rerollOptionPresentation';
@@ -12562,6 +12562,8 @@ function panelFor(side: 'home' | 'away') {
   const team = side === 'home' ? game.teamHome : game.teamAway;
   const turnData = side === 'home' ? game.turnDataHome : game.turnDataAway;
   const chips = hideZeroRerollChips(buildInducementChips(turnData), settings.hideZeroRerolls);
+  const fansChip = cheeringFansChip(turnData);
+  if (fansChip) chips.push(fansChip);
   return {
     coach: team.coach,
     teamName: team.teamName,
@@ -13815,9 +13817,12 @@ function sendChat() {
             <div class="coach-name">{{ homePanel.coach }}</div>
             <div class="team-title">{{ homePanel.teamName }}</div>
             <div v-if="homePanel.chips.length" class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
-                <img :src="resourceIcon(chip.icon)" alt="" />
-                <b class="inducement-quantity">{{ chip.count }}</b>
+              <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
+                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
+                <template v-else>
+                  <img :src="resourceIcon(chip.icon)" alt="" />
+                  <b class="inducement-quantity">{{ chip.count }}</b>
+                </template>
               </span>
             </div>
           </div>
@@ -13849,9 +13854,12 @@ function sendChat() {
             <div class="coach-name">{{ awayPanel.coach }}</div>
             <div class="team-title">{{ awayPanel.teamName }}</div>
             <div v-if="awayPanel.chips.length" class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
-                <img :src="resourceIcon(chip.icon)" alt="" />
-                <b class="inducement-quantity">{{ chip.count }}</b>
+              <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
+                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
+                <template v-else>
+                  <img :src="resourceIcon(chip.icon)" alt="" />
+                  <b class="inducement-quantity">{{ chip.count }}</b>
+                </template>
               </span>
             </div>
           </div>
@@ -16480,6 +16488,8 @@ function sendChat() {
 }
 /* owner 09-06: a FIXED 64 px box — the 256 px masters land at an exact 4:1 (box-filtered, auto); the four 38 px icons
    stretch 1.68x until they are regenerated at 64 px. */
+.inducement-fans { color: #ffe9a8; font-size: max(var(--ui-min-text-size, 12px), 0.7rem); font-weight: 900; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px #000; }
+.inducement[data-chip='cheering_fans'] { border-color: #9d762d; }
 .inducement img { width: 64px; height: 64px; max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: auto; }
 .inducement-quantity {
   position: absolute;

@@ -133,3 +133,22 @@ export function hideZeroRerollChips(chips: InducementChip[], hide: boolean): Ind
   if (!hide) return chips;
   return chips.filter((c) => !(c.icon === 're_roll' && c.count <= 0));
 }
+
+/** Icon key of the text-only Cheering Fans chip (no art; SpectateView renders "FANS +N" text for it). */
+export const CHEERING_FANS_CHIP_ICON = 'cheering_fans';
+
+/**
+ * Pending BB2025 Cheering Fans block assist. Render only server state: the server sets
+ * turnData.cheeringFansBlockAssist (turnDataSetCheeringFansBlockAssist) on the kickoff result and zeroes it when the
+ * assist is consumed by the first block roll, so the chip is present exactly while the value is above 0.
+ * Returns null otherwise (so replay seek/pause, which rebuild turnData, give the same answer).
+ */
+export function cheeringFansChip(turnData: object | null | undefined): InducementChip | null {
+  const count = remaining((turnData as { cheeringFansBlockAssist?: unknown } | null | undefined)?.cheeringFansBlockAssist);
+  if (count <= 0) return null;
+  return {
+    icon: CHEERING_FANS_CHIP_ICON,
+    count,
+    label: `Cheering Fans: +${count} offensive assist on a block`,
+  };
+}
