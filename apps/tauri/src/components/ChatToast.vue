@@ -88,8 +88,8 @@ button.chat-toast[data-author-role][data-author-role] {
   position: relative;
   isolation: isolate;
   width: max-content;
-  min-width: min(240px, calc(100vw - 32px));
-  max-width: min(390px, calc(100vw - 32px));
+  min-width: min(240px, calc(100vw - 32px), var(--chat-toast-avail, 100vw));
+  max-width: min(390px, calc(100vw - 32px), var(--chat-toast-avail, 100vw));
   box-sizing: border-box;
   border: 2px solid var(--chat-border);
   border-left-width: 5px;

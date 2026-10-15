@@ -293,7 +293,7 @@ export function offeredReRollOptions(
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
   } else if (hasMascot) {
     options.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', response: 'reroll', role: 'source' });
-    if (hasTeam) options.push({ label: 'Team Mascot, then Team Reroll', source: 'Mascot TRR', response: 'reroll', role: 'source' });
+    if (hasTeam) options.push({ label: 'Mascot + RR', source: 'Mascot TRR', response: 'reroll', role: 'source' });
   } else if (hasTeam) {
     options.push({ label: 'Team Reroll', source: 'Team ReRoll', response: 'reroll', role: 'source' });
   }

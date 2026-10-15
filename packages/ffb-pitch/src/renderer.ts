@@ -112,7 +112,18 @@ import {
   type FacingGeometry,
   type WalkerHelpers,
   WALKER_TARGET_FIGURE_PX,
+  setTokenVisualNudge,
+  tokenVisualNudge,
 } from './walkers';
+import {
+  blockTargetingSquares,
+  chooseOcclusionNudge,
+  easeOffset,
+  nudgedTargetAt,
+  type NudgedHitEntry,
+  type Offset,
+  type Rect as OcclusionRect,
+} from './occlusionNudge';
 import { bundledWalkEntriesForRaces, bundledWalkManifest, isBundledStarRole } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
 import {
@@ -610,6 +621,9 @@ export interface ContextTarget {
   /** owner 2026-07-04f: right-clicked an EMPTY square (playerId is '') — the host
    *  shows the Mark… submenu without any player-specific entries. */
   emptySquare?: boolean;
+  /** owner 10-14: the right-click landed OFF the 26x15 grid (sidelines, dugouts, surround). playerId is ''; the host
+   *  routes it (acting player's rail menu, or the empty-square cascade) via offPitchRightClickRoute. */
+  offPitch?: boolean;
 }
 
 /** Kick flight: peak lift (world px) of the ball's high arc when it comes into
@@ -4687,6 +4701,12 @@ export class PitchRenderer {
   private maximumCarnageTargeting = false;
   /** Server-projected Fury of the Blood God second-block pause. */
   private furySecondBlockTargeting = false;
+  /** UAT 1.0.205 (coach Ion, occluded block target): per player, the visual nudge (world px) the measurement wants
+   *  and the one currently drawn (eased toward it every frame, back to zero once targeting ends). Visual only. */
+  private occlusionNudgeDesired = new Map<string, Offset>();
+  private occlusionNudgeCurrent = new Map<string, Offset>();
+  private occlusionNudgeKey = '';
+  private occlusionNudgeMeasuredAt = -Infinity;
   /** #181/KG-6 (owner, Meero SR-158/SR-161): the Beer Barrel Bash! keg-throw affordance. Meero SR-161: this is
    *  TWO affordances, not one — (a) the RANGE box (chebyshev-3 around the thrower, drawn REGARDLESS of whether
    *  any target is legal, so an empty set reads as "throw is SHORT", not "keg is BROKEN" = the actual KG-6 fix),
@@ -5353,6 +5373,11 @@ export class PitchRenderer {
     });
     // move interpolation (item 12 + B3-3 styles): waypoint-driven travel
     this.addMovementTickers(app);
+    // UAT 1.0.205: keep an occluded block target visible (after the tokens moved this frame, before the render).
+    app.ticker.add(() => {
+      try { this.tickOcclusionNudge(this.app?.ticker.deltaMS ?? 16, performance.now()); }
+      catch (error) { console.warn('[pitch] occlusion nudge skipped:', (error as Error)?.message); }
+    });
     // Unified Auto Director runs after visual movement advances, so it follows the
     // presented token/ball rather than an immediate-apply model endpoint.
     app.ticker.add(() => {
@@ -12801,6 +12826,197 @@ export class PitchRenderer {
       arrow.node.position.y = token.position.y + arrow.offsetY + Math.abs(Math.sin(now / 350)) * 6 * arrow.scale;
       arrow.node.zIndex = token.zIndex + 80;
     }
+  }
+
+  /** UAT 1.0.205: the squares whose players must stay visible right now: the server's dice-decorated block targets
+   *  while the LOCAL coach's acting player chooses a block-family target in live o66 play. [] otherwise. */
+  private occlusionTargetingSquares(): [number, number][] {
+    const game = this.game;
+    if (!game || !this.order66 || this.presentationMode !== 'live') return [];
+    const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; hasBlocked?: boolean | null } | undefined;
+    const actingId = String(acting?.playerId ?? '');
+    const actorIsHome = !actingId ? null
+      : game.teamHome.playerArray.some((p) => p.playerId === actingId) ? true
+        : game.teamAway.playerArray.some((p) => p.playerId === actingId) ? false : null;
+    const defenderId = String((game as { defenderId?: unknown }).defenderId ?? '');
+    const defenderSquare = defenderId ? game.fieldModel.playerDataArray.find((p) => p.playerId === defenderId)?.playerCoordinate : null;
+    return blockTargetingSquares({
+      actingPlayer: acting,
+      homePlaying: game.homePlaying,
+      actorIsHome,
+      friendlyIsHome: this.friendlyIsHome,
+      diceDecorationArray: game.fieldModel.diceDecorationArray as unknown[] | undefined,
+      secondTargetChoice: this.furySecondBlockTargeting || this.maximumCarnageTargeting,
+      defenderId,
+      defenderSquare: defenderSquare && isOnPitch(defenderSquare) ? [defenderSquare[0], defenderSquare[1]] : null,
+    });
+  }
+
+  /** UAT 1.0.205: a token's FIGURE in token-local units. A walker's boundsArea is the figure only. Other tokens
+   *  (classic icon, checker disc, frog...) carry badges, rings and markings too, which would inflate the rect and make
+   *  a hidden figure read as visible: take their LARGEST direct Sprite child (the figure art) instead, falling back to
+   *  the whole token only when there is none. */
+  private tokenFigureLocalBounds(token: Container): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (token.boundsArea) return token.getLocalBounds();
+    let best: { minX: number; minY: number; maxX: number; maxY: number; a: number } | null = null;
+    for (const child of token.children) {
+      if (!(child instanceof Sprite) || !child.visible || child.label === 'castShadow') continue;
+      let cb: { minX: number; minY: number; maxX: number; maxY: number };
+      try { cb = child.getLocalBounds(); } catch { continue; }
+      // Full local transform (pivot, scale, rotation, position): a prone figure is a ROTATED sprite (Astra pass 3).
+      const cos = Math.cos(child.rotation);
+      const sin = Math.sin(child.rotation);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const [lx, ly] of [[cb.minX, cb.minY], [cb.maxX, cb.minY], [cb.maxX, cb.maxY], [cb.minX, cb.maxY]] as [number, number][]) {
+        const px = (lx - child.pivot.x) * child.scale.x;
+        const py = (ly - child.pivot.y) * child.scale.y;
+        xs.push(child.position.x + px * cos - py * sin);
+        ys.push(child.position.y + px * sin + py * cos);
+      }
+      const r = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+      const a = (r.maxX - r.minX) * (r.maxY - r.minY);
+      if (Number.isFinite(a) && a > 0 && (!best || a > best.a)) best = { ...r, a };
+    }
+    return best ?? token.getLocalBounds();
+  }
+
+  /** UAT 1.0.205: a pitch token's FIGURE rect in token-layer (world) units WITHOUT its visual nudge. */
+  private tokenBaseFigureRect(token: Container): OcclusionRect | null {
+    if (token.destroyed || !token.visible) return null;
+    let b: { minX: number; minY: number; maxX: number; maxY: number } | null;
+    try { b = this.tokenFigureLocalBounds(token); } catch { return null; }
+    if (!b) return null;
+    if (![b.minX, b.minY, b.maxX, b.maxY].every(Number.isFinite) || b.maxX <= b.minX || b.maxY <= b.minY) return null;
+    const n = tokenVisualNudge(token);
+    const px = token.pivot.x + n.x;
+    const py = token.pivot.y + n.y;
+    const xa = token.position.x + (b.minX - px) * token.scale.x;
+    const xb = token.position.x + (b.maxX - px) * token.scale.x;
+    const ya = token.position.y + (b.minY - py) * token.scale.y;
+    const yb = token.position.y + (b.maxY - py) * token.scale.y;
+    return { x: Math.min(xa, xb), y: Math.min(ya, yb), w: Math.abs(xb - xa), h: Math.abs(yb - ya) };
+  }
+
+  /** The pitch tokens in DRAW order (back to front: zIndex, then child order, as the sorted token layer paints them). */
+  private pitchTokensInDrawOrder(): { id: string; token: Container; rect: OcclusionRect }[] {
+    const out: { id: string; token: Container; rect: OcclusionRect; z: number; i: number }[] = [];
+    for (const [id, token] of this.tokensById) {
+      if (token.destroyed || !token.visible || token.parent !== this.tokenLayer) continue;
+      const rect = this.tokenBaseFigureRect(token);
+      if (rect) out.push({ id, token, rect, z: token.zIndex, i: this.tokenLayer.getChildIndex(token) });
+    }
+    out.sort((a, b) => a.z - b.z || a.i - b.i);
+    return out;
+  }
+
+  /** UAT 1.0.205: measure every current target and choose its nudge (world px). Targets are taken FRONT to back, and
+   *  each one avoids the figures of the other targets (as already nudged), so a nudge never lands on another target.
+   *  A moving or injury-held target is left alone. */
+  private measureOcclusionNudges(squares: [number, number][]): Map<string, Offset> {
+    const desired = new Map<string, Offset>();
+    const ids = squares
+      .map(([x, y]) => this.playersBySquare.get(`${x},${y}`))
+      .filter((id): id is string => !!id);
+    if (ids.length === 0) return desired;
+    const drawn = this.pitchTokensInDrawOrder();
+    const index = new Map(drawn.map((d, i) => [d.id, i]));
+    const targets = ids
+      .filter((id) => index.has(id) && !this.moveTweens.has(id) && !this.injuryHeldDrawn.has(id))
+      .sort((a, b) => index.get(b)! - index.get(a)!);
+    for (const id of targets) {
+      const at = index.get(id)!;
+      const { rect: target, token } = drawn[at]!;
+      const square = this.game?.fieldModel.playerDataArray.find((p) => p.playerId === id)?.playerCoordinate;
+      if (!square || !isOnPitch(square)) continue;
+      const quad = squareQuad(square[0], square[1]);
+      const [nearL, nearR, farR, farL] = quad.points as [[number, number], [number, number], [number, number], [number, number]];
+      const cx = target.x + target.w / 2;
+      // The figure's centre may travel to its OWN square's side, never past it (the owner's "nearest square side").
+      // Flip / East-West / zoom are already in the projected quad and the world-unit rects.
+      const limits = {
+        left: Math.max(0, cx - (nearL[0] + farL[0]) / 2),
+        right: Math.max(0, (nearR[0] + farR[0]) / 2 - cx),
+        up: Math.max(0, token.position.y - quad.yTop),
+        down: Math.max(0, quad.yBottom - token.position.y),
+      };
+      const avoid = targets.filter((o) => o !== id).map((o) => {
+        const r = drawn[index.get(o)!]!.rect;
+        const off = desired.get(o);
+        return off ? { x: r.x + off.dx, y: r.y + off.dy, w: r.w, h: r.h } : r;
+      });
+      // Drawn in front = later in draw order; a front target already placed is measured where it will be drawn.
+      const occluders = drawn.slice(at + 1).map((d) => {
+        const off = desired.get(d.id);
+        return off ? { x: d.rect.x + off.dx, y: d.rect.y + off.dy, w: d.rect.w, h: d.rect.h } : d.rect;
+      });
+      const offset = chooseOcclusionNudge(target, occluders, { limits, avoid });
+      if (offset.dx !== 0 || offset.dy !== 0) desired.set(id, offset);
+    }
+    return desired;
+  }
+
+  /** UAT 1.0.205 ticker: re-measure (on a target-set change, else every 120 ms while targeting) and ease each token's
+   *  drawn nudge toward its target; once targeting ends every nudge eases back to zero. Applied to whatever token is
+   *  CURRENT for the player, so a refresh() rebuild or a setGame token reuse keeps the nudge without a flicker. */
+  private tickOcclusionNudge(dtMs: number, now: number): void {
+    const squares = this.occlusionTargetingSquares();
+    if (squares.length === 0 && this.occlusionNudgeCurrent.size === 0 && this.occlusionNudgeDesired.size === 0) return;
+    const key = squares.map(([x, y]) => `${x},${y}:${this.playersBySquare.get(`${x},${y}`) ?? ''}`).join('|');
+    if (squares.length === 0) {
+      this.occlusionNudgeDesired.clear();
+      this.occlusionNudgeKey = '';
+    } else if (key !== this.occlusionNudgeKey || now - this.occlusionNudgeMeasuredAt >= 120) {
+      this.occlusionNudgeKey = key;
+      this.occlusionNudgeMeasuredAt = now;
+      this.occlusionNudgeDesired = this.measureOcclusionNudges(squares);
+    }
+    const ids = new Set([...this.occlusionNudgeDesired.keys(), ...this.occlusionNudgeCurrent.keys()]);
+    for (const id of ids) {
+      const want = this.occlusionNudgeDesired.get(id) ?? { dx: 0, dy: 0 };
+      const cur = easeOffset(this.occlusionNudgeCurrent.get(id) ?? { dx: 0, dy: 0 }, want, dtMs, 55);
+      const token = this.tokensById.get(id);
+      if (token && !token.destroyed) {
+        const sx = Math.abs(token.scale.x) > 1e-6 ? token.scale.x : 1;
+        const sy = Math.abs(token.scale.y) > 1e-6 ? token.scale.y : 1;
+        setTokenVisualNudge(token, cur.dx / sx, cur.dy / sy);
+      }
+      if (cur.dx === 0 && cur.dy === 0 && !this.occlusionNudgeDesired.has(id)) this.occlusionNudgeCurrent.delete(id);
+      else this.occlusionNudgeCurrent.set(id, cur);
+    }
+  }
+
+  /** UAT 1.0.205: a tap on the visible part of a nudged target (inside its DRAWN figure, outside every figure drawn
+   *  in front of it) returns the canvas point of that target's square centre; otherwise null. */
+  private occlusionNudgeTapRemap(offsetX: number, offsetY: number): { x: number; y: number } | null {
+    if (this.occlusionNudgeCurrent.size === 0 || !this.game) return null;
+    // Only players that are legal targets RIGHT NOW (read from the live model, not the last tick): a nudge easing back
+    // after targeting ended is drawn, never clickable.
+    const live = new Set(this.occlusionTargetingSquares().map(([x, y]) => this.playersBySquare.get(`${x},${y}`)).filter((id): id is string => !!id));
+    if (live.size === 0) return null;
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const drawn = this.pitchTokensInDrawOrder();
+    const shifted = drawn.map((d) => {
+      const off = this.occlusionNudgeCurrent.get(d.id);
+      return off ? { x: d.rect.x + off.dx, y: d.rect.y + off.dy, w: d.rect.w, h: d.rect.h } : d.rect;
+    });
+    const entries: NudgedHitEntry[] = [];
+    drawn.forEach((d, i) => {
+      const off = this.occlusionNudgeCurrent.get(d.id);
+      if (!off || !live.has(d.id) || Math.hypot(off.dx, off.dy) < 0.5) return;
+      entries.push({ id: d.id, rect: shifted[i]!, occluders: shifted.slice(i + 1) });
+    });
+    const id = nudgedTargetAt(worldX, worldY, entries);
+    if (!id) return null;
+    // A tap on ANOTHER legal target's own square stays that target's: square selection always wins (Astra pass 2).
+    const [csx, csy] = worldToSquare(worldX, worldY);
+    const onSquare = this.playersBySquare.get(`${csx},${csy}`);
+    if (onSquare && onSquare !== id && live.has(onSquare)) return null;
+    const square = this.game.fieldModel.playerDataArray.find((p) => p.playerId === id)?.playerCoordinate;
+    if (!square || !isOnPitch(square)) return null;
+    const a = squareAnchor(square[0], square[1]);
+    return { x: a.x * this.world.scale.x + this.world.position.x, y: a.y * this.world.scale.y + this.world.position.y };
   }
 
   /** Resolve only rendered pitch/setup tokens from their LIVE geometry. During a movement tween, playersBySquare
@@ -21799,8 +22015,8 @@ export class PitchRenderer {
     // Pass/bomb targeting surface (Fives contract 08-12): emit the hovered square so the host can
     // drive the throw/catch tooltip + intercept feed. Fires ahead of the mode-specific handlers
     // below (which early-return) and is purely additive — dedup by key, null off-pitch / on mode-exit.
-    if (this.passRulerFrom || (this.plannerEnabled && (this.actionMode === 'pass' || this.actionMode === 'bomb'))) {
       const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
+    if (this.passRulerFrom || (this.plannerEnabled && (this.actionMode === 'pass' || this.actionMode === 'bomb'))) {
       const key = onPitch ? `${sx},${sy}` : null;
       if (key !== this.squareHoverLast) {
         this.squareHoverLast = key;
@@ -21885,6 +22101,12 @@ export class PitchRenderer {
 
   /** The primary TAP body (a press that barely moved), shared by the canvas pointerup and the pad crosshair's A. */
   private tapAt(offsetX: number, offsetY: number, mods: { shift: boolean; ctrl: boolean; alt: boolean }, isTap: boolean): void {
+    // UAT 1.0.205: a tap on the VISIBLE part of a nudged block target is a tap on that target's square (the nudge may
+    // have drawn it over a neighbouring square). Everything below resolves squares as before.
+    if (isTap) {
+      const remap = this.occlusionNudgeTapRemap(offsetX, offsetY);
+      if (remap) { offsetX = remap.x; offsetY = remap.y; }
+    }
     // Shift-click annotations take priority over every gameplay surface and never select, plan, or send.
     // Plain Shift on a rendered player toggles its persistent overhead arrow; an empty square keeps the
     // original single-square mark. Ctrl/Alt variants remain row/column marks even over a token.
@@ -22114,12 +22336,19 @@ export class PitchRenderer {
     const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
     const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
     const [sx, sy] = worldToSquare(worldX, worldY);
-    const playerId = this.playersBySquare.get(`${sx},${sy}`);
+    const binnedPlayerId = this.playersBySquare.get(`${sx},${sy}`);
     // The selected token is the authoritative activation-cancel gesture. Do not let a plotted
     // waypoint swallow that right-click before the host can send CLIENT_ACTING_PLAYER(null)
     // (or surface the required Blitz/Punt confirmation). Other right-clicks retain the one-shot
     // waypoint cancel contract.
-    if (playerId !== this.selectedPlayerId && this.dismissWaypointPlanForContextMenu()) return;
+    // Owner 10-14: EXACT off-pitch test (the continuous inverse; worldToSquare's row-midpoint width mis-bins sloped
+    // boundary pixels). Honours flip / orientation. An off-pitch click reaches the host before any waypoint dismissal,
+    // so it is equivalent to right-clicking the acting token (the host clears the route itself on the empty branch).
+    // Independent of occupancy: a boundary pixel mis-binned onto an edge-square occupant is still off the pitch.
+    const ground = projectionInverse()(worldX, worldY);
+    const offPitch = ground.x < 0 || ground.x >= PITCH_COLS || ground.y < 0 || ground.y >= PITCH_ROWS;
+    const playerId = offPitch ? undefined : binnedPlayerId;
+    if (!offPitch && playerId !== this.selectedPlayerId && this.dismissWaypointPlanForContextMenu()) return;
     if (playerId && this.preSetupCoords.has(playerId)) return;
     // Owner 09-08: on an inspection-only surface a right-click clears the inspect read first; an empty square then
     // needs no menu, a player still gets its context menu (card) below.
@@ -22129,6 +22358,19 @@ export class PitchRenderer {
       if (!playerId) return;
     }
     if (!playerId) {
+      // Owner 10-14: an OFF-pitch right-click (sidelines, dugouts, surround) is routed by the host, so it skips the
+      // renderer-local double-right-click reset (that would clear the selection the host's acting menu needs).
+      if (offPitch) {
+        this.onContextMenu?.(
+          {
+            playerId: '', square: [sx, sy], emptySquare: true, offPitch: true,
+            isOpposition: false, isHomeTeam: false, isDown: false,
+            activationSpent: false, isConfused: false, isHypnotized: false,
+          },
+          offsetX, offsetY,
+        );
+        return;
+      }
       const now = performance.now();
       const quickSecond = now - this.lastRightClickAt < PitchRenderer.DOUBLE_RCLICK_MS;
       this.lastRightClickAt = now;
@@ -22151,28 +22393,42 @@ export class PitchRenderer {
       }
       return;
     }
+    const target = this.contextTargetFor(playerId, [sx, sy]);
+    if (!target) return;
+    this.onContextMenu?.(target, offsetX, offsetY);
+  }
+
+  /** The ContextTarget for a player (the right-click body's player branch). Owner 10-14: also lets the host build the
+   *  acting player's target for an off-pitch right-click. `square` defaults to the player's own coordinate. */
+  contextTargetFor(playerId: string, square?: Square): ContextTarget | null {
     const data = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
-    if (!data) return;
+    if (!data) return null;
+    let sq = square;
+    if (!sq) {
+      for (const [key, pid] of this.playersBySquare) {
+        if (pid !== playerId) continue;
+        const [qx, qy] = key.split(',').map(Number);
+        sq = [qx!, qy!];
+        break;
+      }
+      if (!sq) sq = isOnPitch(data.playerCoordinate) ? [data.playerCoordinate![0], data.playerCoordinate![1]] : [-1, -1];
+    }
     const isHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
     // perspective: the selected player's team, or home = "own" without one
     const ownSide = this.selectedPlayerId ? this.selectedIsHome() : true;
     const base = baseState(data.playerState);
     const shadeable =
       base === PlayerStateBase.STANDING || base === PlayerStateBase.MOVING || base === PlayerStateBase.PRONE;
-    this.onContextMenu?.(
-      {
-        playerId,
-        square: [sx, sy],
-        isOpposition: isHome !== ownSide,
-        isHomeTeam: isHome,
-        isDown: isDown(data.playerState),
-        activationSpent: shadeable && !hasFlag(data.playerState, PlayerStateFlag.ACTIVE),
-        isConfused: hasFlag(data.playerState, PlayerStateFlag.CONFUSED),
-        isHypnotized: hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED),
-      },
-      offsetX,
-      offsetY,
-    );
+    return {
+      playerId,
+      square: sq,
+      isOpposition: isHome !== ownSide,
+      isHomeTeam: isHome,
+      isDown: isDown(data.playerState),
+      activationSpent: shadeable && !hasFlag(data.playerState, PlayerStateFlag.ACTIVE),
+      isConfused: hasFlag(data.playerState, PlayerStateFlag.CONFUSED),
+      isHypnotized: hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED),
+    };
   }
 
   // --- controller support P2a: the pad crosshair (owner 10-07, spec-controller-support.md) ---

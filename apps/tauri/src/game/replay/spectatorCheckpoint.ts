@@ -609,8 +609,8 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   if (!object(p.block) || !keys(p.block, ['attackerId', 'defenderId', 'chosenDice', 'defenderSquare', 'rollOccurrence']) || !Number.isSafeInteger(p.block.rollOccurrence) || Number(p.block.rollOccurrence) < 0 || !nullableString(p.block.attackerId)
     || !(p.block.defenderSquare === null || (numbers(p.block.defenderSquare) && p.block.defenderSquare.length === 2)) || !nullableString(p.block.defenderId) || !(p.block.chosenDice === null || numbers(p.block.chosenDice))) fail(45);
   const b = p.blitz;
-  if (b !== null && (!object(b) || !keys(b, ['id', 'targetId', 'side', 'turnKey', 'visible'])
-    || ![b.id, b.targetId, b.turnKey].every((v) => typeof v === 'string') || typeof b.side !== 'boolean' || typeof b.visible !== 'boolean')) fail(46);
+  if (b !== null && (!object(b) || !keys(b, ['id', 'targetId', 'side', 'turnKey', 'visible', 'targetLive'])
+    || ![b.id, b.targetId, b.turnKey].every((v) => typeof v === 'string') || typeof b.side !== 'boolean' || typeof b.visible !== 'boolean' || typeof b.targetLive !== 'boolean')) fail(46);
   const action = p.actionRolls;
   if (!object(action) || !keys(action, ['players']) || !Array.isArray(action.players)) fail(47);
   const playerIds = new Set<string>();

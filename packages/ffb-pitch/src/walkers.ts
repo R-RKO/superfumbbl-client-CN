@@ -1233,7 +1233,29 @@ function keepFeetInSquare(record: WalkerTokenRecord): void {
   const sprite = record.sprite;
   const bottomLocal = sprite.position.y + sprite.height * (1 - sprite.anchor.y);
   const lift = Math.max(0, bottomLocal + FEET_EDGE_MARGIN_PX - halfBelow);
-  if (Math.abs(record.token.pivot.y - lift) > 1e-3) record.token.pivot.y = lift;
+  // UAT 1.0.205 (occluded block target): a visual nudge rides the same pivot, so the lift keeps it.
+  const target = lift - tokenVisualNudge(record.token).y;
+  if (Math.abs(record.token.pivot.y - target) > 1e-3) record.token.pivot.y = target;
+}
+
+type NudgeableToken = Container & { visualNudge?: { x: number; y: number } };
+
+/** UAT 1.0.205: the token-local visual nudge currently applied through the token's pivot ({0,0} when none). */
+export function tokenVisualNudge(token: Container): { x: number; y: number } {
+  return (token as NudgeableToken).visualNudge ?? { x: 0, y: 0 };
+}
+
+/** UAT 1.0.205 (occluded block target): draw the token's content offset by (x, y) TOKEN-LOCAL units without moving
+ *  the token (position, tweens, square lookups and decorations reading position are untouched). Applied through the
+ *  pivot, which the walker feet lift also uses: pivot = base - nudge, so the base is recovered from any prior nudge. */
+export function setTokenVisualNudge(token: Container, x: number, y: number): void {
+  const prev = tokenVisualNudge(token);
+  if (prev.x === x && prev.y === y) return;
+  const baseX = token.pivot.x + prev.x;
+  const baseY = token.pivot.y + prev.y;
+  if (x === 0 && y === 0) delete (token as NudgeableToken).visualNudge;
+  else (token as NudgeableToken).visualNudge = { x, y };
+  token.pivot.set(baseX - x, baseY - y);
 }
 
 export function tickWalkers(

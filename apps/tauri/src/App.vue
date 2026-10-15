@@ -3258,6 +3258,14 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <p class="hint">Marks the rush, dodge and pickup rolls on a planned path.</p>
+            <label class="row">
+              <span>Blitz target marker</span>
+              <select v-model="settings.blitzTargetMarker">
+                <option value="turn">Keep for the turn (default)</option>
+                <option value="fumbbl">Clear when the blitz ends (FUMBBL)</option>
+              </select>
+            </label>
+            <p class="hint">How long the target marker stays on a blitzed player. The blitzer keeps its own marker for the turn either way.</p>
           </fieldset>
 
           <AssetPackSettings :live-game="gameStore.game.value" />

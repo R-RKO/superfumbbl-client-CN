@@ -43,7 +43,7 @@ import { inferStandingRerollsFromReplay } from './standingRerollProjection';
 import { reduceEndGameHud } from './endGameHudProjection';
 import { reduceDriveProjection, type DriveProjection } from './driveProjection';
 import { spectatorFieldFlip, spectatorFixedFlip, viewerCoachName, viewerSide } from './spectatorView';
-import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, type BlitzProjection } from './blitzProjection';
+import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, blitzTokenView, type BlitzProjection } from './blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
 import { computed, customRef, nextTick, reactive, ref, shallowRef, triggerRef, watch } from 'vue';
 import { boardTurnKey, createBoardProjection, reduceBoardProjection } from './boardProjection';
@@ -1403,7 +1403,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     defectors: p.endGameHud.defectorNames ? { names: p.endGameHud.defectorNames, seq } : null,
     ttmHeld: p.heldTeamMate ? { ...p.heldTeamMate, seq } : null,
     fumblerooskie: p.fumblerooskie ? { ...p.fumblerooskie, seq } : null,
-    blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId, side: p.blitz.side, seq } : null,
+    blitzTokens: null, // served live by the published-position proxy (display setting; see 'blitzTokens' below)
     passDestination: passive.passDestination ? { ...passive.passDestination, seq } : null,
     hmpScatterMarks: passive.hmpScatterMarks ? { ...passive.hmpScatterMarks, seq } : null,
     opponentReviewingDice: passive.opponentReviewingDice, opponentChoicePending: passive.opponentChoicePending,
@@ -1484,6 +1484,8 @@ const state = new Proxy(legacyState, {
       }
       // Owner 10-11: the orientation follows Settings > Spectator and replay view, so it is not part of the cached HUD.
       if (key === 'fieldFlip') return { flip: publishedFieldFlip(position), seq: position.epoch };
+      // Settings > UI > Blitz target marker is a display choice, so it is applied here and never cached in the HUD.
+      if (key === 'blitzTokens') { const view = blitzTokenView(position.checkpoint.durableProjection.blitz, settings.blitzTargetMarker); return view && { ...view, seq: position.epoch }; }
       const hud = spectatorHud(position);
       // Owner 10-13: a failed TTM landing's (read-only) reroll card waits for the landing die's read beat, as the coach's.
       if (key === 'reRollPrompt') {
@@ -2841,6 +2843,17 @@ function teardownAbortedKickEmBlockPresentation(): void {
 let visibleBlockContext = createBlockContext();
 // #94: this turn's OBSERVED blitz declarer + target (reset per turn); state.blitzTokens derives from these gated on turnData.blitzUsed. Spectate-parity.
 let visibleBlitzProjection: BlitzProjection | null = null;
+/** Project the observed blitz occurrence onto state.blitzTokens under Settings > UI > Blitz target marker. */
+function applyBlitzTokens(): void {
+  const view = blitzTokenView(visibleBlitzProjection, settings.blitzTargetMarker);
+  const cur = state.blitzTokens;
+  if (view) {
+    if (!cur || cur.blitzerId !== view.blitzerId || cur.targetId !== view.targetId) {
+      state.blitzTokens = { blitzerId: view.blitzerId, targetId: view.targetId, side: view.side, seq: (cur?.seq ?? 0) + 1 };
+    }
+  } else if (cur) state.blitzTokens = null;
+}
+watch(() => settings.blitzTargetMarker, () => applyBlitzTokens(), { flush: 'sync' });
 /** Owner 07-06 (#1/#5): the block's DEFENDER square captured at block time — reaction-skill icons anchor HERE, not the (already pushed) live token. */
 /** Owner 07-06: `<attacker>:<target>` of the current BLITZ declaration — crosshair fires ONCE at declaration, not per frame. */
 let lastBlitzDeclKey = '';
@@ -8931,13 +8944,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // #94: derive PERSISTENT blitz tokens from the observed model (spectate-parity, D10 flag gate); runs AFTER the block section so the frame's attacker/defender ids are current. Negatrait-failed blitz keeps the marker with no target (spent-token property).
   {
     visibleBlitzProjection = reduceBlitzProjection(visibleBlitzProjection, game.value, { attackerId: visibleBlockContext.attackerId, defenderId: visibleBlockContext.defenderId });
-    const marker = visibleBlitzProjection;
-    const cur = state.blitzTokens;
-    if (marker?.visible) {
-      if (!cur || cur.blitzerId !== marker.id || cur.targetId !== marker.targetId) {
-        state.blitzTokens = { blitzerId: marker.id, targetId: marker.targetId, side: marker.side, seq: (cur?.seq ?? 0) + 1 };
-      }
-    } else if (cur) state.blitzTokens = null;
+    applyBlitzTokens();
   }
   // B9-14/G4: push arrows — signalled by `pushback` OR a PUSH blockChoice; the MOVE may land later, so register pre-push square and fire on the actual move.
   {
@@ -20351,7 +20358,7 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
     opts.push({ label: specialTeamLabel, source: 'Team ReRoll', kind: 'team' });
   } else if (hasMascot) {
     opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team' });
-    if (hasTeam) opts.push({ label: 'Team Mascot, then Team Reroll', source: 'Mascot TRR', kind: 'team' });
+    if (hasTeam) opts.push({ label: 'Mascot + RR', source: 'Mascot TRR', kind: 'team' });
   } else if (hasTeam) {
     opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
   }

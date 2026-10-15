@@ -161,7 +161,7 @@ function replayDecisionSurfaces(): void {
   for (const replay of decisionSurfaceReplays) replay();
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
 import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
@@ -399,6 +399,7 @@ import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
 import { useSuperFumbblLogoMip } from '../game/logoMips';
 import { useDelayedPresence } from '../game/delayedPresence';
+import { blitzTokenView } from '../game/blitzProjection';
 import { activeServerTarget, applyServerTarget, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
 import { gameServiceFromTarget, resolveReportGameId, wireLogBasename } from '../game/bugReport';
@@ -1525,15 +1526,49 @@ function updateLogToastClearance() {
 }
 watch(() => chatToasts.length, () => { if (chatToasts.length) updateLogToastClearance(); });
 
+// Owner pick (UAT): while the setup rules card is open, left-anchored toasts slide to the RIGHT of it instead of
+// sitting under it (the card out-stacks the toasts, z 42 vs 13; the toasts are NOT raised). The card is measured
+// (it is scaled 1.3x and re-flows with setup errors / narrow windows), so the offset is its real right edge.
+const setupCardEl = ref<HTMLElement | null>(null);
+const setupToastClearance = ref(0);
+const setupToastAvail = ref(0); // px left for a toast right of the card (children use it as their max width)
+function updateSetupToastClearance() {
+  const card = setupCardEl.value;
+  const parent = card?.offsetParent as HTMLElement | null | undefined;
+  if (!card || !parent) { setupToastClearance.value = 0; setupToastAvail.value = 0; return; }
+  const cr = card.getBoundingClientRect();
+  const pr = parent.getBoundingClientRect();
+  setupToastClearance.value = Math.max(0, Math.ceil(cr.right - pr.left + 12));
+  setupToastAvail.value = Math.max(120, Math.floor(pr.width - setupToastClearance.value - 12));
+}
+let setupCardObserver: ResizeObserver | null = null;
+watch(setupCardEl, (el) => {
+  setupCardObserver?.disconnect();
+  setupCardObserver = null;
+  if (!el) { setupToastClearance.value = 0; setupToastAvail.value = 0; return; }
+  updateSetupToastClearance();
+  if (typeof ResizeObserver !== 'undefined') {
+    setupCardObserver = new ResizeObserver(() => updateSetupToastClearance());
+    setupCardObserver.observe(el);
+  }
+}, { flush: 'post' });
+function onSetupToastResize() { if (setupCardEl.value) updateSetupToastClearance(); }
+onMounted(() => window.addEventListener('resize', onSetupToastResize));
+onBeforeUnmount(() => { window.removeEventListener('resize', onSetupToastResize); setupCardObserver?.disconnect(); });
+
+function setupToastLeft(): Record<string, string> {
+  const x = setupToastClearance.value;
+  return x > 0 ? { left: `${x}px`, '--chat-toast-avail': `${setupToastAvail.value}px` } : { left: '12px' };
+}
 const chatToastStyle = computed(() => {
   const base: Record<string, string> = { top: 'auto', bottom: 'auto', left: 'auto', right: 'auto', transform: 'none' };
   switch (settings.chatToastPos) {
     case 'right': return { ...base, top: '86px', right: '12px' };
-    case 'bottomLeft': return { ...base, bottom: `${logToastClearance.value || 58}px`, left: '12px' };
+    case 'bottomLeft': return { ...base, bottom: `${logToastClearance.value || 58}px`, ...setupToastLeft(), };
     case 'top': return { ...base, top: '8px', left: '50%', transform: 'translateX(-50%)' };
     case 'center': return { ...base, top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
     case 'left': // owner 08-19: center-left — top-left collided with the corner panel
-    default: return { ...base, top: '50%', left: '12px', transform: 'translateY(-50%)' };
+    default: return { ...base, top: '50%', ...setupToastLeft(), transform: 'translateY(-50%)' };
   }
 });
 watch(
@@ -6746,7 +6781,7 @@ function pushBlitzTokens() {
   const t = gameStore.state.blitzTokens;
   renderer?.setBlitzTokens(t ? { blitzerId: t.blitzerId, targetId: t.targetId } : null);
 }
-watch(() => gameStore.state.blitzTokens?.seq, pushBlitzTokens);
+watch(() => [gameStore.state.blitzTokens?.seq, gameStore.state.blitzTokens?.targetId, settings.blitzTargetMarker], pushBlitzTokens);
 // The acting-token target-declaration prompt. Owner 10-08: Gaze left it - no victim is named at declare.
 const o66TargetDeclarePos = ref<{ x: number; y: number } | null>(null);
 let targetDeclareRaf = 0;
@@ -8819,6 +8854,27 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
 }
 
 function openContextMenu(target: ContextTarget, x: number, y: number) {
+  // Owner 10-14: an off-pitch right-click (sidelines, dugouts, surround) is the acting player's rail menu when I have
+  // an active player (opened AT THE CURSOR, same placeCtxMenu as the on-token click), else the empty-square cascade
+  // below; spectating / not my turn keep today's no-op.
+  if (target.offPitch) {
+    const offActing = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const route = offPitchRightClickRoute({
+      offPitch: true, order66: !!settings.order66, isPlaying: gameStore.isPlaying.value, myTurn: gameStore.myTurn.value,
+      actingControlled: !!offActing && gameStore.iControl(offActing),
+    });
+    if (route === 'ignore') {
+      // today's behaviour: the renderer's own one-shot waypoint cancel (it no longer runs first for off-pitch clicks)
+      renderer?.dismissWaypointPlanForContextMenu();
+      return;
+    }
+    if (route === 'as-empty-square' && renderer?.dismissWaypointPlanForContextMenu()) return;
+    if (route === 'acting-menu') {
+      const actingTarget = renderer?.contextTargetFor(offActing);
+      if (!actingTarget) return;
+      target = actingTarget;
+    }
+  }
   const selectedToken = !!target.playerId && renderer?.getSelectedPlayerId() === target.playerId;
   const contextGame = gameStore.game.value;
   const actingId = String((contextGame?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -11492,7 +11548,7 @@ onMounted(async () => {
       activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
       recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
       fieldFlip: gameStore.publishedFieldFlip(publishedPosition), // owner 10-11: Settings > Spectator and replay view
-      blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
+      blitzTokens: blitzTokenView(p.blitz, settings.blitzTargetMarker),
       heldTeamMate: p.heldTeamMate, passDestination: publishedPosition.passive.passDestination,
       hmpScatterMarks: publishedPosition.passive.hmpScatterMarks,
     });
@@ -11690,7 +11746,7 @@ watch(
         activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
         recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
         fieldFlip: gameStore.publishedFieldFlip(published), // owner 10-11: Settings > Spectator and replay view
-        blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
+        blitzTokens: blitzTokenView(p.blitz, settings.blitzTargetMarker),
         heldTeamMate: p.heldTeamMate, passDestination: published.passive.passDestination,
         hmpScatterMarks: published.passive.hmpScatterMarks,
       });
@@ -14541,7 +14597,7 @@ function sendChat() {
             @click="setupBrowserClosed = false">Formations</button>
         </div>
 
-        <div v-if="setupPhase && !setupCardClosed" class="setup-panel setup-card">
+        <div v-if="setupPhase && !setupCardClosed" ref="setupCardEl" class="setup-panel setup-card">
           <button class="setup-close-button setup-card-close" type="button" aria-label="Close setup panel" title="Close"
             data-testid="setup-card-close" @click="setupCardClosed = true">✕</button>
           <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE' : 'SET UP YOUR TEAM' }}</div>

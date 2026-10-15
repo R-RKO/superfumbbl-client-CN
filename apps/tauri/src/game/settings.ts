@@ -453,6 +453,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-14: planned-path roll tags. 'dieWord' (default) = D6 face + "+" over RUSH / DODGE / PICKUP;
    *  'letter' = the 1.0.204 plates R2+ / D4+ / P3+. */
   plannerTagStyle: 'dieWord' | 'letter';
+  /** Owner 10-14: blitz target badge lifetime. 'turn' (default) = kept for the rest of the turn; 'fumbbl' = cleared when the
+   *  server clears its blitz target (end of the blitz), as base FUMBBL. The blitzer's own badge is unchanged. */
+  blitzTargetMarker: 'turn' | 'fumbbl';
   /** Visual treatment for every D6 surface. Brushed metal is the install default;
    *  the original black set remains available as a local presentation choice. */
   d6FaceVariant: 'brushed-metal' | 'black' | 'team'; // owner 10-13: 'team' = blue home / red away D6s (d6.ts)
@@ -774,6 +777,7 @@ const DEFAULTS: AppSettings = {
   markerPosition: 'feet',
   dieTagPosition: 'corner',
   plannerTagStyle: 'dieWord',
+  blitzTargetMarker: 'turn',
   d6FaceVariant: 'brushed-metal',
   auraDisturbingPresence: 'selected',
   auraPickMeUp: 'selected',
@@ -1114,6 +1118,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       ? raw.spectatorTackleZoneMode as SpectatorTackleZoneMode
       : DEFAULTS.spectatorTackleZoneMode;
     merged.plannerTagStyle = raw.plannerTagStyle === 'letter' ? 'letter' : 'dieWord'; // owner 10-14: die + word unless the letter plates were chosen
+    merged.blitzTargetMarker = raw.blitzTargetMarker === 'fumbbl' ? 'fumbbl' : 'turn';
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' || raw.d6FaceVariant === 'team' ? raw.d6FaceVariant : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.hideZeroRerolls = raw.hideZeroRerolls === true; // owner 10-13: off unless the user turned it on
