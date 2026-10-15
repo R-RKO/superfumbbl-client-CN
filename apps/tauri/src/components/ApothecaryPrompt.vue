@@ -148,7 +148,7 @@ defineEmits<{
 .apo-wait { display: block; min-width: 0; max-width: 100%; margin-top: 4px; overflow-wrap: anywhere; white-space: normal; color: #9ea9b6; font-size: max(var(--ui-min-text-size, 12px), 0.55rem); font-weight: 800; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .readonly .apo-injury { opacity: 0.9; }
 :deep(.pitch-confirm-title) { padding-right: 46px; padding-left: 0; text-align: left; }
-:global(.hud-chrome) .apothecary-prompt { border-top-color: #727d89; border-bottom-color: #080a0c; }
-:global(.hud-minimalist) .apothecary-prompt { border-width: 1px 1px 1px 4px; background: rgba(11, 18, 14, 0.92); box-shadow: 0 7px 22px #000b; }
+:global(.hud-chrome .apothecary-prompt) { border-top-color: #727d89; border-bottom-color: #080a0c; }
+:global(.hud-minimalist .apothecary-prompt) { border-width: 1px 1px 1px 4px; background: rgba(11, 18, 14, 0.92); box-shadow: 0 7px 22px #000b; }
 @media (max-width: 620px) { .apo-layout { grid-template-columns: 110px minmax(0, 1fr); gap: 8px; } .apo-portrait { width: 82px; height: 82px; flex-basis: 82px; } .apo-injury { align-items: stretch; flex-direction: column; } .apo-option-row { justify-content: flex-start; } }
 </style>

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
+import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
 import { allBlockDiceIndices, BlockTumbleRun, handBlockTumbleTo3d, type BlockTumbleFrame } from '../game/blockRerollTumble';
 import { measuredRefreshHz, resolveFpsCap, trackDisplayRate } from '../game/displayRefreshRate';
+import { rerollToastIconKind } from '../game/rerollPresentation';
 import {
   cachedBundledFumbblAsset,
   PitchRenderer,
@@ -34,7 +36,7 @@ import {
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
   PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, serverMoveSquareRolls, squareAnchor, worldToSquare,
-  displayDiceSide, playerServerSide, teamServerSide, type BlockDieSide } from '@fumbbl40k/ffb-pitch';
+  displayDiceSide, playerServerSide, teamServerSide, disturbingPresenceTagText, type BlockDieSide } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
@@ -2875,7 +2877,9 @@ watch(
     if (m && renderer && !settings.spectatorClean) {
       // Owner 09-09: the cause is the renderer's lowercase KEY ('pass' / 'catch') — the capitalised words never
       // matched the die-tag branches, so the pass and catch badges were silently skipped (the tag fell to '?').
-      renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed);
+      // Owner 10-15: a server Disturbing Presence modifier on the roll rides the die as its "DP −N" tag.
+      if (m.disturbingPresence) renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed, undefined, undefined, undefined, undefined, undefined, undefined, m.disturbingPresence);
+      else renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed);
     }
   },
 );
@@ -6837,7 +6841,7 @@ watch(targetDeclarePrompt, (prompt) => {
 });
 // Owner o66aa: the 2-click target CUE for pass / hand-off / foul — 🏈 over a pass/hand-off target, the armour-
 // break roll over a foul victim. RAF-follows the camera; shown while a pending target awaits its confirm click.
-const o66TargetCue = ref<{ x: number; y: number; label: string; throwRoll?: number; catchRoll?: number } | null>(null);
+const o66TargetCue = ref<{ x: number; y: number; label: string; throwRoll?: number; catchRoll?: number; throwDp?: string | null; catchDp?: string | null } | null>(null);
 let targetCueRaf = 0;
 const o66ConfirmedPassDestination = computed(() => {
   const g = gameStore.game.value;
@@ -7093,7 +7097,11 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
     const throwDestination = !!o66PassDestination.value
       || (!!o66PendingPass.value && o66PendingThrowKind.value !== 'fireball');
     const throwerId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    const from = throwerId ? (o66PendingMove.value?.dest ?? playerSquareById(throwerId)) : null;
+    // Astra 10-15: a confirmed walk-then-pass keeps its submitted throw origin while the thrower walks (as the preview
+    // watcher above does), so the Pass number and its DP part describe the square the ball is thrown from.
+    const from = o66SubmittedPassProjection.value
+      ? o66SubmittedPassProjection.value.origin
+      : throwerId ? (o66PendingMove.value?.dest ?? playerSquareById(throwerId)) : null;
     const mode = isThrowMateState(clientState) ? 'TTM_LANDING'
       : o66PendingThrowKind.value === 'bomb' ? 'BOMB'
         : g && isHailMaryPassAction(g) ? 'HAIL_MARY_PASS' : 'PASS';
@@ -7110,6 +7118,9 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
       throwRoll: preview?.throwRoll,
       // owner 10-05: the catch requirement rides this same cue (the renderer's green "Catch" chip is retired)
       catchRoll: preview?.catchRoll ?? undefined,
+      // Owner 10-15: the combined Disturbing Presence modifier inside each number ("DP −N"; null = none)
+      throwDp: disturbingPresenceTagText(preview?.throwDisturbingPresence),
+      catchDp: preview?.catchRoll != null ? disturbingPresenceTagText(preview?.catchDisturbingPresence) : null,
     };
     targetCueRaf = requestAnimationFrame(step);
   };
@@ -7369,6 +7380,25 @@ watch(() => { const g = gameStore.game.value; return g && settings.order66 && ga
 watch(() => actingHasBlocked(gameStore.game.value), (blocked) => {
   if (blocked) { o66AggroStage.value = null; o66PendingBlock.value = null; }
 });
+// UAT 1.0.208 (JLeav, owner option A): until a block/blitz target is clicked the renderer draws the server's dice
+// decorations for my declared Block/Blitz as dots; a click hands over to the existing post-click presentation.
+// "Clicked" = a target stage, the block chooser card, or a block/blitz plan carrying a target, latched for the
+// activation (see game/blockTargetLatch.ts).
+const o66BlockTargetLatch = ref<string | null>(null);
+const o66BlockTargetLatchKey = computed(() => {
+  const acting = gameStore.game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  return blockTargetLatchKey(acting?.playerId, acting?.playerAction);
+});
+const o66BlockTargetLive = computed(() => {
+  const plan = gameStore.activePlanIdentity();
+  return !!o66AggroStage.value || !!gameStore.state.blitzBlockChoice || (!!plan && (plan.actKind === 'block' || plan.actKind === 'blitz'));
+});
+watch([o66BlockTargetLatchKey, o66BlockTargetLive], ([key, live]) => {
+  o66BlockTargetLatch.value = nextBlockTargetLatch(o66BlockTargetLatch.value, key, live);
+}, { immediate: true });
+const o66BlockTargetChosen = computed(() => blockTargetChosen(o66BlockTargetLatch.value, o66BlockTargetLatchKey.value, o66BlockTargetLive.value));
+watch(o66BlockTargetChosen, (chosen) => renderer?.setDeclaredBlockTargetChosen(chosen));
+watch(() => settings.preClickBlockDice, (enabled) => renderer?.setPreClickBlockDice(enabled)); // owner 10-15: live toggle redraws
 // At a plain Block/Blitz nominate stage, surface the block-dice preview over the target. A selected special attack
 // uses BlockAttackConfirmModal instead; both retire from the same aggro stage.
 watch(o66AggroStage, (st) => {
@@ -10625,6 +10655,8 @@ onMounted(async () => {
   renderer.trailMarkStyle = settings.trailMarks; // owner 2026-07-08: echo | numbers
   renderer.plannerEnabled = plannerAllowed.value;
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
+  renderer.setDeclaredBlockTargetChosen(o66BlockTargetChosen.value); // UAT 1.0.208: a remount mid-choice keeps the click
+  renderer.setPreClickBlockDice(settings.preClickBlockDice); // owner 10-15: Settings > UI gate
   renderer.viewerIsHome = props.mode === 'play' ? gameStore.myTeamIsHome.value : null; // owner 09-25: enemy clicks inspect
   renderer.setAutoDirectorEnabled(settings.autoDirector && !spectatorDirectorSuspended.value); // owner 2026-07-03: Auto Director
   renderer.setAutoDirectorSuspended(gameStore.playbackCatchingUp.value);
@@ -15590,10 +15622,12 @@ function sendChat() {
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
+            <span v-if="o66TargetCue.throwDp" class="o66-target-dp" data-testid="target-cue-pass-dp">{{ o66TargetCue.throwDp }}</span>
           </span>
           <!-- owner 10-05: the catch requirement in the same pill (accent tint, like the hover tip's catch line) -->
           <span v-if="o66TargetCue.throwRoll != null && o66TargetCue.catchRoll != null" class="o66-target-pass-roll o66-target-catch-roll" data-testid="target-cue-catch">Catch
             <D6Face class="o66-target-d6" :value="o66TargetCue.catchRoll" :label="`Catch needs ${o66TargetCue.catchRoll}`" />+
+            <span v-if="o66TargetCue.catchDp" class="o66-target-dp" data-testid="target-cue-catch-dp">{{ o66TargetCue.catchDp }}</span>
           </span>
         </div>
 
@@ -15820,6 +15854,7 @@ function sendChat() {
         <div v-if="gameStore.state.rerollSplash" :key="'rr-' + gameStore.state.rerollSplash.seq"
           class="reroll-toast" :data-side="gameStore.state.rerollSplash.side" :style="rerollSplashAnchorStyle">
           <img v-if="gameStore.state.rerollSplash.skill && settings.skillDisplay === 'icons'" class="reroll-toast-icon" :src="skillIconUrl(gameStore.state.rerollSplash.skill, effectiveIconStyle)" alt="" />
+          <img v-else-if="rerollToastIconKind(gameStore.state.rerollSplash, false) === 'mascot'" class="reroll-toast-icon" :src="resourceIcon('team_mascot')" alt="" />
           <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? `${gameStore.state.rerollSplash.coach} uses ${gameStore.state.rerollSplash.source}!` }}</span>
@@ -16110,6 +16145,7 @@ function sendChat() {
           </template>
           <template v-else v-for="(part, i) in d6RequirementParts(actionTip.text)" :key="i">
             <D6Face v-if="part.face" class="action-target-d6" :value="part.face" :label="part.label" />
+            <span v-else-if="part.dp" class="o66-target-dp">{{ part.text }}</span>
             <template v-else>{{ part.text }}</template>
           </template>
         </div>
@@ -18724,6 +18760,19 @@ function sendChat() {
 .o66-target-pass-roll { display: inline-flex; align-items: center; gap: 2px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); }
 .o66-target-d6 { width: 22px; height: 22px; }
 .o66-target-catch-roll { color: var(--ui-accent); } /* owner 10-05: the catch line in the accent tint */
+/* Owner 10-15: the combined Disturbing Presence modifier on the Pass / Catch chips - the pitch DP tag's plate (DP aura
+   red tint, dark lettering), so the pre-throw card and the rolled die read the same. */
+.o66-target-dp {
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid #6a1a10;
+  border-radius: 3px;
+  background: #e8806f;
+  color: #1a1a1a;
+  font-size: 0.85em;
+  font-weight: 700;
+  line-height: 1.25;
+}
 /* Owner ⑩ (08-12): pass/bomb targeting tooltip — the throw/catch roll at the hovered square. Mirrors the
    target-cue look (over-head, pointer-transparent); catch line reads in the accent tint. */
 .pass-hover-tip {

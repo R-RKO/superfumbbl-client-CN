@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
+import DisplayCaps from './DisplayCaps.vue';
 
 const props = defineProps<{
   playerName: string;
@@ -30,15 +31,16 @@ defineEmits<{
 </script>
 
 <template>
-  <PitchConfirmationPanel class="sendoff-prompt" title="Spotted by the Ref!"
+  <PitchConfirmationPanel class="sendoff-prompt"
     label="Referee send-off decision" :position-style="panelStyle" draggable
     test-id="sendoff-prompt" @drag-start="$emit('dragStart', $event)">
+    <template #title><DisplayCaps text="Spotted by the Ref!" /></template>
     <div class="sendoff-summary">
       <span class="sendoff-ref-frame" aria-hidden="true">
         <img :src="refereeIconUrl" class="sendoff-ref" alt="" />
       </span>
       <span class="sendoff-copy">
-        <span class="sendoff-kicker">Referee decision</span>
+        <span class="sendoff-kicker"><DisplayCaps text="Referee decision" /></span>
         <strong class="sendoff-player">{{ playerName }}</strong>
         <span v-if="positionName" class="sendoff-position">{{ positionName }}</span>
         <span class="sendoff-instruction">Choose how to answer the call.</span>
@@ -47,14 +49,14 @@ defineEmits<{
     <template #actions>
       <button v-if="canArgue" type="button" class="sendoff-btn sendoff-action argue"
         @pointerdown.stop @click.stop="$emit('argue')">
-        <span aria-hidden="true">⚖</span> Argue the call
+        <span aria-hidden="true">⚖</span> <DisplayCaps text="Argue the call" />
       </button>
       <button v-if="canBribe" type="button" class="sendoff-btn sendoff-action bribe"
         @pointerdown.stop @click.stop="$emit('bribe')">
-        <img :src="coinIconUrl" class="sendoff-coin" alt="" /> Bribe
+        <img :src="coinIconUrl" class="sendoff-coin" alt="" /> <DisplayCaps text="Bribe" />
       </button>
       <button type="button" class="sendoff-btn sendoff-action pass" data-pad-cancel
-        @pointerdown.stop @click.stop="$emit('pass')">Pass</button>
+        @pointerdown.stop @click.stop="$emit('pass')"><DisplayCaps text="Pass" /></button>
     </template>
   </PitchConfirmationPanel>
 </template>
@@ -110,6 +112,7 @@ defineEmits<{
   white-space: nowrap;
 }
 .sendoff-instruction { color: color-mix(in srgb, var(--ui-text) 68%, transparent); font-size: max(var(--ui-min-text-size, 12px), 0.7rem); }
+.sendoff-action :deep(.display-caps-art), .sendoff-kicker :deep(.display-caps-art) { white-space: nowrap; }
 .sendoff-action {
   min-width: 94px;
   min-height: 32px;
@@ -122,26 +125,26 @@ defineEmits<{
 .sendoff-action.pass { color: #c8d0da; }
 .sendoff-coin { width: 17px; height: 17px; object-fit: contain; image-rendering: pixelated; }
 
-:global(.hud-chrome) .sendoff-prompt {
+:global(.hud-chrome .sendoff-prompt) {
   border-top-color: #727d89;
   border-bottom-color: #080a0c;
 }
-:global(.hud-chrome) .sendoff-prompt :deep(.pitch-confirm-title) {
+:global(.hud-chrome .sendoff-prompt .pitch-confirm-title) {
   padding-bottom: 2px;
   border-bottom: 1px solid #76818c55;
 }
-:global(.hud-minimalist) .sendoff-prompt {
+:global(.hud-minimalist .sendoff-prompt) {
   padding: 12px 14px 13px;
   border-width: 1px;
   border-radius: 8px;
   background: rgba(13, 17, 23, 0.9);
 }
-:global(.hud-minimalist) .sendoff-ref-frame {
+:global(.hud-minimalist .sendoff-ref-frame) {
   border-color: color-mix(in srgb, var(--ui-accent) 42%, transparent);
   background: rgba(255, 255, 255, 0.035);
   box-shadow: none;
 }
-:global(.hud-minimalist) .sendoff-action {
+:global(.hud-minimalist .sendoff-action) {
   box-shadow: none;
 }
 

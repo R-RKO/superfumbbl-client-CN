@@ -36,6 +36,7 @@ export {
   type SkillIconStyle,
 } from './skillIcons';
 export * from './actions';
+export { disturbingPresenceFromRollModifiers, disturbingPresenceTagText } from './disturbingPresence';
 export * from './markLabels';
 export * from './geometry';
 export * from './movement';

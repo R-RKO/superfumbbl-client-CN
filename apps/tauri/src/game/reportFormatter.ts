@@ -1271,7 +1271,10 @@ export function reportDiceOwner(report: Report, game: GameJson | null): ServerSi
   const id = String(report.reportId ?? '');
   if (UNOWNED_DICE_REPORTS.has(id)) return null;
   if (id === 'blockRoll' || id === 'blockReRoll') return teamServerSide(game, report.choosingTeamId);
-  if (id === 'injury') return playerServerSide(game, report.attackerId);
+  // Owner 10-15: an injury with no attacker (a failed rush / dodge / jump, any fall of the player's own) shows its armour
+  // and injury dice in the colour of the team OPPOSING the injured player, never neutral white. Display only: the dice
+  // statistics still count these rolls for nobody (diceStats.ts).
+  if (id === 'injury') return playerServerSide(game, report.attackerId) ?? opposingSide(playerServerSide(game, report.defenderId));
   // Shadowing / Tentacles (upstream dice stats): BB2020 / BB2025 the roll is `defenderId`'s (the shadower / holder,
   // mixed ReportTentaclesShadowingRoll TEAM_FOR_PLAYER); BB2016 it is the OPPOSING player's escape roll (bb2016
   // ReportTentaclesShadowingRoll OPPONENT_TEAM_FOR_PLAYER of defenderId).

@@ -29,7 +29,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
     :style="positionStyle" :aria-label="label" :data-testid="testId"
     :title="draggable ? 'Drag to move' : undefined"
     @pointerdown="draggable && $emit('dragStart', $event)">
-    <div v-if="title" class="pitch-confirm-title">{{ title }}</div>
+    <div v-if="title || $slots.title" class="pitch-confirm-title"><slot name="title">{{ title }}</slot></div>
     <div class="pitch-confirm-body"><slot /></div>
     <div v-if="$slots.actions" class="pitch-confirm-actions"><slot name="actions" /></div>
   </section>
@@ -100,7 +100,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
 .pitch-confirm-actions :deep(button:disabled) { opacity: 0.42; cursor: default; }
 
 /* Console Chrome: layered metal casing and inset command well. */
-:global(.hud-chrome) .pitch-confirm-panel {
+:global(.hud-chrome .pitch-confirm-panel) {
   padding: 10px 16px 12px;
   border: 3px solid #15191e;
   outline: 2px solid #4c555f;
@@ -111,21 +111,21 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
     linear-gradient(180deg, #555d67 0, #252b32 18%, #090c10 100%);
   box-shadow: 0 5px 0 #030405, 0 10px 24px #000d, inset 0 2px 0 #818a95, inset 0 -4px 0 #11151a;
 }
-:global(.hud-chrome) .pitch-confirm-body,
-:global(.hud-chrome) .pitch-confirm-actions {
+:global(.hud-chrome .pitch-confirm-body),
+:global(.hud-chrome .pitch-confirm-actions) {
   padding: 5px 7px;
   border: 1px solid #0a0c0f;
   border-top-color: #3f4852;
   background: linear-gradient(180deg, #11161c, #06080b);
   box-shadow: inset 0 2px 5px #000d, 0 1px 0 #68717d55;
 }
-:global(.hud-chrome) .pitch-confirm-actions :deep(button) {
+:global(.hud-chrome .pitch-confirm-actions button) {
   border-width: 2px;
   box-shadow: inset 0 1px 0 #ffffff55, inset 0 -2px 0 #0008, 0 2px 0 #050608;
 }
 
 /* Minimalist: a lighter single-plane card with no console casing. */
-:global(.hud-minimalist) .pitch-confirm-panel {
+:global(.hud-minimalist .pitch-confirm-panel) {
   border-color: color-mix(in srgb, var(--ui-accent) 65%, transparent);
   background: rgba(12, 15, 21, 0.88);
   box-shadow: 0 5px 16px #0009;

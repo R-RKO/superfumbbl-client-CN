@@ -507,7 +507,7 @@ function noteChatGame(url: string, coach: string, gameId: unknown): void {
 
 const spectatorPublication = new SpectatorPublication();
 /** One published action-dice batch (`state.actionDice` / an `state.actionDiceQueue` element). */
-type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean }[]; seq: number };
+type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean; disturbingPresence?: number }[]; seq: number };
 /** Owner 10-06 (spec-dice-queue): the queue only bridges one tick to the view's drain; cap it so an unmounted view
  *  (lobby, headless tests) cannot grow it without bound. */
 const ACTION_DICE_QUEUE_CAP = 16;
@@ -667,7 +667,7 @@ const legacyState = reactive({
    *  instead so the first die still renders. Emptied wherever `actionDice` is nulled. */
   actionDiceQueue: [] as ActionDiceBatchState[],
   /** o66 #7: PASS/CATCH roll as an over-head MODAL (passRoll.playerId = passer, catchRoll.playerId = catcher — the modal lands on the right head). */
-  rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; seq: number } | null,
+  rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; disturbingPresence?: number; seq: number } | null,
   /** #18a: DERIVED each frame, not latched (Meero C-18a): opponent is the block-dice decider — keyed on the dialog's `choosingTeamId` so a Side-Step defender's OWN pick suppresses it. Existence-only, never the dice values. */
   opponentReviewingDice: false,
   /** DERIVED each frame from an opponent-owned reactive dialog. */
@@ -1368,7 +1368,7 @@ const legacyState = reactive({
   /** #136: opponent LEFT the game (wire ServerCommandLeave) — graceful-leave notice; a hard disconnect surfaces via the close handler. Cleared on game-change. */
   opponentLeft: null as { coach: string; seq: number } | null,
   /** Owner 07-06: top-centre mini splash when a coach spends a TEAM RE-ROLL. */
-  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string } | null,
+  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
    *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
@@ -2382,7 +2382,7 @@ function showMascotSplash(g: GameJson, teamId: string, roll: number | null): voi
   if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
   const coach = (team.coach as string | null) ?? 'Coach';
   state.rerollSplash = {
-    side, coach, logo, source: 'Team Mascot', isTeam: true,
+    side, coach, logo, source: 'Team Mascot', isTeam: true, mascot: true,
     text: `${coach}'s Team Mascot comes through${roll != null ? ` (${roll})` : ''} - free reroll!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));

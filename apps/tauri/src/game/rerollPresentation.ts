@@ -37,3 +37,12 @@ export function rerollPresentation(reports: readonly Record<string, unknown>[]) 
     isBlockReroll: report.reportId === 'blockReRoll' || reports.some((r) => r.reportId === 'blockRoll'),
     lonerFailed: isTeam && report.successful === false && Number.isInteger(roll) && roll > 0 };
 }
+
+/** Owner 10-15: which icon the reroll toast leads with. A skill icon (when skill icons are on) wins; a WORKING Team
+ *  Mascot (the splash showMascotSplash raises from a successful mascotUsed report) shows the Mascot inducement icon;
+ *  any other team reroll (including a failed Mascot that fell back to a Team ReRoll report) keeps the TRR icon. */
+export function rerollToastIconKind(splash: { skill?: string; isTeam: boolean; mascot?: boolean }, skillIconsOn: boolean): 'skill' | 'mascot' | 'trr' | 'logo' {
+  if (splash.skill && skillIconsOn) return 'skill';
+  if (splash.mascot) return 'mascot';
+  return splash.isTeam ? 'trr' : 'logo';
+}

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue';
+import DisplayCaps from './DisplayCaps.vue';
 
 export interface SendOffResultView {
   kind: 'argue' | 'bribe';
@@ -47,7 +48,7 @@ const surfaceStyle: CSSProperties = {
     :style="surfaceStyle" data-testid="sendoff-result" aria-live="polite" aria-label="Referee decision result">
     <header class="sendoff-result-header">
       <img v-if="refereeIconUrl" :src="refereeIconUrl" class="sendoff-result-ref" alt="" aria-hidden="true" />
-      <span class="sendoff-result-kicker">{{ result.rerolled ? 'Bribery & Corruption reroll' : result.kind === 'bribe' ? 'Bribe result' : 'Argue the Call' }}</span>
+      <span class="sendoff-result-kicker"><DisplayCaps :text="result.rerolled ? 'Bribery & Corruption reroll' : result.kind === 'bribe' ? 'Bribe result' : 'Argue the Call'" /></span>
       <span class="sendoff-result-side">{{ result.side }}</span>
     </header>
     <div class="sendoff-result-body">
@@ -66,7 +67,7 @@ const surfaceStyle: CSSProperties = {
         <span v-if="result.rerolled" class="sendoff-reroll-mark" aria-label="Bribery and Corruption reroll">↻</span>
       </div>
       <div class="sendoff-result-copy">
-        <strong class="sendoff-result-title">{{ result.sentOff ? 'Sent Off' : 'Call Overturned' }}</strong>
+        <strong class="sendoff-result-title"><DisplayCaps :text="result.sentOff ? 'Sent Off' : 'Call Overturned'" /></strong>
         <span class="sendoff-result-text">{{ resultText }}</span>
       </div>
     </div>
@@ -85,7 +86,7 @@ const surfaceStyle: CSSProperties = {
   border-radius: 8px;
   background: linear-gradient(135deg, #3d1014f2, #13080a 60%, #090b0e);
   box-shadow: 0 12px 38px #000d, inset 0 1px 0 #ffffff18;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
   animation: sendoff-result-in var(--p-260) ease-out;
 }
 .sendoff-result-panel.success {
@@ -102,6 +103,7 @@ const surfaceStyle: CSSProperties = {
   border-bottom: 1px solid #ffffff1c;
   background: #05070a99;
 }
+.sendoff-result-kicker :deep(.display-caps-art) { white-space: nowrap; }
 .sendoff-result-kicker { font-size: max(var(--ui-min-text-size, 12px), 0.67rem); font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }
 .sendoff-result-side { color: #aeb8c5; font-size: max(var(--ui-min-text-size, 12px), 0.58rem); font-weight: 900; letter-spacing: 0.16em; text-transform: uppercase; }
 .sendoff-result-body {
@@ -149,19 +151,19 @@ const surfaceStyle: CSSProperties = {
 .success .sendoff-result-title { color: #83e4a4; }
 .sendoff-result-text { color: #f4f6f8; font-size: max(var(--ui-min-primary-text-size, 16px), 0.83rem); font-weight: 800; line-height: 1.3; }
 
-:global(.hud-chrome) .sendoff-result-panel {
+:global(.hud-chrome .sendoff-result-panel) {
   border-width: 3px;
   outline: 2px solid #606a75;
   outline-offset: -7px;
   border-radius: 9px 4px 9px 4px;
   box-shadow: 0 5px 0 #030405, 0 13px 30px #000e, inset 0 2px 0 #ffffff24;
 }
-:global(.hud-minimalist) .sendoff-result-panel {
+:global(.hud-minimalist .sendoff-result-panel) {
   border-width: 1px;
   background: rgba(29, 10, 13, 0.92);
   box-shadow: 0 7px 22px #000b;
 }
-:global(.hud-minimalist) .sendoff-result-panel.success { background: rgba(8, 31, 20, 0.92); }
+:global(.hud-minimalist .sendoff-result-panel.success) { background: rgba(8, 31, 20, 0.92); }
 
 @keyframes sendoff-result-in {
   from { opacity: 0; transform: translate(-50%, -44%) scale(0.94); }

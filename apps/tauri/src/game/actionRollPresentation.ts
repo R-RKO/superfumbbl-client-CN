@@ -1,6 +1,9 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { offeredReRollOptions, playerById } from './reRollDecisionProjection';
 import { breatheFirePassed, breatheFireRerollMayBeOfferedUnfailed } from './breatheFireOutcome';
+import { disturbingPresenceFromRollModifiers } from '@fumbbl40k/ffb-pitch/src/disturbingPresence';
+/** Owner 10-15: the rolls whose tag shows the combined Disturbing Presence modifier the server applied. */
+const DISTURBING_PRESENCE_TAG_REPORTS = new Set(['passRoll', 'catchRoll', 'interceptionRoll']);
 const DIE_CAUSE_BY_REPORT: Record<string, string> = {
   dodgeRoll: 'dodge',
   pickUpRoll: 'pickup',
@@ -23,6 +26,7 @@ const DIE_CAUSE_BY_REPORT: Record<string, string> = {
   reRoll: 'reroll',
   blockReRoll: 'reroll',
   extraReRoll: 'reroll',
+  throwAtStallingPlayer: 'stalling', // owner 10-15: the existing stalling die wears the STALLING badge
 };
 /** Owner 10-10: a skill roll that had no cause of its own drew a BARE die. Held through a reroll offer (a failed Foul
  *  Appearance roll while the coach decides) nothing on the pitch said what it was once the 3 s skill toast had gone.
@@ -70,11 +74,16 @@ export interface ActionDieCue { square: [number, number]; value: number; cause?:
   rerollOfferNotFailed?: boolean;
   /** Astra 10-10 (round 2): this is the REROLLED result of a Breathe Fire roll. Only such a result may re-roll in
    *  place the unfailed Breathe Fire die above; any other roll's rerolled result looks for failed dice only. */
-  breatheFireReroll?: boolean }
+  breatheFireReroll?: boolean;
+  /** Owner 10-15: the combined Disturbing Presence count from this roll's server `rollModifiers` (interception only;
+   *  absent when the server applied none). The die's tag reads "DP −N". */
+  disturbingPresence?: number }
 export interface ActionRollCue {
   reRolled: boolean;
   die: ActionDieCue | null;
-  modal: { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled: boolean } | null;
+  modal: { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled: boolean;
+    /** Owner 10-15: the combined Disturbing Presence count from the server's `rollModifiers` (absent when none). */
+    disturbingPresence?: number } | null;
   trait: { playerId: string; trait: string; successful: boolean; roll: number; needed?: number; hasTarget?: boolean } | null;
 }
 /** Shared report interpretation. Scheduling and UI publication remain with the active reader. */
@@ -111,14 +120,18 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   if (id === 'bloodLustRoll' && failed) result.trait = { playerId, trait: 'Blood Lust', successful: false, roll, needed };
   if (!coordinate || !(coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15)) return result;
   const square: [number, number] = [coordinate[0]!, coordinate[1]!];
+  // Owner 10-15: render only what the server sent - the count comes from this report's modifiers, never the board.
+  const disturbingPresence = DISTURBING_PRESENCE_TAG_REPORTS.has(id) ? disturbingPresenceFromRollModifiers(report.rollModifiers) : 0;
   if (id === 'passRoll' || id === 'catchRoll') {
-    result.modal = { playerId, square, kind: id === 'passRoll' ? 'pass' : 'catch', roll, needed, ok: !failed, reRolled };
+    result.modal = { playerId, square, kind: id === 'passRoll' ? 'pass' : 'catch', roll, needed, ok: !failed, reRolled,
+      ...(disturbingPresence > 0 ? { disturbingPresence } : {}) };
     return result;
   }
   const dialog = game.dialogParameter as Record<string, unknown> | null | undefined;
   const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   result.die = { square, value: roll, cause, failed, needed,
     rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined };
+  if (disturbingPresence > 0) result.die.disturbingPresence = disturbingPresence;
   // Owner 10-09 ("The FAILED toast is appearing at the square where the player fails their dodge before the player
   // token enters that square"): the first roll of a move into a square is shown on the token's arrival there. A
   // rerolled result replaces a die that is already up; a roller that is not moving is "arrived" at once.

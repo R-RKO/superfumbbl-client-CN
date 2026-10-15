@@ -4,7 +4,7 @@
  *  dismiss, Esc does nothing. Every choice step is prefilled from the current settings and writes ONLY when an option
  *  is selected (immediately, so Back/Next never loses a choice). The step model lives in game/setupWizard.ts. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl } from '@fumbbl40k/ffb-pitch';
+import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl, type BlockDieSide, type BlockDieSurface } from '@fumbbl40k/ffb-pitch';
 import D6Face from './D6Face.vue';
 import { settings } from '../game/settings';
 import { flushFumbblPassword } from '../game/credentials';
@@ -50,9 +50,19 @@ const TWITCH_URL = 'https://twitch.tv/flutethecat';
 // and an explicit "preview unavailable" state when composition fails (no canvas). A newer family pick supersedes an
 // older compose: only the latest generation may settle the cards.
 type SurfacePreviewState = 'pending' | 'ready' | 'failed';
-const surfacePreview = ref<Record<'black' | 'white', SurfacePreviewState>>({ black: 'pending', white: 'pending' });
+// Owner 10-15: 'home' / 'away' are the Home / Away card's two rows (the blue and red brushed-metal sets).
+const PREVIEW_SURFACES = ['black', 'white', 'home', 'away'] as const;
+const surfacePreview = ref<Record<BlockDieSurface, SurfacePreviewState>>({ black: 'pending', white: 'pending', home: 'pending', away: 'pending' });
 let surfacePreviewGeneration = 0;
-function surfaceFaceUrls(surface: 'black' | 'white'): string[] {
+/** The rows a card shows: one per surface, the Home / Away card two (home blue above away red). */
+function previewSurfaces(card: 'black' | 'white' | 'team'): BlockDieSurface[] {
+  return card === 'team' ? ['home', 'away'] : [card];
+}
+/** The D6 rows a card shows: the Home / Away variant is a blue row and a red row, the others one plain row. */
+function d6Sides(variant: string): Array<BlockDieSide | null> {
+  return variant === 'team' ? ['home', 'away'] : [null];
+}
+function surfaceFaceUrls(surface: BlockDieSurface): string[] {
   return PitchRenderer.bundledBlockFaceUrls(settings.blockDiceFamily, surface);
 }
 
@@ -63,7 +73,7 @@ const isLast = computed(() => index.value === steps.value.length - 1);
 watch(() => [step.value.id, settings.blockDiceFamily] as const, ([id, family]) => {
   if (id !== 'blockDiceSurface') return;
   const generation = ++surfacePreviewGeneration;
-  for (const surface of ['black', 'white'] as const) {
+  for (const surface of PREVIEW_SURFACES) {
     if (blockFacesReady(family, surface)) { surfacePreview.value[surface] = 'ready'; continue; }
     surfacePreview.value[surface] = 'pending';
     void PitchRenderer.prepareBlockFaces(family, surface).then((ok) => {
@@ -305,18 +315,22 @@ function finish(): void {
                   <span>{{ FONT_SAMPLE.sentence }}</span>
                   <span class="setup-font-digits">{{ FONT_SAMPLE.digits }}</span>
                 </div>
-                <div v-else-if="option.d6Variant" class="setup-images setup-d6">
-                  <D6Face v-for="value in D6_FACE_VALUES" :key="value" :value="value" :variant="option.d6Variant" />
+                <div v-else-if="option.d6Variant" class="setup-preview-rows">
+                  <div v-for="side in d6Sides(option.d6Variant)" :key="side ?? 'plain'" class="setup-images setup-d6" :data-side="side ?? undefined">
+                    <D6Face v-for="value in D6_FACE_VALUES" :key="value" :value="value" :variant="option.d6Variant" :side="side" />
+                  </div>
                 </div>
-                <div v-else-if="option.blockSurface" class="setup-images setup-dice" :data-surface="option.blockSurface"
-                  :data-preview="surfacePreview[option.blockSurface]">
-                  <template v-if="surfacePreview[option.blockSurface] === 'ready'">
-                    <img v-for="(url, f) in surfaceFaceUrls(option.blockSurface)" :key="f" :src="url" alt="" />
-                  </template>
-                  <template v-else-if="surfacePreview[option.blockSurface] === 'pending'">
-                    <span v-for="f in 5" :key="f" class="setup-die-skeleton" :class="'setup-die-skeleton--' + option.blockSurface" aria-hidden="true"></span>
-                  </template>
-                  <span v-else class="setup-preview-failed">Preview unavailable. Your dice will use the face set's original art.</span>
+                <div v-else-if="option.blockSurface" class="setup-preview-rows">
+                  <div v-for="surface in previewSurfaces(option.blockSurface)" :key="surface" class="setup-images setup-dice" :data-surface="surface"
+                    :data-preview="surfacePreview[surface]">
+                    <template v-if="surfacePreview[surface] === 'ready'">
+                      <img v-for="(url, f) in surfaceFaceUrls(surface)" :key="f" :src="url" alt="" />
+                    </template>
+                    <template v-else-if="surfacePreview[surface] === 'pending'">
+                      <span v-for="f in 5" :key="f" class="setup-die-skeleton" :class="'setup-die-skeleton--' + surface" aria-hidden="true"></span>
+                    </template>
+                    <span v-else class="setup-preview-failed">Preview unavailable. Your dice will use the face set's original art.</span>
+                  </div>
                 </div>
                 <div v-else-if="option.images.length" class="setup-images" :class="{ 'setup-dice': step.id === 'blockDice' }">
                   <template v-for="key in option.images" :key="key">
@@ -497,6 +511,9 @@ function finish(): void {
 .setup-die-skeleton { width: 60px; height: 60px; margin: 6px; border-radius: 9px; opacity: 0.55; animation: setup-die-pulse 1.1s ease-in-out infinite alternate; }
 .setup-die-skeleton--black { background: #141414; box-shadow: inset 0 0 0 2px #5a5e61; }
 .setup-die-skeleton--white { background: #f3efe6; box-shadow: inset 0 0 0 2px #26221e; }
+.setup-die-skeleton--home { background: #1860c5; box-shadow: inset 0 0 0 2px #14181a; }
+.setup-die-skeleton--away { background: #9a0f12; box-shadow: inset 0 0 0 2px #14181a; }
+.setup-preview-rows { display: flex; flex-direction: column; gap: 4px; }
 @keyframes setup-die-pulse { from { opacity: 0.35; } to { opacity: 0.7; } }
 @media (prefers-reduced-motion: reduce) { .setup-die-skeleton { animation: none; } }
 .setup-preview-failed { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.9rem); }

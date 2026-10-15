@@ -2278,6 +2278,16 @@ export function pickupTargetAtBall(game: GameJson, playerId: string): number | n
 
 type PreviewCatchMode = 'CATCH_ACCURATE_PASS' | 'CATCH_ACCURATE_BOMB' | 'CATCH_HAND_OFF';
 
+/** The player the server would ask for an accurate catch on `square`: one with tackle zones standing there
+ *  (StepResolvePass.java:49-71 only enters the accurate catch branch for such a player). */
+function accurateCatcherAt(game: GameJson, square: [number, number]): PlayerDataLike | undefined {
+  for (const p of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
+    const pos = normSquare(p.playerCoordinate);
+    if (pos && sameSquare(pos, square) && exertsTacklezone(p.playerState)) return p;
+  }
+  return undefined;
+}
+
 /** Shared accurate-target catch stack. Upstream's CatchModifierFactory applies Disturbing Presence to every catch
  *  and tackle zones unless ignoreTacklezonesWhenCatching is present [ffb-common factory/CatchModifierFactory.java:
  *  38-45]. Its collection supplies +1 per TACKLEZONE, +1 per DISTURBING_PRESENCE, and +1 Pouring Rain
@@ -2288,12 +2298,7 @@ type PreviewCatchMode = 'CATCH_ACCURATE_PASS' | 'CATCH_ACCURATE_BOMB' | 'CATCH_H
 function accurateCatchTargetAt(game: GameJson, square: [number, number], mode: PreviewCatchMode): number | null {
   const fm = game.fieldModel;
   if (!fm) return null;
-  // The server only enters the accurate catch branch for a player with tackle zones (StepResolvePass.java:49-71).
-  let catcher: PlayerDataLike | undefined;
-  for (const p of (fm.playerDataArray ?? []) as PlayerDataLike[]) {
-    const pos = normSquare(p.playerCoordinate);
-    if (pos && sameSquare(pos, square) && exertsTacklezone(p.playerState)) { catcher = p; break; }
-  }
+  const catcher = accurateCatcherAt(game, square);
   if (!catcher) return null;
   const catcherId = catcher.playerId;
   const catcherIsHome = playerSideIsHome(game, catcherId);
@@ -2304,14 +2309,7 @@ function accurateCatchTargetAt(game: GameJson, square: [number, number], mode: P
   // +1 per OPPOSING tackle zone on the catcher's square — Nerves of Steel ignores tackle zones when catching.
   const tz = hasSkill(game, catcherId, 'Nerves of Steel') ? 0 : tzPlayersAdjacent(game, square, !catcherIsHome).length;
   // +1 per OPPOSING Disturbing Presence within Chebyshev 3 of the catcher (state-agnostic, on-field).
-  let dp = 0;
-  for (const p of (fm.playerDataArray ?? []) as PlayerDataLike[]) {
-    const side = playerSideIsHome(game, p.playerId);
-    if (side === null || side === catcherIsHome) continue; // opponents of the catcher only
-    const pos = normSquare(p.playerCoordinate);
-    if (!pos || pos[0] < 0 || pos[0] >= PITCH_COLS_A || pos[1] < 0 || pos[1] >= PITCH_ROWS_A) continue; // on-field
-    if (chebyshev(square, pos) <= 3 && hasSkill(game, p.playerId, 'Disturbing Presence')) dp++;
-  }
+  const dp = disturbingPresencesAt(game, catcherId, square);
   const rain = String((fm as { weather?: string }).weather ?? '').toLowerCase().includes('pouring') ? 1 : 0;
   const divingCatch = (mode === 'CATCH_ACCURATE_PASS' || mode === 'CATCH_ACCURATE_BOMB')
     && hasSkill(game, catcherId, 'Diving Catch') ? -1 : 0;
@@ -2406,6 +2404,12 @@ export interface PassDestinationRollPreview {
   targetSquare: [number, number];
   throwRoll: number;
   catchRoll: number | null;
+  /** Owner 10-15: the Disturbing Presence count inside `throwRoll` (opposing DP within 3 of the throw square; the same
+   *  disturbingPresencesAt term passModifierTotal adds). Absent when 0. */
+  throwDisturbingPresence?: number;
+  /** Owner 10-15: the Disturbing Presence count inside `catchRoll` (opposing DP within 3 of the catcher). Absent when 0
+   *  or when there is no catch roll. */
+  catchDisturbingPresence?: number;
 }
 
 /** Keep the TTM requirement clear of the held-player marker over the thrower.
@@ -2437,11 +2441,17 @@ export function passDestinationRollPreview(
   const catchRoll = mode === 'TTM_LANDING'
     ? null
     : mode === 'BOMB' ? bombCatchTargetAt(game, to) : catchTargetAt(game, to);
+  // Owner 10-15: the Disturbing Presence part of each number, from the SAME count the numbers were built from.
+  const throwDisturbingPresence = disturbingPresencesAt(game, throwerId, from);
+  const catcher = catchRoll != null ? accurateCatcherAt(game, to) : undefined;
+  const catchDisturbingPresence = catcher ? disturbingPresencesAt(game, catcher.playerId, to) : 0;
   return {
     throwSquare: [from[0], from[1]],
     targetSquare: [to[0], to[1]],
     throwRoll,
     catchRoll,
+    ...(throwDisturbingPresence > 0 ? { throwDisturbingPresence } : {}),
+    ...(catchDisturbingPresence > 0 ? { catchDisturbingPresence } : {}),
   };
 }
 

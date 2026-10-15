@@ -8830,7 +8830,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8849,7 +8850,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8868,7 +8870,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8887,7 +8890,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8906,7 +8910,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8925,7 +8930,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8944,7 +8950,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmorr",
@@ -8963,7 +8970,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -8982,7 +8990,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9001,7 +9010,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9020,7 +9030,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9039,7 +9050,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9058,7 +9070,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9077,7 +9090,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9096,7 +9110,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "khainiteassassins",
@@ -9115,7 +9130,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9134,7 +9150,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9153,7 +9170,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9172,7 +9190,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9191,7 +9210,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9210,7 +9230,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9229,7 +9250,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9248,7 +9270,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9267,7 +9290,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9287,7 +9311,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "kislev",
@@ -9307,7 +9332,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9326,7 +9352,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9345,7 +9372,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9364,7 +9392,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9383,7 +9412,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9402,7 +9432,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9421,7 +9452,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9441,7 +9473,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9461,7 +9494,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9480,7 +9514,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "northernnippon",
@@ -9499,7 +9534,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9518,7 +9554,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9537,7 +9574,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9556,7 +9594,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9575,7 +9614,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9594,7 +9634,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9613,7 +9654,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9632,7 +9674,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9651,7 +9694,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9670,7 +9714,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "araby",
@@ -9689,7 +9734,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9708,7 +9754,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9727,7 +9774,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9746,7 +9794,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9765,7 +9814,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9784,7 +9834,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9803,7 +9854,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9823,7 +9875,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "cathay",
@@ -9843,7 +9896,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9862,7 +9916,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9881,7 +9936,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9900,7 +9956,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9919,7 +9976,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9938,7 +9996,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9957,7 +10016,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9976,7 +10036,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -9995,7 +10056,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10014,7 +10076,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10033,7 +10096,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10053,7 +10117,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10073,7 +10138,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10093,7 +10159,8 @@
     "W",
     "SW"
    ],
-   "frame": 96
+   "frame": 96,
+   "league": "secret-league"
   },
   {
    "race": "chaosimp",
@@ -10113,7 +10180,8 @@
     "W",
     "SW"
    ],
-   "frame": 96
+   "frame": 96,
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10132,7 +10200,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10151,7 +10220,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10171,7 +10241,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10191,7 +10262,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10211,7 +10283,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10231,7 +10304,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10250,7 +10324,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "clanmoulder",
@@ -10269,7 +10344,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10288,7 +10364,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10307,7 +10384,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10326,7 +10404,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10345,7 +10424,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10364,7 +10444,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10383,7 +10464,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10402,7 +10484,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofmanann",
@@ -10421,7 +10504,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10440,7 +10524,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10459,7 +10544,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10478,7 +10564,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10497,7 +10584,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10516,7 +10604,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10535,7 +10624,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10554,7 +10644,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10573,7 +10664,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10592,7 +10684,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultofranald",
@@ -10611,7 +10704,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10630,7 +10724,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10649,7 +10744,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10668,7 +10764,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10687,7 +10784,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10706,7 +10804,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10725,7 +10824,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10745,7 +10845,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "cultoftaalandrhya",
@@ -10765,7 +10866,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10784,7 +10886,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10803,7 +10906,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10822,7 +10926,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10841,7 +10946,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10860,7 +10966,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10879,7 +10986,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10898,7 +11006,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10917,7 +11026,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10936,7 +11046,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsmith",
@@ -10955,7 +11066,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -10974,7 +11086,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -10993,7 +11106,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11012,7 +11126,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11031,7 +11146,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11050,7 +11166,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11069,7 +11186,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11088,7 +11206,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11107,7 +11226,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11126,7 +11246,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "fournations",
@@ -11145,7 +11266,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11164,7 +11286,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11183,7 +11306,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11202,7 +11326,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11221,7 +11346,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11241,7 +11367,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11261,7 +11388,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11281,7 +11409,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "giantspider",
@@ -11301,7 +11430,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11320,7 +11450,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11339,7 +11470,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11358,7 +11490,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11377,7 +11510,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11397,7 +11531,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "lumbria",
@@ -11417,7 +11552,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11436,7 +11572,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11455,7 +11592,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11474,7 +11612,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11493,7 +11632,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11512,7 +11652,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11531,7 +11672,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11550,7 +11692,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11569,7 +11712,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11589,7 +11733,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "lybaras",
@@ -11609,7 +11754,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11628,7 +11774,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11647,7 +11794,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11666,7 +11814,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11685,7 +11834,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11704,7 +11854,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11723,7 +11874,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11742,7 +11894,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "mahrak",
@@ -11761,7 +11914,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11780,7 +11934,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11799,7 +11954,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11818,7 +11974,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11837,7 +11994,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11856,7 +12014,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11875,7 +12034,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11894,7 +12054,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nagarythe",
@@ -11913,7 +12074,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -11932,7 +12094,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -11951,7 +12114,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -11970,7 +12134,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -11989,7 +12154,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -12009,7 +12175,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "nautican",
@@ -12029,7 +12196,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12048,7 +12216,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12067,7 +12236,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12086,7 +12256,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12105,7 +12276,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12124,7 +12296,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12143,7 +12316,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12162,7 +12336,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "nippon",
@@ -12181,7 +12356,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12200,7 +12376,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12219,7 +12396,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12239,7 +12417,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12259,7 +12438,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12279,7 +12459,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12299,7 +12480,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12319,7 +12501,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12339,7 +12522,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12359,7 +12543,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12379,7 +12564,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12399,7 +12585,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "ogrekingdom",
@@ -12419,7 +12606,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12438,7 +12626,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12457,7 +12646,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12476,7 +12666,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12495,7 +12686,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12514,7 +12706,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12533,7 +12726,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12553,7 +12747,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12573,7 +12768,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12592,7 +12788,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "piratesofsartosa",
@@ -12611,7 +12808,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12630,7 +12828,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12649,7 +12848,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12668,7 +12868,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12687,7 +12888,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12706,7 +12908,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12725,7 +12928,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12745,7 +12949,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12765,7 +12970,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12785,7 +12991,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "savageorc",
@@ -12805,7 +13012,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12824,7 +13032,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12843,7 +13052,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12862,7 +13072,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12881,7 +13092,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12900,7 +13112,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12919,7 +13132,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12939,7 +13153,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "seaelf",
@@ -12959,7 +13174,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -12978,7 +13194,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -12997,7 +13214,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13016,7 +13234,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13035,7 +13254,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13054,7 +13274,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13073,7 +13294,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13093,7 +13315,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13113,7 +13336,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13133,7 +13357,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "simyin",
@@ -13153,7 +13378,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13172,7 +13398,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13191,7 +13418,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13210,7 +13438,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13229,7 +13458,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13248,7 +13478,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13267,7 +13498,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13286,7 +13518,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13305,7 +13538,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13324,7 +13558,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "sistersofsigmar",
@@ -13343,7 +13578,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13362,7 +13598,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13381,7 +13618,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13400,7 +13638,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13419,7 +13658,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13438,7 +13678,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13457,7 +13698,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13476,7 +13718,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "snakemen",
@@ -13495,7 +13738,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13514,7 +13758,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13533,7 +13778,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13552,7 +13798,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13571,7 +13818,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13590,7 +13838,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13609,7 +13858,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13628,7 +13878,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13647,7 +13898,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13667,7 +13919,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "strigoi",
@@ -13687,7 +13940,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13706,7 +13960,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13725,7 +13980,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13744,7 +14000,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13763,7 +14020,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13783,7 +14041,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "were",
@@ -13803,7 +14062,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13822,7 +14082,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13841,7 +14102,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13860,7 +14122,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13879,7 +14142,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13898,7 +14162,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13917,7 +14182,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13936,7 +14202,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "dryad",
@@ -13955,7 +14222,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -13974,7 +14242,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -13993,7 +14262,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14012,7 +14282,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14031,7 +14302,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14050,7 +14322,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14069,7 +14342,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14089,7 +14363,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14109,7 +14384,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14128,7 +14404,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14147,7 +14424,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14167,7 +14445,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14187,7 +14466,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14207,7 +14487,8 @@
     "W",
     "SW"
    ],
-   "frame": 96
+   "frame": 96,
+   "league": "secret-league"
   },
   {
    "race": "engineers",
@@ -14227,7 +14508,8 @@
     "W",
     "SW"
    ],
-   "frame": 96
+   "frame": 96,
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14246,7 +14528,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14265,7 +14548,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14284,7 +14568,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14303,7 +14588,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14323,7 +14609,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "eonir",
@@ -14343,7 +14630,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14363,7 +14651,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14383,7 +14672,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14402,7 +14692,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14421,7 +14712,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14440,7 +14732,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14459,7 +14752,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14478,7 +14772,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "everpeak",
@@ -14497,7 +14792,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14516,7 +14812,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14535,7 +14832,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14554,7 +14852,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14573,7 +14872,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14592,7 +14892,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14611,7 +14912,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14630,7 +14932,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14649,7 +14952,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14669,7 +14973,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "slayer",
@@ -14689,7 +14994,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14708,7 +15014,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14727,7 +15034,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14746,7 +15054,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14765,7 +15074,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14784,7 +15094,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14803,7 +15114,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14822,7 +15134,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14841,7 +15154,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14860,7 +15174,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "hobgoblin",
@@ -14879,7 +15194,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14898,7 +15214,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14917,7 +15234,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14936,7 +15254,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14955,7 +15274,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14974,7 +15294,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -14993,7 +15314,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15013,7 +15335,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15033,7 +15356,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15053,7 +15377,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15073,7 +15398,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15092,7 +15418,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "norsedwarf",
@@ -15111,7 +15438,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15130,7 +15458,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15149,7 +15478,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15168,7 +15498,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15187,7 +15518,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15206,7 +15538,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15225,7 +15558,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15244,7 +15578,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "eightpeaks",
@@ -15263,7 +15598,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15282,7 +15618,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15301,7 +15638,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15320,7 +15658,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15339,7 +15678,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15358,7 +15698,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "witchelf",
@@ -15377,7 +15718,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15396,7 +15738,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15415,7 +15758,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15434,7 +15778,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15453,7 +15798,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15473,7 +15819,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "daemonsofslaanesh",
@@ -15493,7 +15840,8 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 72,
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15512,7 +15860,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15531,7 +15880,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15550,7 +15900,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15569,7 +15920,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15588,7 +15940,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15607,7 +15960,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15626,7 +15980,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   },
   {
    "race": "claneshin",
@@ -15645,7 +16000,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "league": "secret-league"
   }
  ]
 }

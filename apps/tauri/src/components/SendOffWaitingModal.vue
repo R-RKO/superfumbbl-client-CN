@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { fumbblAsset } from '../game/jnlpRouting';
+import DisplayCaps from './DisplayCaps.vue';
 
 export interface SendOffWaitingView {
   playerName: string;
@@ -43,8 +44,8 @@ const portraitSrc = computed(() => fumbblAsset(
           <span v-if="refereeIconUrl" class="sendoff-waiting-ref-frame" aria-hidden="true">
             <img :src="refereeIconUrl" class="sendoff-waiting-ref" alt="" />
           </span>
-          <span class="sendoff-waiting-kicker">Referee</span>
-          <h2 id="sendoff-waiting-title">Send-off Review</h2>
+          <span class="sendoff-waiting-kicker"><DisplayCaps text="Referee" /></span>
+          <h2 id="sendoff-waiting-title"><DisplayCaps text="Send-off Review" /></h2>
           <span class="sendoff-waiting-team">{{ progress.coach || progress.teamName }}</span>
         </div>
       </header>
@@ -87,7 +88,7 @@ const portraitSrc = computed(() => fumbblAsset(
   border-radius: 10px;
   background: linear-gradient(135deg, rgba(53, 15, 19, 0.98), rgba(12, 15, 21, 0.98) 62%);
   box-shadow: 0 10px 34px #000d, inset 0 1px 0 #ffffff1a;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
 }
 .sendoff-waiting.resolved { border-color: #69747e; }
 .sendoff-waiting-head {

@@ -152,7 +152,7 @@ function onKeydown(event: KeyboardEvent) {
   border: 0;
 }
 
-:global(.hud-minimalist) .confirm-action {
+:global(.hud-minimalist .confirm-action) {
   border-width: 1px;
   border-radius: 7px;
   outline: none;

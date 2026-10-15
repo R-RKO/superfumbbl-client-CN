@@ -1,0 +1,10 @@
+{
+  "file": "stalling.png",
+  "purpose": "STALLING die cause tag: the round badge on the on-pitch die of the server's throwAtStallingPlayer roll.",
+  "license": "Super FUMBBL Media License (original art)",
+  "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/stalling/stalling-grey-v1.png",
+  "sha256": "179010f42f7390e8bd3b266dd0b247532811d4fc3a4f10f79b7c80b110ce1455",
+  "tool": "Built-in image_gen (art lane, owner-supplied 10-15); manifest alongside the source",
+  "processing": "Same pipeline as secure-the-ball.png: hidden RGB under alpha 0 zeroed, trimmed to the alpha bounds (1254x1254 -> 1240x1228), centred on a square canvas, premultiplied Lanczos downscale to 256x256 RGBA. No redraw or recolour.",
+  "note": "No FUMBBL or Games Workshop material."
+}

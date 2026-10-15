@@ -22,7 +22,8 @@ import {
   type BundledSkillBadgeFamily,
   type SkillIconStyle,
 } from './skillIcons';
-import { AURA_RADIUS, auraEmitters, bombCells, catchTarget, foulTarget, interceptors, passTargetRoll } from './actions';
+import { AURA_RADIUS, auraEmitters, bombCells, catchTarget, disturbingPresenceLayers, foulTarget, interceptors, passTargetRoll } from './actions';
+import { disturbingPresenceTagText } from './disturbingPresence';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
 import { jumpTargetForPlayer, serverMoveSquareRolls, type ServerMoveRoll } from './jumpTarget';
@@ -127,6 +128,12 @@ import {
   type Offset,
   type Rect as OcclusionRect,
 } from './occlusionNudge';
+import { preClickBlockDots, type PreClickBlockDot } from './preClickBlockDots';
+
+/** UAT 1.0.208: a stable signature of the occlusion nudge targets (world px, 0.1 px), for change detection. */
+function nudgeMapSignature(map: ReadonlyMap<string, Offset>): string {
+  return [...map].map(([id, o]) => `${id}:${o.dx.toFixed(1)},${o.dy.toFixed(1)}`).sort().join('|');
+}
 import { bundledWalkEntriesForRaces, bundledWalkManifest, isBundledStarRole } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
 import {
@@ -1081,6 +1088,8 @@ interface ActionDieRecord {
   owner?: ServerSide | null;
   /** The displayed side the face sprite was last textured for (the frame loop re-textures when the seat flips). */
   faceSide?: BlockDieSide | null;
+  /** Owner 10-15: the world rectangle of this die's "DP −N" tag (null/absent = none shown), an obstacle for later tags. */
+  dpTagRect?: { x0: number; y0: number; x1: number; y1: number } | null;
 }
 /** Accepted local movement gets a visible first stride promptly while its authoritative echo is in flight.
  * It may approach, but never complete, the destination square before confirmation. */
@@ -1684,6 +1693,13 @@ const PLANNER_TAG_LETTERING: DisplayLetteringStyle = { ...DUGOUT_LETTERING, fill
 function tagRectsMeet(a: { x0: number; y0: number; x1: number; y1: number }, b: { x0: number; y0: number; x1: number; y1: number }, margin = 0.5): boolean {
   return a.x0 < b.x1 + margin && a.x1 > b.x0 - margin && a.y0 < b.y1 + margin && a.y1 > b.y0 - margin;
 }
+/** Owner 10-15: the "DP −N" Disturbing Presence tag plate - a light tint of the opposition DP aura red, dark lettering. */
+const DP_TAG_PLATE = { fill: 0xe8806f, stroke: 0x6a1a10 };
+/** Owner 10-15: the DP tag's die + word lettering scale on an action die (the planner path tags use ~0.75-1 x depth;
+ *  the die is drawn larger than a path square's tag, so its word is too). */
+const DP_DIE_WORD_SCALE = 1.6;
+/** Owner 10-15: gap (px, die units) between the die's lowest decoration and the DP tag row. */
+const DP_DIE_TAG_GAP = 3;
 const PLANNER_TAG_PLATES: Record<'rush' | 'dodge' | 'jump' | 'pickup', { fill: number; stroke: number }> = {
   rush: { fill: 0xf0ead6, stroke: 0x6a5a10 }, dodge: { fill: 0xe0c832, stroke: 0x6a5a10 },
   jump: { fill: 0xe08a2a, stroke: 0x6a3c10 }, pickup: { fill: 0xd98836, stroke: 0x6a3a10 },
@@ -2657,6 +2673,8 @@ export class PitchRenderer {
   /** Owner 10-10: SECURE THE BALL roll badge (the approved round, silver-rimmed badge; 256 px, linear + mipmaps like
    *  catch). Null = the roll keeps the PICK UP badge, exactly as before. */
   private secureBallDieTagTexture: Texture | null = null;
+  /** Owner 10-15: STALLING roll badge (grey clock, 256 px, linear + mipmaps like secure the ball). Null = the die stays untagged. */
+  private stallingDieTagTexture: Texture | null = null;
   /** Owner 09-06: block decorations — the block TARGET (front fist + red Pow burst, replaces the 💥 glyph) and the
    *  ATTACKER (fist only). Null until loaded / when missing: the 💥 glyph stays as the fallback. */
   private blockTargetDecoTexture: Texture | null = null;
@@ -4703,6 +4721,14 @@ export class PitchRenderer {
   private modelBlockDecorations = false;
   /** Host-confirmed Maximum Carnage target phase; legal squares remain the server's dice decorations. */
   private maximumCarnageTargeting = false;
+  /** UAT 1.0.208 (JLeav, owner option A): the host's "a block/blitz target has been clicked" (its local target
+   *  stage). While false, the local coach's declared Block/Blitz draws the server's dice decorations as dots. */
+  private declaredBlockTargetChosen = false;
+  /** Owner 10-15: the Settings > UI gate for the pre-click dots ("Show block dice on every target before choosing").
+   *  Off = exactly the earlier behaviour (dots only after the target click). */
+  private preClickBlockDiceEnabled = true;
+  /** UAT 1.0.208: the last overlay redraw drew pre-click dots (a nudge change must then re-place them). */
+  private preClickDotsDrawn = false;
   /** Server-projected Fury of the Blood God second-block pause. */
   private furySecondBlockTargeting = false;
   /** UAT 1.0.205 (coach Ion, occluded block target): per player, the visual nudge (world px) the measurement wants
@@ -5163,6 +5189,16 @@ export class PitchRenderer {
       this.secureBallDieTagTexture = null;
     }
     if (!this.initActive(generation, app)) return;
+    try {
+      // owner 10-15: STALLING badge - same treatment as secure the ball (linear + mipmaps).
+      const texture = await Assets.load<Texture>(new URL('../assets/status/stalling.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.stallingDieTagTexture = texture;
+    } catch {
+      this.stallingDieTagTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
     // Owner 09-06: block decorations (transparent PNGs, drawn ~20 token units tall — linear sampling on purpose).
     try {
       const texture = await Assets.load<Texture>(new URL('../assets/decorations/block-target-front.png', import.meta.url).href);
@@ -5466,6 +5502,7 @@ export class PitchRenderer {
         if (e >= DIE_IN + DIE_HOLD + DIE_OUT) {
           die.node.parent?.removeChild(die.node);
           die.node.destroy({ children: true });
+          this.dpTagsDirty = true;
           return false;
         }
         if (e < DIE_IN) {
@@ -5504,6 +5541,7 @@ export class PitchRenderer {
         }
         return true;
       });
+      if (this.dpTagsDirty) this.refitDisturbingPresenceTags();
       if (this.actionDice3d) {
         const dt = this.lastActionDiceTick ? (now - this.lastActionDiceTick) / 1000 : 0;
         this.lastActionDiceTick = now;
@@ -8669,14 +8707,18 @@ export class PitchRenderer {
     }
     if (targetIsHome !== selIsHome || !hasTackleZones(data.playerState)) return null;
     const c = catchTarget(g, targetId);
-    if (mode === 'handoff') return c == null ? null : `HAND ${c}+`;
+    // Owner 10-15: the combined Disturbing Presence modifier inside each number, " DP −N" after it (nothing when 0).
+    // The count is the one catchTarget / the pass roll were built from: opposing DP within 3 of the catcher / thrower.
+    const dpSuffix = (n: number) => { const t = disturbingPresenceTagText(n); return t ? ` ${t}` : ''; };
+    const catchDp = c == null ? '' : dpSuffix(disturbingPresenceLayers(g, [data.playerCoordinate![0], data.playerCoordinate![1]], targetIsHome));
+    if (mode === 'handoff') return c == null ? null : `HAND ${c}+${catchDp}`;
     // pass: rolled from the path END (the thrower throws after moving); owner 10-13: a plotted Order-66 route's
     // destination is that end too
     const from = this.passOrigin();
     if (!from) return null;
     const passRoll = this.resolvedPassRoll(this.selectedPlayerId, from, [data.playerCoordinate![0], data.playerCoordinate![1]]);
     if (passRoll == null) return null;
-    return `PASS ${passRoll}+ · CATCH ${c ?? '?'}+`;
+    return `PASS ${passRoll}+${dpSuffix(disturbingPresenceLayers(g, from, selIsHome))} · CATCH ${c ?? '?'}+${catchDp}`;
   }
 
   /** Arm `targetId` for the current foul/handoff/pass action: auto-path to
@@ -8718,7 +8760,10 @@ export class PitchRenderer {
     if (Math.max(Math.abs(at[0] - from[0]), Math.abs(at[1] - from[1])) !== 1) return false;
     const localText = this.actionRollText('handoff', targetId);
     if (!localText) return false;
-    const rollText = catchTarget != null ? `HAND ${catchTarget}+` : localText;
+    // Owner 10-15: the catcher's Disturbing Presence part does not depend on where the hand-off is made from, so the
+    // local text's " DP −N" (the count inside the requirement) rides the host's requirement too.
+    const dpPart = / DP −\d+$/.exec(localText)?.[0] ?? '';
+    const rollText = catchTarget != null ? `HAND ${catchTarget}+${dpPart}` : localText;
     const seq = ++this.armedActionSeq;
     this.armedAction = { seq, mode: 'handoff', targetId, square: at, rollText, plannedOrigin: from, catchTarget: catchTarget ?? null };
     this.redrawOverlays();
@@ -8783,6 +8828,20 @@ export class PitchRenderer {
   setModelBlockDecorations(enabled: boolean): void {
     if (this.modelBlockDecorations === enabled) return;
     this.modelBlockDecorations = enabled;
+    this.redrawOverlays();
+  }
+
+  /** UAT 1.0.208: the host reports whether the coach has clicked a block/blitz target (any local target stage).
+   *  Clicked = the pre-click server dots give way to the existing post-click presentation. */
+  setPreClickBlockDice(enabled: boolean): void {
+    if (this.preClickBlockDiceEnabled === enabled) return;
+    this.preClickBlockDiceEnabled = enabled;
+    this.redrawOverlays();
+  }
+
+  setDeclaredBlockTargetChosen(chosen: boolean): void {
+    if (this.declaredBlockTargetChosen === chosen) return;
+    this.declaredBlockTargetChosen = chosen;
     this.redrawOverlays();
   }
 
@@ -9846,12 +9905,40 @@ export class PitchRenderer {
       t.zIndex = 20;
       this.overlayLayer.addChild(t);
     };
-    const targetChip = (prefix: string, target: number, sq: Square, dy: number, color: number) => {
+    // Owner 10-15: each chip's rectangle, so a "DP −N" tag under one chip never lands on another.
+    const chipRects: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const dpTags: { tag: Container; x: number; top: number; s: number }[] = [];
+    const targetChip = (prefix: string, target: number, sq: Square, dy: number, color: number, disturbingPresence = 0) => {
       const p = squareAnchor(sq[0], sq[1]);
       const s = Math.max(0.7, depthScale(sq[0], sq[1]));
       const node = this.buildPassRollChip(p.x, p.y - TILE_H * dy * s, s, target, color, prefix);
       node.zIndex = 20;
       this.overlayLayer.addChild(node);
+      const halfW = node.width / 2;
+      chipRects.push({ x0: node.x - halfW, x1: node.x + halfW, y0: node.y - 8.5 * s, y1: node.y + 8.5 * s });
+      const tag = this.buildDisturbingPresenceTag(disturbingPresence);
+      if (tag) dpTags.push({ tag, x: node.x, top: node.y + 8.5 * s + 2 * s, s });
+    };
+    // Owner 10-15: place the DP tags under their chips by the tag-badge rule (full size, else 60%, else omitted).
+    const placeDpTags = () => {
+      const placed = [...chipRects];
+      for (const { tag, x, top, s } of dpTags) {
+        const size = this.dpTagSize.get(tag)!;
+        let done = false;
+        for (const f of [1, 0.6]) {
+          const w = size.w * s * f, h = size.h * s * f;
+          const rect = { x0: x - w / 2, x1: x + w / 2, y0: top, y1: top + h };
+          if (placed.some((r) => tagRectsMeet(rect, r, 0))) continue;
+          tag.scale.set(s * f);
+          tag.position.set(x, top + h / 2);
+          tag.zIndex = 20;
+          this.overlayLayer.addChild(tag);
+          placed.push(rect);
+          done = true;
+          break;
+        }
+        if (!done) tag.destroy({ children: true });
+      }
     };
     // target reticle (the push-crosshair art, static)
     const cross = this.buildPushCrosshair(a.square);
@@ -9863,17 +9950,20 @@ export class PitchRenderer {
       this.overlayLayer.addChild(arrow);
       const pass = this.resolvedPassRoll(this.selectedPlayerId, from, a.square);
       const catchRoll = catchTarget(this.game, a.targetId);
+      const selIsHome = this.selectedIsHome();
       if (pass != null) {
         const mid: Square = [Math.round((from[0] + a.square[0]) / 2), Math.round((from[1] + a.square[1]) / 2)];
-        targetChip('Pass', pass, mid, 1.0, 0xffb020);
+        targetChip('Pass', pass, mid, 1.0, 0xffb020, disturbingPresenceLayers(this.game, from, selIsHome));
       }
-      if (catchRoll != null) targetChip('Catch', catchRoll, a.square, 1.35, 0x2ec24f);
+      if (catchRoll != null) targetChip('Catch', catchRoll, a.square, 1.35, 0x2ec24f, disturbingPresenceLayers(this.game, a.square, selIsHome));
+      placeDpTags();
       // interceptor tips: ✋ with a prohibited slash + the interference roll
       for (const it of interceptors(this.game, this.selectedPlayerId, from, a.square)) this.overlayLayer.addChild(this.buildInterceptTip(it.square, it.roll));
     } else if (a.mode === 'handoff') {
       // Owner 10-15: a destination card's chip shows the same host-supplied requirement as the card.
       const target = a.catchTarget ?? catchTarget(this.game, a.targetId);
-      if (target != null) targetChip('Hand', target, a.square, 1.2, 0x2ec24f);
+      if (target != null) targetChip('Hand', target, a.square, 1.2, 0x2ec24f, disturbingPresenceLayers(this.game, a.square, this.selectedIsHome()));
+      placeDpTags();
     } else {
       chip(a.rollText, a.square, 1.2); // Armour is a 2D6 total, not a D6 face.
     }
@@ -10199,6 +10289,7 @@ export class PitchRenderer {
    *  updateDiceDecorations broadcasts the exact legal second targets and signed dice counts. Render those
    *  decorations directly in that state instead of applying the ordinary block/blitz action gate. */
   private drawBlockTargets(): void {
+    this.preClickDotsDrawn = false;
     if (!this.game) return;
     const decorations = this.game.fieldModel.diceDecorationArray ?? [];
     const drawModelDecorations = (only?: Square | null) => {
@@ -10252,6 +10343,20 @@ export class PitchRenderer {
         drawModelDecorations();
         return;
       }
+    }
+
+    // UAT 1.0.208 (JLeav, owner option A 10-15): like base FUMBBL, my declared Block (and a Blitz once the server
+    // has decorated its block step) shows the server's dice dots over every decorated opponent BEFORE the target
+    // click. Verbatim decorations only; the click hands over to the existing post-click preview below.
+    // While this phase applies the server's array is the whole contract: an empty one draws nothing (never the
+    // client-estimated fallback below, which the retired showBlockDice setting could still arm).
+    const preClick = this.preClickBlockDotsNow();
+    if (preClick) {
+      for (const dot of preClick) {
+        if (isOnPitch(dot.square)) this.drawBlockDotsAt(dot.square, dot.dice, dot.opponentChoice, this.occlusionNudgeAt(dot.square));
+      }
+      this.preClickDotsDrawn = preClick.length > 0;
+      return;
     }
 
     // S32 (owner 09-29): Vicious Vines targets stand two squares away, so the adjacent computation below never
@@ -10312,7 +10417,10 @@ export class PitchRenderer {
     return this.blockPreviewSquares.map((s) => {
       const d = this.game?.fieldModel.playerDataArray.find((p) => p.playerCoordinate?.[0] === s[0] && p.playerCoordinate?.[1] === s[1]);
       const token = d ? this.tokensById.get(d.playerId) : undefined;
-      return token && !token.destroyed ? (walkerDecorScale(token) ?? 1).toFixed(4) : '-';
+      const scale = token && !token.destroyed ? (walkerDecorScale(token) ?? 1).toFixed(4) : '-';
+      // UAT 1.0.208: a changed occlusion nudge target re-places the pre-click dots that follow it.
+      const nudge = d && this.preClickDotsDrawn ? this.occlusionNudgeDesired.get(d.playerId) : undefined;
+      return nudge ? `${scale}@${nudge.dx.toFixed(1)},${nudge.dy.toFixed(1)}` : scale;
     }).join('|');
   }
 
@@ -10364,7 +10472,7 @@ export class PitchRenderer {
     this.redrawOverlays();
   }
 
-  private drawBlockDotsAt(square: Square, dice: number, opponentChoice: boolean): void {
+  private drawBlockDotsAt(square: Square, dice: number, opponentChoice: boolean, follow: Offset | null = null): void {
     const [bx, by] = square;
     const anchor = squareAnchor(bx, by);
     const scale = depthScale(bx, by);
@@ -10372,14 +10480,18 @@ export class PitchRenderer {
     // FUMBBL Classic keeps them shifted higher (1.62); FUMBBL40k sits them closer to
     // the head (SpectateView sets a smaller factor).
     const s = 8 * scale; // small SQUARE (owner 2026-07-08)
+    // UAT 1.0.208: `follow` = the occlusion nudge the target's figure is easing to (world px); the dots ride with it
+    // so they stay over the moved figure and clear of its raised ring.
+    const dx = follow?.dx ?? 0;
     const y = this.blockPreviewY(square, anchor.y - TILE_H * this.blockDotsHeadFactor * scale, s / 2, scale);
+    const fy = y + (follow?.dy ?? 0);
     const gap = 11 * scale;
     const color = opponentChoice ? 0xe0433a : dice > 1 ? 0x3ac04a : 0xf0c020; // red / green / yellow
     const g = new Graphics();
     for (let i = 0; i < dice; i++) {
-      const x = anchor.x + (i - (dice - 1) / 2) * gap - s / 2;
-      g.rect(x, y - s / 2, s, s).fill({ color });
-      g.rect(x, y - s / 2, s, s).stroke({ color: 0x14161a, width: 1 * scale });
+      const x = anchor.x + dx + (i - (dice - 1) / 2) * gap - s / 2;
+      g.rect(x, fy - s / 2, s, s).fill({ color });
+      g.rect(x, fy - s / 2, s, s).stroke({ color: 0x14161a, width: 1 * scale });
     }
     this.pathLayer.addChild(g);
   }
@@ -10678,6 +10790,132 @@ export class PitchRenderer {
     chip.addChild(text);
     chip.position.set(x, y);
     return chip;
+  }
+
+  /** Owner 10-15: plate geometry of each "DP −N" tag (unscaled px) and, once placed on a die, the top of its row. */
+  private dpTagSize = new WeakMap<Container, { w: number; h: number; rowTop: number }>();
+
+  /** Owner 10-15 (poordecision report, owner ruling: "show the combined Disturbing Presence modifier on the catch and
+   *  pass roll tags"): a "DP −N" plate in the planner tag lettering - 'letter' = the R2+ / D4+ text plate, 'dieWord' =
+   *  the Graduate C word plate. `count` is always the server's number (rolled die) or the server-mirrored projection
+   *  (pre-roll); this only draws it. Null when there is nothing to show. */
+  private buildDisturbingPresenceTag(count: number | null | undefined): Container | null {
+    const text = disturbingPresenceTagText(count);
+    if (!text) return null;
+    const tag = new Container();
+    tag.label = 'disturbingPresenceTag';
+    const measure = (t: Text) => (typeof document === 'undefined' ? t.text.length * 7 * t.scale.x : t.width);
+    let w: number;
+    let h: number;
+    if (this.plannerTagStyle === 'letter') {
+      const t = new Text({ text, style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+      t.anchor.set(0.5, 0.5);
+      w = measure(t) + 8;
+      h = 17;
+      tag.addChild(
+        new Graphics()
+          .roundRect(-w / 2, -h / 2, w, h, 4)
+          .fill({ color: DP_TAG_PLATE.fill })
+          .roundRect(-w / 2, -h / 2, w, h, 4)
+          .stroke({ color: DP_TAG_PLATE.stroke, width: 1.4 }),
+        t,
+      );
+    } else {
+      // the die + word plate's lettering (the word "DP" in Graduate C) with the value beside it, as in "3+ RUSH"
+      const u = DP_DIE_WORD_SCALE;
+      const art = this.plannerWordArt('DP');
+      const wordW = art ? (art.fitWidth * 6.5 * u) / art.fitHeight : 2 * 7 * 0.5 * u;
+      const word = this.buildPlannerWord('DP', u);
+      const value = new Text({ text: `−${count}`, style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+      value.anchor.set(0, 0.5);
+      value.scale.set(0.5 * u);
+      const valueW = measure(value);
+      const pad = 2 * u;
+      const gap = 1.5 * u;
+      w = pad + wordW + gap + valueW + pad;
+      h = 14 * u * 0.75;
+      word.position.set(-w / 2 + pad + wordW / 2, 0);
+      value.position.set(-w / 2 + pad + wordW + gap, 0);
+      tag.addChild(
+        new Graphics()
+          .roundRect(-w / 2, -h / 2, w, h, 3 * u * 0.75)
+          .fill({ color: DP_TAG_PLATE.fill, alpha: 0.92 })
+          .roundRect(-w / 2, -h / 2, w, h, 3 * u * 0.75)
+          .stroke({ color: DP_TAG_PLATE.stroke, width: 1 * u * 0.75 }),
+        word,
+        value,
+      );
+    }
+    this.dpTagSize.set(tag, { w, h, rowTop: 0 });
+    return tag;
+  }
+
+  /** Owner 10-15: the existing tag-badge rule for the dice' "DP −N" tags - each full size if its plate meets no other
+   *  action die body and no tag already placed, else once more at 60% size, else HIDDEN (never overlapping). Re-run over
+   *  every die whenever one appears or retires (Astra 10-15: a tag placed earlier must yield to a die that lands on it
+   *  later), oldest first so a tag already on screen keeps its place where it can. */
+  /** Owner 10-15 (Astra pass 4): set on EVERY action-die addition (addActionDie) and retirement (the dice ticker, the
+   *  prompt-copy replacements); the next dice tick refits the DP tags when it is set, so an addition and a retirement
+   *  in the same tick can never cancel out. An unchanged tick costs one flag read. */
+  private dpTagsDirty = false;
+  /** Every action die / skill pop / armour die enters the pitch through here (the DP tag fitter must see it). */
+  private addActionDie(record: ActionDieRecord): void {
+    this.actionDice.push(record);
+    this.dpTagsDirty = true;
+  }
+  private refitDisturbingPresenceTags(): void {
+    this.dpTagsDirty = false;
+    // Every die in one frame (effectsLayer space): an anchored effect may sit inside a projection wrapper that moves
+    // AND scales it (Astra pass 2), so position and scale are both read through the wrapper chain.
+    const layer = this.effectsLayer;
+    const frame = (node: Container) => {
+      const parent = node.parent;
+      if (!parent) return { p: { x: node.position.x, y: node.position.y }, k: 1 };
+      const o = layer.toLocal(parent.toGlobal({ x: 0, y: 0 }));
+      const u = layer.toLocal(parent.toGlobal({ x: 1, y: 0 }));
+      return { p: layer.toLocal(node.getGlobalPosition()), k: Math.hypot(u.x - o.x, u.y - o.y) || 1 };
+    };
+    const tagOf = (d: ActionDieRecord) => d.node.children.find((c) => c.label === 'disturbingPresenceTag') as Container | undefined;
+    const live = this.actionDice.filter((d) => !d.node.destroyed && !!d.node.parent);
+    if (!live.some((d) => tagOf(d))) return; // no DP tag on the pitch: nothing to fit
+    const bodies = live.map((d) => {
+      const { p, k } = frame(d.node);
+      const s = d.baseScale * k;
+      // the die AND everything it carries (cause badge, FAILED + needed, reroll caption), its own DP tag left out
+      // (Astra pass 2: a DP row must not land on another die's FAILED plate either)
+      const tag = tagOf(d);
+      const index = tag ? d.node.getChildIndex(tag) : -1;
+      if (tag) d.node.removeChild(tag);
+      let b = { minX: -14, maxX: 14, minY: -14, maxY: 14 };
+      try { b = d.node.getLocalBounds(); } catch { /* no text metrics (headless host): the die body alone */ }
+      if (tag) d.node.addChildAt(tag, index);
+      const x0 = Math.min(b.minX, -14), x1 = Math.max(b.maxX, 14), y0 = Math.min(b.minY, -14), y1 = Math.max(b.maxY, 14);
+      return { die: d, p, s, rect: { x0: p.x + x0 * s, x1: p.x + x1 * s, y0: p.y + y0 * s, y1: p.y + y1 * s } };
+    });
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (const { die, p, s } of bodies) {
+      die.dpTagRect = null;
+      const tag = tagOf(die);
+      const size = tag ? this.dpTagSize.get(tag) : undefined;
+      if (!tag || !size) continue;
+      let fitted = false;
+      for (const f of [1, 0.6]) {
+        const cy = size.rowTop + (size.h * f) / 2;
+        const rect = {
+          x0: p.x - (size.w * f * s) / 2, x1: p.x + (size.w * f * s) / 2,
+          y0: p.y + (cy - (size.h * f) / 2) * s, y1: p.y + (cy + (size.h * f) / 2) * s,
+        };
+        if (bodies.some((b) => b.die !== die && tagRectsMeet(rect, b.rect, 0)) || placed.some((o) => tagRectsMeet(rect, o, 0))) continue;
+        tag.scale.set(f);
+        tag.position.set(0, cy);
+        tag.visible = true;
+        die.dpTagRect = rect;
+        placed.push(rect);
+        fitted = true;
+        break;
+      }
+      if (!fitted) tag.visible = false;
+    }
   }
 
   /** Orange jump tag "J6+". */
@@ -12863,6 +13101,36 @@ export class PitchRenderer {
     }
   }
 
+  /** UAT 1.0.208: the server's dice decorations to draw as dots while the LOCAL coach's declared Block/Blitz awaits
+   *  its target click (live o66 play only, where friendlyIsHome is the local coach's side); [] = that phase with no
+   *  decorations. null when the phase does not apply. */
+  private preClickBlockDotsNow(): PreClickBlockDot[] | null {
+    const game = this.game;
+    if (!game || !this.preClickBlockDiceEnabled) return null;
+    const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; hasBlocked?: boolean | null } | undefined;
+    const actingId = String(acting?.playerId ?? '');
+    const actorIsHome = !actingId ? null
+      : game.teamHome.playerArray.some((p) => p.playerId === actingId) ? true
+        : game.teamAway.playerArray.some((p) => p.playerId === actingId) ? false : null;
+    return preClickBlockDots({
+      live: this.order66 && this.presentationMode === 'live',
+      actingPlayer: acting,
+      homePlaying: game.homePlaying,
+      actorIsHome,
+      friendlyIsHome: this.friendlyIsHome,
+      diceDecorationArray: game.fieldModel.diceDecorationArray as unknown[] | undefined,
+      targetChosen: this.declaredBlockTargetChosen || !!this.blockTargetsOnly || !!this.pendingBlock,
+      defenderId: String((game as { defenderId?: unknown }).defenderId ?? ''),
+    });
+  }
+
+  /** UAT 1.0.208: the occlusion nudge (world px) the player on `square` is easing to, or null when none. */
+  private occlusionNudgeAt(square: Square): Offset | null {
+    const id = this.playersBySquare.get(`${square[0]},${square[1]}`);
+    const nudge = id ? this.occlusionNudgeDesired.get(id) : undefined;
+    return nudge && (nudge.dx !== 0 || nudge.dy !== 0) ? nudge : null;
+  }
+
   /** UAT 1.0.205: the squares whose players must stay visible right now: the server's dice-decorated block targets
    *  while the LOCAL coach's acting player chooses a block-family target in live o66 play. [] otherwise. */
   private occlusionTargetingSquares(): [number, number][] {
@@ -12998,6 +13266,7 @@ export class PitchRenderer {
     const squares = this.occlusionTargetingSquares();
     if (squares.length === 0 && this.occlusionNudgeCurrent.size === 0 && this.occlusionNudgeDesired.size === 0) return;
     const key = squares.map(([x, y]) => `${x},${y}:${this.playersBySquare.get(`${x},${y}`) ?? ''}`).join('|');
+    const desiredBefore = this.preClickDotsDrawn ? nudgeMapSignature(this.occlusionNudgeDesired) : '';
     if (squares.length === 0) {
       this.occlusionNudgeDesired.clear();
       this.occlusionNudgeKey = '';
@@ -13006,6 +13275,8 @@ export class PitchRenderer {
       this.occlusionNudgeMeasuredAt = now;
       this.occlusionNudgeDesired = this.measureOcclusionNudges(squares);
     }
+    // UAT 1.0.208: the pre-click dots ride the nudge target; on an idle board nothing else redraws them.
+    if (this.preClickDotsDrawn && nudgeMapSignature(this.occlusionNudgeDesired) !== desiredBefore) this.redrawOverlays();
     const ids = new Set([...this.occlusionNudgeDesired.keys(), ...this.occlusionNudgeCurrent.keys()]);
     for (const id of ids) {
       const want = this.occlusionNudgeDesired.get(id) ?? { dx: 0, dy: 0 };
@@ -15458,15 +15729,17 @@ export class PitchRenderer {
   /** On-pitch action d6 (owner 2026-07-03 r3): pop a die showing `value` (1–6)
    *  NEXT TO the given square (upper-right corner), animated in/hold/out. Driven
    *  from the report stream on skill/agility rolls (pickup, dodge, GFI, catch…). */
-  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void {
-    this.showActionDieImpl(null, square, value, cause, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, rerollOfferPending, rerollOfferNotFailed, breatheFireReroll);
+  /** Owner 10-15: `disturbingPresence` = the combined Disturbing Presence count the SERVER applied to this roll (from
+   *  its report's rollModifiers); the die then carries a "DP −N" tag. Absent / 0 = no tag. */
+  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean, disturbingPresence?: number): void {
+    this.showActionDieImpl(null, square, value, cause, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, rerollOfferPending, rerollOfferNotFailed, breatheFireReroll, disturbingPresence);
   }
   /** Owner 10-13: an action die whose roller is known and may not be the player on `square` (Ball & Chain shows its
    *  direction die at the destination, which can hold an opposing victim). The die wears `ownerPlayerId`'s colour. */
   showActionDieOwnedBy(ownerPlayerId: string | null, square: [number, number], value: number, cause?: string): void {
     this.showActionDieImpl(ownerPlayerId, square, value, cause);
   }
-  private showActionDieImpl(ownerPlayerId: string | null, square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void {
+  private showActionDieImpl(ownerPlayerId: string | null, square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean, disturbingPresence?: number): void {
     // Owner 10-05: a reroll OFFER is open for this failed roll - the die and its cause marker stay until the offer
     // is answered (accepted: the die re-rolls in place and keeps its marker; declined / cleared: both fade together).
     // `opponentRerollPending` (the watching seat) additionally hides the needed roll on the FAILED plate, as before.
@@ -15507,7 +15780,8 @@ export class PitchRenderer {
       persisted.splashSuspendMs = 0;
       persisted.node.alpha = 1;
       persisted.node.scale.set(persisted.baseScale);
-      this.decorateActionDie(persisted.node, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
+      this.decorateActionDie(persisted.node, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, disturbingPresence);
+      this.refitDisturbingPresenceTags();
       this.applyActionDieFaceMode(persisted);
       this.startActionDieTumble(persisted, now, tumbleMs);
       return;
@@ -15536,7 +15810,7 @@ export class PitchRenderer {
     if (failed && cause && !rerollSkill) {
       this.actionDice = this.actionDice.filter((d) => {
         const promptCopy = d.failed && d.cause === undefined && d.value === value && d.square && d.square[0] === x && d.square[1] === y;
-        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
+        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); this.dpTagsDirty = true; }
         return !promptCopy;
       });
     }
@@ -15547,7 +15821,7 @@ export class PitchRenderer {
     if (cause === 'breatheFire' && !rerollSkill) {
       this.actionDice = this.actionDice.filter((d) => {
         const promptCopy = !!d.breatheFirePromptCopy && d.cause === undefined && d.value === value && d.square && d.square[0] === x && d.square[1] === y;
-        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
+        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); this.dpTagsDirty = true; }
         return !promptCopy;
       });
     }
@@ -15562,7 +15836,7 @@ export class PitchRenderer {
     const side = displayDiceSide(owner, this.viewerDiceSeat());
     const built = this.buildActionDieFace(value, cause, side);
     const die = built.node;
-    this.decorateActionDie(die, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
+    this.decorateActionDie(die, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, disturbingPresence);
     // sit at the square's upper-right so it reads "next to" the action, not on it
     die.position.set(anchor.x + TILE_W * 0.5 * scale, anchor.y - TILE_H * 0.7 * scale);
     die.scale.set(0.05);
@@ -15589,7 +15863,8 @@ export class PitchRenderer {
       owner,
       faceSide: side,
     };
-    this.actionDice.push(record);
+    this.addActionDie(record);
+    this.refitDisturbingPresenceTags();
     this.applyActionDieFaceMode(record);
     this.startActionDieTumble(record, now, tumbleMs, presentationMs(ACTION_DIE_IN_MS));
   }
@@ -15604,8 +15879,22 @@ export class PitchRenderer {
   }
 
   /** Owner 2026-07-05 / 07-08 / 09-14: FAILED (+ the roll needed) under the die; a re-roll caption below that. */
-  private decorateActionDie(node: Container, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean): void {
+  private decorateActionDie(node: Container, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, disturbingPresence?: number): void {
     if (failed) node.addChild(this.buildFailedStencil(needed, opponentRerollPending));
+    // Owner 10-15: the server's combined Disturbing Presence modifier, in a row of its own under everything else the
+    // die carries (FAILED + needed, the reroll caption, a bottom cause badge at its largest zoom), so it never sits on them.
+    const dpTag = this.buildDisturbingPresenceTag(disturbingPresence);
+    if (dpTag) {
+      const skillCaption = !!rerollSkill && !rerollTeam;
+      let bottom = 14; // the 28 px die
+      if (this.dieTagPosition === 'bottom') bottom = Math.max(bottom, 14 + 28 * 0.32 * 2); // badge radius x the 2x zoom cap
+      if (failed) bottom = Math.max(bottom, 35); // FAILED plate 17..35
+      if (skillCaption) bottom = Math.max(bottom, (failed ? 48 : 28) + 8);
+      const size = this.dpTagSize.get(dpTag)!;
+      size.rowTop = bottom + DP_DIE_TAG_GAP;
+      dpTag.position.set(0, size.rowTop + size.h / 2);
+      node.addChild(dpTag);
+    }
     // Owner 2026-07-08: EVERY reroll captions the re-rolled die in soft gold — a SKILL reroll
     // (Dodge, Sure Hands, Pro…) reads "<skill icon/glyph> reroll"; a TEAM reroll reads
     // "<TRR inducement icon> used!". Owner 09-14: it sits BELOW the FAILED tag, never on it.
@@ -15986,7 +16275,7 @@ export class PitchRenderer {
     node.zIndex = this.depthZ(x, y) + 75; // owner 09-19: above the armour (+60/62) and injury (+70/72) plates — a Stand Firm icon was hidden behind the armour roll
     this.effectsLayer.addChild(node);
     this.anchorEffect(node, x, y, true, true);
-    this.actionDice.push({ node, baseScale: scale * 0.67, start: performance.now() }); // owner 09-07: skill-use pop -33%
+    this.addActionDie({ node, baseScale: scale * 0.67, start: performance.now() }); // owner 09-07: skill-use pop -33%
   }
 
   /** Owner 2026-07-08: VAMPIRE FEED — pop a 🧛 over a bitten Thrall's head just before the
@@ -16009,7 +16298,7 @@ export class PitchRenderer {
     node.zIndex = this.depthZ(x, y) + 62;
     this.effectsLayer.addChild(node);
     this.anchorEffect(node, x, y, true, true);
-    this.actionDice.push({ node, baseScale: scale, start: performance.now() });
+    this.addActionDie({ node, baseScale: scale, start: performance.now() });
   }
 
   /** Owner 2026-07-05: world→screen position of a pitch square's token, for
@@ -16070,7 +16359,7 @@ export class PitchRenderer {
     node.zIndex = this.depthZ(x, y) + 60;
     this.effectsLayer.addChild(node);
     this.anchorEffect(node, x, y, true, true);
-    this.actionDice.push({ node, baseScale: scale, start: performance.now(), armour: true });
+    this.addActionDie({ node, baseScale: scale, start: performance.now(), armour: true });
   }
 
   /** Owner 09-15: is an armour roll (dice + 'ARMOR BREAKS!' stencil) still on screen? The store gates the KO /
@@ -16704,7 +16993,7 @@ export class PitchRenderer {
     // the wide view. Enrol the complete cause tag (disc + installed/bundled/fallback art) in the exact same
     // 1×..2× inverse-zoom policy as player skill icons. The parent action die, pips, FAILED/needed readout,
     // and reroll label deliberately keep their existing geometry.
-    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall') { // owner 09-08: + catch; 09-23: + pickMeUp; 10-10: + secureTheBall
+    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall' || cause === 'stalling') { // owner 10-15: + stalling; 09-08: + catch; 09-23: + pickMeUp; 10-10: + secureTheBall
       this.overlayScaleGroups.push(c);
       c.scale.set(this.overlayZoomFactor());
     }
@@ -16716,7 +17005,8 @@ export class PitchRenderer {
     // Owner 10-10: a Secure the Ball roll IS a pick-up roll (the server's pickUpRoll report with secureTheBallUsed).
     // It wears its own badge; without that art it is drawn exactly as the pick-up tag always was.
     if (cause === 'secureTheBall' && !this.secureBallDieTagTexture) cause = 'pickup';
-    // Owner 2026-07-04: reuse the EXISTING skill-icon art where the cause maps to
+    // Owner 10-15: a stalling die without its badge art stays untagged (never the generic grey '?').
+    if (cause === 'stalling' && !this.stallingDieTagTexture) return c;    // Owner 2026-07-04: reuse the EXISTING skill-icon art where the cause maps to
     // a skill/cause target we have an icon for (pickup→PickUp, catch→Catch,
     // gaze→Hypnotic Gaze, …), on a neutral dark disc. Installed packs may
     // override GFI/PickUp only by explicitly providing those canonical targets.
@@ -16741,7 +17031,9 @@ export class PitchRenderer {
                 ? this.pickMeUpDieTagTexture ?? undefined
                 : cause === 'secureTheBall'
                   ? this.secureBallDieTagTexture ?? undefined
-                  : undefined;
+                  : cause === 'stalling'
+                    ? this.stallingDieTagTexture ?? undefined
+                    : undefined;
     // Owner 09-05: a re-roll cause wears the TRR (team re-roll) token icon instead of the old ↻ arrow glyph.
     const rerollIcon = cause === 'reroll' ? this.tokenRerollIcon ?? undefined : undefined;
     const icon = rerollIcon ?? (skillName
@@ -16761,7 +17053,7 @@ export class PitchRenderer {
       // the former generic badge footprint even after inverse-zoom scaling.
       // Give that canonical target a larger intrinsic face while leaving the
       // shared tag disc, GFI sizing, override precedence, and fallbacks alone.
-      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall' ? 2.15 : 1.7;
+      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall' || cause === 'stalling' ? 2.15 : 1.7;
       s.width = R * iconScale;
       s.height = R * iconScale;
       c.addChild(s);
@@ -17419,6 +17711,8 @@ export class PitchRenderer {
       wrapper.scale.set(s);
       wrapper.position.set(at.x - s * rec.origin.x, at.y - s * rec.origin.y);
     }
+    // Owner 10-15 (Astra pass 2): a projection change moves the dice relative to each other - refit their DP tags
+    this.refitDisturbingPresenceTags();
   }
 
   /** The view as it is DRAWN now (not what a waiting request asked for): the orientation, and whether the pitch is

@@ -44,6 +44,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
         <template v-if="modal.mode === 'foul'">{{ foulRollNumber(modal.rollText) }}</template>
         <template v-else v-for="(part, i) in d6RequirementParts(modal.rollText)" :key="i">
           <D6Face v-if="part.face" class="action-target-d6" :value="part.face" :label="part.label" />
+          <span v-else-if="part.dp" class="action-target-dp">{{ part.text }}</span>
           <template v-else>{{ part.text }}</template>
         </template>
       </span>
@@ -76,5 +77,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
 .action-modal-roll { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 4px; font-weight: 800; font-size: max(var(--ui-min-text-size, 12px), 12px); color: var(--ui-heading); }
 .action-modal-note { display: block; font-weight: 600; }
 .action-target-d6 { --d6-size: 1.5em; margin: -0.12em 0.08em; }
+/* Owner 10-15: the "DP −N" Disturbing Presence tag plate (as on the pitch: DP aura red tint, dark lettering). */
+.action-target-dp { padding: 0 4px; border: 1px solid #6a1a10; border-radius: 3px; background: #e8806f; color: #1a1a1a; font-weight: 700; font-size: 0.9em; line-height: 1.25; }
 .action-roll-die { width: 16px; height: 16px; image-rendering: pixelated; vertical-align: middle; margin-right: 3px; }
 </style>

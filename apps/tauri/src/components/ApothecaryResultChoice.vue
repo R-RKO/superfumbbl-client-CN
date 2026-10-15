@@ -79,6 +79,6 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
 /* Owner: injury names on ONE line — the anywhere-wrap that shredded "Seriously Hurt" letter-per-line is gone. */
 .apo-result strong { white-space: nowrap; color: #f3f5f7; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); }
 .apo-result-help { width: 100%; margin-top: 7px; color: #aeb8c5; font-size: max(var(--ui-min-text-size, 12px), 0.68rem); font-weight: 800; text-align: center; }
-:global(.hud-chrome) .apo-result-choice { border-top-color: #727d89; border-bottom-color: #080a0c; }
-:global(.hud-minimalist) .apo-result-choice { border-width: 1px 1px 1px 4px; background: rgba(11, 18, 14, 0.92); }
+:global(.hud-chrome .apo-result-choice) { border-top-color: #727d89; border-bottom-color: #080a0c; }
+:global(.hud-minimalist .apo-result-choice) { border-width: 1px 1px 1px 4px; background: rgba(11, 18, 14, 0.92); }
 </style>

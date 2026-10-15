@@ -15,8 +15,10 @@ export type D6LogPart =
   | { text?: never; face: D6FaceValue; kind: D6LogToken['kind']; team?: 'home' | 'away' };
 
 export type D6RequirementPart =
-  | { text: string; face?: never; label?: never }
-  | { text?: never; face: D6FaceValue; label: string };
+  | { text: string; face?: never; label?: never; dp?: never }
+  | { text?: never; face: D6FaceValue; label: string; dp?: never }
+  /** Owner 10-15: a "DP −N" combined Disturbing Presence modifier, drawn as its tag plate. */
+  | { text: string; face?: never; label?: never; dp: true };
 
 const DICE_REPORT_IDS = new Set([
   'cheeringFans',
@@ -82,7 +84,25 @@ export function d6RequirementParts(text: string): D6RequirementPart[] {
     cursor = match.index + match[0].length;
   }
   if (cursor < text.length) parts.push({ text: text.slice(cursor) });
-  return parts.length ? parts : [{ text }];
+  return splitDisturbingPresenceTags(parts.length ? parts : [{ text }]);
+}
+
+/** Owner 10-15: lift each "DP −N" tag (the renderer's disturbingPresenceTagText vocabulary) out of the text parts. */
+function splitDisturbingPresenceTags(parts: D6RequirementPart[]): D6RequirementPart[] {
+  const out: D6RequirementPart[] = [];
+  for (const part of parts) {
+    if (part.text === undefined || part.dp) { out.push(part); continue; }
+    const tag = /DP −[1-9]\d*/g;
+    let cursor = 0;
+    for (let match = tag.exec(part.text); match; match = tag.exec(part.text)) {
+      if (match.index > cursor) out.push({ text: part.text.slice(cursor, match.index) });
+      out.push({ text: match[0], dp: true });
+      cursor = match.index + match[0].length;
+    }
+    if (cursor === 0) out.push(part);
+    else if (cursor < part.text.length) out.push({ text: part.text.slice(cursor) });
+  }
+  return out;
 }
 
 /** Returns a single-D6 reroll target; legacy Tentacles/Shadowing use a 2D6 total. */

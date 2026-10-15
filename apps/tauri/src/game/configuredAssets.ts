@@ -62,11 +62,13 @@ export interface ConfiguredAssetsState {
   other: ConfiguredOtherRow[];
 }
 
-type WalkManifestRow = { race: string; role: string; side: SpriteSide; file: string };
+type WalkManifestRow = { race: string; role: string; side: SpriteSide; file: string; league?: string };
 const BUILT_IN_WALK_ROWS = (walkManifest.sheets as WalkManifestRow[]);
 
-/** Canonical base-team membership comes only from packages/ffb-pitch/assets/walk/manifest.json. */
-export const BASE_TEAM_RACES = [...new Set(BUILT_IN_WALK_ROWS.map((row) => row.race))].sort();
+/** Canonical base-team membership comes only from packages/ffb-pitch/assets/walk/manifest.json. Owner 10-15: the 40
+ *  Secret League rosters also ship built-in sheets (manifest `league: "secret-league"`); they stay in the Secret League
+ *  section, so they are not base teams. */
+export const BASE_TEAM_RACES = [...new Set(BUILT_IN_WALK_ROWS.filter((row) => !row.league).map((row) => row.race))].sort();
 const BASE_TEAM_SET = new Set(BASE_TEAM_RACES);
 
 export function spriteOverrideKey(teamId: string, positionId: string, side: SpriteSide): string {

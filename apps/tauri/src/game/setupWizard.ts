@@ -55,8 +55,9 @@ export interface SetupOption {
   /** A row of the six real d6 faces of this variant (drawn from @fumbbl40k/ffb-pitch's d6FaceUrl, not a screenshot). */
   d6Variant?: AppSettings['d6FaceVariant'];
   /** A row of the five block-die faces of the CURRENTLY chosen family composed on this surface (the same composed art
-   *  the dice use — PitchRenderer.prepareBlockFaces / bundledBlockFaceUrls), not a screenshot. */
-  blockSurface?: 'black' | 'white';
+   *  the dice use — PitchRenderer.prepareBlockFaces / bundledBlockFaceUrls), not a screenshot. 'team' (owner 10-15,
+   *  Home / Away) shows two rows: the blue home set and the red away set. */
+  blockSurface?: 'black' | 'white' | 'team';
   /** A sample block rendered in this CSS font stack (the Font step; the same stacks App.vue applies as --ui-font). */
   fontStack?: string;
   /** The plain setting writes this option makes when selected. */
@@ -151,10 +152,13 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     options: [
       { id: 'black', title: 'Black', images: [], blockSurface: 'black', writes: { blockDiceSurface: 'black' } },
       { id: 'white', title: 'White', images: [], blockSurface: 'white', writes: { blockDiceSurface: 'white' } },
+      // Owner 10-15: the same setting Settings > Art > Dice offers as "Brushed metal, home and away" ('team').
+      { id: 'team', title: 'Home / Away', description: 'Blue for the home team, red for the away team', images: [], blockSurface: 'team', writes: { blockDiceSurface: 'team' } },
     ],
     // Owner 10-06 follow-up: the preselected card is the RESOLVED surface for the family picked on the previous step
     // ('auto' = per face set); leaving the step without a pick writes nothing, so 'auto' stays.
-    prefill: (s) => resolveBlockDieSurface(s.blockDiceFamily, s.blockDiceSurface),
+    // 'team' must be read first: resolveBlockDieSurface without a die side falls back to the face set's own surface.
+    prefill: (s) => (s.blockDiceSurface === 'team' ? 'team' : resolveBlockDieSurface(s.blockDiceFamily, s.blockDiceSurface)),
   },
   {
     // Owner 10-06 follow-up. Labels match Settings > Dice's mapping: the legacy 'black' key is the WHITE face set.
@@ -165,8 +169,10 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     options: [
       { id: 'black', title: 'Black (Default)', images: [], d6Variant: 'brushed-metal', writes: { d6FaceVariant: 'brushed-metal' } },
       { id: 'white', title: 'White', images: [], d6Variant: 'black', writes: { d6FaceVariant: 'black' } },
+      // Owner 10-15: Settings > Art > Dice "Brushed metal, home and away".
+      { id: 'team', title: 'Home / Away', description: 'Blue for the home team, red for the away team', images: [], d6Variant: 'team', writes: { d6FaceVariant: 'team' } },
     ],
-    prefill: (s) => (s.d6FaceVariant === 'black' ? 'white' : 'black'),
+    prefill: (s) => (s.d6FaceVariant === 'team' ? 'team' : s.d6FaceVariant === 'black' ? 'white' : 'black'),
   },
   {
     id: 'skills',

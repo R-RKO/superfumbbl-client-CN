@@ -3315,6 +3315,11 @@ onBeforeUnmount(() => {
             <p class="hint">The roster opens from the helmet button on the Quick bar. Tick this to also keep the old
               Roster tab next to Log and Chat.</p>
             <label class="row">
+              <input v-model="settings.preClickBlockDice" type="checkbox" />
+              <span>Show block dice on every target before choosing</span>
+            </label>
+            <p class="hint">After you declare a Block or Blitz, the dice dots show over every player you can block. Off: they show only once you click a target.</p>
+            <label class="row">
               <input v-model="settings.coachCornerCounts" type="checkbox" />
               <span>Reserve / Out counts on the coach panels</span>
             </label>

@@ -17,7 +17,8 @@ const props = withDefaults(defineProps<{
 });
 
 const valid = computed(() => isD6FaceValue(props.value));
-const teamSide = computed(() => settings.d6FaceVariant === 'team' && (props.side === 'home' || props.side === 'away') ? props.side : null);
+// Owner 10-15: an explicit variant="team" (the setup wizard's Home / Away preview) draws the side's set too.
+const teamSide = computed(() => (settings.d6FaceVariant === 'team' || props.variant === 'team') && (props.side === 'home' || props.side === 'away') ? props.side : null);
 const effectiveVariant = computed<D6FaceVariant>(() => teamSide.value ? 'team' : props.variant ?? settings.d6FaceVariant);
 const url = computed(() => valid.value
   ? d6FaceUrl(props.value as 1 | 2 | 3 | 4 | 5 | 6, effectiveVariant.value, teamSide.value)

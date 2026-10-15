@@ -25,6 +25,8 @@ export interface ActionDieRoll {
   /** Owner 10-09: a movement roll's die (Dodge / Rush / Leap, first roll) belongs to the square the mover is entering:
    *  it is shown when the mover's token has arrived there (actionDiceQueueDrain), not while it is still walking in. */
   awaitsArrival?: boolean;
+  /** Owner 10-15: the combined Disturbing Presence count the server applied (interception die; from rollModifiers). */
+  disturbingPresence?: number;
 }
 
 /** The turnover splash object the store publishes (subset of `state.turnover`). */
@@ -34,7 +36,7 @@ export interface TurnoverSplash { seq: number }
 export interface ActionDiceRenderer {
   showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number,
     rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean,
-    rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean): void;
+    rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean, disturbingPresence?: number): void;
   releaseDiceAtTurnover(): void;
   clearActionDice(): void;
   setTurnoverSplashShowing(showing: boolean): void;
@@ -85,7 +87,11 @@ export function createActionDiceLifecycle(deps: ActionDiceLifecycleDeps): Action
       // the same re-validation for the rolling coach's own offer: a deferred show after the offer closed takes no hold
       const rerollOfferPending = opponentRerollHoldAtShow(roll.rerollOfferPending, dialogId);
       // (the extra arguments are passed only for the Breathe Fire rolls that carry them: every other call is unchanged)
-      if (roll.rerollOfferNotFailed || roll.breatheFireReroll) renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
+      // Owner 10-15: a roll with a server Disturbing Presence modifier passes its count as the last argument.
+      if (roll.disturbingPresence) renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
+        roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending, !!roll.rerollOfferNotFailed, !!roll.breatheFireReroll,
+        roll.disturbingPresence);
+      else if (roll.rerollOfferNotFailed || roll.breatheFireReroll) renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
         roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending, !!roll.rerollOfferNotFailed, !!roll.breatheFireReroll);
       else renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
         roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending);
