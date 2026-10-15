@@ -8,6 +8,7 @@ import { quickSnapAllowanceText, quickSnapCountText, quickSnapExhaustedText } fr
 import { prayerForRoll } from './prayerCatalog';
 import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
+import { isGateRerollSource, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
 
 /**
  * First-pass port of the FFB report texts (upstream: ffb-client-logic
@@ -107,6 +108,9 @@ export interface ReportDisplay {
   names: LogNameToken[];
   /** Owner 08-18: kind-tagged decoration runs (line titles, the armour shield glyph). */
   tags: LogTagToken[];
+  /** Owner 10-15: the action plate (icon + acting team) of this line, set by formatReportLines on a report's first
+   *  line when it belongs to a plated action. Absent = no plate. Display-only; `text` never changes with it. */
+  action?: LogActionPlate;
 }
 
 /** `owner` = the report-level dice owner (reportDiceOwner); a die marked H / A / N overrides it for that die alone. */
@@ -327,12 +331,29 @@ function gameOption(game: GameJson | null, id: string): string | undefined {
   return game?.gameOptions.gameOptionArray.find((option) => option.gameOptionId === id)?.gameOptionValue;
 }
 
-/** Owner 08-19: the succeeds/fails suffix on roll lines — a SUCCESS ends at the needs
- *  clause ("— succeeds" suppressed; a re-rolled note survives as ", re-rolled"); a FAIL
- *  stays explicit ("— fails" / "— fails, re-rolled"). */
-function outcomeSuffix(successful: unknown, reRolled: unknown): string {
-  const rerolled = reRolled ? ', rerolled' : '';
-  return successful ? rerolled : ` | ${FAILS}${rerolled}`;
+/** Owner 08-19: the succeeds/fails suffix on roll lines: a SUCCESS ends at the needs clause ("succeeds" suppressed),
+ *  a FAIL stays explicit (" | fails"). Owner 10-15: a rerolled roll no longer ends ", rerolled"; the line LEADS with
+ *  the reroll marker instead (withRerollLead, applied to every formatted line whose report says reRolled). */
+function outcomeSuffix(successful: unknown): string {
+  return successful ? '' : ` | ${FAILS}`;
+}
+
+/** Owner 10-15 ("move 'rerolled' to the front of the line when it's a reroll"): the marker every rerolled roll line
+ *  opens with, for every roll type whose report carries the wire's reRolled flag. */
+export const REROLL_LEAD = 'Rerolled | ';
+function withRerollLead(report: Report, marked: string, context?: Pick<ReportLogContext, 'lastRerollSource' | 'lastRerollPlayerId' | 'lastRerollTeamId'> | null, game: GameJson | null = null): string {
+  return isRerolledLine(report, context, game) ? `${REROLL_LEAD}${marked}` : marked;
+}
+/** Owner 10-15 (Astra pass 4): a line is a reroll's replacement roll when the report says reRolled, when it is a
+ *  blockReRoll (replacement block dice: Pro / Brawler single die, a Multiple Block target), or when it is a blockRoll
+ *  that a pending reroll grant leads to: a full block reroll arrives as a fresh, unflagged blockRoll after the grant
+ *  (team reroll / Mascot / Pro: reRoll or mascotUsed -> block -> blockRoll). The grant is the same context latch the
+ *  Graphical log's reroll source icon uses (logActionPlates.latchLogActionContext); it is read here BEFORE the
+ *  blockRoll consumes it. */
+function isRerolledLine(report: Report, context?: Pick<ReportLogContext, 'lastRerollSource' | 'lastRerollPlayerId' | 'lastRerollTeamId'> | null, game: GameJson | null = null): boolean {
+  if (report.reRolled === true) return true;
+  if (String(report.reportId ?? '') === 'blockReRoll') return true;
+  return pendingRerollApplies(report, context, game);
 }
 
 /** ReportSkillRoll family: playerId, successful, roll, minimumRoll, reRolled.
@@ -345,7 +366,7 @@ function skillRoll(verb: string) {
     // Owner 2026-07-06: guard the roll so a roll-less report can never render
     // "rolls undefined" (finding C — the apothecary report has no single roll).
     const rollPart = report.roll != null ? ` ${hiddenTag('rolls ')}${d6(report.roll)}` : '';
-    return `${pn(game, report.playerId)} ${verb}:${rollPart}${min}${outcomeSuffix(report.successful, report.reRolled)}`;
+    return `${pn(game, report.playerId)} ${verb}:${rollPart}${min}${outcomeSuffix(report.successful)}`;
   };
 }
 
@@ -366,10 +387,7 @@ function namedSkillRoll(label: string) {
   return (report: Report, game: GameJson | null): string => {
     const min = report.minimumRoll != null ? ` (${d6(report.minimumRoll, 'target')}+)` : '';
     const rollPart = report.roll != null ? ` ${hiddenTag('rolls ')}${d6(report.roll)}` : '';
-    const rerolled = report.reRolled === true ? ', rerolled' : '';
-    const outcome = report.successful === false
-      ? ` | ${FAILS}${rerolled}`
-      : report.successful === true ? rerolled : '';
+    const outcome = report.successful === false ? ` | ${FAILS}` : '';
     const detail = `${rollPart}${min}${outcome}`;
     return `${pn(game, report.playerId)} | ${label}${detail ? `:${detail}` : ''}`;
   };
@@ -396,9 +414,25 @@ export interface ReportLogContext {
   lastBlockDefenderId: string | null;
   lastBlockAttackerId: string | null;
   lastBlockChoosingTeamId: string | null;
+  /** Owner 10-15 (Graphical log): the receiver named by the last `handOver` report, until the catch roll it leads to
+   *  (that catch is the Hand-off's; any later catch, such as a bounce, is a plain Catch). Optional so a checkpoint
+   *  written before it existed still validates. */
+  lastHandOverCatcherId?: string | null;
+  /** Owner 10-15 (Graphical log): the reroll source that last provided a reroll, until the rerolled roll line it leads
+   *  to (that line shows the source icon). Optional for the same reason. */
+  lastRerollSource?: string | null;
+  /** The player / team the pending grant named (Graphical log / reroll lead). Optional for the same reason. */
+  lastRerollPlayerId?: string | null;
+  lastRerollTeamId?: string | null;
 }
 export function createReportLogContext(): ReportLogContext {
-  return { lastBlockDefenderId: null, lastBlockAttackerId: null, lastBlockChoosingTeamId: null };
+  return { lastBlockDefenderId: null, lastBlockAttackerId: null, lastBlockChoosingTeamId: null, lastHandOverCatcherId: null, lastRerollSource: null, lastRerollPlayerId: null, lastRerollTeamId: null };
+}
+/** Owner 10-15: advance the Graphical-log latches (hand-off receiver, reroll source) from a report the live log may
+ *  not display (`handOver` carries no dice, so the live display gate skips formatting it). Idempotent with
+ *  formatReportLines, which latches them too. */
+export function noteReportLogContext(report: Report, context: ReportLogContext): void {
+  latchLogActionContext(report, context);
 }
 const legacyReportLogContext = createReportLogContext();
 
@@ -514,7 +548,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const modifier = typeof r.modifier === 'number' && r.modifier > 0 ? ` (Timm-ber +${r.modifier})` : '';
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
     const rollPart = r.roll != null ? ` ${hiddenTag('rolls ')}${d6(r.roll)}` : '';
-    return `${pn(g, r.playerId)} stands up${modifier}:${rollPart}${min}${outcomeSuffix(r.successful, r.reRolled)}`;
+    return `${pn(g, r.playerId)} stands up${modifier}:${rollPart}${min}${outcomeSuffix(r.successful)}`;
   },
   jumpUpRoll: skillRoll('jumps up'),
   blitzRoll: (r, g) => `${teamName(g, r.teamId)} | Blitz: ${hiddenTag('rolls ')}${r.roll ?? '?'} on D3; may activate ${r.nrOfPlayers ?? r.amount ?? '?'} open player(s)`,
@@ -543,7 +577,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const trait = r.confusionSkill ? String(r.confusionSkill) : 'a negative trait';
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
     const rollPart = r.roll != null ? ` ${hiddenTag('rolls ')}${d6(r.roll)}` : '';
-    return `${pn(g, r.playerId)} | ${trait}:${rollPart}${min}${outcomeSuffix(r.successful, r.reRolled)}`;
+    return `${pn(g, r.playerId)} | ${trait}:${rollPart}${min}${outcomeSuffix(r.successful)}`;
   },
   // These two ReportSkillRoll shapes previously fell through to the generic key/value dump
   // (`successful true`). Give them the same concise success trimming as every action roll;
@@ -573,7 +607,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
     const thrown = r.thrownPlayerId ? pn(g, r.thrownPlayerId) : 'a team-mate';
     const verb = r.isKick ? 'kicks' : 'throws';
-    return `${pn(g, r.playerId)} ${verb} ${thrown}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${outcomeSuffix(r.successful, r.reRolled)}`;
+    return `${pn(g, r.playerId)} ${verb} ${thrown}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${outcomeSuffix(r.successful)}`;
   },
 
   // Wire reality (EC-8, verified against upstream ReportBlock 2026-07-02):
@@ -712,11 +746,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // PlayerState 0x40000 via the renderer — this is the log half.)
   chompRoll: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    const rerolled = r.reRolled ? ', rerolled' : '';
     const chomper = String(r.chomper ?? r.attackerId ?? r.playerId ?? '');
     const chompeeId = r.chompee ?? r.defenderId;
     const victim = chompeeId ? ` on ${pn(g, String(chompeeId))}` : '';
-    return `${pn(g, chomper)} | Chomp${victim}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${rerolled} | ${r.successful ? 'CHOMPED' : FAILS}`;
+    return `${pn(g, chomper)} | Chomp${victim}: ${hiddenTag('rolls ')}${d6(r.roll)}${min} | ${r.successful ? 'CHOMPED' : FAILS}`;
   },
   chompRemoved: (r, g) =>
     r.successful ? `${pn(g, r.playerId)} is no longer chomped` : `${pn(g, r.playerId)} stays chomped`,
@@ -734,7 +767,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   gettingEvenRoll: (r, g) => {
     const kw = r.keyword ? ` (${humanize(String(r.keyword))})` : '';
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    return `${pn(g, r.playerId)} | Getting Even${kw}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${outcomeSuffix(r.successful, r.reRolled)}`;
+    return `${pn(g, r.playerId)} | Getting Even${kw}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${outcomeSuffix(r.successful)}`;
   },
   dwarfenWisdomRoll: (r, g) => `${teamName(g, r.teamId)} | Dwarfen Wisdom: ${hiddenTag('rolls ')}${r.roll ?? '?'}`, // D3
   // #141 (GAP-WAVE-2, ball-flight): the punt/swoop DIRECTION rolls (owner: show a direction ARROW — Voss's
@@ -795,11 +828,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   breatheFire: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
     const target = r.defenderId ? ` on ${pn(g, r.defenderId)}` : '';
-    const rerolled = r.reRolled ? ' | rerolled' : '';
     const outcome = breatheFireOutcome(r);
     const result = outcome === 'failure' ? FAILS : outcome === 'noEffect' ? 'no effect' : outcome === 'prone' ? 'placed prone'
       : outcome === 'knockDown' ? 'knocked down' : breatheFirePassed(r) === false ? FAILS : '';
-    return `${pn(g, r.playerId)}'s Breathe Fire${target}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${rerolled}${result ? ` | ${result}` : ''}`;
+    return `${pn(g, r.playerId)}'s Breathe Fire${target}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${result ? ` | ${result}` : ''}`;
   },
   lookIntoMyEyesRoll: skillRoll('uses Look Into My Eyes'),
   weepingDaggerRoll: skillRoll('uses Weeping Dagger'),
@@ -812,7 +844,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   oldPro: (r, g) => r.selfInflicted
     ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to reroll ${d6(r.oldRoll, 'roll', otherSide(playerServerSide(g, r.playerId)))} into ${d6(r.roll, 'roll', otherSide(playerServerSide(g, r.playerId)))}`
     : `${pn(g, r.playerId)} uses Old Pro: rerolls ${d6(r.oldRoll)} into ${d6(r.roll)}`,
-  pickMeUp: (r, g) => `${pn(g, r.playerId)} | Pick Me Up: ${hiddenTag('rolls ')}${d6(r.roll)}${outcomeSuffix(r.successful, r.reRolled)}`,
+  pickMeUp: (r, g) => `${pn(g, r.playerId)} | Pick Me Up: ${hiddenTag('rolls ')}${d6(r.roll)}${outcomeSuffix(r.successful)}`,
   // Kildash fix ("Dodgey snack stats not showing"): the roll only decides WHO is affected. Upstream ReportDodgySnackRoll carries
   // just {roll, playerId}; StepApplyKickoffResult.dodgySnackEffect sends a 1 to the reserves and applies -1 MA / -1 AV from a 2 up,
   // and the Java DodgySnackRollMessage words it the same way. The rule exists in BB2025 only (no BB2020 report).
@@ -824,8 +856,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   raidingParty: (r, g) => `${pn(g, r.playerId)} uses Raiding Party`,
   thrownKeg: (r, g) =>
     `${pn(g, r.playerId)} throws a keg at ${pn(g, r.targetPlayerId)}: ${hiddenTag('rolls ')}${d6(r.roll)} | ${r.fumble ? 'fumbles' : r.successful ? 'hits' : 'misses'}`,
-  mascotUsed: (r, g) => `${teamName(g, r.teamId)} | Mascot: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful, r.reRolled)}`,
-  teamCaptainRoll: (r, g) => `${teamName(g, r.teamId)} | Team Captain: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful, r.reRolled)}`,
+  mascotUsed: (r, g) => `${teamName(g, r.teamId)} | Mascot: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful)}`,
+  teamCaptainRoll: (r, g) => `${teamName(g, r.teamId)} | Team Captain: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful)}`,
   weatherMageRoll: (r) => `Weather Mage: ${hiddenTag('rolls ')}${d6List(r.weatherRoll)}`,
   weatherMageResult: () => 'Weather Mage alters the weather',
   pumpUpTheCrowdReRoll: (r, g) => `${pn(g, r.playerId)} earns a Pump Up The Crowd reroll`,
@@ -942,7 +974,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   reRoll: (r, g) => {
     const src = humanize(String(r.reRollSource ?? 'team reroll'));
     const roll = r.roll;
-    if (typeof roll === 'number' && Number.isInteger(roll) && roll > 0) {
+    // Owner 10-15 (Astra pass 8): only a gate source's roll grants or denies (Pro, Loner, team reroll); another
+    // source's roll is the replacement's own (Blind Rage: successful false roll 3, then the rerolled Dauntless), so it
+    // never reads "FAILED | no reroll".
+    if (typeof roll === 'number' && Number.isInteger(roll) && roll > 0 && isGateRerollSource(typeof r.reRollSource === 'string' ? r.reRollSource : null)) {
       const outcome = r.successful === false ? 'FAILED | no reroll' : 'passed';
       return `${pn(g, r.playerId)} rerolls (${src}) | rolled ${d6(roll)}, ${outcome}`;
     }
@@ -1227,7 +1262,10 @@ function humanize(id: string): string {
     .replace(/([A-Z])/g, ' $1')
     .replace(/[_\s]+/g, ' ')
     .toLowerCase()
-    .trim();
+    .trim()
+    // Owner 10-15 ("team re roll" -> "team reroll"): a server enum such as "Team ReRoll" / "teamReRoll" humanizes to
+    // the house spelling, never "re roll".
+    .replace(/\bre roll/g, 'reroll');
 }
 
 function titleCase(text: string): string {
@@ -1298,7 +1336,7 @@ export function formatReportDisplay(report: Report, game: GameJson | null, conte
   const formatter = formatters[id];
   if (formatter) {
     try {
-      return decodeDisplay(formatter(report, game, context), owner);
+      return decodeDisplay(withRerollLead(report, formatter(report, game, context), context, game), owner);
     } catch {
       // fall through to the generic line
     }
@@ -1321,7 +1359,7 @@ export function formatReportDisplay(report: Report, game: GameJson | null, conte
       return `${humanize(key)} ${JSON.stringify(report[key]).replace(/"/g, '')}`;
     })
     .join(', ');
-  return decodeDisplay(extras ? `${humanize(id)} | ${extras}` : humanize(id), owner);
+  return decodeDisplay(withRerollLead(report, extras ? `${humanize(id)} | ${extras}` : humanize(id), context, game), owner);
 }
 
 export function formatReport(report: Report, game: GameJson | null, context = legacyReportLogContext): string {
@@ -1333,6 +1371,25 @@ export function formatReport(report: Report, game: GameJson | null, context = le
  *  KO-recovery lines, heat-exhaustion line) instead of one '; '-joined wall of text. Callers
  *  should log() each returned entry as its own line, in order. */
 export function formatReportLines(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay[] {
+  const lines = formatReportLinesPlain(report, game, context);
+  // Owner 10-15: after the formatter ran, so a `block` report has already latched its attacker into the context.
+  // Every line of the report belongs to the same action (an injury's dice line, its effect sentence and its casualty
+  // line are all the block's / foul's / failed move's), so each wears the plate.
+  const action = logActionPlate(report, game, context, reportDiceOwner(report, game));
+  // turnEnd has no single owner, but its lines do: the touchdown line is the scorer's team, each KO recovery line its
+  // player's team (turnEndLines order: TD / "turn ends", recoveries, heat). A row tint per line, never per report.
+  if (String(report.reportId ?? '') === 'turnEnd' && lines.length) {
+    const recoveries = Array.isArray(report.knockoutRecoveryArray) ? (report.knockoutRecoveryArray as Report[]) : [];
+    const sides = [playerServerSide(game, report.playerIdTouchdown), ...recoveries.map((r) => playerServerSide(game, r.playerId))];
+    return lines.map((line, index) => {
+      const side = sides[index] ?? null;
+      return side ? { ...line, action: { kind: null, side } } : line;
+    });
+  }
+  return action ? lines.map((line) => ({ ...line, action })) : lines;
+}
+
+function formatReportLinesPlain(report: Report, game: GameJson | null, context: ReportLogContext): ReportDisplay[] {
   if (String(report.reportId ?? '') === 'turnEnd') {
     try {
       return turnEndLines(report, game).map((line) => decodeDisplay(line));
@@ -1348,7 +1405,7 @@ export function formatReportLines(report: Report, game: GameJson | null, context
       const raw = formatter(report, game, context);
       if (raw.includes('\n')) {
         const owner = reportDiceOwner(report, game);
-        return raw.split('\n').filter((line) => line.length > 0).map((line) => decodeDisplay(line, owner));
+        return raw.split('\n').filter((line) => line.length > 0).map((line, index) => decodeDisplay(index === 0 ? withRerollLead(report, line, context, game) : line, owner));
       }
     } catch {
       // fall through to the single-line generic path

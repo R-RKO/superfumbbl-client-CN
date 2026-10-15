@@ -75,6 +75,7 @@ import {
 } from '../game/inducementRevealHold';
 import ChargePickPanel from '../components/ChargePickPanel.vue';
 import PitchConfirmationPanel from '../components/PitchConfirmationPanel.vue';
+import { confirmCardLocked as confirmCardLockOpen, lockedConfirmTarget, lockedEscapeOutcomes, openConfirmCards, type ConfirmCardLockInput } from '../game/logic/confirmCardLock';
 import { PROMPT_ANSWER_SELECTOR, installPromptPointerTracker, vPromptDodge } from '../game/promptDodgeDom';
 import { deferredSwitchClick, deferredSwitchFollowUpFresh, deferredSwitchStillValid, type DeferredFriendlySwitch } from '../game/deferredFriendlySwitch';
 import ConfirmActionButton from '../components/ConfirmActionButton.vue';
@@ -129,6 +130,7 @@ import { logTagParts, type LogTagKind, type LogTagToken } from '../game/logTags'
 // die toast uses (renderer.ts showArmorRoll), inline at text size, over the 🛡 text node.
 import breastplateIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/breastplate.png';
 import niStatDownIconUrl from '@fumbbl40k/ffb-pitch/assets/status/stat-down/ni.png';
+import LogActionPlate, { logRowSide } from '../components/LogActionPlate.vue';
 import { kickoffCineHoldGuard } from '../game/kickElection';
 import { watchKickoffArcDecisionDwell } from '../game/kickoffArcDwell';
 import { quickSnapExhaustedText } from '../game/quickSnapController';
@@ -6165,6 +6167,7 @@ const puntDirectionArrow: Record<PuntScreenDirection, string> = { up: '▲', dow
 const puntReaimAnchor = ref<{ x: number; y: number } | null>(null);
 const puntDirectionChoices = ref<PuntDirectionChoice[]>([]);
 function selectPuntDirection(square: [number, number]) {
+  if (guardConfirmCard()) return; // owner 10-15: no re-aim under an open confirmation card
   o66PendingPunt.value = square;
 }
 let puntConeRaf = 0;
@@ -6207,6 +6210,7 @@ onBeforeUnmount(() => cancelAnimationFrame(puntConeRaf));
 // The cone-centre card is the only sender — commit the current aim as the punt field-coordinate.
 function confirmPuntV2() {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
+  if (guardConfirmCard()) return; // owner 10-15
   const g = gameStore.game.value;
   if (!g || !isPuntTargeting(g) || !o66PendingPunt.value) return;
   const af = puntActingFrom(g); if (!af) return;
@@ -6735,6 +6739,14 @@ function acceptBlitzMoveConvert() {
   if (tile) gameStore.convertBlitzToMove(tile); // ⚖ Tarkin's hook: un-consume (self-target-cancel) → re-declare move → step
 }
 function dismissBlitzMoveModal() { blitzMoveModalTile.value = null; rearmO66MovementSurface(); } // NO wire — blitz stays server-held-pending; coach re-picks the target
+// Owner 10-15 (Astra confirmlock-1): the card (and the confirmation-card lock it holds) lives only as long as the
+// declared-but-unconfirmed Blitz it asks about: a frame that ends that state (activation over, turn over, reconnect
+// into another state, leaving the seat) retires it with no wire.
+watch(() => {
+  if (!blitzMoveModalTile.value) return true;
+  const g = gameStore.game.value;
+  return !!g && gameStore.isPlaying.value && deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET' && !blitzUsedActingSide(g);
+}, (live) => { if (!live) blitzMoveModalTile.value = null; }, { flush: 'sync' });
 // Feed the renderer the authoritative pickup target only while a Move preview approaches a settled ball.
 watch([o66PendingMove, () => {
   const fm = gameStore.game.value?.fieldModel as { ballInPlay?: boolean; ballMoving?: boolean; ballCoordinate?: unknown } | undefined;
@@ -8109,6 +8121,7 @@ const queuedSteps = ref(0);
 
 function confirmMove() {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
+  if (guardConfirmCard()) return; // owner 10-15: nor under any other open confirmation card
   // Owner 2026-07-04c: an armed foul/handoff/pass — the confirm button commits
   // the WHOLE action (path + wire), per "the confirm button should behave as
   // expected here and confirm any action that is currently planned".
@@ -8674,6 +8687,7 @@ function dropDeferredFriendlySwitch() {
  *  (Astra pass 4, 10-05). */
 function toggleJumpFromBadge() {
   if (pitchHeldByConfirmation()) return;
+  if (guardConfirmCard()) return; // owner 10-15 (Astra confirmlock-1): no leap toggle under any open confirmation card
   deferredFriendlySwitch.value = null;
   gameStore.toggleJump();
 }
@@ -9353,6 +9367,7 @@ function runMenuItem(item: MenuItem) {
   if (item.disabled || !item.action) return;
   // Astra re-review 10-04: a context-menu row left open under an End Activation / End Turn confirmation sends nothing.
   if (pitchHeldByConfirmation()) { ctxMenu.visible = false; return; }
+  if (guardConfirmCard()) { ctxMenu.visible = false; return; } // owner 10-15
   item.action();
   ctxMenu.visible = false;
 }
@@ -9511,20 +9526,99 @@ function confirmArmedGaze(): boolean {
 
 /** A button INSIDE one of the client's confirmation panels has keyboard focus (Astra review 10-04). */
 function focusedPromptButton(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && target.tagName === 'BUTTON' && !!target.closest('.pitch-confirm-panel');
+  // Owner 10-15 (Astra confirmlock-3): the Bloodlust decision card is a covered confirmation card too.
+  return target instanceof HTMLElement && target.tagName === 'BUTTON' && !!target.closest('.pitch-confirm-panel, .bloodlust-card');
 }
 /** Astra review 10-04: while an End Activation / End Turn confirmation is up, the pitch takes no clicks - a click
  *  on a receiver used to nominate (or send) the throw UNDER the open prompt, and Space then confirmed the end. */
 function pitchHeldByConfirmation(): boolean {
   return !!endActConfirm.value || endTurnWarnCount.value !== null;
 }
+/** Owner 10-15 ("No other actions can be planned while any confirm modal is up. These should be swallowing clicks and
+ *  force an interaction."): the visibility of every covered confirmation card, on exactly the conditions the template
+ *  mounts each one, so the lock lives and dies with the card (game/logic/confirmCardLock.ts holds the rules). */
+function confirmCardLockInput(): ConfirmCardLockInput {
+  const apo = gameStore.apothecaryCardVisible.value;
+  const yesNo = gameStore.state.yesNo;
+  // Astra confirmlock-4: a card that answers a server dialog counts only while that dialog is LIVE (present, not
+  // outlived, not already answered), so a server clear always releases the lock even if a card state lingers.
+  // Astra confirmlock-5: by OCCURRENCE where the card recorded one (a replacement of the same type does not count).
+  const live = (...dialogIds: string[]) => gameStore.serverDialogLive(dialogIds);
+  const liveOccurrence = (instance: string | null | undefined, ...dialogIds: string[]) => gameStore.cardDialogLive(dialogIds, instance);
+  return {
+    seated: gameStore.isPlaying.value && !gameStore.replay.active,
+    cards: {
+      endTurnWarn: endTurnWarnCount.value !== null,
+      endActivation: !!endActConfirm.value,
+      yesNo: !!yesNo && (!yesNo.answersDialog || liveOccurrence(yesNo.answersInstance, yesNo.answersDialog)), // client-owned: own lifecycle
+      wideRailSpecial: !!wideRailActivationPrompt.value,
+      blitzToMove: !!blitzMoveModalTile.value,
+      blockAttack: !!blockAttackConfirm.value,
+      padBlockDeclare: !!padBlockDeclare.value,
+      chainsawBlitz: !!gameStore.state.blitzBlockChoice && chainsawBlitzConfirm.value,
+      actionTarget: !!actionModal.value,
+      wizardZap: !!gameStore.state.wizardTargetConfirm && liveOccurrence(gameStore.state.wizardTargetConfirm.answersInstance, 'wizardSpell'),
+      shadowing: !!shadowingPick.value && !!shadowingPos.value && liveOccurrence(shadowingPick.value.answersInstance, 'playerChoice'),
+      tentacles: !!tentaclesPick.value && !!tentaclesPos.value && liveOccurrence(tentaclesPick.value.answersInstance, 'playerChoice'),
+      apothecary: !!apo && apo.mine && !gameStore.apothecaryCardLingering.value && live('useApothecary', 'useApothecaries'),
+      apothecaryResult: !!apoResultCardShown.value && !!gameStore.state.apothecaryD16?.mine && live('apothecaryChoice'),
+      sendOff: !!gameStore.state.sendOff && liveOccurrence(gameStore.state.sendOff.answersInstance, 'bribes', 'argueTheCall'),
+      // Astra confirmlock-2: the reroll / bite beats stay out
+      bloodlustDecision: gameStore.state.bloodlust?.stage === 'decision' && liveOccurrence(gameStore.state.bloodlust.instanceKey, 'bloodlustAction'),
+    },
+  };
+}
+/** Owner 10-15: THE gate. The renderer's click bodies, the action runner (keys + pad), the hotbar keys and the
+ *  planning buttons all ask this one predicate. */
+function confirmCardLocked(): boolean {
+  return confirmCardLockOpen(confirmCardLockInput());
+}
+let lastConfirmNudgeAt = -Infinity;
+/** Owner 10-15: a swallowed click / key draws the eye to the open card (a short shake, a glow under reduced motion). */
+function nudgeConfirmCard(): void {
+  const now = performance.now();
+  if (now - lastConfirmNudgeAt < 350) return;
+  lastConfirmNudgeAt = now;
+  if (typeof document === 'undefined') return;
+  const reduce = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const frames: Keyframe[] = reduce
+    ? [{ filter: 'brightness(1)' }, { filter: 'brightness(1.6)' }, { filter: 'brightness(1)' }]
+    : [{ translate: '0 0' }, { translate: '-7px 0' }, { translate: '6px 0' }, { translate: '-4px 0' }, { translate: '2px 0' }, { translate: '0 0' }];
+  const panels = document.querySelectorAll<HTMLElement>('.pitch-confirm-panel:not(.pitch-instruction):not(.readonly):not(.lingering):not(.opponent-setup-notice)');
+  panels.forEach((el) => { if (typeof el.animate === 'function') el.animate(frames, { duration: 360, easing: 'ease-out' }); });
+}
+/** Owner 10-15: a planning button / key under an open card: true = swallowed (the card pulses), do nothing. */
+function guardConfirmCard(): boolean {
+  if (!confirmCardLocked()) return false;
+  nudgeConfirmCard();
+  return true;
+}
+/** Owner 10-15: Esc with a card open runs only the card's own Esc answer (the ones it had before the lock); anything
+ *  the cascade would do underneath the card is refused and the card pulses instead. */
+function lockedEscape(): void {
+  if (!settings.order66 || !gameStore.isPlaying.value) { nudgeConfirmCard(); return; }
+  padCascadeRefused = false;
+  escO66Cascade(lockedEscapeOutcomes(openConfirmCards(confirmCardLockInput())));
+  if (padCascadeRefused) { padCascadeRefused = false; nudgeConfirmCard(); }
+}
+/** Owner 10-15: the confirm key with a card open answers that card where it already did (End Turn? / End Activation?,
+ *  the staged attack, the armed target) and nothing else: never a plotted route or a planner arm under the card. */
+function lockedConfirm(): boolean {
+  const target = lockedConfirmTarget(openConfirmCards(confirmCardLockInput()));
+  if (target === 'consume') return true;
+  if (target === 'endConfirmation' && answerOpenConfirmation()) return true;
+  if (target === 'blockAttack' && confirmAggroStage()) return true;
+  if (target === 'actionTarget' && renderer?.hasArmedAction()) { renderer.confirmArmedAction(); return true; }
+  nudgeConfirmCard();
+  return true;
+}
 /** Astra re-review 10-04: with a confirmation up, a button the coach reached BY KEYBOARD (Tab - :focus-visible)
  *  outside the panel owns its own key; the global shortcut must not end the activation / turn behind it. A button
  *  merely left focused by a mouse click (End Turn, a quick-bar action) does not match :focus-visible, so the common
  *  "click End Turn, press Space" flow still confirms. */
 function keyboardFocusedOutsideButton(target: EventTarget | null): boolean {
-  if (!pitchHeldByConfirmation() && !setupConfirm.value && !kickConfirmCard.value) return false; // owner 10-13: the kick card too
-  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel')) return false;
+  if (!pitchHeldByConfirmation() && !setupConfirm.value && !kickConfirmCard.value && !confirmCardLocked()) return false; // owner 10-13: the kick card too; 10-15: every covered card
+  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel, .bloodlust-card')) return false;
   // Astra pass 3 (10-04): :focus-visible is a per-browser heuristic. Ownership is decided by a recorded fact: the
   // focused button is the one the coach last pressed with the pointer (mouse focus) or it is not (keyboard focus).
   return target !== lastPointerFocusedButton;
@@ -9553,6 +9647,7 @@ onBeforeUnmount(() => {
  *  the End TURN warning. A button commits its own planner arm, and nothing at all while a confirmation is up. */
 function confirmPlannerFromButton(): boolean {
   if (pitchHeldByConfirmation() || setupConfirm.value) return false;
+  if (guardConfirmCard()) return false; // owner 10-15
   deferredFriendlySwitch.value = null; // owner 10-05: confirming the acting player's own action drops a pending switch
   return o66ConfirmPending();
 }
@@ -10320,6 +10415,7 @@ const runAction = createInGameActionRunner({
   togglePlayerCards,
   crosshair: crosshairActions,
   setup: padSetup,
+  confirmCardLock: { locked: confirmCardLocked, nudge: nudgeConfirmCard, escape: lockedEscape, confirm: lockedConfirm },
 });
 /** Controller camera stick = the WASD glide with magnitude; fail-safe neutralise (Astra review P1). */
 const onCameraStick = createCameraStickHandler({
@@ -10434,6 +10530,7 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault();
     runAction('openChat', 'keyboard');
   } else if (hasSelection.value && /^Digit[1-6]$/.test(event.code)) {
+    if (guardConfirmCard()) return; // owner 10-15: no action hotkey under an open confirmation card
     const button = hotbarActions.value[Number(event.code.slice(5)) - 1];
     if (button && !button.used) setAction(button.mode);
   }
@@ -10690,6 +10787,9 @@ onMounted(async () => {
     renderer.onSetupClick = handleSwarmingSetupClick;
     renderer.onDugoutSetupDragStart = startSwarmingPlayerDrag;
   }
+  // Owner 10-15: the renderer's click bodies consult the single confirmation-card gate before acting.
+  renderer.pitchInputHold = confirmCardLocked;
+  renderer.onPitchInputHeld = nudgeConfirmCard;
   renderer.onPlayerClick = (playerId, clickX = 0, clickY = 0) => {
     if (pitchHeldByConfirmation()) return; // Astra review 10-04: answer the open confirmation first
     renderer?.clearUnactivatedCues(); // owner 09-08: any player click ends the End-Turn idle-player cue
@@ -13275,6 +13375,7 @@ function endTurn() {
   // Owner 2026-07-04 (interaction catalog 15): in play mode End Turn sends the
   // real clientEndTurn for the CURRENT turnMode (also closes kick-off mini-phases).
   if (!gameStore.isPlaying.value) { gameStore.demoEndTurn(); return; }
+  if (guardConfirmCard()) return; // owner 10-15: the open confirmation card is answered first
   // Astra pass 5 (10-04): with an End Activation prompt open (and nobody idle) End Turn sent clientEndTurn straight
   // over it. The open prompt is answered first.
   if (endActConfirm.value) return;
@@ -13352,6 +13453,8 @@ watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
 // these view-local prompts by itself. Sync, so no frame can slip a step out between the prompt opening and the report;
 // the store wakes the plan when the prompt closes (Confirm has cancelled it by then).
 watch(() => pitchHeldByConfirmation(), (open) => gameStore.setPlannerClientPromptHold(open), { immediate: true, flush: 'sync' });
+// Owner 10-15: a declaration menu left open when a confirmation card arrives closes with it (it is a planning surface).
+watch(confirmCardLocked, (locked) => { if (locked) ctxMenu.visible = false; }, { flush: 'sync' });
 onBeforeUnmount(() => gameStore.setPlannerClientPromptHold(false));
 // Astra review 10-04: the prompt belongs to ONE activation. It remembers whose it is and closes itself when the
 // acting player changes (the activation ended server-side, a turnover, the turn passed), so "End hand-off" can never
@@ -13566,6 +13669,7 @@ function sendChat() {
   // Astra pass 5 (10-04): a slash command (/endturn, /pass, /stuck) is a game action - held, text kept, while a
   // confirmation is open. Plain chat still sends.
   if (text.startsWith('/') && pitchHeldByConfirmation()) return;
+  if (text.startsWith('/') && guardConfirmCard()) return; // owner 10-15 (Astra confirmlock-3): every covered card
   if (text) {
     // Owner 2026-07-08: a leading '/' routes to the DEV CONSOLE (e.g. /stuck to pass a
     // stuck turn) instead of being sent as chat.
@@ -14241,7 +14345,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="entry.action" /><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -14305,7 +14409,7 @@ function sendChat() {
              (same Space binding shown), shown while the Blitz/Block stage is armed. Clickable too. -->
         <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="confirm-move confirm-aggro" tone="aggressive" :label="aggroConfirmLabel"
-          :shortcut-code="settings.confirmKey" @activate="confirmAggroStage()" />
+          :shortcut-code="settings.confirmKey" @activate="guardConfirmCard() || confirmAggroStage()" />
         <div v-if="blitzConfirmCostNote && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="blitz-confirm-cost" data-testid="blitz-confirm-cost">{{ blitzConfirmCostNote }}</div>
         <!-- #48 (owner, confirm-bar parity): the same bar for a nominated o66 MOVE route / FOUL (mirrors the
@@ -15060,13 +15164,13 @@ function sendChat() {
         <!-- #91 (owner): declared-but-unconfirmed blitz + a floor-tile click → "convert to a plain Move?". Accept
              un-consumes the blitz (server-safe) and moves; right-click (or Keep Blitz) dismisses with NO wire,
              leaving the blitz declaration pending. -->
-        <PitchConfirmationPanel v-if="blitzMoveModalTile" title="Keep Blitz?" label="Blitz conversion confirmation"
+        <PitchConfirmationPanel v-if="blitzMoveModalTile" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Keep Blitz?" label="Blitz conversion confirmation"
           :position-style="reactivePromptStyle('blitzMove')" draggable
           @drag-start="startReactivePromptDrag('blitzMove', $event)" @contextmenu.prevent="dismissBlitzMoveModal()">
           You've declared a Blitz. Convert to a plain Move instead?
           <template #actions>
             <button class="rr-use" @click="acceptBlitzMoveConvert()">Convert to Move</button>
-            <button class="rr-decline" @click="dismissBlitzMoveModal()">Keep Blitz</button>
+            <button class="rr-decline" data-pad-cancel @click="dismissBlitzMoveModal()">Keep Blitz</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -15311,7 +15415,7 @@ function sendChat() {
              (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects).
              Owner 10-05: the card is the modern confirmation panel (the pick-me-up / End Turn? language), still
              anchored beside the tentacler and draggable. -->
-        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" title="Use Tentacles?" label="Tentacles decision"
+        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" v-pad-focus title="Use Tentacles?" label="Tentacles decision"
           compact draggable test-id="tentacles-panel"
           v-prompt-dodge="promptDodge('tentacles', tentaclesPick.seq)"
           :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
@@ -15319,7 +15423,7 @@ function sendChat() {
           <span>{{ tentaclerName }} can try to hold the runner</span>
           <template #actions>
             <button class="rr-use" @click="answerTentacles(true)">Use</button>
-            <button v-if="tentaclesPick.declinable" class="rr-decline" @click="answerTentacles(false)">Decline</button>
+            <button v-if="tentaclesPick.declinable" class="rr-decline" data-pad-cancel @click="answerTentacles(false)">Decline</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -15480,7 +15584,7 @@ function sendChat() {
         <PitchConfirmationPanel v-if="gameStore.state.onTheBallMover" title="On the Ball"
           label="On the Ball movement confirmation" test-id="on-the-ball-confirmation" compact>
           Finish the reaction movement when ready.
-          <template #actions><button class="pick-confirm" @click="gameStore.endActivation()">End Move</button></template>
+          <template #actions><button class="pick-confirm" @click="guardConfirmCard() || gameStore.endActivation()">End Move</button></template>
         </PitchConfirmationPanel>
 
         <!-- #85 Quick Snap: after a player is selected, its valid ≤1/empty target squares carry INVISIBLE click
@@ -15539,7 +15643,7 @@ function sendChat() {
              has fired. Only the four property-derived offers carried by the store are rendered; a plain player never
              mounts this modal. The normal Blitz declare already happened; the choice changes only clientBlock's
              existing USING_* flavor flag. -->
-        <BlockAttackConfirmModal v-if="blockAttackConfirm" :preview="blockAttackConfirm.preview"
+        <BlockAttackConfirmModal v-if="blockAttackConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :preview="blockAttackConfirm.preview"
           :target-name="blockAttackConfirm.targetName" @confirm="confirmAggroStage()"
           @cancel="o66AggroStage = null" />
         <!-- Controller support P2b (owner round 3): the controller-only block declaration ask - A Block, X the special,
@@ -15618,7 +15722,7 @@ function sendChat() {
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
         <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze, 'pass-destination': o66TargetCue.throwRoll != null }"
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
-          @click="o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton())">
+          @click="guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton()))">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
@@ -16125,7 +16229,7 @@ function sendChat() {
           <button v-for="(action, i) in hotbarActions" :key="action.mode"
             :data-active="actionMode === action.mode" :data-used="action.used" :disabled="action.used"
             :title="action.used ? `${action.label} — used this turn` : `${action.label} (${i + 1})`"
-            @click="setAction(action.mode)">
+            @click="guardConfirmCard() || setAction(action.mode)">
             <span class="hotbar-emoji">{{ action.icon }}</span>
             <span class="hotbar-nr">{{ i + 1 }}</span>
             <span class="hotbar-label">{{ action.label }}</span>
@@ -16152,7 +16256,7 @@ function sendChat() {
 
         <!-- Owner 2026-07-04c/d: armed-action confirm modal ("Perform foul?" …) —
              compact (33% smaller) + DRAGGABLE by its body (owner 2026-07-04d). -->
-        <ActionTargetConfirmModal v-if="actionModal" :key="actionModal.seq" :modal="actionModal"
+        <ActionTargetConfirmModal v-if="actionModal" :key="actionModal.seq" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :modal="actionModal"
           :position-style="actionModalStyle" :foul-skull-url="blockSkullUrl"
           @drag-start="startActionModalDrag" @confirm="renderer?.confirmArmedAction()"
           @cancel="renderer?.cancelArmedAction()" />
@@ -20495,6 +20599,27 @@ function sendChat() {
 /* (Owner 08-19: the 07-08 full-line side colours are retired — the seat colour rides the
    coach-name span only, spectators/unknown senders stay plain.) */
 .log [data-kind='system'] { color: var(--ui-muted); }
+/* Owner 10-15 (Settings > Display > Log > Log style "Graphical"): each line is a ROW - separated from its neighbours,
+   its background tinted with the acting team's colour (the log dice's home blue #1860c5 / away red #9a0f12 at a low
+   alpha so the text keeps its contrast; neutral rows for lines with no single team), and a fixed icon cell on the left
+   (bare icons, LogActionPlate.vue). Wrapped lines hang under the text, not under the icons. Zebra: every other row of
+   the same colour is a shade lighter, so consecutive same-team rows still read as separate rows. Text style = none of
+   this applies (no class, no row attribute, no icon nodes). The log panel is always dark (its own gradient), so one
+   tint set serves every UI theme. */
+.log.log-graphical { --log-icon-cell: 2.8em; --log-icon-gap: 0.35em; padding-left: 0; padding-right: 0; }
+.log.log-graphical > span[data-kind] {
+  display: block;
+  padding: 0.14em 0.6rem 0.14em calc(0.35rem + var(--log-icon-cell) + var(--log-icon-gap));
+  text-indent: calc(-1 * (var(--log-icon-cell) + var(--log-icon-gap)));
+  border-bottom: 1px solid rgb(255 255 255 / 0.09);
+}
+.log.log-graphical > span[data-kind] * { text-indent: 0; }
+.log.log-graphical > span[data-row-side='home'] { background: rgb(24 96 197 / 0.24); }
+.log.log-graphical > span[data-row-side='home']:nth-child(even) { background: rgb(24 96 197 / 0.17); }
+.log.log-graphical > span[data-row-side='away'] { background: rgb(154 15 18 / 0.30); }
+.log.log-graphical > span[data-row-side='away']:nth-child(even) { background: rgb(154 15 18 / 0.21); }
+.log.log-graphical > span[data-row-side='neutral'] { background: transparent; }
+.log.log-graphical > span[data-row-side='neutral']:nth-child(even) { background: rgb(255 255 255 / 0.035); }
 .chat { flex: none; } /* owner 09-23: the entry keeps its grown height; the log above yields */
 .chat textarea {
   display: block;

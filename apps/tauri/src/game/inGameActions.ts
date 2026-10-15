@@ -5,6 +5,7 @@
  * code. Kept out of the 20k-line view so tests drive the real runner.
  */
 import { requestPlayerCard, type ControlActionId, type InputSource } from './controls';
+import { lockedControlAction } from './logic/confirmCardLock';
 
 export interface InGameActionDeps {
   /** An app-shell modal (Settings, the setup wizard rerun) owns input: the shell's handler answers instead. */
@@ -45,6 +46,20 @@ export interface InGameActionDeps {
   crosshair?: CrosshairActionDeps;
   /** Controller support P2b: the setup shortcuts (absent / false = not in setup, the press goes on). */
   setup?: SetupPadDeps;
+  /** Owner 10-15: a coach confirmation card is open (game/logic/confirmCardLock.ts). Absent = never locked. */
+  confirmCardLock?: ConfirmCardLockDeps;
+}
+
+/** Owner 10-15: "No other actions can be planned while any confirm modal is up." While `locked()`, gameplay actions
+ *  are swallowed (`nudge` draws the eye to the card), Esc / Start runs only the card's own Esc answer, the confirm key
+ *  only the card's own confirm; camera, chat, Log, roster and display toggles keep working (lockedControlAction). */
+export interface ConfirmCardLockDeps {
+  locked(): boolean;
+  nudge(): void;
+  /** Esc with a card open: the card's own Esc answer, else nothing (the host nudges). */
+  escape(): void;
+  /** The confirm key with a card open: true = handled (answered, consumed or swallowed). */
+  confirm(): boolean;
 }
 
 /** P2b (owner round 2): setup — LB places the current player on the next free line-of-scrimmage square, RB sends it to
@@ -74,6 +89,16 @@ export function createInGameActionRunner(deps: InGameActionDeps): (id: ControlAc
     if (deps.shellModalOpen()) return false;
     if (deps.inputBlocked(source)) return source === 'controller'; // swallowed: never reaches the shell either
     if (source === 'controller' && deps.unknownPanelGate?.(id, source)) return true;
+    if (deps.confirmCardLock?.locked()) {
+      const verdict = lockedControlAction(id);
+      if (verdict === 'escape') {
+        if (deps.rosterOpen()) deps.closeRoster(); // the roster pop-out is non-game UI: Esc still closes it first
+        else deps.confirmCardLock.escape();
+        return true;
+      }
+      if (verdict === 'confirm') return deps.confirmCardLock.confirm();
+      if (verdict === 'swallow') { deps.confirmCardLock.nudge(); return true; }
+    }
     switch (id) {
       case 'gameMenu':
         // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else).

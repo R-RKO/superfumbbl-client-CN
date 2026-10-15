@@ -1,5 +1,6 @@
 import { createFollowupProjection, reduceFollowupProjection, type FollowupProjection } from '../followupProjection';
 import { LOG_TAG_KINDS } from '../logTags';
+import { isLogActionPlate } from '../logActionPlates';
 import { TEAM_SIDES } from '../teamSide';
 import { D6_LOG_TOKEN_KINDS } from '../d6Log';
 import { OBSERVED_MOVEMENT_PHASES } from '../movementOccurrenceProjection';
@@ -387,6 +388,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
  *  still runs on every validation. */
 const validatedLogRows = new WeakSet<object>();
 const deepFrozenRow = (entry: SpectatorLogEntry): boolean => Object.isFrozen(entry) && Object.isFrozen(entry.source)
+  && (entry.action === undefined || Object.isFrozen(entry.action))
   && [entry.d6, entry.blockDice, entry.names, entry.tags].every((tokens) => Object.isFrozen(tokens) && tokens.every((token) => Object.isFrozen(token)));
 
 export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
@@ -436,14 +438,21 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   if (!object(p.reportDedupe) || !keys(p.reportDedupe, ['signature', 'commandNr', 'sourceSequence']) || !nullableString(p.reportDedupe.signature)
     || !(p.reportDedupe.commandNr === null || Number.isSafeInteger(p.reportDedupe.commandNr))
     || !Number.isSafeInteger(p.reportDedupe.sourceSequence) || p.reportDedupe.sourceSequence < 0 || p.reportDedupe.sourceSequence > value.cursor.sequence) fail(10);
-  if (!object(p.logContext) || !keys(p.logContext, ['lastBlockAttackerId', 'lastBlockDefenderId', 'lastBlockChoosingTeamId'])
+  // owner 10-15: the Graphical-log latches are optional so checkpoints written before them still validate
+  const contextKeys = object(p.logContext) ? Object.keys(p.logContext) : [];
+  const requiredContextKeys = ['lastBlockAttackerId', 'lastBlockDefenderId', 'lastBlockChoosingTeamId'];
+  const optionalContextKeys = ['lastHandOverCatcherId', 'lastRerollSource', 'lastRerollPlayerId', 'lastRerollTeamId'];
+  if (!object(p.logContext) || !requiredContextKeys.every((k) => contextKeys.includes(k))
+    || !contextKeys.every((k) => requiredContextKeys.includes(k) || optionalContextKeys.includes(k))
     || !Object.values(p.logContext).every(nullableString) || !strings(p.gazeVictimIds) || !strings(p.recoveringIds)) fail(11);
   if (value.clock !== null && (!object(value.clock) || !keys(value.clock, ['gameTime', 'turnTime', 'receivedMonotonicAt']) || !Object.values(value.clock).every(finite))) fail(12);
   if (!Array.isArray(p.log) || p.log.length > 500) fail(13);
   for (const entry of p.log) {
     if (!object(entry) || !source(entry.source as SpectatorCursor)) fail(14);
     if (validatedLogRows.has(entry)) continue;
-    if (!keys(entry, ['text', 'd6', 'blockDice', 'names', 'tags', 'receivedWallAt', 'ingressOrder', 'source']) || typeof entry.text !== 'string'
+    // Owner 10-15: an optional `action` plate (kind + acting team's server side) rides a report's first line.
+    const rowKeys = ['text', 'd6', 'blockDice', 'names', 'tags', 'receivedWallAt', 'ingressOrder', 'source'];
+    if (!(keys(entry, rowKeys) || (keys(entry, [...rowKeys, 'action']) && isLogActionPlate(entry.action))) || typeof entry.text !== 'string'
       || ![entry.d6, entry.blockDice, entry.names, entry.tags].every(Array.isArray) || !finite(entry.receivedWallAt) || !Number.isSafeInteger(entry.ingressOrder) || entry.ingressOrder < 0) fail(14);
     for (const tokens of [entry.d6, entry.blockDice, entry.names, entry.tags]) for (const token of tokens) {
       if (!object(token) || !Number.isInteger(token.index) || Number(token.index) < 0 || Number(token.index) >= entry.text.length) fail(15);

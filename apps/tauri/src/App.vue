@@ -3022,6 +3022,14 @@ onBeforeUnmount(() => {
               <input v-model="settings.logNeededAsNumbers" type="checkbox" />
             </label>
             <p class="hint">The roll needed shows as a number instead of a die.</p>
+            <label class="row">
+              <span>Log style</span>
+              <select v-model="settings.logStyle">
+                <option value="text">Text</option>
+                <option value="graphical">Graphical</option>
+              </select>
+            </label>
+            <p class="hint">Graphical: each line is a row in the acting team's colour, with the action's icon (and a reroll's source) on the left.</p>
           </fieldset>
 
           <fieldset class="settings-group">

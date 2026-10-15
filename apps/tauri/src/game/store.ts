@@ -61,7 +61,8 @@ import {
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
-import { createReportLogContext, formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
+import { createReportLogContext, formatReportLines, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
+import type { LogActionPlate } from './logActionPlates';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
 import type { LogNameToken } from './logNames';
@@ -328,6 +329,9 @@ export interface LogEntry {
   /** Owner 08-18: kind-tagged decoration runs in `text` (block-line titles, the armour
    *  shield glyph) -- format-time truth, rendered by the view; the text itself is untouched. */
   tags?: LogTagToken[];
+  /** Owner 10-15: the action plate (icon + acting team's server side) for Settings > Display > Log > Action icons.
+   *  Display-only: bug-report and diagnostic text read `text` alone. */
+  action?: LogActionPlate;
   /** Server-authoritative talk author classification; missing team/coach truth stays neutral. */
   side?: ChatAuthorSide;
 }
@@ -1043,6 +1047,8 @@ const legacyState = reactive({
   /** Locally staged Zap target. Selection is reversible; only explicit confirmation emits clientWizardSpell. */
   wizardTargetConfirm: null as {
     square: [number, number]; playerId: string; playerName: string; requiredRoll: number; seq: number;
+    /** Owner 10-15 (confirmation-card lock): the wizardSpell occurrence this confirmation answers. */
+    answersInstance?: string | null;
   } | null,
   /** Owner 07-04d: PERSISTENT admin broadcast (serverAdminMessage), top-right; acknowledge to clear. */
   adminMessage: null as string | null,
@@ -1260,7 +1266,7 @@ const legacyState = reactive({
     seq: number;
   } | null,
   /** Owner 07-04: REFEREE SEND-OFF prompt (spotted foul / secret weapon) — argue, bribe, or pass; from the `bribes`/`argueTheCall` dialog addressed to my team. */
-  sendOff: null as { playerId: string; playerName: string; square: [number, number] | null; canBribe: boolean; canArgue: boolean; seq: number } | null,
+  sendOff: null as { playerId: string; playerName: string; square: [number, number] | null; canBribe: boolean; canArgue: boolean; seq: number; /** the dialog occurrence it answers (confirmation-card lock) */ answersInstance?: string | null } | null,
   /** Send-off ROLL outcome cinematic. ⚠ `sentOff` = `!successful` (owner g350 #12: EVERY fail ejects, stays only on success — argue 6 / 5+ biased, bribe 2+); natural-1 argue also bans the coach. */
   sendOffResult: null as { kind: 'argue' | 'bribe'; success: boolean; sentOff: boolean; coachBanned: boolean; rerolled: boolean; roll: number; playerName: string; side: 'home' | 'away'; logoUrl: string | null; coach: string; seq: number } | null,
   /** Passive, opponent-only progress through the other coach's authoritative send-off election. */
@@ -1281,6 +1287,8 @@ const legacyState = reactive({
   /** Generic interactive PLAYER PICK — eligibleIds stays the server set; FIX 7 splits its render glyph by side. Click answers (or Decline when declinable). Consumers arm via armPlayerPick: playerChoice(19)/interception(40)/touchback(17)/bloodlust(42)/kickoffReturn(16)/Zap(59)/gaze(38). */
   playerPick: null as {
     key: string; prompt: string; eligibleIds: ClassifiedPlayerPickIds; declinable: boolean;
+    /** Owner 10-15 (confirmation-card lock): the server dialog occurrence this pick answers (null = client-owned). */
+    answersInstance?: string | null;
     /** FIX 7: client-rendering split of the unchanged server eligible set, relative to the picking coach. */
     friendlyIds: string[]; oppositionIds: string[]; unknownIds: string[];
     /** confirm mode (CSV 17): clicks SELECT + a Confirm button commits (touchback-style); off = first click answers (interception-style). */
@@ -1293,7 +1301,8 @@ const legacyState = reactive({
     seq: number;
   } | null,
   /** Owner 07-04 (catalog 0.2): generic YES/NO prompt (server text verbatim) — consumers: yesOrNoQuestion(65, never seen on wire) / regen-reroll(33) / confirmEndAction(64). */
-  yesNo: null as { key: string; text: string; bullets?: string[]; yesLabel: string; noLabel: string; seq: number } | null,
+  /** `answersDialog`: the server dialogId this card answers (null = a client-owned question with its own lifecycle). */
+  yesNo: null as { key: string; text: string; bullets?: string[]; yesLabel: string; noLabel: string; seq: number; answersDialog: string | null; answersInstance?: string | null } | null,
   /** Owner 07-04 (catalog 1.1): interactive FOLLOW-UP choice — chip card ("Follow up"/"Stay") anchored offset-near the vacated block square; `from` = attacker's current square. */
   followupChoice: null as { playerId: string; square: [number, number]; from: [number, number]; seq: number; instanceKey?: string | null } | null,
   /** SPECTATOR variant — passive "X follows up / stays" indicator (aura + chip, no buttons) at the chosen square. */
@@ -5898,10 +5907,10 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection') {
+function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate) {
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
   const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
-  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
+  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
 }
 /** Owner 10-10: my own follow-up answer as a match log line ("<Player> does not follow the block"), the name tagged
@@ -5913,10 +5922,12 @@ function logFollowUpChoice(playerId: string | null | undefined, follow: boolean)
   const home = !!g && ((g.teamHome as { playerArray?: { playerId?: string }[] } | undefined)?.playerArray ?? []).some((p) => p.playerId === id);
   const away = !!g && ((g.teamAway as { playerArray?: { playerId?: string }[] } | undefined)?.playerArray ?? []).some((p) => p.playerId === id);
   const names: LogNameToken[] | undefined = home || away ? [{ index: 0, length: name.length, team: home ? 'home' : 'away', playerId: id }] : undefined;
-  log('report', `${name} ${follow ? 'follows the block' : 'does not follow the block'}`, undefined, undefined, undefined, names);
+  // Owner 10-15: the follow-up belongs to the block, so it wears the blocker's Block plate when action icons are on.
+  const action: LogActionPlate = { kind: 'block', side: home ? 'home' : away ? 'away' : null };
+  log('report', `${name} ${follow ? 'follows the block' : 'does not follow the block'}`, undefined, undefined, undefined, names, undefined, undefined, action);
 }
-function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[]): void {
-  log(kind, text, side, d6, blockDice, names, tags, 'match');
+function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], action?: LogActionPlate): void {
+  log(kind, text, side, d6, blockDice, names, tags, 'match', action);
 }
 const railDiagnostic: RailDiagnosticSink = (diagnostic) => {
   log('system', `⚠ rail: ${diagnostic.message}`);
@@ -7836,6 +7847,7 @@ function maximumCarnageOnModelApplied(): void {
   }
   askYesNo({
     key: `maximumCarnage:${entryKey}`,
+    answersDialog: null, // client-owned
     text: 'Maximum Carnage — make a second chainsaw attack?',
     yesLabel: 'Confirm',
     noLabel: 'Decline',
@@ -8766,6 +8778,9 @@ function applyFrameContents(frame: QueuedFrame) {
     if (hint) setBlockDefenderHint(String((hint as { defenderId?: unknown }).defenderId), visibleReportLogContext);
   }
   for (const [reportIndex, report] of reports.entries()) {
+    // Owner 10-15 (Graphical log): an undisplayed handOver report still marks the next catch as the Hand-off's, and a
+    // reroll grant the source of the rerolled roll line it leads to.
+    noteReportLogContext(report, visibleReportLogContext);
     if (String(report.reportId) === 'dwarfenWisdomRoll') {
       const roll = Number(report.roll);
       const teamId = String(report.teamId ?? '');
@@ -8822,7 +8837,7 @@ function applyFrameContents(frame: QueuedFrame) {
         : report;
       const lines = formatReportLines(reportForDisplay, game.value, visibleReportLogContext);
       const surfaceLog = () => {
-        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags);
+        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action);
       };
       const fireballReport = (String(report.reportId) === 'spellEffectRoll' && String(report.specialEffect) === 'fireball')
         || (String(report.reportId) === 'injury' && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
@@ -10662,6 +10677,7 @@ function offerGazeToMoveAfterBloodlust(playerId: string): void {
   gazeToMoveOffer = { playerId, route: [], afterBloodlust: true, retry: false };
   askYesNo({
     key: `${GAZE_TO_MOVE_KEY}${playerId}`,
+    answersDialog: null, // client-owned
     text: `Bloodlust failed. ${playerName(g, playerId) || 'The vampire'}'s Hypnotic Gaze was not rolled. Convert to a Move, or keep the Hypnotic Gaze? Converting gives up the Hypnotic Gaze for this activation.`,
     yesLabel: GAZE_TO_MOVE_YES_LABEL,
     noLabel: GAZE_TO_MOVE_NO_LABEL,
@@ -10690,6 +10706,7 @@ function offerGazeToMove(playerId: string, route: [number, number][]): false {
   gazeToMoveOffer = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]), afterBloodlust: false, retry: false };
   askYesNo({
     key: `${GAZE_TO_MOVE_KEY}${playerId}`,
+    answersDialog: null, // client-owned
     text: 'You\'ve declared a Hypnotic Gaze. Convert to a plain Move instead? The Gaze can\'t be used again this activation.',
     yesLabel: GAZE_TO_MOVE_YES_LABEL,
     noLabel: GAZE_TO_MOVE_NO_LABEL,
@@ -10780,6 +10797,7 @@ function raiseGazeToMoveRetry(): void {
   gazeToMoveOffer = { playerId, route: gazeToMoveRetryRoute, afterBloodlust: false, retry: true };
   askYesNo({
     key: `${GAZE_TO_MOVE_KEY}${playerId}:retry`,
+    answersDialog: null, // client-owned
     text: GAZE_TO_MOVE_RETRY_TEXT,
     yesLabel: GAZE_TO_MOVE_RETRY_LABEL,
     noLabel: GAZE_TO_MOVE_WAIT_LABEL,
@@ -13312,7 +13330,8 @@ function plannerRetireQuietly(reason: string) {
   plannerSet(null); plannerClearAbort();
   if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
   state.blitzBlockChoice = null; state.foulChoiceHold = null; foulChoice = null;
-  log('system', `plan ended — ${reason}.`);
+  // Owner 10-15: no em dash in user-facing text.
+  log('system', `Plan ended: ${reason}.`);
 }
 function plannerFlush(reason: string) {
   if (!plannerPlan) return;
@@ -19214,6 +19233,7 @@ function surfaceSendOff(g: GameJson, dp: Record<string, unknown> | undefined) {
   const canBribe = dp?.dialogId === 'bribes' && Number(dp?.maxNrOfBribes ?? 0) > 0;
   const canArgue = dp?.dialogId === 'argueTheCall' && sendOffAnsweredKey !== playerId;
   state.sendOff = {
+    answersInstance: liveDialogInstance(), // owner 10-15: the lock is held only while this occurrence is live
     playerId,
     playerName: playerName(g, playerId),
     square: sq && sq[0] >= 0 && sq[0] < 26 && sq[1] >= 0 && sq[1] < 15 ? [sq[0], sq[1]] : null,
@@ -19879,6 +19899,7 @@ function armPlayerPick(opts: {
   const eligibleIds = Object.assign([...opts.eligibleIds], split) as ClassifiedPlayerPickIds;
   state.playerPick = {
     key: opts.key,
+    answersInstance: liveDialogId() === 'playerChoice' ? liveDialogInstance() : null, // owner 10-15: lock liveness
     prompt: opts.prompt,
     eligibleIds,
     friendlyIds: split.friendlyIds,
@@ -20018,14 +20039,49 @@ function injuryDecisionPending(): boolean {
 // 0.2 yes/no: a two-button card rendering any accompanying server text verbatim.
 let yesNoResolver: ((yes: boolean) => void) | null = null;
 // `bullets` (optional): the main-view card shows `text`'s intro line + a <ul>; `text` still carries the full message for text-only surfaces.
-function askYesNo(opts: { key: string; text: string; bullets?: string[]; yesLabel?: string; noLabel?: string; onAnswer: (yes: boolean) => void }) {
+// Owner 10-15 (confirmation-card lock): `answersDialog` = the server dialog the card answers. Omitted = the dialog live
+// when the card is asked (every server-driven card is asked from that dialog's followup); a client-owned question
+// passes null. A card answering a server dialog counts for the lock only while that dialog is live, and it is retired
+// when the server clears or replaces it (resolvePlayFollowups), so a server clear always releases the lock.
+function askYesNo(opts: { key: string; text: string; bullets?: string[]; yesLabel?: string; noLabel?: string; answersDialog?: string | null; onAnswer: (yes: boolean) => void }) {
   if (state.yesNo?.key === opts.key) return;
   yesNoResolver = opts.onAnswer;
   state.yesNo = {
     key: opts.key, text: opts.text, ...(opts.bullets ? { bullets: opts.bullets } : {}),
     yesLabel: opts.yesLabel ?? 'Yes', noLabel: opts.noLabel ?? 'No',
     seq: (state.yesNo?.seq ?? 0) + 1,
+    answersDialog: opts.answersDialog !== undefined ? opts.answersDialog : (liveDialogId() || null),
   };
+  // Astra confirmlock-5: the OCCURRENCE (instance key: dialog, addressee, discriminator), not just the type: a
+  // replacement dialog of the same type (the opponent's confirmEndAction) is not the question this card asks.
+  const answers = state.yesNo.answersDialog;
+  state.yesNo.answersInstance = answers && liveDialogId() === answers ? liveDialogInstance() : null;
+}
+/** The live dialog's instance key (null = none). */
+function liveDialogInstance(): string | null {
+  try { return dialogInstanceKey(game.value); } catch { return null; }
+}
+/** Owner 10-15: a card's server dialog is still the one it answers: the same dialogId and, when the card recorded it,
+ *  the same occurrence (present only: not checked for answered / outlived; that is cardDialogLive). */
+function cardDialogPresent(dialogIds: readonly string[], instance: string | null | undefined): boolean {
+  const id = liveDialogId();
+  if (!id || !dialogIds.includes(id)) return false;
+  return !instance || liveDialogInstance() === instance;
+}
+/** Owner 10-15 (confirmation-card lock): the card's dialog occurrence is live and unanswered: it may hold the lock. */
+function cardDialogLive(dialogIds: readonly string[], instance: string | null | undefined): boolean {
+  return cardDialogPresent(dialogIds, instance) && serverDialogLive(dialogIds);
+}
+/** The live server dialogId ('' = none). */
+function liveDialogId(): string {
+  return String((game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
+}
+/** Owner 10-15: one of `dialogIds` is the live server dialog: present, not outlived by its phase, not already answered. */
+function serverDialogLive(dialogIds: readonly string[]): boolean {
+  const id = liveDialogId();
+  if (!id || !dialogIds.includes(id)) return false;
+  if (staleDialogOutlivedPhase(id, game.value?.turnMode)) return false;
+  return !dialogAlreadyAnswered();
 }
 function clearYesNo() {
   yesNoResolver = null;
@@ -20545,6 +20601,16 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // A confirm-end card dies with its server dialog (cleared / replaced). Sends nothing.
   if (state.yesNo?.key.startsWith('confirmEnd:')
     && (game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId !== 'confirmEndAction') clearYesNo();
+  // Owner 10-15 (confirmation-card lock): EVERY card answering a server dialog dies with that dialog (cleared /
+  // replaced), so a server clear always releases the lock. Sends nothing. Client-owned questions keep their lifecycle.
+  // Astra confirmlock-5: by OCCURRENCE: a replacement of the same type (another coach's, another player's) retires it too.
+  if (state.yesNo?.answersDialog && !cardDialogPresent([state.yesNo.answersDialog], state.yesNo.answersInstance)) clearYesNo();
+  // Astra confirmlock-4: the referee card and the Bloodlust decision beat have no meaning without their dialog.
+  if (state.sendOff && !cardDialogPresent(['bribes', 'argueTheCall'], state.sendOff.answersInstance)) { state.sendOff = null; sendOffKey = ''; }
+  if (state.bloodlust?.stage === 'decision' && !cardDialogPresent(['bloodlustAction'], state.bloodlust.instanceKey)) state.bloodlust = null;
+  // The Shadowing / Tentacles cards answer one playerChoice occurrence; a replacement (an opponent-addressed one) ends them.
+  if (state.playerPick && /^pchoice:(shadowing|tentacles):/.test(state.playerPick.key) && state.playerPick.answersInstance
+    && !cardDialogPresent(['playerChoice'], state.playerPick.answersInstance)) clearPlayerPick();
   // A pending gaze End (and any Yes it carries) is dropped the moment its occurrence is not the live one - the acting
   // player cleared or changed, another action, turn or game: the server answered some other way and nothing is left
   // for that Yes to answer. Astra P2 (10-08): any OTHER frame (a clock / timeout-availability model sync, chat) is not
@@ -20567,6 +20633,8 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     liveUseInducementOffer = null;
   }
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
+  // Astra confirmlock-6: a replacement wizardSpell occurrence (the opponent's) retires the stale Zap confirmation.
+  else if (state.wizardTargetConfirm?.answersInstance && !cardDialogPresent(['wizardSpell'], state.wizardTargetConfirm.answersInstance)) clearWizardSpellElection();
   if (initialDialogId !== 'reRollRegenerationMultiple') clearRegenerationElection();
   if (initialDialogId !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
   if (initialDialogId !== 'reRollForTargets') { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
@@ -24375,6 +24443,10 @@ export const gameStore = {
   /** Astra 10-14: the card to draw = revealed election, else a watched card lingering to its 450 ms floor. */
   apothecaryCardVisible,
   apothecaryCardLingering,
+  /** Owner 10-15 (confirmation-card lock): one of these dialogIds is the live, unanswered server dialog. */
+  serverDialogLive,
+  /** Owner 10-15: the card's own dialog occurrence (instance key, when recorded) is live and unanswered. */
+  cardDialogLive,
   reportMovementPresentationRecoveryDiagnostic(message: string, error: unknown): void {
     log('system', `⚠ ${message}: ${error instanceof Error ? error.message : String(error)}`);
   },
@@ -24583,6 +24655,7 @@ export const gameStore = {
             playerName: playerName(game.value, target.playerId),
             requiredRoll: wizardZapRequiredRoll(target),
             seq: (state.wizardTargetConfirm?.seq ?? 0) + 1,
+            answersInstance: liveDialogInstance(), // owner 10-15: the lock holds only while this occurrence is live
           };
           return;
         }
@@ -28172,6 +28245,7 @@ export const gameStore = {
     const key = `kickEmConfirm:${occurrence}:${defenderId}`;
     askYesNo({
       key,
+      answersDialog: null, // client-owned
       text: `Use Kick 'Em while they're down on ${playerName(g, defenderId)}?`,
       yesLabel: "Kick 'Em",
       noLabel: 'Not yet',
@@ -29106,7 +29180,7 @@ export const gameStore = {
     for (const report of sampleReports) {
       if (settings.debugLog || isDiceRoll(report) || isAlwaysVisibleEffectReport(report)) {
         for (const formatted of formatReportLines(report, g, visibleReportLogContext)) {
-          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags);
+          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, undefined, formatted.action);
         }
       }
     }

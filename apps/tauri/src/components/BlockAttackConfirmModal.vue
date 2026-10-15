@@ -23,7 +23,7 @@ defineEmits<{ confirm: []; cancel: [] }>();
     <div class="attack-detail">{{ preview.detail }}</div>
     <template #actions>
       <button type="button" class="confirm" @click.stop="$emit('confirm')">Confirm</button>
-      <button type="button" @click.stop="$emit('cancel')">Cancel</button>
+      <button type="button" data-pad-cancel @click.stop="$emit('cancel')">Cancel</button>
     </template>
   </PitchConfirmationPanel>
 </template>

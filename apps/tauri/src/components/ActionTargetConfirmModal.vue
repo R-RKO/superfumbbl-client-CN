@@ -51,7 +51,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
     </div>
     <template #actions>
       <button type="button" class="sendoff-btn argue" @click.stop="$emit('confirm')">Confirm</button>
-      <button type="button" class="sendoff-btn pass" @click.stop="$emit('cancel')">Cancel</button>
+      <button type="button" class="sendoff-btn pass" data-pad-cancel @click.stop="$emit('cancel')">Cancel</button>
     </template>
   </PitchConfirmationPanel>
 </template>

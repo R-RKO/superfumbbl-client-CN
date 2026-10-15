@@ -3078,6 +3078,15 @@ export class PitchRenderer {
    *  end (finishPresentationStepTween), never at tween start — otherwise the digit led the piece by a full
    *  step. Queued per mover; flushed on completion, or when a newer move for that mover is stamped. */
   private pendingTrailNumbers = new Map<string, { sq: [number, number]; n: number; color: number; outline: number }[]>();
+  /** Owner 10-15 (Astra passes 1-2): where the token stood when a movement fence retired its drive, keyed by the
+   *  fence's reconciliation key; those digits stay bare until that reconciliation's bridge starts. */
+  private reconcileRestSquares = new Map<string, { key: string; leave: string[] }>();
+  /** Owner 10-15 (Astra passes 2-3): movers whose drive retired while their tile still had a digit queued. The token is
+   *  carried on by whatever replaces the tile (a model-refresh carry tween, a fence bridge), so the digit waits until
+   *  that movement has settled: no tween and no reconciliation pending for the mover (releaseSettledTrailNumbers, run
+   *  every movement frame and at every drive / fence / bridge transition). A new drive for the mover takes the queue
+   *  back (its own tile flushes it). */
+  private settlingTrailNumbers = new Set<string>();
   /** App background colour (set at init) — used for the 'auto' trail contrast. */
   private bgColor = 0x14161a;
   private resolveTrailColor(): number {
@@ -3373,6 +3382,7 @@ export class PitchRenderer {
     if (Math.abs(app.renderer.resolution * this.world.scale.x - this.lastWalkerDeviceScale) > 1e-4) markWalkersDirty();
     // Owner 10-13 / Astra (MAJOR 2): the thrown player's landing hold is woken here, every frame, not only by refresh().
     if (this.modernPitchPresentation) this.tickTtmLandingWake(performance.now());
+    this.releaseSettledTrailNumbers(); // owner 10-15: a retired drive's digit waits for its replacement movement
     if (this.moveTweens.size === 0 && !walkersNeedTick(this.walkerOwnerId)) return;
     const now = performance.now();
     for (const [id, tween] of this.moveTweens) {
@@ -4540,6 +4550,14 @@ export class PitchRenderer {
    *  changes which squares are eligible or what the tap does. The host uses it to drop an armed two-click target
    *  (a "click elsewhere"). `null` = the tap was off the pitch. */
   onInertTileClick: ((coord: [number, number] | null) => void) | null = null;
+  /** Owner 10-15 ("No other actions can be planned while any confirm modal is up"): the host's single predicate "a
+   *  confirmation card this coach must answer is open". While it is true every gameplay click body (tap, right-click,
+   *  double-click, setup drag) is swallowed before it can select, plot, declare or arm; the camera (drag, wheel,
+   *  pinch), hover and Shift annotations keep working, and (owner refinement 10-15) a tap on a player only shows its
+   *  card through onInspectPlayer. Null = never held (spectator, replay, tests). */
+  pitchInputHold: (() => boolean) | null = null;
+  /** Owner 10-15: told once per swallowed gameplay gesture (the host pulses the open card). */
+  onPitchInputHeld: (() => void) | null = null;
   /** owner o66 (complete pass): an EXTRA set of clickable squares beyond `eligible` — clicks on them fire
    *  onTilePick, but they are NOT drawn as walkable move-dots. Used in PASS for the throwing-RANGE template
    *  (the reach dots show where the passer can WALK; the range squares show where it can THROW). Drawn as a
@@ -6355,6 +6373,9 @@ export class PitchRenderer {
     this.movementIntentStartedSeq = -1;
     for (const pending of this.reconciliationTimers.values()) this.cancelTimer(pending.timer);
     this.reconciliationTimers.clear();
+    this.reconcileRestSquares.clear();
+    this.pendingTrailNumbers.clear(); // owner 10-15 (Astra pass 4): no queued digit of the old game is stamped into the next
+    this.settlingTrailNumbers.clear();
     this.cancelAllPostStepConvergence();
     this.movementReconcileFence = null;
     this.cancelTimer(this.boardReconciliationTimer);
@@ -6459,6 +6480,7 @@ export class PitchRenderer {
     this.movementIntentStartedSeq = -1;
     for (const pending of this.reconciliationTimers.values()) this.cancelTimer(pending.timer);
     this.reconciliationTimers.clear();
+    this.reconcileRestSquares.clear();
     this.cancelAllPostStepConvergence();
     this.movementReconcileFence = null;
     this.cancelTimer(this.boardReconciliationTimer);
@@ -20038,6 +20060,8 @@ export class PitchRenderer {
     this.effectsLayer.addChild(label);
     this.anchorEffect(label, sx, sy, false, false, { x: 0, y: -3 }); // placed at (anchor.x, anchor.y - 3)
     this.trailNumberNodes.push({ label, sq: [sx, sy] }); // persistent — NOT flashRings (no fade); sq drives the #194 toggle
+    const key = `${sx},${sy}`;
+    label.visible = !this.playersBySquare.has(key) && !this.presentedRestSquareKeys().has(key); // owner 10-15: born hidden under the token
   }
 
   /** Remove the persistent 'numbers' trail — the activation ended (setActivePlayer) or
@@ -20058,14 +20082,78 @@ export class PitchRenderer {
 
   private clearTrailNumbers(): void {
     this.pendingTrailNumbers.clear();
+    this.settlingTrailNumbers.clear();
     for (const { label } of this.trailNumberNodes) { label.parent?.removeChild(label); label.destroy(); }
     this.trailNumberNodes = [];
   }
 
   private updateTrailNumberVisibility(): void {
+    const rest = this.presentedRestSquareKeys();
     for (const { label, sq } of this.trailNumberNodes) {
-      label.visible = !this.playersBySquare.has(`${sq[0]},${sq[1]}`);
+      const key = `${sq[0]},${sq[1]}`;
+      label.visible = !this.playersBySquare.has(key) && !rest.has(key);
     }
+  }
+
+  /** Every square whose digit must stay bare because a presented token has not yet visibly left it: the drive's rest
+   *  square plus the square a movement fence retired a drive on (Astra pass 1: the fence nulls the drive at once, but
+   *  the token only moves when startTokenReconciliation runs on the next task). A fence entry is honoured only while
+   *  its own reconciliation key is still the pending start timer, so it expires with the reconciliation (started,
+   *  not needed, cancelled, superseded or cleared) without any bookkeeping of its own. */
+  private presentedRestSquareKeys(): Set<string> {
+    const keys = new Set<string>();
+    const drive = this.presentedRestSquareKey();
+    if (drive) keys.add(drive);
+    for (const [playerId, rest] of [...this.reconcileRestSquares]) {
+      const state = this.reconcileRestState(playerId, rest.key);
+      if (state === 'expired') { this.reconcileRestSquares.delete(playerId); continue; }
+      if (state === 'waiting') for (const key of rest.leave) keys.add(key);
+    }
+    return keys;
+  }
+
+  /** Owner 10-15 wake for settlingTrailNumbers: stamp a retired drive's queued digits once the mover's replacement
+   *  movement is over. Every tween ends (ticker) and every reconciliation resolves (completion, cancel, clear), so
+   *  nothing waits forever. */
+  private releaseSettledTrailNumbers(): void {
+    if (this.settlingTrailNumbers.size === 0) return;
+    let stamped = false;
+    for (const playerId of [...this.settlingTrailNumbers]) {
+      if (this.presentationStep?.playerId === playerId) { this.settlingTrailNumbers.delete(playerId); continue; } // the new drive owns the queue
+      if (this.moveTweens.has(playerId) || this.reconciliationTimers.has(playerId)) continue;
+      this.settlingTrailNumbers.delete(playerId);
+      if (this.pendingTrailNumbers.has(playerId)) { this.flushTrailNumbers(playerId); stamped = true; }
+    }
+    if (stamped) this.updateTrailNumberVisibility();
+  }
+
+  /** A mover's drive retired: hand its queued digits (if any) to the settle wake. */
+  private settleRetiredTrailNumbers(playerId: string): void {
+    if (playerId === '__ball__' || !this.pendingTrailNumbers.has(playerId)) return;
+    this.settlingTrailNumbers.add(playerId);
+  }
+
+  /** Where a fence's reconciliation stands: start timer still pending, bridge tween running, or over. */
+  private reconcileRestState(playerId: string, key: string): 'waiting' | 'bridging' | 'expired' {
+    if (this.reconciliationTimers.get(playerId)?.key !== key) return 'expired';
+    return this.moveTweens.get(playerId)?.reconcileKey === key ? 'bridging' : 'waiting';
+  }
+
+  /** Owner 10-15 ("Ensure trail numbers hold on anim until the token leaves"): the square the PRESENTED mover is
+   *  standing on, as the drain shows it, or null while it is visibly leaving a square (its tile tween has started)
+   *  or no drive is presenting (the model draw, which the #194 occupancy toggle already covers). Under the roll-beat
+   *  hold the model is already a square (or a whole planned run) ahead of the token, so the model alone let the
+   *  digit of the square the held token still stands on show through. Derived from the store's delivered step
+   *  (server frames, paced), never from tween pixels; recomputed on every drive change, tile start and tile end, so
+   *  a hidden digit cannot stay hidden past the token: there is no pending queue to wake. */
+  private presentedRestSquareKey(): string | null {
+    const step = this.presentationStep;
+    if (!step || step.playerId === '__ball__') return null;
+    if (step.rollPending) return `${step.from[0]},${step.from[1]}`; // held on its square until the roll resolves
+    if (this.presentationStepConsumed === step) return `${step.to[0]},${step.to[1]}`; // arrived, not yet left
+    const tween = this.moveTweens.get(step.playerId);
+    if (tween?.psStep === step && !this.presentationTileStartPending) return null; // the tile tween is running: leaving
+    return `${step.from[0]},${step.from[1]}`; // delivered, but its tween has not drawn a frame yet
   }
 
   /** #150 (owner g759): the PLOTTED-PREVIEW move number — the total movement count in the BOTTOM-RIGHT
@@ -20596,6 +20684,7 @@ export class PitchRenderer {
       if (intent.occurrenceId <= this.movementReconcileFence.occurrenceId) return;
       const pending = this.reconciliationTimers.get(intent.playerId);
       if (pending) { this.cancelTimer(pending.timer); this.reconciliationTimers.delete(intent.playerId); }
+      this.updateTrailNumberVisibility(); // owner 10-15: a cancelled bridge releases its fence's rest digit
       if (this.moveTweens.get(intent.playerId)?.reconcileKey) this.moveTweens.delete(intent.playerId);
       this.movementReconcileFence = null;
     }
@@ -20672,6 +20761,14 @@ export class PitchRenderer {
       .some((occurrence) => occurrence !== undefined && occurrence > fence.occurrenceId);
     if (newerOwner) return; // a late pulse from occurrence N must never retire N+1
     this.cancelPostStepConvergence(playerId);
+    // Owner 10-15: where the token stands as this fence arrives (held for a roll, or between tiles); it keeps standing
+    // there until the bridge tween below starts, so that square's digit stays hidden until then.
+    const restBeforeFence = this.presentationStep?.playerId === playerId ? this.presentedRestSquareKey() : null;
+    // Astra pass 2: a fence that supersedes an earlier fence's still-pending reconciliation inherits its bare square
+    // (the token has not left it any more than before).
+    const leave: string[] = restBeforeFence ? [restBeforeFence] : [];
+    const priorRest = this.reconcileRestSquares.get(playerId);
+    if (priorRest && this.reconcileRestState(playerId, priorRest.key) === 'waiting') leave.push(...priorRest.leave);
 
     if (currentIntentOccurrence !== undefined && currentIntentOccurrence <= fence.occurrenceId) {
       this.cancelTimer(this.movementIntentTimer);
@@ -20690,6 +20787,9 @@ export class PitchRenderer {
       this.presentationTileStartPending = false;
       this.presentationStepConsumed = null;
     }
+    // Owner 10-15 wake: the fence retired this mover's drive (its tile tween, if any, is gone). A digit still queued for
+    // that tile lands on a square the token has not reached yet: it is stamped when the bridge below has settled.
+    if (!this.presentationStep || this.presentationStep.playerId !== playerId) this.settleRetiredTrailNumbers(playerId);
     if (this.movementPresentationCursor?.playerId === playerId
         && this.movementPresentationCursor.step.occurrenceId !== undefined
         && this.movementPresentationCursor.step.occurrenceId <= fence.occurrenceId) {
@@ -20697,13 +20797,18 @@ export class PitchRenderer {
     }
     this.movementReconcileFence = fence;
     if (coordinate) this.lastSquares.set(playerId, [coordinate[0], coordinate[1]]);
+    const reconcileKey = `movement:${fence.occurrenceId}:${fence.seq}`;
     if (coordinate) this.scheduleAuthoritativeReconciliation(
       playerId,
       coordinate,
-      `movement:${fence.occurrenceId}:${fence.seq}`,
+      reconcileKey,
       fence.expectedRttMs,
     );
     else this.scheduleTimer(() => this.refresh(), 0); // post-flush compartment renderer owns placement
+    if (coordinate && leave.length > 0) this.reconcileRestSquares.set(playerId, { key: reconcileKey, leave });
+    else this.reconcileRestSquares.delete(playerId);
+    this.updateTrailNumberVisibility();
+    this.releaseSettledTrailNumbers(); // with no bridge (no coordinate) the digit waits only for a tween already running
     this.redrawOverlays();
   }
 
@@ -20782,6 +20887,7 @@ export class PitchRenderer {
     this.presentationStepConsumed = null;
     this.movementPresentationCursor = null;
     this.pendingTrailNumbers.clear();
+    this.settlingTrailNumbers.clear();
     this.o66MovePath.clear();
     for (const [playerId, tween] of [...this.moveTweens]) {
       if (tween.psStep || tween.movementIntent || tween.reconcileKey || tween.postStepCorrectionKey) this.moveTweens.delete(playerId);
@@ -21005,6 +21111,7 @@ export class PitchRenderer {
     this.flushTrailNumbers(playerId); // owner 09-05: the piece has arrived — NOW the square's number appears
     const completedStep = tween.psStep;
     this.notePresentationTweenComplete(tween); // step-stutter: this tile is animated OUT — never replay it
+    this.updateTrailNumberVisibility(); // owner 10-15: the arrival square's digit stays hidden until the token leaves it
     this.adCompletedMotionTargets.set(playerId, { x: end.x, y: end.y });
     if (playerId !== '__ball__') this.onAnimDone?.('walk', playerId, completedStep?.seq);
     this.moveTweens.delete(playerId);
@@ -21130,8 +21237,11 @@ export class PitchRenderer {
       const pending = this.reconciliationTimers.get(playerId);
       if (pending?.key !== key) return;
       this.reconciliationTimers.delete(playerId);
+      // Owner 10-15 (Astra pass 4): the bridge starts now (or is not needed): the token leaves the fence's rest square
+      // here, whatever later replaces the bridge (a refresh carry), so the entry retires at this point, not at completion.
+      if (this.reconcileRestSquares.get(playerId)?.key === key) this.reconcileRestSquares.delete(playerId);
       const token = this.tokensById.get(playerId);
-      if (!token || token.destroyed) { this.refresh(); return; }
+      if (!token || token.destroyed) { this.refresh(); this.updateTrailNumberVisibility(); this.releaseSettledTrailNumbers(); return; }
       const target = this.tokenPos(coordinate[0], coordinate[1]);
       // Vue's post-flush model rebuild may already have placed a fresh token at truth. Restore only the exact
       // pixels visible when the fence arrived, then bridge forward; never revisit the movement origin.
@@ -21140,6 +21250,8 @@ export class PitchRenderer {
         this.followTokenDecorations(playerId, start.x, start.y);
       }
       this.startTokenReconciliation(playerId, token, target, key, expectedRttMs);
+      this.updateTrailNumberVisibility(); // owner 10-15: the bridge started (or was not needed): the fence's rest digit shows
+      this.releaseSettledTrailNumbers();
     }, 0);
     this.reconciliationTimers.set(playerId, { key, timer });
   }
@@ -21192,6 +21304,8 @@ export class PitchRenderer {
       }
       this.moveTweens.delete(playerId);
     }
+    this.releaseSettledTrailNumbers(); // owner 10-15: the bridge arrived
+    this.updateTrailNumberVisibility(); // Astra pass 4: also when nothing was queued (a fence rest square may expire here)
   }
 
   private armMovementIntentIfReady(): void {
@@ -21293,6 +21407,18 @@ export class PitchRenderer {
    *  (already immediate-applied) model, so nothing else would trigger the redraw. null clears the drive → the
    *  next refresh falls back to the model draw (the model already sits on the final square, so no snap). */
   setPresentationStep(step: PresentationStep | null): void {
+    const prior = this.presentationStep;
+    this.applyPresentationStep(step);
+    // Owner 10-15 wake: a digit queued for the tile of a drive that has now retired (null, or another mover took the
+    // drive) can no longer be released by that tile's tween end. The token is handed to the model draw, which may carry
+    // it on (Astra pass 3), so the digit is stamped once that movement has settled.
+    if (prior && this.presentationStep?.playerId !== prior.playerId) this.settleRetiredTrailNumbers(prior.playerId);
+    // Owner 10-15: the digit under the presented token follows every drive change (held, armed, retired).
+    this.updateTrailNumberVisibility();
+    this.releaseSettledTrailNumbers();
+  }
+
+  private applyPresentationStep(step: PresentationStep | null): void {
     if (step) {
       const pending = this.postStepConvergenceById.get(step.playerId);
       const sameOccurrence = pending && step.occurrenceId !== undefined && pending.step.occurrenceId !== undefined
@@ -21563,6 +21689,7 @@ export class PitchRenderer {
     this.presentationTileStart = now;
     this.presentationTileStartPending = false;
     tween.start = now;
+    this.updateTrailNumberVisibility(); // owner 10-15: the token now visibly leaves `from`, so its digit shows
   }
 
   /** Legacy no-confirmed-step fallback: begin a full-path walk animation for `playerId`. A confirmed
@@ -22253,7 +22380,8 @@ export class PitchRenderer {
       // Owner 10-10 (Astra P2): with a host on the middle button, a middle press on a setup token is NOT a setup
       // drag / swap - it registers as an ordinary pointer (tap = onMiddleClick, drag = camera pan).
       const middleForHost = event.button === 1 && !!this.onMiddleClick;
-      if (this.setupActive && this.onDugoutSetupDragStart && this.pointers.size === 0 && !middleForHost) {
+      // Owner 10-15: under an open confirmation card a press never starts a setup drag (it pans; its tap is swallowed).
+      if (this.setupActive && this.onDugoutSetupDragStart && this.pointers.size === 0 && !middleForHost && !this.pitchInputHold?.()) {
         const wx = (event.offsetX - this.world.position.x) / this.world.scale.x;
         const wy = (event.offsetY - this.world.position.y) / this.world.scale.y;
         const [sx, sy] = worldToSquare(wx, wy);
@@ -22512,6 +22640,24 @@ export class PitchRenderer {
     if (this.togglePersistentPlayerArrow(playerId)) this.requestPlayerMarkLabel(playerId);
   }
 
+  /** Owner 10-15: the player a tap at this canvas point lands on, resolved exactly as the tap body does (the top
+   *  dugout token first, then the model's occupancy map). Null = no player there. */
+  private playerAtCanvasPoint(offsetX: number, offsetY: number): string | null {
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const dh = this.dugoutHitAt(worldX, worldY);
+    if (dh) return dh.playerId;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    return this.playersBySquare.get(`${sx},${sy}`) ?? null;
+  }
+
+  /** Owner 10-15: true when an open confirmation card swallows this gameplay gesture (and the host is told). */
+  private swallowedByConfirmCard(): boolean {
+    if (!this.pitchInputHold?.()) return false;
+    this.onPitchInputHeld?.();
+    return true;
+  }
+
   /** The primary TAP body (a press that barely moved), shared by the canvas pointerup and the pad crosshair's A. */
   private tapAt(offsetX: number, offsetY: number, mods: { shift: boolean; ctrl: boolean; alt: boolean }, isTap: boolean): void {
     // UAT 1.0.205: a tap on the VISIBLE part of a nudged block target is a tap on that target's square (the nudge may
@@ -22551,6 +22697,17 @@ export class PitchRenderer {
       }
       // Astra pass 2: a Shift tap that hits neither a dugout token nor the pitch is no annotation and no gameplay
       // click either - it never falls through to a selection or a setup action (setupRemove would reach the wire).
+      return;
+    }
+    // Owner 10-15: an open confirmation card takes no planning click (Shift marks above stay usable). Owner refinement
+    // 10-15: "users should still be able to click players and see portrait info": a tap on a pitch or dugout player
+    // only shows that player's card (onInspectPlayer: no selection, no switch, no plan); any other tap is swallowed and
+    // pulses the card. A release that was a camera drag (isTap false) is swallowed silently: it was never a click.
+    if (this.pitchInputHold?.()) {
+      if (!isTap) return;
+      const inspected = this.playerAtCanvasPoint(offsetX, offsetY);
+      if (inspected) this.onInspectPlayer?.(inspected);
+      else this.onPitchInputHeld?.();
       return;
     }
     // PUNT UX v2: cone-side re-aim owns its pixels before pitch-square interaction.
@@ -22730,6 +22887,7 @@ export class PitchRenderer {
 
   /** The double-click body, shared by the canvas dblclick and the host's virtual double-click. */
   private doubleClickAt(offsetX: number, offsetY: number): void {
+    if (this.pitchInputHold?.()) return; // owner 10-15: its two taps were already swallowed (and pulsed) by tapAt
     const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
     const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
     const [sx, sy] = worldToSquare(worldX, worldY);
@@ -22743,6 +22901,8 @@ export class PitchRenderer {
 
   /** The right-click body, shared by the canvas contextmenu and the pad crosshair's X. */
   private contextAt(offsetX: number, offsetY: number): void {
+    // Owner 10-15: a right-click under an open confirmation card cancels, opens and declares nothing.
+    if (this.swallowedByConfirmCard()) return;
     // Match the primary click rail: Order 66 cinematics are presentation-only and cannot swallow
     // an activation-cancel gesture. Legacy/spectator camera cinematics retain the B5-5 freeze.
     if (this.cinematic && !this.order66) return;
@@ -22915,7 +23075,7 @@ export class PitchRenderer {
     this.releaseCinematicForUser();
     if (this.clickFrozenByCinematic()) return true; // pointerdown bails → the release is no tap
     this.clearHoverSquareMarker();
-    if (this.setupActive && this.onDugoutSetupDragStart) {
+    if (this.setupActive && this.onDugoutSetupDragStart && !this.pitchInputHold?.()) { // owner 10-15: tapAt swallows it
       const wx = (at.x - this.world.position.x) / this.world.scale.x;
       const wy = (at.y - this.world.position.y) / this.world.scale.y;
       const [sx, sy] = worldToSquare(wx, wy);
