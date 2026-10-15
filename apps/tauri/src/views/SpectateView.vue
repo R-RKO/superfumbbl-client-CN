@@ -14345,8 +14345,8 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="entry.action" /><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
-</span></pre>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="entry.action" /><span class="log-text"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+</span></span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
               </button>
@@ -20599,27 +20599,54 @@ function sendChat() {
 /* (Owner 08-19: the 07-08 full-line side colours are retired — the seat colour rides the
    coach-name span only, spectators/unknown senders stay plain.) */
 .log [data-kind='system'] { color: var(--ui-muted); }
-/* Owner 10-15 (Settings > Display > Log > Log style "Graphical"): each line is a ROW - separated from its neighbours,
-   its background tinted with the acting team's colour (the log dice's home blue #1860c5 / away red #9a0f12 at a low
-   alpha so the text keeps its contrast; neutral rows for lines with no single team), and a fixed icon cell on the left
-   (bare icons, LogActionPlate.vue). Wrapped lines hang under the text, not under the icons. Zebra: every other row of
-   the same colour is a shade lighter, so consecutive same-team rows still read as separate rows. Text style = none of
-   this applies (no class, no row attribute, no icon nodes). The log panel is always dark (its own gradient), so one
-   tint set serves every UI theme. */
-.log.log-graphical { --log-icon-cell: 2.8em; --log-icon-gap: 0.35em; padding-left: 0; padding-right: 0; }
-.log.log-graphical > span[data-kind] {
-  display: block;
-  padding: 0.14em 0.6rem 0.14em calc(0.35rem + var(--log-icon-cell) + var(--log-icon-gap));
-  text-indent: calc(-1 * (var(--log-icon-cell) + var(--log-icon-gap)));
-  border-bottom: 1px solid rgb(255 255 255 / 0.09);
+/* Owner 10-15 (Settings > Display > Log > Log style "Graphical"): each line is a ROW of two columns - an icon column
+   (bare icons, LogActionPlate.vue: [reroll source][action]) and a text column (.log-text) - separated from its
+   neighbours by a full-width divider, with the acting team's tint behind the whole row (neutral rows for lines with no
+   single team). Owner 10-15 follow-up: three grid columns - [action icon, fixed width, far left] [reroll source icon,
+   ONLY on a reroll line, else zero width] [text]. Icons are centred horizontally and vertically against the text however
+   many lines it wraps to, and sized from the log font (--log-icon-size: 1.7 x one text line, clamped 20-42 px, so the
+   Settings font slider 9-22 px gives 22-42 px icons). A line without a reroll starts its text right at the action
+   column's edge (rows with no action icon keep the empty action column, so every such row starts at the same x); a
+   reroll line's text starts after its source icon. Text style = none of this applies: no class, no row attribute, no icon nodes, and the
+   .log-text wrapper is an unstyled inline span there. The log panel is always dark (its own gradient), so one tint set
+   serves every UI theme. */
+.log.log-graphical {
+  /* Row tints - the ONE place to tune them (owner 10-15: "too subtle, home/away need to be visually distinct"): a
+     saturated, brighter blue / red than the dice colours, alpha-blended over the dark panel; -alt = the zebra row. */
+  --log-row-home: rgb(40 110 235 / 0.55);
+  --log-row-home-alt: rgb(40 110 235 / 0.40);
+  --log-row-away: rgb(225 35 40 / 0.52);
+  --log-row-away-alt: rgb(225 35 40 / 0.37);
+  --log-row-neutral: transparent;
+  --log-row-neutral-alt: rgb(255 255 255 / 0.05);
+  --log-icon-size: clamp(20px, calc(1.45em * 1.7), 42px);
+  --log-source-size: calc(var(--log-icon-size) * 0.8);
+  --log-action-col: calc(var(--log-icon-size) + 0.5em);
+  padding-left: 0;
+  padding-right: 0;
 }
-.log.log-graphical > span[data-kind] * { text-indent: 0; }
-.log.log-graphical > span[data-row-side='home'] { background: rgb(24 96 197 / 0.24); }
-.log.log-graphical > span[data-row-side='home']:nth-child(even) { background: rgb(24 96 197 / 0.17); }
-.log.log-graphical > span[data-row-side='away'] { background: rgb(154 15 18 / 0.30); }
-.log.log-graphical > span[data-row-side='away']:nth-child(even) { background: rgb(154 15 18 / 0.21); }
-.log.log-graphical > span[data-row-side='neutral'] { background: transparent; }
-.log.log-graphical > span[data-row-side='neutral']:nth-child(even) { background: rgb(255 255 255 / 0.035); }
+.log.log-graphical > span[data-kind] {
+  display: grid;
+  grid-template-columns: var(--log-action-col) auto minmax(0, 1fr);
+  align-items: center;
+  padding: 0.16em 0.6rem 0.16em 0;
+  border-bottom: 1px solid rgb(255 255 255 / 0.12);
+  /* the stronger tints: a dark outline keeps white text, seat-coloured names and the red "fails" readable on both */
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.9), 0 0 2px rgb(0 0 0 / 0.75);
+}
+.log.log-graphical .log-text { display: block; grid-column: 3; min-width: 0; }
+/* Astra: the copy layers that keep selectable text under artwork use color: transparent, which does not hide a
+   coloured shadow - the row outline must not paint through the dice, armour and NI artwork. */
+.log.log-graphical .log-hidden, .log.log-graphical .log-armour-glyph, .log.log-graphical .log-stat-down-copy,
+.log.log-graphical :deep(.block-die-result), .log.log-graphical :deep(.d6-face-value:not(.visible)) { text-shadow: none; }
+.log.log-graphical > span[data-row-side='home'] { background: var(--log-row-home); }
+.log.log-graphical > span[data-row-side='home']:nth-child(even) { background: var(--log-row-home-alt); }
+.log.log-graphical > span[data-row-side='away'] { background: var(--log-row-away); }
+.log.log-graphical > span[data-row-side='away']:nth-child(even) { background: var(--log-row-away-alt); }
+.log.log-graphical > span[data-row-side='neutral'] { background: var(--log-row-neutral); }
+.log.log-graphical > span[data-row-side='neutral']:nth-child(even) { background: var(--log-row-neutral-alt); }
+/* scarlet "fails" on a red row: a lighter red keeps it legible (with the outline above) */
+.log.log-graphical > span[data-row-side='away'] .log-fail { color: #ff8f7a; }
 .chat { flex: none; } /* owner 09-23: the entry keeps its grown height; the log above yields */
 .chat textarea {
   display: block;

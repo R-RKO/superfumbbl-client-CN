@@ -64,39 +64,45 @@ const actionLabel = computed(() => (icons.value.action ? LOG_ACTION_LABELS[icons
 </script>
 
 <template>
-  <span class="log-icons"><span class="log-icon log-icon-source" :data-source="icons.source ? (icons.source.kind === 'skill' ? icons.source.skill : icons.source.kind === 'resource' ? icons.source.name : 'trr') : undefined"
-    :role="icons.source ? 'img' : undefined" :aria-label="icons.source ? sourceLabel : undefined" :aria-hidden="icons.source ? undefined : 'true'" :title="icons.source ? sourceLabel : undefined"><img v-if="icons.source" :src="sourceUrl" alt="" aria-hidden="true" draggable="false" /></span><span class="log-icon log-icon-action" :data-action="icons.action ?? undefined"
-    :role="icons.action ? 'img' : undefined" :aria-label="icons.action ? actionLabel : undefined" :aria-hidden="icons.action ? undefined : 'true'" :title="icons.action ? actionLabel : undefined"><img v-if="icons.action" :src="actionUrl" alt="" aria-hidden="true" draggable="false" /></span></span>
+  <span class="log-icons"><span class="log-icon log-icon-action" :data-action="icons.action ?? undefined"
+    :role="icons.action ? 'img' : undefined" :aria-label="icons.action ? actionLabel : undefined" :aria-hidden="icons.action ? undefined : 'true'" :title="icons.action ? actionLabel : undefined"><img v-if="icons.action" :src="actionUrl" alt="" aria-hidden="true" draggable="false" /></span><span v-if="icons.source" class="log-icon log-icon-source"
+    :data-source="icons.source.kind === 'skill' ? icons.source.skill : icons.source.kind === 'resource' ? icons.source.name : 'trr'"
+    role="img" :aria-label="sourceLabel" :title="sourceLabel"><img :src="sourceUrl" alt="" aria-hidden="true" draggable="false" /></span></span>
 </template>
 
 <style scoped>
-.log-icons {
-  display: inline-flex;
-  align-items: center;
-  width: var(--log-icon-cell, 2.9em);
-  margin-right: var(--log-icon-gap, 0.35em);
-  vertical-align: middle;
-  text-indent: 0;
-  user-select: none;
-}
-/* Fixed slots: [source][action]; an empty slot keeps its width so every row's text starts at the same x. No plate
-   or background: the bare icon sits on the row's team tint. */
+/* The wrapper takes no box: its cells are the row's grid cells (see SpectateView .log.log-graphical) - the action icon
+   in column 1 (fixed width, always present, empty when the line has no action), the reroll source icon in column 2
+   ONLY on a reroll line (absent otherwise, so column 2 is zero wide and the text starts at the action column's edge).
+   Each icon is centred in its cell both ways. Sizes come from the row (--log-icon-size / --log-source-size). No plate or
+   background: the bare icon sits on the row's team tint. */
+.log-icons { display: contents; }
 .log-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.4em;
-  height: 1.3em;
-  flex: none;
+  align-self: center;
+  justify-self: center;
+  user-select: none;
+}
+.log-icon-action {
+  grid-column: 1;
+  width: var(--log-icon-size, 2.4em);
+  height: var(--log-icon-size, 2.4em);
+}
+.log-icon-source {
+  grid-column: 2;
+  width: var(--log-source-size, 1.9em);
+  height: var(--log-source-size, 1.9em);
+  margin-right: 0.3em;
 }
 .log-icon img {
-  max-width: 1.35em;
-  max-height: 1.25em;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   image-rendering: auto;
   /* readable on the blue, red and neutral rows: a thin white edge, then a dark one, around the art */
   filter: drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.9)) drop-shadow(0 0 0.9px rgba(0, 0, 0, 0.95));
   pointer-events: none;
 }
-.log-icon-source img { max-width: 1.2em; max-height: 1.15em; }
 </style>
