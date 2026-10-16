@@ -633,6 +633,9 @@ const legacyState = reactive({
   /** Owner 10-15 (Astra r7): bumped whenever the pending-cancel state changes, so the view's movement surface (which
    *  stands down while our cancel is unanswered) re-derives the moment a No on confirmEndAction re-opens it. */
   cancelRevision: 0,
+  /** Owner 10-16 P0 (Astra): bumped on every change of the pending-declaration latch, so the computed play surface
+   *  (o66MoveSquares, the local mover) re-evaluates when a release happens with no other state change. */
+  declarationRevision: 0,
   /** #107/#119: move-trail CLEAR pulse — bumped at the received turnEnd frame (the server IS the signal, not a timer — ⚖ Voss); view calls renderer.clearMoveTrail(). Side-agnostic. */
   moveTrailClearSeq: 0,
   /** Owner 10-05 ("let's pin that die"): a reroll was ACCEPTED and its result is staged behind the reroll beat /
@@ -9164,7 +9167,7 @@ function applyFrameContents(frame: QueuedFrame) {
     if (turnKey !== priorBoardTurnKey) {
       // o66r #9 (activation-state root): NULL srvActingId + activePlayerId at each team-turn boundary — a stale carry-over caused phantom declares, #4/#6/#10/#13. Nulled here to WIN over the recompute above.
       srvActingId = null;
-      declarationAwaitingEcho = false;
+      declarationAwaitingEcho = false; noteDeclarationLatchChange();
       setCancelInFlight(false); serverClearedActor = true; declarationAwaitingEchoFor = null; // P0 #2: a new team turn, no activation
       wakeActorClearWaiters(); // Astra r7 F2: a turn boundary is an actor clear too (each waiter re-checks its own validity)
       state.activePlayerId = null;
@@ -11943,7 +11946,7 @@ function resetPlayback() {
   maximumCarnageInstanceKey = ''; maximumCarnageConfirmedInstanceKey = ''; state.maximumCarnageTargeting = false; state.actionNotice = null; clearBlockWatch(); releaseChainsawDeclare(); chainsawBlockSent = null; // g315 / row #334: fresh game — clear action notices + their state-entry key, then the block debounce/watchdog
   srvActingId = null; srvActingAction = null; // g330: fresh game — reset the receive-time acting-player mirror
   state.switchWatcherCard = null; // Astra r12: an unanswered watcher card never carries into another game
-  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear();
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); noteDeclarationLatchChange();
   pendingWideRailDeclare = null; acknowledgedWideRailDeclare = null; completedWideRailDeclare = null;
   deferredStandUpWideRail = null; // client-owned activation elections never cross connection/game boundaries
   clearShotToNothingElection(); // post-Pass client election never crosses connection/game boundaries
@@ -12368,6 +12371,36 @@ let cancelInFlight = false;
 let serverClearedActor = false;
 /** The dialog object standing when the cancel went out: only a NEW server question answers that cancel. */
 let cancelInFlightDialog: unknown = null;
+/** Owner 10-16 P0 (Diomed, FUMBBL g1953859): both latches FAIL OPEN. A declaration or a cancel the server silently
+ *  ignores (a player who has already acted, an activation the server had already ended itself) never echoes; until
+ *  now the latch held to the team-turn boundary and every click was swallowed ("No actions available", no walk, no
+ *  declaration) for the rest of the turn. Any later server frame that carries no acting-player change answers it once
+ *  the latch is older than LATCH_FRAME_GRACE_MS (a reply to an older command of ours can still be in flight before
+ *  that), and a watchdog covers a server that sends nothing at all. The cost of releasing early is at worst a second
+ *  cancel or declaration, which the declaration watcher logs. */
+const LATCH_FRAME_GRACE_MS = 1500;
+const LATCH_WATCHDOG_MS = 3000;
+let declarationSentAt = 0;
+let cancelSentAt = 0;
+let latchWatchdog: ReturnType<typeof setTimeout> | null = null;
+function releaseStaleLatches(reason: string): void {
+  if (declarationAwaitingEcho) {
+    declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; declarationAwaitingEchoAction = null; noteDeclarationLatchChange();
+    log('system', `play: declaration not answered by the server (${reason}) - released`);
+  }
+  if (cancelInFlight) {
+    setCancelInFlight(false); serverClearedActor = !srvActingId;
+    log('system', `play: cancel not answered by the server (${reason}) - released`);
+    if (!srvActingId) wakeActorClearWaiters();
+  }
+}
+function armLatchWatchdog(): void {
+  if (latchWatchdog) cancelGameTimeout(latchWatchdog);
+  latchWatchdog = scheduleGameTimeout(() => {
+    latchWatchdog = null;
+    if (declarationAwaitingEcho || cancelInFlight) releaseStaleLatches('watchdog');
+  }, LATCH_WATCHDOG_MS, 'connection');
+}
 /** Owner 10-15 DECLARATION WATCHER (detect only, never alters a send): occurrences of a declaration for player B that
  *  went out while a different player A was still the server's acting player or still awaiting the echo of our own
  *  declaration, with no cancel sent and answered in between. Every occurrence is logged (bug reports carry them); the
@@ -12405,6 +12438,9 @@ function reportDeclarationSwitch(found: DeclarationSwitch): void {
 /** The one rule for a null cancel: an activation of OURS exists on the server (receive-time mirror; the applied model
  *  only while the server has not cleared it) or a declaration of ours is in flight, and no cancel is in flight. */
 /** The one writer of the pending-cancel state outside test resets: every change bumps state.cancelRevision. */
+/** Every production change of declarationAwaitingEcho bumps state.declarationRevision (Astra 10-16: the fail-open
+ *  release is otherwise invisible to the computed surface). Test-harness resets do not need it. */
+function noteDeclarationLatchChange(): void { state.declarationRevision += 1; }
 function setCancelInFlight(value: boolean): void {
   if (cancelInFlight === value) return;
   cancelInFlight = value;
@@ -12797,7 +12833,7 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
       explicitPlayerId = true;
       explicitPlayerIdNonNull = ch.modelChangeValue != null;
       srvActingId = (ch.modelChangeValue as string | null) ?? null;
-      declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; // the server answered (owner 10-15)
+      declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; noteDeclarationLatchChange(); // the server answered (owner 10-15)
       if (srvActingId == null) { setCancelInFlight(false); serverClearedActor = true; wakeActorClearWaiters(); } // P0 #2: the activation is over
       else serverClearedActor = false; // (a delayed echo of a declaration being cancelled keeps cancelInFlight: Astra r2 F4)
       if (pendingWideRailDeclare && srvActingId === pendingWideRailDeclare.playerId) {
@@ -12857,6 +12893,14 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
       && srvActingAction !== pendingShotToNothingDeclare.playerAction) {
     clearShotToNothingElection();
   }
+  // Owner 10-16 P0: a server frame without any acting-player change, once our latch is older than the grace, means
+  // the server ignored that declaration / cancel (it never echoes one it refused): release it instead of holding the
+  // whole turn. A cancel can never be pending when the server has no actor at all.
+  if (!explicitPlayerId) {
+    const now = Date.now();
+    if (declarationAwaitingEcho && now - declarationSentAt >= LATCH_FRAME_GRACE_MS) releaseStaleLatches('a later server frame');
+    if (cancelInFlight && (srvActingId == null || now - cancelSentAt >= LATCH_FRAME_GRACE_MS)) releaseStaleLatches('a later server frame');
+  }
   // A foreign activation can legitimately CLEAR before whenPriorActivationEnded sends and arms the requested
   // declaration. Once armed, only an exact tuple acknowledges it; coherent mismatches above reject it.
   reconcileWideRailDeclarationEcho();
@@ -12874,7 +12918,7 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   const ap = g?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
   srvActingId = ap?.playerId ?? null;
   srvActingAction = ap?.playerAction ?? null;
-  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; // a snapshot is the server's whole answer (owner 10-15)
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; noteDeclarationLatchChange(); // a snapshot is the server's whole answer (owner 10-15)
   setCancelInFlight(false); serverClearedActor = !srvActingId; // P0 #2
   if (!srvActingId) wakeActorClearWaiters();
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null; // never rebuilt from a snapshot (first action / reconnect)
@@ -18914,12 +18958,14 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     // Owner 10-15: a declaration is in flight until its acting-player echo; an accepted null cancel answers it and
     // latches (P0 #2: one cancel per activation); a new declaration re-opens it.
     if (cmd.netCommandId === NetCommandId.CLIENT_ACTING_PLAYER) {
-      declarationAwaitingEcho = cmd.playerId != null;
+      declarationAwaitingEcho = cmd.playerId != null; noteDeclarationLatchChange();
       declarationAwaitingEchoFor = cmd.playerId != null ? String(cmd.playerId) : null;
       declarationAwaitingEchoAction = cmd.playerId != null ? String(cmd.playerAction ?? '') : null;
       setCancelInFlight(cmd.playerId == null);
       cancelInFlightDialog = cmd.playerId == null ? (game.value?.dialogParameter ?? null) : null;
       if (cmd.playerId != null) serverClearedActor = false;
+      if (cmd.playerId != null) declarationSentAt = Date.now(); else cancelSentAt = Date.now();
+      armLatchWatchdog(); // owner 10-16 P0: the latch fails open if the server never answers
     }
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
@@ -28927,7 +28973,7 @@ export const gameStore = {
    *  / shows a "planning…" affordance while true.) */
   isPlanActive(): boolean { return plannerActive(); },
   /** Owner 10-15: a declaration of ours was accepted and its acting-player echo has not been received yet. */
-  declarationInFlight(): boolean { return declarationAwaitingEcho; },
+  declarationInFlight(): boolean { void state.declarationRevision; return declarationAwaitingEcho; },
   /** Astra r4 F2: a back-out gesture (Escape's deselect) abandons a declaration queued behind a cancel. */
   abandonQueuedDeclaration(): void { priorActivationEndSeq += 1; },
   /** Owner 10-15 declaration watcher: occurrences detected this session (dev-visible counter). */
