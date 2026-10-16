@@ -20971,11 +20971,18 @@ function sendChat() {
    that opens with an outcome icon (stun stars, KO lettering, the apothecary) hangs that icon in the gutter to the LEFT
    of its text and its first word lines up with the other rows at that indent. */
 .log.log-graphical { --log-indent: calc(var(--log-icon-size) + 0.45em); }
-.log.log-graphical .log-text[data-indent='1'] { padding-left: var(--log-indent); }
-.log.log-graphical .log-text[data-indent='2'] { padding-left: calc(var(--log-indent) * 2); }
+/* Owner 10-16: the indent was too aggressive - every child row's text starts where its parent's text starts; the
+   structure reads from the hanging outcome icon (left of the text, in the icon column) and the row tint alone. */
+.log.log-graphical .log-text[data-indent='1'] { padding-left: 0; }
+.log.log-graphical .log-text[data-indent='2'] { padding-left: 0; }
 .log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour:first-child { margin-left: calc(-1 * var(--log-indent)); margin-right: max(0.2em, calc(var(--log-indent) - var(--log-icon-size) - 0.12em)); }
 /* the KO lettering is 1.6 icons wide: it overhangs further LEFT so its text still starts at the indent column */
-.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child { margin-left: calc(-1 * var(--log-indent) - 0.6 * var(--log-icon-size)); }
+/* Astra 10-16: a hanging KO lettering is held to ONE icon width (contain) so it never clips at the log's left edge */
+.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child { width: var(--log-icon-size); }
+.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child img { object-fit: contain; }
+/* a child row that carries its own action icon in the icon column cannot hang there: it keeps one indent step and the
+   outcome icon hangs into THAT, so its first word and its wrapped lines still share one left edge (Astra 10-16) */
+.log.log-graphical > span[data-kind]:has(.log-icon-action[data-action]) > .log-text[data-indent][data-lead-icon] { padding-left: var(--log-indent); }
 /* Owner 10-15 (live 1.0.220): in the Graphical style every inline die / roll glyph - d6 faces, block dice, the armour
    shield and the apothecary injury icon - is the SAME size as the row's action icon (--log-icon-size: 1.7 x one text
    line, 20-42 px), vertically centred on the line; the line box grows to fit, so nothing clips and wrapping stays in
