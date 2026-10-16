@@ -2094,7 +2094,7 @@ function clearRerollSplash(): void {
 const isLeaderReroll = (raw: string | undefined) => String(raw ?? '').replace(/[^a-z]/gi, '').toLowerCase() === 'leader';
 const rerollSplashWanted = (isTeam: boolean, raw?: string) => isTeam || !!raw; // owner 09-19: EVERY re-roll rides the re-roll toast (team, Leader, Pro, Dodge/Sure Feet/…) — one surface, not icon-fade for skills and a splash for TRR
 // Owner 07-08 (rev 2/9): FAIL→REROLL staging is STRICTLY SERIAL — the wire delivers fail+spend+result in ONE burst; we show failed die (full display), pause, reroll splash, pause, re-rolled die. Spectator pacing only (holdPlayback no-ops in play). Beats owner-tuned on feel.
-const FAIL_BEAT_MS = 1220; // owner 2026-07-08: −1/3 (was 1830)
+const FAIL_BEAT_MS = 750; // owner 10-16: 1220 -> 750 (the failed dodge read was too long); owner 2026-07-08: −1/3 (was 1830)
 // Owner C3 pt.2: a SUCCESSFUL roll reads ~half the fail beat (owner-tuned to 560); tune here if the feel is off.
 const SUCCESS_ROLL_BEAT_MS = 560;
 // C3 pt.2 + #65 (07-17): FED-PATH STEP STAGGER — per-square drain-hold set ABOVE the renderer's 200ms tween so a fed walk settles per boundary (spectate parity by construction); the 3 roll beats subsume it via Math.max. ⚠ INERT in o66 play (#67 drain owns pacing; sole call site is the `!o66Play` branch) — LEGACY-play only, a Track-B comment-out candidate (N-4).
@@ -2109,7 +2109,7 @@ let rerollStageTimers: ReturnType<typeof setTimeout>[] = [];
  *  move goes on. The server's frames that follow (the next squares of the path, their rolls, a skill dialog at the
  *  square) wait in the receive queue for both beats, on every seat (rescuedMoveHoldUntil).
  *   - failReadMs: the failed die reads this long before the reroll use + the rerolled result replace it. It is the
- *     existing successful-roll beat (SUCCESS_ROLL_BEAT_MS), not the 1220 ms FAIL beat: that one lets a failure that
+ *     existing successful-roll beat (SUCCESS_ROLL_BEAT_MS), not the 750 ms FAIL beat (FAIL_BEAT_MS): that one lets a failure that
  *     ends the activation read, and this failure does not stand. 0 when the failed die was shown by an earlier frame
  *     (a team reroll / Pro: the offer was open and the coach answered).
  *   - resultReadMs: the rerolled result reads this long before the walk carries on: the die's re-tumble in place

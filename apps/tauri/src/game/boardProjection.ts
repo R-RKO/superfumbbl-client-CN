@@ -12,8 +12,15 @@ export interface BoardProjection {
 export function createBoardProjection(): BoardProjection {
   return { playingIsHome: null, sawActiveBit: false, turnKey: '', activePlayerId: null, actedPlayers: [] };
 }
+/** Turn modes the server enters INSIDE a coach's activation and leaves again with the same acting player (the blitz
+ *  target pick: regular -> selectBlitzTarget -> regular). They are not a turn boundary: Elyod 10-16 (1.0.228, three
+ *  reports) could not End a blitz after its block because the flip back to regular had nulled the receive-time
+ *  acting mirror and marked the actor cleared (the P0 #2 boundary reset), so the cancel was refused as "nothing
+ *  declared"; a Jump toggle (a fresh declaration echo) un-wedged it. */
+const MID_ACTIVATION_SUB_MODES: Record<string, string> = { selectBlitzTarget: 'regular' };
 export function boardTurnKey(g: GameJson): string {
-  return `${g.turnMode}:${turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
+  const mode = MID_ACTIVATION_SUB_MODES[String(g.turnMode)] ?? g.turnMode;
+  return `${mode}:${turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
 }
 export function reduceBoardProjection(previous: BoardProjection, game: GameJson, input: {
   recoveringPlayers: readonly string[];
