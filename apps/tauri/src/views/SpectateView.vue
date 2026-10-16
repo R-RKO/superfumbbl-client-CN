@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { installMouseEntropy } from '../game/mouseEntropy';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
@@ -48,6 +49,7 @@ import { playSound } from '../game/sounds';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
+import DisplayCaps from '../components/DisplayCaps.vue';
 import D6Face from '../components/D6Face.vue';
 import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue';
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
@@ -58,6 +60,10 @@ import ChatDock from '../components/ChatDock.vue';
 import { useChatOverInducements } from '../game/chatOverInducements';
 import { inducementCatcherActive, inducementGapsPassThrough, isPrayerBoardPickKey } from '../game/inducementCatcher';
 import ChatToast from '../components/ChatToast.vue';
+import ChatBubbleRows from '../components/ChatBubbleRows.vue';
+import ChatEmojiText from '../components/ChatEmojiText.vue';
+import PaneSearch from '../components/PaneSearch.vue';
+import { usePaneSearch } from '../game/usePaneSearch';
 import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/ballOutView';
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
 import { teamBoxCounts } from '../game/dugoutCounts';
@@ -122,6 +128,7 @@ import { d6LogParts, d6RequirementParts } from '../game/d6Log';
 import { blockDieLogParts, type BlockDieFaceValue, type BlockDieLogToken } from '../game/blockDieLog';
 import { logNameParts, logNameSeatKey, type LogNameTeam, type LogNameToken } from '../game/logNames';
 import { chatLineParts } from '../game/chatLine';
+import { chatBubbleRows } from '../game/chatBubbles';
 import { chatToastRole, type ChatAuthorSide } from '../game/chatAuthor';
 import { useChatToastQuietClear } from '../game/chatToastQuietClear';
 import { newlyAppendedChatOccurrences, scheduleAuthoredChatToastExpiry } from '../game/chatToastLifetime';
@@ -768,6 +775,12 @@ const chatEntries = computed(() => reviewChatHidden.value ? [] : liveChatEntries
 function chatParts(entry: { text: string }): { name: string; rest: string } {
   return chatLineParts(entry.text);
 }
+// Owner 10-16 (Chat style "Bubbles"): one bubble row per chat entry, shaded from the same seat tint as the log names
+// (logNameColor), falling back to the toasts' seat mapping (chatToastRole) before the renderer reports a tint.
+const chatBubbleList = computed(() => settings.chatStyle === 'bubbles'
+  ? chatBubbleRows(chatEntries.value, (side) => logNameColor(side), (side) => chatToastRole(side, gameStore.mySeat.value, gameStore.isPlaying.value))
+  : []);
+const chatBubbleTimes = computed(() => chatEntries.value.map((e) => e.time));
 // Owner 2026-07-08: chat lives ONLY in the Chat tab now — occlude 'talk' lines from
 // the Log pane so it stays a pure event log.
 const logEntries = computed(() => {
@@ -788,14 +801,6 @@ function logRowLine(entry: (typeof logEntries.value)[number]) {
 /** Owner 10-15: a Graphical row's indent inside the text column (undefined in the Text style and at level 0). */
 function logRowIndent(entry: (typeof logEntries.value)[number]): number | undefined {
   return settings.logStyle === 'graphical' && entry.g && entry.g.indent > 0 ? entry.g.indent : undefined;
-}
-/** Owner 10-15 (second indent): '' when an indented Graphical row OPENS with an outcome icon (stun stars, KO lettering,
- *  the apothecary, the armour shield) - the row hangs that icon in the indent gutter left of its text (CSS data-lead-icon).
- *  Timestamps on: the time precedes the icon, so the icon is not :first-child and stays in the flow (no overlap). */
-function logRowLeadIcon(entry: (typeof logEntries.value)[number]): '' | undefined {
-  if (logRowIndent(entry) == null) return undefined;
-  const tk = logSegmentsFor(logRowLine(entry))[0]?.tk;
-  return tk === 'armour' || tk === 'apothecary' || tk === 'ko' || tk === 'stun' || tk === 'dead' ? '' : undefined;
 }
 /** Owner 10-15: each row's plate - a step row drops an icon that only repeats its parent's action (logRowPlates). */
 const logRowPlateList = computed(() => logRowPlates(logEntries.value.map((entry) => ({ action: entry.action, indent: logRowIndent(entry) ?? 0 }))));
@@ -1503,8 +1508,8 @@ const LOG_IDLE_MS = 10000;
 function armLogIdle() {
   clearTimeout(logIdleTimer);
   logIdleTimer = window.setTimeout(() => {
-    if (logHovered.value) {
-      armLogIdle(); // still hovering — wait, then re-check
+    if (logHovered.value || paneSearch.active.value) {
+      armLogIdle(); // still hovering (or stepping through search matches, owner 10-16) — wait, then re-check
       return;
     }
     if (panelTab.value === 'chat') {
@@ -1523,6 +1528,25 @@ function onLogHover(hovering: boolean) {
   // start a fresh 10s countdown once the mouse leaves (if scrolled up)
   if (!hovering && !(panelTab.value === 'chat' ? chatAtBottom.value : logAtBottom.value)) armLogIdle();
 }
+
+// Owner 10-16: SEARCH in the Log / Chat pane (the box on the right of the settings bar; game/paneSearch.ts). Find-in-page
+// over the ACTIVE tab's rendered rows, newest match first; the query stays in the view (never the wire, never the entries).
+const paneSearch = usePaneSearch({
+  // a stable key per rendered row (the entry object); the match text is read from the rendered rows themselves
+  // (Graphical: the row's own GraphicalLine, which stays the same object even for the rows a line expands into)
+  keys: () => (panelTab.value === 'log' ? logEntries.value.map((e) => (settings.logStyle === 'graphical' && e.g ? e.g : e)) : panelTab.value === 'chat' ? chatEntries.value : []),
+  container: () => (panelCollapsed.value ? null : panelTab.value === 'log' ? logEl.value : panelTab.value === 'chat' ? chatEl.value : null),
+});
+const paneSearchQuery = paneSearch.query;
+const paneSearchCount = paneSearch.count;
+const paneSearchCounter = paneSearch.counter;
+/** Escape in the search box: the query is cleared (PaneSearch) and focus goes back to the active pane. */
+function paneSearchEscape(): void {
+  const el = panelTab.value === 'chat' ? chatEl.value : logEl.value;
+  el?.focus({ preventScroll: true });
+}
+// Closing the settings bar drops the search with it (no marks left behind a hidden box).
+watch(panelSettingsOpen, (open) => { if (!open) paneSearch.clear(); });
 
 function jumpToBottom(which: 'log' | 'chat') {
   const el = which === 'log' ? logEl.value : chatEl.value;
@@ -1549,6 +1573,14 @@ watch(
     if (!chatEl.value) return;
     if (chatAtBottom.value) chatEl.value.scrollTop = chatEl.value.scrollHeight;
     else chatNewEvents.value = true;
+  },
+);
+// Owner 10-16: switching the Chat style re-lays the pane; a reader who was following stays on the newest message.
+watch(
+  () => settings.chatStyle,
+  async () => {
+    await nextTick();
+    if (chatEl.value && chatAtBottom.value) chatEl.value.scrollTop = chatEl.value.scrollHeight;
   },
 );
 // Owner 09-08: the log/chat <pre> is v-if'd per tab, so jumping to the tab (or un-collapsing onto it) mounts a
@@ -2731,8 +2763,10 @@ watch(() => gameStore.game.value?.gameId, () => {
   stopBlockTumble();
   disposeBlockDice3d(true);
 });
+let detachMouseEntropy: (() => void) | null = null;
 onMounted(() => {
   bpMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  detachMouseEntropy = installMouseEntropy(); // owner 10-16: client-supplied entropy, as the Java client harvests it
   bpMotionListener = () => { bpReducedMotion.value = bpMotionQuery?.matches ?? false; };
   bpMotionListener();
   bpMotionQuery.addEventListener('change', bpMotionListener);
@@ -2740,6 +2774,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopBlockTumble();
   disposeBlockDice3d();
+  detachMouseEntropy?.(); detachMouseEntropy = null;
   stopMultiBlockTumbles();
   if (bpMotionListener) bpMotionQuery?.removeEventListener('change', bpMotionListener);
   bpMotionListener = null;
@@ -14390,7 +14425,7 @@ function sendChat() {
           <div class="active-indicator" role="status" :data-active="homePanel.playing"
             :aria-hidden="!homePanel.playing"
             :title="homePanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label"><span>Current</span><span>Player</span></span>
+            <span class="active-label"><span><DisplayCaps text="Current" /></span><span><DisplayCaps text="Player" /></span></span>
           </div>
           <div v-if="homePrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in homePrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
@@ -14427,7 +14462,7 @@ function sendChat() {
           <div class="active-indicator" role="status" :data-active="awayPanel.playing"
             :aria-hidden="!awayPanel.playing"
             :title="awayPanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label"><span>Current</span><span>Player</span></span>
+            <span class="active-label"><span><DisplayCaps text="Current" /></span><span><DisplayCaps text="Player" /></span></span>
           </div>
           <div v-if="awayPrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in awayPrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
@@ -14672,13 +14707,16 @@ function sendChat() {
                 <option value="mono">Monospace</option>
               </select>
             </label>
+            <!-- Owner 10-16: search the active tab (Log or Chat), right-aligned in this bar. -->
+            <PaneSearch v-if="panelTab === 'log' || panelTab === 'chat'" v-model="paneSearchQuery" :count="paneSearchCount" :counter="paneSearchCounter"
+              @older="paneSearch.older()" @newer="paneSearch.newer()" @escape="paneSearchEscape" />
           </div>
 
           <template v-if="!panelCollapsed">
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)" :data-lead-icon="logRowLeadIcon(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -14719,10 +14757,13 @@ function sendChat() {
             @dock="dockChat">
             <button v-if="reviewChatHidden" class="live-chat-opt-in" @click="openLiveChat">Live chat — may reveal newer events<span v-if="chatUnread"> ({{ chatUnread > 99 ? '99+' : chatUnread }})</span></button>
             <div v-else class="log-holder">
+              <!-- Owner 10-16: Settings > Display > Log > Chat style. Bubbles (default) = ChatBubbleRows inside this same <pre>
+                   (scroll, follow and onLogScroll unchanged; .chat-bubbles anchors the stack to the bottom); Text = the
+                   08-19 line markup below (message words through ChatEmojiText: :shortcode: emoji, display only). -->
               <!-- Owner 08-19: chat — muted HH:MM stamp, coach NAME seat-coloured (logNameColor),
                    spectator LINES pale green, names in Nuffle over sans-serif message text. -->
-              <pre ref="chatEl" class="log chat-log" :style="logTextStyle" @scroll="onLogScroll('chat', $event)"><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else>{{ entry.text }}</template>
-</span></pre>
+              <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" /><template v-else><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
+</span></template></pre>
               <button v-if="chatNewEvents" class="new-events" @click="jumpToBottom('chat')">
                 New messages ↓
               </button>
@@ -16960,7 +17001,7 @@ function sendChat() {
   font-weight: 900;
   letter-spacing: 0.01875em;
   line-height: 1.05;
-  text-transform: none; /* owner 10-12: "Current" / "Player", sentence case as written */
+  text-transform: none; /* owner 10-16: lettered by DisplayCaps (Nuffle lead letter + Graduate small caps), the shared treatment */
   text-shadow: 0 1px 1px #000;
   white-space: nowrap;
   color: #fff;
@@ -20717,7 +20758,9 @@ function sendChat() {
    (the log stays legible while a stun/injury/casualty plays). */
 .panel-settings {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap; /* owner 10-16: the search box wraps to its own right-aligned line in a narrow pane */
+  align-items: center;
+  gap: 4px 10px;
   padding: 5px 8px;
   border-bottom: 1px solid var(--ui-border);
   font-size: max(var(--ui-min-text-size, 12px), 0.7rem);
@@ -20725,6 +20768,8 @@ function sendChat() {
   font-family: Arial, Helvetica, sans-serif;
 }
 .panel-settings label { display: flex; align-items: center; gap: 4px; }
+/* Owner 10-16: Escape in the search box focuses the pane (tabindex -1); no focus ring on the log itself. */
+.log:focus { outline: none; }
 .panel-settings input[type='range'] { width: 64px; }
 .log-holder {
   position: relative;
@@ -20929,6 +20974,19 @@ function sendChat() {
 /* owner 08-19: chat typography — Nuffle names over sans-serif message text; spectator lines pale green (inline style). */
 .chat-log { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
 .chat-log .log-name { font-family: 'Nuffle', system-ui, sans-serif; }
+/* Owner 10-16 (Chat style "Bubbles"): the chat builds FROM THE BOTTOM - newest bubble on the bottom edge, older ones
+   stacked above, a short chat leaves the space above empty. A flex column whose FIRST child takes margin-top: auto is
+   the bottom anchor (justify-content: flex-end would push overflowing bubbles past the top, where they cannot be
+   scrolled to); once the stack is taller than the pane the auto margin collapses to 0 and the pre scrolls as before,
+   so scrollTop = scrollHeight and onLogScroll's at-bottom test are unchanged. The bubbles themselves live in
+   ChatBubbleRows.vue. */
+.chat-log.chat-bubbles {
+  display: flex;
+  flex-direction: column;
+  white-space: normal;
+  padding-bottom: 0.5rem;
+}
+.chat-log.chat-bubbles > :deep(:first-child) { margin-top: auto; }
 /* (Owner 08-19: the 07-08 full-line side colours are retired — the seat colour rides the
    coach-name span only, spectators/unknown senders stay plain.) */
 .log [data-kind='system'] { color: var(--ui-muted); }
@@ -20968,23 +21026,13 @@ function sendChat() {
   text-shadow: 0 1px 1px rgb(0 0 0 / 0.9), 0 0 2px rgb(0 0 0 / 0.75);
 }
 .log.log-graphical .log-text { display: block; grid-column: 3; min-width: 0; }
-/* Owner 10-15 (block flow): indent levels inside the text column; a wrapped line wraps at its own indent.
-   Owner 10-15 (second indent): each indent step is an icon column (--log-indent = one inline icon + a gap), so a row
-   that opens with an outcome icon (stun stars, KO lettering, the apothecary) hangs that icon in the gutter to the LEFT
-   of its text and its first word lines up with the other rows at that indent. */
-.log.log-graphical { --log-indent: calc(var(--log-icon-size) + 0.45em); }
-/* Owner 10-16: the indent was too aggressive - every child row's text starts where its parent's text starts; the
-   structure reads from the hanging outcome icon (left of the text, in the icon column) and the row tint alone. */
-.log.log-graphical .log-text[data-indent='1'] { padding-left: 0; }
-.log.log-graphical .log-text[data-indent='2'] { padding-left: 0; }
-.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour:first-child { margin-left: calc(-1 * var(--log-indent)); margin-right: max(0.2em, calc(var(--log-indent) - var(--log-icon-size) - 0.12em)); }
-/* the KO lettering is 1.6 icons wide: it overhangs further LEFT so its text still starts at the indent column */
-/* Astra 10-16: a hanging KO lettering is held to ONE icon width (contain) so it never clips at the log's left edge */
-.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child { width: var(--log-icon-size); }
-.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child img { object-fit: contain; }
-/* a child row that carries its own action icon in the icon column cannot hang there: it keeps one indent step and the
-   outcome icon hangs into THAT, so its first word and its wrapped lines still share one left edge (Astra 10-16) */
-.log.log-graphical > span[data-kind]:has(.log-icon-action[data-action]) > .log-text[data-indent][data-lead-icon] { padding-left: var(--log-indent); }
+/* Owner 10-16: the activation structure. A declaration is a head row (indent 0); its events sit one SMALL step in,
+   a block's steps two, their outcome rows three (1.5 characters per step, owner: "a 1-2 space indent"). A wrapped
+   line wraps at its own indent; the outcome icons stay inline at the indent. */
+.log.log-graphical { --log-indent: 1.5ch; }
+.log.log-graphical .log-text[data-indent='1'] { padding-left: var(--log-indent); }
+.log.log-graphical .log-text[data-indent='2'] { padding-left: calc(var(--log-indent) * 2); }
+.log.log-graphical .log-text[data-indent='3'] { padding-left: calc(var(--log-indent) * 3); }
 /* Owner 10-15 (live 1.0.220): in the Graphical style every inline die / roll glyph - d6 faces, block dice, the armour
    shield and the apothecary injury icon - is the SAME size as the row's action icon (--log-icon-size: 1.7 x one text
    line, 20-42 px), vertically centred on the line; the line box grows to fit, so nothing clips and wrapping stays in

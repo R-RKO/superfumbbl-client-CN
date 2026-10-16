@@ -1,3 +1,4 @@
+import { withEntropy } from './mouseEntropy';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   GameSession,
@@ -215,7 +216,7 @@ function stageFumbblLobby(
   const generation = preparedFumbblGeneration;
   const target = server ?? activeServerTarget();
   preparedFumbblServer = { url: target.url, compression: target.compression };
-  const prepared = new GameSession({ url: target.url, compression: target.compression });
+  const prepared = new GameSession({ url: target.url, compression: target.compression, decorateOutgoing: withEntropy }); // owner 10-16: client-supplied entropy
   preparedFumbblSession = prepared;
   preparedFumbblHandedOff = false;
   preparedFumbblActiveParams = null;

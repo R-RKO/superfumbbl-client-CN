@@ -3030,6 +3030,14 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <p class="hint">Graphical: each line is a row in the acting team's colour, with the action's icon (and a reroll's source) on the left.</p>
+            <label class="row">
+              <span>Chat style</span>
+              <select v-model="settings.chatStyle" data-testid="chat-style">
+                <option value="text">Text</option>
+                <option value="bubbles">Bubbles</option>
+              </select>
+            </label>
+            <p class="hint">Bubbles: each message sits in a bubble in the speaker's team colour, newest at the bottom.</p>
             <label v-if="settings.logStyle === 'graphical'" class="row">
               <span>Row colour strength</span>
               <input v-model.number="settings.logTintStrength" v-fill-range type="range" min="0" max="100" step="5" data-testid="log-tint-strength" />

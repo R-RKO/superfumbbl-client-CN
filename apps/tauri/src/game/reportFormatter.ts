@@ -143,7 +143,9 @@ export interface GraphicalLine {
   blockDice: BlockDieLogToken[];
   names: LogNameToken[];
   tags: LogTagToken[];
-  indent: 0 | 1 | 2;
+  /** 0 = a head row; each step under it is one small indent (owner 10-16: the activation's declaration is the head, its
+   *  events sit one step in, a block's steps two, their outcome rows three). */
+  indent: 0 | 1 | 2 | 3;
   /** Further Graphical rows this line expands into, right after it (each with its own indent; never nested deeper).
    *  E.g. "<P> vomits all over themselves!" then its armour / injury row and casualty row. */
   more?: GraphicalLine[];
@@ -528,6 +530,11 @@ export interface ReportLogContext {
    *  "<Coach> turns over!"). Set per frame by the store; absent (older checkpoints, tests) = the plain "turn ends". */
   turnEndSide?: ServerSide | null;
   turnEndTurnover?: boolean;
+  /** Owner 10-16: the open ACTIVATION the log is inside - set by a narrated `playerAction` (its line is the head at
+   *  indent 0), every later line indents one step under it until a turn end, the next declaration, or the server
+   *  clearing the acting player (activationCancelReport). `lines` counts the lines logged under it: an activation
+   *  that ends with none gets "<Player> cancels their <Action> action.". Optional: older checkpoints lack it. */
+  activation?: { playerId: string; action: string; lines: number; acted: boolean } | null;
   /** Owner 10-15 (Graphical block flow): the open block sequence - attacker, defender, and the chosen result once the
    *  blockChoice names it ('pow' | 'stumble' | 'push' | 'bothDown' | 'skull'). Null = no open sequence. Optional for
    *  the same reason. */
@@ -644,8 +651,8 @@ function turnEndLines(r: Report, g: GameJson | null, context: ReportLogContext |
       heatParts.push(`${pn(g, exhaustion.playerId)} heat exhaustion ${d6(exhaustion.roll, 'roll', playerDieOwner(g, exhaustion.playerId))}`);
     }
   } else if (heat.length && r.heatRoll != null) {
-    // BB2020/25 heatRoll is the D3 fainting count; entry rolls are zero.
-    heatParts.push(`heat exhaustion ${r.heatRoll}`);
+    // BB2020/25 heatRoll is the D3 fainting count; entry rolls are zero. Owner 10-16: read as the rule says it.
+    heatParts.push(`Sweltering Heat affects ${r.heatRoll} player${Number(r.heatRoll) === 1 ? '' : 's'} on each team.`);
   }
   if (heatParts.length) lines.push(heatParts.join('; '));
   return lines;
@@ -1174,8 +1181,11 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // log line — TD always its own line, KO recoveries grouped+split by outcome, heat
   // exhaustion kept joined exactly as before (unregressed) but on its own line.
   turnEnd: (r, g) => turnEndLines(r, g).join('; '),
-  // Owner 10-16: the declaration line reads as upstream's ("<Player> starts a Move action."); shown in the match log.
-  playerAction: (r, g) => `${pn(g, r.actingPlayerId ?? r.playerId)} starts a ${playerActionLabel(r.playerAction)} action.`,
+  // Owner 10-16: the declaration line reads as upstream's ("<Player> starts a Move Action."); shown in the match log.
+  // Astra 10-16: exactly upstream's description, and nothing for the values upstream keeps silent.
+  playerAction: (r, g) => { const d = playerActionDescription(r.playerAction); return d ? `${pn(g, r.actingPlayerId ?? r.playerId)} ${d}.` : ''; },
+  // Owner 10-16: an activation the server cleared before it logged anything (store: activationCancelReport)
+  playerActionCancelled: (r, g) => `${pn(g, r.actingPlayerId ?? r.playerId)} cancels their ${playerActionLabel(r.playerAction)} action.`,
   skillUse: (r, g) => String(r.skill ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase() === 'reliable'
       && String(r.skillUse ?? '') === 'fumbledPlayerLandsSafely'
     ? `play: Reliable used (${pn(g, r.playerId)})`
@@ -1502,6 +1512,69 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
  *  generic line renders with their dice - so a test can keep each one in the action icon table. */
 export const LOG_REPORT_TYPES: readonly string[] = [...Object.keys(formatters), ...Object.keys(genericD6Fields)];
 
+/** Owner 10-16 (Astra): upstream's narration of a declaration, exactly (ffb-common PlayerAction.java descriptions;
+ *  PlayerActionMessage prints "<Player> <description>." only when the description exists). null = upstream is silent
+ *  only for the server's internal states (removeConfusion). Owner 10-16: the SELECT stages upstream keeps silent (blitz /
+ *  gaze / pass / foul / hand over / throw team-mate ...) are narrated like their move stage, since this client declares
+ *  through them and the server reports the first stage only. */
+const PLAYER_ACTION_DESCRIPTIONS: Readonly<Record<string, string | null>> = {
+  move: 'starts a Move Action', block: 'starts a Block Action', blitz: 'starts a Blitz Action', blitzMove: 'starts a Blitz Action', blitzSelect: 'starts a Blitz Action',
+  handOver: 'starts a Hand Over Action', handOverMove: 'starts a Hand Over Action', pass: 'starts a Pass Action', passMove: 'starts a Pass Action', foul: 'starts a Foul Action',
+  foulMove: 'starts a Foul Action', standUp: 'stands up', throwTeamMate: 'starts a Throw Team-mate action', throwTeamMateMove: 'starts a Throw Team-mate action',
+  removeConfusion: null, gaze: 'starts a Gaze action', gazeSelect: 'starts a Gaze action', gazeMove: 'starts a Gaze action', multipleBlock: 'starts a Multi-Block Action',
+  hailMaryPass: 'starts a Hail Mary Pass action', dumpOff: 'starts a Dump-Off action', standUpBlitz: 'stands up with Blitz', throwBomb: 'starts a Bomb Action', hailMaryBomb: 'starts a Hail Mary Bomb action',
+  swoop: 'starts a Swoop action', kickTeamMateMove: 'starts a Kick Team-mate action', kickTeamMate: 'starts a Kick Team-mate action', treacherous: 'starts a Treacherous action', wisdomOfTheWhiteDwarf: 'starts a Wisdom of the White Dwarf action',
+  throwKey: 'readies a beer keg', raidingParty: 'starts a Raiding Party action', maximumCarnage: 'starts a Maximum Carnage action', lookIntoMyEyes: 'tries to steal the ball', balefulHex: 'starts a Baleful Hex action',
+  allYouCanEat: 'starts an All You Can Eat action', putridRegurgitationMove: 'starts a Projectile Vomit action',
+  putridRegurgitationBlitz: 'performs an additional Projectile Vomit attack', putridRegurgitationBlock: 'performs an additional Projectile Vomit attack',
+  kickEmBlock: 'targets a downed opponent', kickEmBlitz: 'targets a downed opponent', blackInk: 'uses Black Ink', catchOfTheDay: 'uses Catch of the Day',
+  thenIStartedBlastin: "starts blastin'", theFlashingBlade: 'flashes the blade', viciousVines: 'uses Vicious Vines', furiousOutburst: 'has a furious outburst',
+  secureTheBall: 'secures the ball', breatheFire: 'starts a Breathe Fire action', chainsaw: 'starts a Chainsaw action', stab: 'starts a Stab action',
+  projectileVomit: 'starts a Projectile Vomit action', autoGazeZoat: 'uses Hypnotic Gaze', forgo: 'forgoes the activation', incorporeal: 'becomes incorporeal',
+  chomp: 'starts a Chomp action', punt: 'starts a Punt action', puntMove: 'starts a Punt action',
+};
+/** The narration of a declaration, or null when upstream shows nothing for it (an unknown value is silent too). */
+export function playerActionDescription(action: unknown): string | null {
+  return PLAYER_ACTION_DESCRIPTIONS[String(action ?? '')] ?? null;
+}
+/** Owner 10-16: the synthetic report the store logs when the server clears an acting player whose activation logged
+ *  nothing: "<Player> cancels their Move action." Null when the open activation already has lines (it ended, not
+ *  cancelled) or none is open. Always closes the activation. */
+export function activationCancelReport(context: ReportLogContext): Report | null {
+  const open = context.activation;
+  context.activation = null;
+  // Astra 10-16: an activation that logged a visible row OR committed activity in the model (a walk logs nothing) ended
+  if (!open || open.lines > 0 || open.acted) return null;
+  return { reportId: 'playerActionCancelled', actingPlayerId: open.playerId, playerAction: open.action };
+}
+/** The open activation as it stood BEFORE a report was formatted: the one that report's rows belong to (a declaration
+ *  replaces it, so its own row never counts for the activation it opens). Null when none is open. */
+export type OpenActivation = NonNullable<ReportLogContext['activation']>;
+export function openActivationBefore(context: ReportLogContext, report: Report): OpenActivation | null {
+  return String(report.reportId ?? '') === 'playerAction' ? null : context.activation ?? null;
+}
+/** The caller DISPLAYED `count` rows belonging to `activation` (the formatter cannot know a caller's visibility gate,
+ *  live and replay gate differently, and a row surfaced late - behind a fireball - must still count for ITS activation,
+ *  not whichever is open by then: Astra 10-16). */
+export function noteActivationLogged(activation: OpenActivation | null, count: number): void {
+  if (activation && count > 0) activation.lines += count;
+}
+const ACTIVITY_CHANGE_IDS = new Set(['actingPlayerSetHasMoved', 'actingPlayerSetHasBlocked', 'actingPlayerSetHasFouled', 'actingPlayerSetHasPassed',
+  'actingPlayerSetHasFed', 'actingPlayerSetHasJumped', 'actingPlayerSetStandingUp', 'actingPlayerSetGoingForIt', 'actingPlayerSetDodging', 'actingPlayerSetLeaping']);
+/** A frame's model changes show the open activation DID something: a flag the server raises only for an action taken
+ *  (hasMoved / hasBlocked / ...), a positive current move, or the acting player changing square. A walk that rolls
+ *  nothing logs nothing, so this is what separates "ended" from "cancelled" (Astra 10-16, recorded g1918823). */
+export function noteActivationActivity(context: ReportLogContext, changes: readonly { modelChangeId?: string; modelChangeKey?: unknown; modelChangeValue?: unknown }[]): void {
+  const open = context.activation;
+  if (!open || open.acted) return;
+  for (const ch of changes) {
+    const id = String(ch.modelChangeId ?? '');
+    if ((ACTIVITY_CHANGE_IDS.has(id) && ch.modelChangeValue === true)
+      || (id === 'actingPlayerSetCurrentMove' && Number(ch.modelChangeValue) > 0)
+      || (id === 'fieldModelSetPlayerCoordinate' && String(ch.modelChangeKey ?? '') === open.playerId)) { open.acted = true; return; }
+  }
+}
+
 /** Owner 10-16: the wire playerAction as the action's name ("Move", "Blitz", "Hand-off", "Throw Team-Mate"). */
 function playerActionLabel(action: unknown): string {
   switch (String(action ?? '')) {
@@ -1605,6 +1678,8 @@ export function reportDiceOwner(report: Report, game: GameJson | null): ServerSi
     const ballAndChain = actingPlayerHasBallAndChain(game);
     if (ballAndChain) return playerServerSide(game, ballAndChain);
   }
+  // Astra 10-16: a declaration row is the acting player's whatever its action (no icon needed for the tint)
+  if (id === 'playerAction' || id === 'playerActionCancelled') return playerServerSide(game, report.actingPlayerId) ?? playerServerSide(game, report.playerId);
   return playerServerSide(game, report.playerId) ?? teamServerSide(game, report.teamId);
 }
 export function formatReportDisplay(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay {
@@ -1648,6 +1723,9 @@ export function formatReport(report: Report, game: GameJson | null, context = le
  *  KO-recovery lines, heat-exhaustion line) instead of one '; '-joined wall of text. Callers
  *  should log() each returned entry as its own line, in order. */
 export function formatReportLines(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay[] {
+  const reportId = String(report.reportId ?? '');
+  // Astra 10-16: a declaration upstream does not narrate produces no line at all
+  if (reportId === 'playerAction' && !playerActionDescription(report.playerAction)) { noteReportLogContext(report, context, game); return []; } // the latches still advance
   const lines = formatReportLinesPlain(report, game, context);
   // read before logActionPlate consumes the hand-off latch: is this the receiver's catch of a hand-off?
   const handoffCatch = isHandoffCatch(report, context);
@@ -1658,6 +1736,7 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   // turnEnd has no single owner, but its lines do: the touchdown line is the scorer's team, each KO recovery line its
   // player's team (turnEndLines order: TD / "turn ends", recoveries, heat). A row tint per line, never per report.
   if (String(report.reportId ?? '') === 'turnEnd' && lines.length) {
+    context.activation = null; // owner 10-16: a turn end closes the open activation (this branch returns early)
     const recoveries = Array.isArray(report.knockoutRecoveryArray) ? (report.knockoutRecoveryArray as Report[]) : [];
     const sides = [playerServerSide(game, report.playerIdTouchdown) ?? context?.turnEndSide ?? null, ...recoveries.map((r) => playerServerSide(game, r.playerId))];
     safeLatchBlockFlow(report, game, context); // a turn end closes any open block sequence
@@ -1676,7 +1755,11 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   // context holds; then advance the sequence. A failure here never touches the Text line.
   let graphical: (GraphicalLine | null | undefined)[] = [];
   try {
-    graphical = graphicalLines(report, game, context, decorated, handoffCatch);
+    // owner 10-16: the declaration is the head (0); its cancel line always sits one step under it (Astra: the
+    // activation is already closed when the cancel report is formatted, so the step is explicit here)
+    graphical = reportId === 'playerAction' ? decorated.map((line) => graphicalFromLine(line, 0))
+      : reportId === 'playerActionCancelled' ? decorated.map((line) => graphicalFromLine(line, 1))
+      : graphicalLines(report, game, context, decorated, handoffCatch);
   } catch {
     graphical = [];
   }
@@ -1685,14 +1768,45 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   // Astra 10-15: only a report that actually pairs with the sequence (an injury must pass injuryPairsWithFlow) - an
   // unpaired injury's casualty row is indented under ITS injury, not the block, and keeps its own tint.
   const pairsWithFlow = String(report.reportId ?? '') !== 'injury' || injuryPairsWithFlow(report, context);
-  const flowSide = context.flowAttackerId && pairsWithFlow && BLOCK_FLOW_REPORTS.has(String(report.reportId ?? '')) ? playerServerSide(game, context.flowAttackerId) : null;
+  // owner 10-16: the uphill choice row keeps the CHOOSER's seat tint (the defender's coach picked the die)
+  const uphillChoice = reportId === 'blockChoice' && isUphillChoice(report, game, context.flowAttackerId ?? null);
+  const flowSide = context.flowAttackerId && pairsWithFlow && !uphillChoice && BLOCK_FLOW_REPORTS.has(String(report.reportId ?? '')) ? playerServerSide(game, context.flowAttackerId) : null;
+  const chooserSide = uphillChoice ? teamServerSide(game, report.choosingTeamId) : null;
   safeLatchBlockFlow(report, game, context);
-  return decorated.map((line, index) => {
-    const g = graphical[index];
-    if (g === undefined) return line;
-    const stepAction = flowSide && g && g.indent > 0 ? { ...(line.action ?? { kind: null }), side: flowSide } : line.action;
+  // Owner 10-16: the activation structure. A narrated declaration opens an activation and is its head (indent 0); the
+  // cancel line and every other line logged while it is open sit one step under it (a block's steps two, their outcome
+  // rows three); a turn end closes it and stays a head row.
+  const opensActivation = reportId === 'playerAction';
+  if (reportId === 'turnEnd') context.activation = null;
+  const inside = !opensActivation && !!context.activation;
+  const rows = decorated.map((line, index) => {
+    // Astra 10-16: a row with no Graphical variant shows its Text form in the Graphical style, so inside an activation
+    // it gets one built here and steps in like the rest (an explicit null stays hidden)
+    const g0 = graphical[index] === undefined && inside ? graphicalFromLine(line, 0) : graphical[index];
+    if (g0 === undefined) return line;
+    const g = inside && g0 ? indentUnderActivation(g0) : g0;
+    const stepAction = chooserSide ? { ...(line.action ?? { kind: null }), side: chooserSide }
+      : flowSide && g && g.indent > 0 ? { ...(line.action ?? { kind: null }), side: flowSide } : line.action;
     return stepAction ? { ...line, action: stepAction, g } : { ...line, g };
   });
+  if (opensActivation) context.activation = { playerId: String(report.actingPlayerId ?? report.playerId ?? ''), action: String(report.playerAction ?? ''), lines: 0, acted: false };
+  if (reportId === 'playerActionCancelled') context.activation = null;
+  return rows;
+}
+
+/** Owner 10-16: a block choice made by the DEFENDER's coach (an uphill block): the report's dice count is negative, or
+ *  its choosing team is not the blocker's team. */
+function isUphillChoice(report: Report, game: GameJson | null, attackerId: string | null): boolean {
+  if (Number(report.nrOfDice) < 0) return true;
+  const chooser = teamServerSide(game, report.choosingTeamId);
+  const blocker = attackerId ? playerServerSide(game, attackerId) : null;
+  return !!chooser && !!blocker && chooser !== blocker;
+}
+
+/** One small indent step under the open activation's head (capped at the deepest level the view styles). */
+function indentUnderActivation(g: GraphicalLine): GraphicalLine {
+  const bump = (line: GraphicalLine): GraphicalLine => ({ ...line, indent: Math.min(3, line.indent + 1) as 0 | 1 | 2 | 3, ...(line.more ? { more: line.more.map(bump) } : {}) });
+  return bump(g);
 }
 
 // ---- Easter eggs (owner 10-15) ------------------------------------------------------------------------------------
@@ -1874,7 +1988,7 @@ function graphicalOf(marked: string, indent: 0 | 1 | 2, owner: ServerSide | null
 
 /** A Text line as-is at an indent (the same tokens), or with the reroll lead removed when the row's reroll source
  *  icon already says it. */
-function graphicalFromLine(line: ReportDisplay, indent: 0 | 1 | 2): GraphicalLine {
+function graphicalFromLine(line: ReportDisplay, indent: 0 | 1 | 2 | 3): GraphicalLine {
   let { text, d6, blockDice, names, tags } = line;
   if (line.action?.source && text.startsWith(REROLL_LEAD)) {
     const cut = REROLL_LEAD.length;
@@ -1995,10 +2109,13 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
       // "Block" is the row's icon and "Rerolled" its reroll source icon: the line names who blocks whom.
       return [graphicalOf(`${keptLead()}${pn(game, a)} blocks ${pn(game, d)}${uphill ? ' (uphill)' : ''}: ${blockDieList(report.blockRoll)}`, 0, owner)];
     }
-    case 'blockChoice':
-      return open && (typeof report.defenderId !== 'string' || !report.defenderId || report.defenderId === defender)
-        ? lines.map((line) => graphicalFromLine(line, 1))
-        : leadOnly();
+    case 'blockChoice': {
+      if (!(open && (typeof report.defenderId !== 'string' || !report.defenderId || report.defenderId === defender))) return leadOnly();
+      // owner 10-16: an uphill choice (the defender's coach picks) says so at the end of its row; its tint is the
+      // chooser's seat (formatReportLines exempts it from the blocker's flow tint)
+      const uphill = isUphillChoice(report, game, attacker);
+      return lines.map((line) => { const g = graphicalFromLine(line, 1); return uphill ? { ...g, text: `${g.text} (Uphill)` } : g; });
+    }
     case 'steadyFootingRoll':
       // a failed Steady Footing resumes the deferred fall of the block: a step of it for the sequence's players
       return open && (report.playerId === attacker || report.playerId === defender) ? lines.map((line) => graphicalFromLine(line, 1)) : leadOnly();
@@ -2053,6 +2170,9 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
         return injuryRows(lines, roll, casualty);
       } else if (type === 'stab' && typeof report.attackerId === 'string' && report.attackerId) {
         head = report.armorBroken ? `${pn(game, report.attackerId)} stabs ${name}!` : `${pn(game, report.attackerId)} ${FAILS} to stab ${name}.`;
+      } else if ((type === 'bitten' || type === 'quickbite') && typeof report.attackerId === 'string' && report.attackerId) {
+        // owner 10-16: a Bloodlust bite reads "<Vampire> feeds on <Thrall>", its injury dice under it, the result under that
+        head = `${pn(game, report.attackerId)} feeds on ${name}`;
       } else {
         // any other injury (Chainsaw, Fireball, Lightning, Bomb...): "<P> | <Cause>" then the shared armour / injury form
         const cause = titleCase(humanize(String(report.injuryType ?? 'injury')));

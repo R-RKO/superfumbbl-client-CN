@@ -184,7 +184,7 @@ export const REPORT_ACTION_KIND: Readonly<Record<string, LogActionKind | null>> 
   nervesOfSteel: 'nervesOfSteel', indomitable: 'indomitable', pickMeUp: 'pickMeUp', raidingParty: 'raidingParty',
   thrownKeg: 'keg', bombOutOfBounds: 'bomb', bombExplodesAfterCatch: 'bomb', cloudBurster: 'cloudBurster',
   trapDoor: 'trapDoor', skillUse: 'skill', skillUseOtherPlayer: 'skill', skillWasted: 'skill', throwAtPlayer: 'thrownAt',
-  balefulHex: 'hex', catchOfTheDay: 'catchOfTheDay', allYouCanEat: 'allYouCanEat', playerAction: null,
+  balefulHex: 'hex', catchOfTheDay: 'catchOfTheDay', allYouCanEat: 'allYouCanEat', playerAction: null, playerActionCancelled: null,
   // report types without a formatter of their own (the generic line)
   argueTheCall: 'argueTheCall', bribesRoll: 'bribe', kickTeamMateRoll: 'throwTeamMate', officiousRefRoll: 'referee',
   spellEffectRoll: 'wizard', thenIStartedBlastin: 'saboteur',
@@ -516,7 +516,7 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       return plate('foul', sideOfFirst(game, actingPlayerId(game)));
     case 'mascotUsed':
       return plate('mascot', teamServerSide(game, report.teamId) ?? sideOfFirst(game, report.playerId));
-    case 'playerAction': {
+    case 'playerAction': case 'playerActionCancelled': {
       const kind = logActionForPlayerAction(report.playerAction);
       return kind ? plate(kind, sideOfFirst(game, report.actingPlayerId, report.playerId)) : null;
     }

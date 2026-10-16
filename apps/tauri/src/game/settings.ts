@@ -217,6 +217,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-15 (Settings > Display > Log > Log style): 'text' = the plain log (default); 'graphical' = every line a
    *  row tinted with the acting team's colour, with the action's icon (and a reroll's source icon) on its left. */
   logStyle: 'text' | 'graphical';
+  /** Owner 10-16 (Settings > Display > Log > Chat style): 'bubbles' = each chat message a bubble shaded with a dark
+   *  version of the speaker's team colour, the chat building from the bottom (default); 'text' = the plain chat lines. */
+  chatStyle: 'text' | 'bubbles';
   /** Owner 10-15 (Settings > Display > Log > Row colour strength): 0-100, how strong the Graphical rows' team tints
    *  paint (100 = the launch look, which the owner found a little bright). */
   logTintStrength: number;
@@ -681,6 +684,7 @@ const DEFAULTS: AppSettings = {
   logDiceAsNumbers: false,
   logNeededAsNumbers: false,
   logStyle: 'text', // owner 10-15: Graphical is opt-in while the owner tests it
+  chatStyle: 'bubbles', // owner 10-16: Bubbles by default; Text keeps the plain chat lines
   logTintStrength: 75,
   showServerSequencingEvents: false,
   logPos: null,
@@ -1164,6 +1168,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;
     merged.logStyle = raw.logStyle === 'graphical' ? 'graphical' : 'text'; // owner 10-15: Text unless the user picked Graphical
+    merged.chatStyle = raw.chatStyle === 'text' ? 'text' : 'bubbles'; // owner 10-16: Bubbles unless the user picked Text
     { const v = Number(raw.logTintStrength); merged.logTintStrength = Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : DEFAULTS.logTintStrength; }
     // Fail closed to the quiet match log for fresh, older, or corrupted settings blobs.
     merged.showServerSequencingEvents = raw.showServerSequencingEvents === true;

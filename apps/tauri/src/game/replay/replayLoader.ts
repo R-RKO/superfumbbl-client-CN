@@ -1,3 +1,4 @@
+import { withEntropy } from '../mouseEntropy';
 import {
   FfbConnection,
   NetCommandId,
@@ -109,7 +110,7 @@ export async function downloadReplay(
   createConnection: ReplayConnectionFactory = (options) => new FfbConnection(options),
 ): Promise<ReplayBundle> {
   const gameId = positiveGameId(request.gameId);
-  const connection = createConnection({ url: request.url, compression: request.compression ?? true });
+  const connection = createConnection({ url: request.url, compression: request.compression ?? true, decorateOutgoing: withEntropy }); // owner 10-16: replay requests are client commands too
   const assembler = new ReplayChunkAssembler();
   let finalState: GameJson | null = null;
   let requested = false;

@@ -61,7 +61,8 @@ import {
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
-import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
+import { withEntropy } from './mouseEntropy';
+import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
 import type { GraphicalLine, LogLineTokens } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
@@ -7752,8 +7753,10 @@ function isAlwaysVisibleEffectReport(r: Record<string, unknown>): boolean {
   if (id === 'modifiedDodgeResultSuccessful' || id === 'modifiedPassResult') return true;
   // Owner 10-15: "<Player> hands off to <Target>" is part of the match narrative (it carries no dice)
   if (id === 'handOver') return true;
-  // Owner 10-16: the action declaration ("<Player> starts a Move action.") is part of the match log, as upstream
-  if (id === 'playerAction') return true;
+  // Owner 10-16: the action declaration ("<Player> starts a Move Action.") is part of the match log, as upstream;
+  // Astra 10-16: only the values upstream narrates. The cancel line is the store's own (activationCancelReport).
+  if (id === 'playerAction') return !!playerActionDescription(r.playerAction);
+  if (id === 'playerActionCancelled') return true;
   return id === 'playerEvent' && typeof r.message === 'string' && r.message.trim().length > 0;
 }
 
@@ -8404,10 +8407,10 @@ function applyFrameContents(frame: QueuedFrame) {
     game.value, changes, watchOutReports, ++liveMovementSequence);
   dialogAlreadyAnswered(); // A cleared or replaced server dialog retires the local answer latch.
   reconcilePrimalSavageryIntent();
-  if (endTurnInFlight && endTurnInFlightTurnKey !== currentTurnKey(game.value)) {
+  if (endTurnInFlightTurnKey !== null && endTurnInFlightTurnKey !== currentTurnKey(game.value)) {
     if (endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; // owner 09-19: the server answered OUR regular End Turn
     endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; // #14b TB-5: the applied server model advanced the turn — END_TURN ack landed
-  } else if (endTurnInFlight && endTurnInFlightMode !== null && String(game.value.turnMode ?? '') !== endTurnInFlightMode) {
+  } else if (endTurnInFlightMode !== null && String(game.value.turnMode ?? '') !== endTurnInFlightMode) {
     // Astra review (touchdown hold): a touchdown ends the turn by switching the turn MODE (regular -> setup) with no
     // turn-key change - retire the latch (no ack claimed: the server ended the turn, not our click), or Confirm Setup
     // would stay blocked behind a stale in-flight End Turn.
@@ -8892,9 +8895,13 @@ function applyFrameContents(frame: QueuedFrame) {
           && report.successful === false && foulAppearanceFrameContext
         ? { ...report, defenderId: foulAppearanceFrameContext.defenderId }
         : report;
+      const activationOfRows = openActivationBefore(visibleReportLogContext, report); // owner 10-16: before the formatter opens a new one
       const lines = applyLogEasterEgg(reportForDisplay, game.value, formatReportLines(reportForDisplay, game.value, visibleReportLogContext),
         // the event identity (game id + the server's report), the same key spectate and replay hash
         logEventKey(game.value, report));
+      // Astra r3 10-16: count at FORMAT time, not when the rows surface: a fireball-deferred row still belongs to its
+      // activation, and the acting-player clear (which decides a cancel) can arrive before the deferred rows surface.
+      noteActivationLogged(activationOfRows, lines.length); // owner 10-16: displayed rows of THEIR activation (never the declaration's own)
       const surfaceLog = () => {
         for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt);
       };
@@ -10315,6 +10322,18 @@ function applyFrameContents(frame: QueuedFrame) {
       turnoverArmed = step.context.turnoverArmed;
       turnoverArmedAfterInjury = step.context.turnoverAfterInjury;
     }
+    // Owner 10-16: the server cleared the acting player in this frame (after its reports were logged above): an
+    // activation that logged nothing was cancelled, and says so under its declaration.
+    {
+      const changes = (cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [];
+      noteActivationActivity(visibleReportLogContext, changes);
+      if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)) {
+        const cancel = activationCancelReport(visibleReportLogContext);
+        if (cancel) for (const formatted of formatReportLines(cancel, game.value, visibleReportLogContext)) {
+          logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt);
+        }
+      }
+    }
     // Owner 2026-07-06: the Dodgy Snack debuff lasts ONE drive. It was only cleared on the NEXT `kickoffResult`, so the 🤮 markers stayed stuck on players after the drive ended. Clear them the moment a new drive is SET UP (turnMode 'setup'), so the status disappears when it's removed.
     if (String(game.value.turnMode ?? '') === 'setup' && state.dodgySnackPlayers.length) state.dodgySnackPlayers = [];
     const turnEnd = reports.find((r) => String(r.reportId) === 'turnEnd');
@@ -11092,6 +11111,10 @@ function canPlayerEndTurn(turnMode: unknown): boolean {
 }
 let prevTimeoutEnforced = false;
 let timeoutAutoEndArmed = false;
+/** Astra 10-16 r2 P2: the phase (turn key + mode) the auto-end was last SENT for. A stale send is not latched, so
+ *  without this marker every later eligible apply would send again for the same phase; the marker lets exactly one
+ *  auto-end go out per applied phase, and a fresh one once the model catches up to the server's mode. */
+let timeoutAutoEndSentFor: string | null = null;
 
 /** Auto-end only our quiet, activation-free timed-out select phase, using received model state. */
 function maybeAutoEndOnTimeout() {
@@ -11099,7 +11122,7 @@ function maybeAutoEndOnTimeout() {
   if (!g) return;
   const enforced = !!(g as { timeoutEnforced?: unknown }).timeoutEnforced;
   if (enforced && !prevTimeoutEnforced) timeoutAutoEndArmed = true;   // TB-1 rising edge → arm
-  if (!enforced && prevTimeoutEnforced) { timeoutAutoEndArmed = false; if (endTurnInFlight && endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; } // TB-1/TB-5 falling edge (server cleared at turn start) → disarm + ack
+  if (!enforced && prevTimeoutEnforced) { timeoutAutoEndArmed = false; timeoutAutoEndSentFor = null; if (endTurnInFlight && endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; } // TB-1/TB-5 falling edge (server cleared at turn start) → disarm + ack
   prevTimeoutEnforced = enforced;
   if (!timeoutAutoEndArmed) return;
   if (endTurnInFlight) return;                                       // #14b TB-5: manual/auto END_TURN already awaits the server turn flip
@@ -11114,9 +11137,12 @@ function maybeAutoEndOnTimeout() {
   // for sender-inventory uniformity (unreachable today: TB-2/TB-3 already exclude the locked states). Keep the latch
   // ARMED on withhold so it defers to the next quiet apply, never a lost enforcement.
   if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
-  const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
+  const phase = `${currentTurnKey(g)}|${String(g.turnMode ?? '')}`;
+  if (timeoutAutoEndSentFor === phase) return;                       // Astra r2 P2: one auto-end per applied phase
+  const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
   if (!accepted) return;
-  endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? '');
+  timeoutAutoEndSentFor = phase;
+  if (!endTurnStale(String(g.turnMode ?? ''))) { endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? ''); armEndTurnWatchdog(); }
   log('system', `play: timeout enforced — auto-ending turn (${g.turnMode})`);
 }
 
@@ -11986,7 +12012,7 @@ function resetPlayback() {
   gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
-  prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
+  prevTimeoutEnforced = false; timeoutAutoEndArmed = false; timeoutAutoEndSentFor = null; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
@@ -12348,6 +12374,39 @@ function captureFoulAppearanceFrameContext(
 }
 // Track acting-player acknowledgements at receive time so presentation lag cannot delay commands.
 let srvActingId: string | null = null;
+/** Owner 10-16 (upstream EndTurnCommandValidator, FFB 08-23 / 09-04): the server now drops a CLIENT_END_TURN whose
+ *  turnMode is not ITS current turn mode (and any end turn outside the modes the step waits in, or from the wrong
+ *  coach). The applied model can lag the server behind presentation holds, so the wire field reads this receive-time
+ *  mirror of gameSetTurnMode (seeded from snapshots), never the rendered model. */
+let srvTurnMode: string | null = null;
+/** Astra 10-16 P1: the End Turn names the phase the coach is ACTING ON (the applied model), never the server's later
+ *  mode: a stale click carrying the server's mode could end a LATER phase the same coach owns (Quick Snap finished by
+ *  itself, the receiving coach's regular turn next). The validator drops the stale one; this is what it is for. */
+function wireTurnMode(g: { turnMode?: unknown } | null | undefined): string {
+  return String(g?.turnMode ?? '');
+}
+/** A click the server will drop (the mirror already shows another mode) is sent as is but never latched: the next
+ *  click, once the model caught up, goes out at once. */
+function endTurnStale(sentMode: string): boolean {
+  if (!srvTurnMode || srvTurnMode === sentMode) return false;
+  log('system', `play: End Turn sent for ${sentMode} while the server is already in ${srvTurnMode} - the server will ignore it`);
+  return true;
+}
+/** Owner 10-16: an End Turn the server drops (the validator above, or a stale mode) never answers; without a release the
+ *  coach's next End Turn is ignored until the turn changes ("already awaiting server ack"). Fail open after 3 s; a
+ *  second End Turn is exactly what the validator exists to dedupe, so a release can never double-end a turn. */
+let endTurnWatchdog: ReturnType<typeof setTimeout> | null = null;
+function armEndTurnWatchdog(): void {
+  if (endTurnWatchdog) cancelGameTimeout(endTurnWatchdog);
+  endTurnWatchdog = scheduleGameTimeout(() => {
+    endTurnWatchdog = null;
+    if (!endTurnInFlight) return;
+    // Astra 10-16 P2: only the repeat-click gate releases; the turn key / mode stay so the applied-frame ack (the turn
+    // flip) can still mark a voluntary end (ownRegularEndTurnAcked) and never mislabel it a turnover.
+    endTurnInFlight = false;
+    log('system', 'play: End Turn not answered by the server - released (press End Turn again if the turn is still yours)');
+  }, 3000, 'connection');
+}
 let srvActingAction: string | null = null;
 /** Owner 10-15 (declare on action, not on click): an accepted clientActingPlayer naming a player whose
  *  actingPlayerSetPlayerId echo has not been received yet. With it, srvActingId and the model's acting player tell
@@ -12829,6 +12888,7 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
   let explicitPlayerActionNonNull = false;
   let terminalBoundary = false;
   for (const ch of arr) {
+    if (ch.modelChangeId === 'gameSetTurnMode') srvTurnMode = ch.modelChangeValue == null ? null : String(ch.modelChangeValue); // owner 10-16: receive-time turn mode
     if (ch.modelChangeId === 'actingPlayerSetPlayerId') {
       explicitPlayerId = true;
       explicitPlayerIdNonNull = ch.modelChangeValue != null;
@@ -12918,6 +12978,7 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   const ap = g?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
   srvActingId = ap?.playerId ?? null;
   srvActingAction = ap?.playerAction ?? null;
+  srvTurnMode = typeof g?.turnMode === 'string' ? g.turnMode : null; // owner 10-16: a snapshot seeds the turn-mode mirror too
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; noteDeclarationLatchChange(); // a snapshot is the server's whole answer (owner 10-15)
   setCancelInFlight(false); serverClearedActor = !srvActingId; // P0 #2
   if (!srvActingId) wakeActorClearWaiters();
@@ -14274,6 +14335,7 @@ export function installMovePlannerTestHarness(
 } {
   const priorGame = game.value;
   const priorSession = session;
+  endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; srvTurnMode = typeof fixture.turnMode === 'string' ? fixture.turnMode : null; // owner 10-16: a fresh harness never inherits an in-flight End Turn; its fixture seeds the turn-mode mirror
   const priorPlay = { ...play };
   const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
@@ -22335,7 +22397,7 @@ function forceAdvanceCurrentState(
       }
     }
   }
-  attempt({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
+  attempt({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
   return finish('End Turn request');
 }
 
@@ -24033,7 +24095,7 @@ function drivePregameStep() {
     // Check the lock before latching a headless mini-turn skip.
     if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
     if (once(`skip:${g.turnMode}`))
-      sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
+      sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
   }
 }
 
@@ -26027,7 +26089,7 @@ export const gameStore = {
       return;
     }
     if (endTurnInFlight) { log('system', `ignored: end turn already awaiting server ack (${g.turnMode})`); return; }
-    const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
+    const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
     if (!accepted) {
       log('system', `⚠ End Turn was not sent; the current server choice must resolve first (${g.turnMode})`);
       state.actionNotice = {
@@ -26036,7 +26098,7 @@ export const gameStore = {
       };
       return;
     }
-    endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? '');
+    if (!endTurnStale(String(g.turnMode ?? ''))) { endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? ''); armEndTurnWatchdog(); }
     retireGazeToMoveForEndTurn(); // Astra P2 (10-09): no convert-to-Move question beside the feed prompt that follows
     log('system', `play: end turn (${g.turnMode})`);
     // Owner 09-19: the turnover disarm waits for the SERVER's answer (ownRegularEndTurnAcked, set when the applied
@@ -26176,7 +26238,7 @@ export const gameStore = {
     state.spectateConnectError = null; // owner 08-18: fresh attempt — drop any prior connect-error modal
     if (!retainedHistory) { game.value = null; triggerRef(game); }
     expectingGame = true;
-    session = new GameSession({ url: params.url, compression: params.compression ?? true });
+    session = new GameSession({ url: params.url, compression: params.compression ?? true, decorateOutgoing: withEntropy }); // owner 10-16: client-supplied entropy on every command
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
     wireConnection('join-start', { mode: 'spectator', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0) });
     // Ignore late events from a prior session that this connect just replaced (a stale async close was otherwise setting a bogus joinError over the new game — seen on rapid reconnects).
@@ -26563,7 +26625,7 @@ export const gameStore = {
     if (!viaReconnect) { seatAutomation = false; classicOptOutCandidate = null; }
     declareSeatedCoachAtConnect();
     pregameHandled.clear();
-    session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true });
+    session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true, decorateOutgoing: withEntropy });
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
     wireConnection('join-start', { mode: 'player', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0), byName: !!params.gameName, withTeam: !!params.teamId, official: officialFumbbl });
     // A prior session closes asynchronously AFTER this connect starts; its late
@@ -28974,6 +29036,8 @@ export const gameStore = {
   isPlanActive(): boolean { return plannerActive(); },
   /** Owner 10-15: a declaration of ours was accepted and its acting-player echo has not been received yet. */
   declarationInFlight(): boolean { void state.declarationRevision; return declarationAwaitingEcho; },
+  /** Owner 10-16: the receive-time turn mode the End Turn wire field carries (tests). */
+  serverTurnMode(): string | null { return srvTurnMode; },
   /** Astra r4 F2: a back-out gesture (Escape's deselect) abandons a declaration queued behind a cancel. */
   abandonQueuedDeclaration(): void { priorActivationEndSeq += 1; },
   /** Owner 10-15 declaration watcher: occurrences detected this session (dev-visible counter). */

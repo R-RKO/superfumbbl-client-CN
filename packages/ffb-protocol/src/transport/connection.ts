@@ -20,6 +20,9 @@ export interface FfbConnectionOptions {
   /** Defaults to globalThis.WebSocket; inject `ws` in Node. */
   webSocketFactory?: WebSocketFactory;
   compression?: boolean;
+  /** Applied to every outgoing command right before it is encoded (owner 10-16: the Java client's one-byte mouse
+   *  entropy rides EVERY client command, chat and lobby included, so the hook sits at the transport, not in play). */
+  decorateOutgoing?: (command: NetCommand) => NetCommand;
 }
 
 export interface FfbConnectionEvents {
@@ -99,7 +102,8 @@ export class FfbConnection {
     if (!this.socket || !this.isOpen) {
       throw new Error('FfbConnection: not connected');
     }
-    this.socket.send(this.codec.encode(JSON.stringify(command)));
+    const outgoing = this.options.decorateOutgoing ? this.options.decorateOutgoing(command) : command;
+    this.socket.send(this.codec.encode(JSON.stringify(outgoing)));
   }
 
   close(): void {

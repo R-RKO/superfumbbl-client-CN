@@ -24,7 +24,7 @@ import { reduceDriveProjection, type DriveProjection } from '../driveProjection'
 import { reduceBlitzProjection, type BlitzProjection } from '../blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers, type HeldTeamMate, type FumblerooskieMarker } from '../persistentPlayerMarkers';
 import { NetCommandId, type GameJson } from '@fumbbl40k/ffb-protocol';
-import { applyLogEasterEgg, logEventKey, createReportLogContext, formatReportLines, injuryReportDedupeKey, setBlockDefenderHint, type ReportDisplay, type ReportLogContext } from '../reportFormatter';
+import { applyLogEasterEgg, logEventKey, createReportLogContext, formatReportLines, injuryReportDedupeKey, setBlockDefenderHint, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, type ReportDisplay, type ReportLogContext } from '../reportFormatter';
 import { reportCarriesDisplayedDice } from '../d6Log';
 import { EMPTY_END_GAME, reduceEndGame, type EndGameState } from '../endGameHandler';
 import { endGameFrameFromServer } from '../endGameFrame';
@@ -303,12 +303,15 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     if (injury && injuries.has(injury)) continue;
     if (injury) injuries.add(injury);
     // Always advance formatter context, even when the normal log filters this report.
+    const activationOfRows = openActivationBefore(projection.logContext, report); // owner 10-16: before the formatter opens a new one
     const lines = applyLogEasterEgg(report, next.model, formatReportLines(report, next.model, projection.logContext),
       logEventKey(next.model, report));
     const id = String(report.reportId);
     if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver'].includes(id)
+      || (id === 'playerAction' && !!playerActionDescription(report.playerAction)) // Astra 10-16: the declaration shows in replays too
       || (id === 'playerEvent' && typeof report.message === 'string' && report.message.trim())) {
       projection.log.push(...lines.map((line) => ({ ...line, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+      noteActivationLogged(activationOfRows, lines.length); // owner 10-16: the same count the live log keeps (never the declaration's own row)
     } else if (['pushback', 'skillUse', 'skillUseOtherPlayer'].includes(id)) {
       // Owner 10-15 (Graphical block flow): steps only the Graphical style shows
       projection.log.push(...lines.filter((line) => line.g).map((line) => ({ ...line, graphicalOnly: true as const, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
@@ -318,6 +321,15 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   const priorBlockCard = projection.blockCard;
   const priorBlockRollOccurrence = projection.block.rollOccurrence;
   projection.block = reduceBlockContext(projection.block, next.model, reports, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])));
+  // Owner 10-16: the server cleared the acting player in this frame: an activation that logged nothing was cancelled
+  noteActivationActivity(projection.logContext, changes);
+  if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)) {
+    const cancel = activationCancelReport(projection.logContext);
+    if (cancel) {
+      const lines = formatReportLines(cancel, next.model, projection.logContext);
+      projection.log.push(...lines.map((line) => ({ ...line, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+    }
+  }
   // owner 10-15: Graphical-only rows ride along without counting against the 500 ordinary rows (logLanes.trimLogRows)
   projection.log = trimLogRows(projection.log, 500, (row) => row.graphicalOnly === true);
   projection.drive = reduceDriveProjection(projection.drive, reports, next.model);
@@ -471,10 +483,14 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   // owner 10-15: the Graphical-log latches are optional so checkpoints written before them still validate
   const contextKeys = object(p.logContext) ? Object.keys(p.logContext) : [];
   const requiredContextKeys = ['lastBlockAttackerId', 'lastBlockDefenderId', 'lastBlockChoosingTeamId'];
-  const optionalContextKeys = ['lastHandOverCatcherId', 'lastRerollSource', 'lastRerollPlayerId', 'lastRerollTeamId', 'flowAttackerId', 'flowDefenderId', 'flowResult', 'flowPushed'];
+  const optionalContextKeys = ['lastHandOverCatcherId', 'lastRerollSource', 'lastRerollPlayerId', 'lastRerollTeamId', 'flowAttackerId', 'flowDefenderId', 'flowResult', 'flowPushed', 'activation'];
+  // owner 10-16: the open activation (declaration head) rides the context as a small object, the other latches are strings
+  const activation = (p.logContext as { activation?: unknown } | null)?.activation;
+  const activationOk = activation === undefined || activation === null || (object(activation) && keys(activation, ['playerId', 'action', 'lines', 'acted'])
+    && typeof activation.playerId === 'string' && typeof activation.action === 'string' && Number.isSafeInteger(activation.lines) && (activation.lines as number) >= 0 && typeof activation.acted === 'boolean');
   if (!object(p.logContext) || !requiredContextKeys.every((k) => contextKeys.includes(k))
     || !contextKeys.every((k) => requiredContextKeys.includes(k) || optionalContextKeys.includes(k))
-    || !Object.values(p.logContext).every(nullableString) || !strings(p.gazeVictimIds) || !strings(p.recoveringIds)) fail(11);
+    || !Object.entries(p.logContext).every(([k, v]) => k === 'activation' || nullableString(v)) || !activationOk || !strings(p.gazeVictimIds) || !strings(p.recoveringIds)) fail(11);
   if (value.clock !== null && (!object(value.clock) || !keys(value.clock, ['gameTime', 'turnTime', 'receivedMonotonicAt']) || !Object.values(value.clock).every(finite))) fail(12);
   if (!Array.isArray(p.log) || p.log.filter((row) => !(row as { graphicalOnly?: unknown }).graphicalOnly).length > 500
     || p.log.filter((row) => (row as { graphicalOnly?: unknown }).graphicalOnly).length > 500) fail(13);
@@ -503,7 +519,7 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
         const hasMore = 'more' in line;
         if (!(keys(line, base) || (allowMore && hasMore && keys(line, [...base, 'more'])))) return false;
         const l = line as { text?: unknown; indent?: unknown; d6?: unknown; blockDice?: unknown; names?: unknown; tags?: unknown; more?: unknown };
-        if (typeof l.text !== 'string' || ![0, 1, 2].includes(l.indent as number) || ![l.d6, l.blockDice, l.names, l.tags].every(Array.isArray)) return false;
+        if (typeof l.text !== 'string' || ![0, 1, 2, 3].includes(l.indent as number) || ![l.d6, l.blockDice, l.names, l.tags].every(Array.isArray)) return false;
         if (!validLogLineTokens(line as unknown as SpectatorLogEntry)) return false;
         return !hasMore || (Array.isArray(l.more) && l.more.every((m) => graphicalLine(m, false)));
       };

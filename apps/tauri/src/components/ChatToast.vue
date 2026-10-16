@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ChatToastRole } from '../game/chatAuthor';
+import ChatEmojiText from './ChatEmojiText.vue';
 
 const props = withDefaults(defineProps<{
   sender?: string;
@@ -30,7 +31,7 @@ const accessibleLabel = computed(() => {
     :data-text-size="toastTextSize" :style="{ '--chat-toast-text-size': `${toastTextSize}px` }"
     :aria-label="accessibleLabel" title="Open chat" @click="$emit('open')">
     <span class="chat-toast-sender">{{ sender || 'Chat' }}</span>
-    <span class="chat-toast-text">{{ text }}</span>
+    <span class="chat-toast-text"><ChatEmojiText :text="text" /></span>
   </button>
 </template>
 
