@@ -12,8 +12,10 @@ export const DICE_EXPECTED_HELP: readonly { key: 'rolls' | 'armour' | 'turns' | 
   // diceStats armour: twoD6AtLeast(threshold) / 36, AV 9 -> 2D6 of 9 or more -> 10 of 36
   { key: 'armour', text: 'Armour: the chance 2D6 breaks it, for example 10 of 36 against AV 9+.' },
   // Owner 10-15, turnsLost.ts / diceStats noteBlockTurns: every block thrown adds P(knock-down) x P(armour breaks) x the
-  // turns each injury result costs now - a stun 1, a KO the turns left in the half, a casualty the turns left in the game
-  { key: 'turns', text: 'Turns lost: per block thrown, turns the victim misses. Stun 1, KO rest of half, casualty rest of game.' },
+  // turns each injury result costs now - a stun 1, a KO the victim team's turns of the drive (owner 10-15: KO recovery
+  // by drive), a casualty the turns left in the game. (The blocker's own fall counting for the defender does not fit
+  // the 60-word cap, so the note leaves it out.)
+  { key: 'turns', text: 'Turns lost: per block thrown, turns the victim misses. Stun 1, KO rest of drive, casualty rest of game.' },
   // diceStats settleBlockRollLuck: the chance of a good (or bad) result given the dice count and who picks
   { key: 'block', text: 'Block: the chance of a good or bad result, given the dice and who picks.' },
 ];

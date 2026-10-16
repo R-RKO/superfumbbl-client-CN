@@ -7,7 +7,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
-import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, turnsLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
+import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, turnsLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood, type TurnsAttackRecord } from './diceStats';
 import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
@@ -20,8 +20,9 @@ export type Side = 'home' | 'away';
 
 export interface PostGameSnapshot {
   /** 2 (owner 10-13): armour / injury luck trials became attacker-only; a version-1 snapshot holds two-sided trial distributions.
-   *  3 (owner 10-15): the injury figure became TURNS LOST; an older snapshot has no turns trials, so it is re-tallied. */
-  version: 3;
+   *  3 (owner 10-15): the injury figure became TURNS LOST; an older snapshot has no turns trials, so it is re-tallied.
+   *  4 (owner 10-15): a KO is valued by its drive and each KO recovery roll is its own trial; re-tallied. */
+  version: 4;
   /** `${server}|${gameId}` — the Play blade looks a FUMBBL replay id up as `fumbbl|<id>`. */
   key: string;
   server: string;
@@ -434,9 +435,12 @@ export function pgHasMarker(like: Likelihood): boolean { return like.measured &&
 
 // Owner 10-09: each Likelihood row states the plain numbers behind it - what happened, and what fair dice expect.
 export interface PgLikelihoodRow {
-  key: 'all' | 'armour' | 'turns' | 'action' | 'block';
+  key: 'all' | 'armour' | 'turns' | 'luck' | 'action' | 'block';
   label: string;
   like: Likelihood;
+  /** Owner 10-15 (the Luck row): the figure shown in place of the "1 in N", and its hover text. */
+  value?: string;
+  valueTitle?: string;
   /** The row's numbers as one line (owner 10-10: no longer drawn under the row; `stats` carries the same numbers). */
   summary: string;
   /** Owner 10-10: the same numbers as short labelled lines, for the row's "i" popover. An empty label is a plain line. */
@@ -472,6 +476,8 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
   const turnsLike = turnsLikelihood(t);
   const turnsValue = `${plural(n(turns.lost), 'turn', 'turns')} (${exp1(turns.expected)} expected)`;
   const removals = `${plural(n(turns.casualties), 'casualty', 'casualties')}, ${plural(n(turns.kos), 'KO', 'KOs')}, ${plural(n(turns.stuns), 'stun', 'stuns')}`;
+  // Owner 10-15: each KO recovery roll credited to an attacker is its own trial (turnsLost.ts header)
+  const recoveries = `${n(turns.recoveries)} rolled, ${n(turns.recoveryFails)} failed`;
   const blockLike = blockLikelihood(t);
   const actionLike = actionLikelihood(t);
   const blockGood = `${n(block.good)} (${exp1(block.goodExpected)} expected)`;
@@ -480,9 +486,10 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
     pgLikelihoodRow('all', 'All dice', all, `${plural(all.n, 'roll', 'rolls')} measured`, [{ label: 'Rolls measured', value: String(all.n) }],
       'armour, injury, action and block rolls together'),
     pgLikelihoodRow('armour', 'Armour', armourLikelihood(t), armourParts.join(' · '), armourStats, 'armour broken against the fair chance of breaking that armour'),
-    pgLikelihoodRow('turns', 'Turns lost', turnsLike, `${turnsValue} · ${removals} · ${plural(turnsLike.n, 'attack', 'attacks')}`,
-      [{ label: 'Injuries', value: turnsValue }, { label: 'Results', value: removals }, { label: 'Attacks', value: String(turnsLike.n) }],
+    pgLikelihoodRow('turns', 'Turns lost', turnsLike, `${turnsValue} · ${removals} · KO recoveries ${recoveries} · ${plural(n(turns.attacks), 'attack', 'attacks')}`,
+      [{ label: 'Injuries', value: turnsValue }, { label: 'Results', value: removals }, { label: 'KO recoveries', value: recoveries }, { label: 'Attacks', value: String(n(turns.attacks)) }],
       `turns the victims missed against the turns expected from every attack made: ${turnsValue}`),
+    pgLuckRow(t, turnsLike),
     pgLikelihoodRow('action', 'Action dice', actionLike, `${n(action.passed)} of ${actionLike.n} passed · ${exp1(action.expected)} expected`,
       [{ label: 'Passed', value: `${n(action.passed)} of ${actionLike.n}` }, { label: 'Expected', value: exp1(action.expected) }],
       'every D6 rolled against a target number, rerolled rolls included'),
@@ -491,6 +498,40 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
       [{ label: 'Defender down available', value: blockGood }, { label: 'Attacker down forced', value: blockBad }, { label: 'Rolls', value: String(blockLike.n) }],
       'what each block roll offered whoever picked the die, for these two players'),
   ];
+}
+/** A signed figure to one decimal: "+6.2", "−3.1" (a minus sign, not a hyphen), "0.0" at zero. */
+export function pgSigned(v: number): string {
+  const r = Math.round(v * 10) / 10;
+  if (r === 0) return '0.0';
+  return `${r > 0 ? '+' : '−'}${Math.abs(r).toFixed(1)}`;
+}
+/** One Turns lost trial as a line of the Luck story: "<outcome> on <attack>, turn <N>: +x.x". */
+export function pgSwingLine(rec: TurnsAttackRecord): string {
+  const attack = rec.recovery ? `KO recovery of ${rec.victimName}` : rec.fall ? `${rec.victimName}'s own ${rec.label}` : `${rec.label} vs ${rec.victimName}`;
+  const when = rec.half === 1 ? `turn ${rec.turn}` : rec.half === 2 ? `turn ${rec.turn} of half 2` : `turn ${rec.turn} of overtime`;
+  return `${rec.outcome} on ${attack}, ${when}: ${pgSigned(rec.actual - rec.expected)}`;
+}
+/**
+ * Owner 10-15: the LUCK row under Turns lost - the turns lost the team dealt minus the turns it was expected to deal,
+ * in turns (positive = the dice favoured the team), scaled by z = luck / sqrt(sum of each trial's variance) (the Turns
+ * lost row's own Likelihood: every trial's distribution, its 0-turn outcomes included). Its popover tells the story:
+ * the three trials with the largest swings (actual - expected, either sign).
+ */
+function pgLuckRow(t: DiceTally, like: Likelihood): PgLikelihoodRow {
+  const base = pgLikelihoodRow('luck', 'Luck', like, '', [], '');
+  if (!like.measured || like.n === 0) return base;
+  const luck = like.score - like.expected;
+  const value = `${pgSigned(luck)} turns`;
+  const z = `z ${pgSigned(like.z)}`;
+  const swings = [...(t.turnsLog ?? [])]
+    .sort((a, b) => Math.abs(b.actual - b.expected) - Math.abs(a.actual - a.expected) || a.id - b.id)
+    .slice(0, 3)
+    .map((rec) => ({ label: '', value: pgSwingLine(rec) }));
+  return {
+    ...base, value, valueTitle: `${z}; beyond ±2 is a genuinely unusual game`,
+    summary: `${value} · ${z}` + (like.unmeasured > 0 ? ` · ${like.unmeasured} not measured` : ''),
+    stats: [{ label: 'Luck', value: `${value} (${z})` }, ...(swings.length ? [{ label: '', value: 'Biggest swings' }, ...swings] : []), ...base.stats.filter((st) => st.label === 'Not measured')],
+  };
 }
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
 /** Owner 10-01 (S67): dodges BY TARGET (2+..6+). Per column, bottom to top: GREEN = passed without a re-roll, BLUE =

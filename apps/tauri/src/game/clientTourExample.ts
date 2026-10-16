@@ -5,7 +5,7 @@
  */
 import { emptyTally, type DiceTally } from './diceStats';
 import { addCount, addTrial, binaryKey, blockFaceScores, blockRollKey, emptyBucket, emptyLuck, injuryKey, parseDist } from './diceLuck';
-import { blockArmourTiers, blockKnockdownChance, turnsKey, turnsScore } from './turnsLost';
+import { attackOutcomes, blockArmourTiers, blockKnockdownChance, outcomeKey, turnsScore } from './turnsLost';
 import type { PostGameSnapshot } from './postGameProjection';
 
 export const EXAMPLE_GAME_ID = 'example';
@@ -132,8 +132,10 @@ function tally(seed: number): DiceTally {
   // Owner 10-15: turns lost - eight two-dice blocks on AV 9 through the first half, and the turns their victims missed
   const turns = (luck.turns ??= emptyBucket());
   for (let i = 0; i < 8; i++) {
-    const key = turnsKey(blockKnockdownChance(2, true, scores, false), blockArmourTiers({ av: 9, mightyBlow: 0, claws: false, chainsaw: false, ironHardSkin: false, clawDoesNotStack: true }),
-      { stunty: false, thickSkull: false }, turnsScore(1, i, 3));
+    // owner 10-15: a KO is worth the drive's turns - here the rest of the half (one drive)
+    const score = turnsScore(1, i, 3);
+    const key = outcomeKey(attackOutcomes(blockKnockdownChance(2, true, scores, false), blockArmourTiers({ av: 9, mightyBlow: 0, claws: false, chainsaw: false, ironHardSkin: false, clawDoesNotStack: true }),
+      { stunty: false, thickSkull: false }), { stun: score.stun, drive: score.ko, cas: score.cas });
     addTrial(turns, key, 0);
     addCount(turns, 'attacks', 1); addCount(turns, 'expected', parseDist(key).mean6 / 6);
   }
@@ -147,7 +149,7 @@ export function exampleSnapshot(now: number = Date.now()): PostGameSnapshot {
   const home = team('EXH', 'Riverside Reavers', 'ExampleCoach', 'Human', HUMAN_POSITIONS, HUMANS);
   const away = team('EXA', 'Ironjaw Krumpaz', 'AnotherCoach', 'Orc', ORC_POSITIONS, ORCS);
   return {
-    version: 3,
+    version: 4,
     key: EXAMPLE_KEY,
     server: 'example',
     gameId: EXAMPLE_GAME_ID,

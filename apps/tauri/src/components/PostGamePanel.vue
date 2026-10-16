@@ -470,7 +470,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                           <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
                           <line v-if="pgHasMarker(row.like)" :x1="pgGaugeX(row.like.zShown)" y1="4" :x2="pgGaugeX(row.like.zShown)" y2="42" class="pg-dice-marker" />
                         </svg>
-                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && row.like.average" :title="row.detail"><b>{{ pgOdds(row.like) }}</b></span>
+                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && (row.value ? row.value.startsWith('0.0') : row.like.average)" :title="row.valueTitle ?? row.detail"><b>{{ row.value ?? pgOdds(row.like) }}</b></span>
                       </div>
                     </div>
                   </div>

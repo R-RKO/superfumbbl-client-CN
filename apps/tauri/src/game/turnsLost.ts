@@ -17,15 +17,30 @@
 //
 // SCORES (turns the victim misses, by injury result):
 //   stunned  = min(1, turns left in the half)  - one team turn; nothing when no turn of the half is left
-//   KO       = the turns left in the half, plus the next drive's turns when the KO recovery roll fails
+//   KO       = the victim team's turns left in the CURRENT DRIVE (owner 10-15: KO recovery tracked by drive)
 //   casualty = the turns left in the game
-// The KO EXPECTATION uses a "one drive per half" estimate: the drive in progress is taken to run to the end of the
-// half (which is what "the rest of the half" already assumes), so a failed recovery roll at the next kick-off costs the
-// whole next half: 8 turns after a first-half KO, nothing after a second-half or overtime KO (no regulation half
-// follows). The recovery fails on (KO weight) faces of 6 (diceLuck.koWeight6: 3 without kegs). This keeps every score a
-// whole number of turns (an exact distribution on a lattice) and a pure function of the game state at the attack. The
-// ACTUAL KO figure is counted live instead: every team turn the victim's team starts during the injury's drive, and
-// during any later drive while the player is still in the KO box (diceStats.advanceTurnsLost).
+// THE DRIVE (owner 10-15). How long the drive in progress runs is not known at the attack, so every attack's KO term
+// is PROVISIONAL: the turns left in the half, until the drive ends (a touchdown, the end of the half, the end of the
+// game); it is then FINALISED to the turns the victim's team actually started from the attack to the drive's end
+// (diceStats.advanceTurnsLost). Nothing is ever estimated beyond the drive in progress.
+// KO RECOVERY. The roll at the next kick-off (bb2025 StepEndTurn.recoverKnockout: a D6, recovered on a roll above 1
+// whose total with the Bloodweiser Kegs and Bugman's XXXXXX modifiers is above 3 - DiceInterpreter.
+// isRecoveringFromKnockout; no reroll, no apothecary) is its OWN trial, credited to the attacker who caused the KO:
+// expected = P(fail) x the turns of the drive that follows, actual = that drive's turns when it fails, else 0 - the
+// drive provisional (the rest of the half) until it ends, like the attack's own. A failed roll keeps the chain going
+// (the next kick-off rolls again); a passed roll, or a new KO of the player, ends it.
+// Every score is a whole number of turns, so each attack is an exact distribution on a lattice (outcomeKey).
+//
+// CROWD PUSHES (owner 10-15: "crowd surfs should be modelled"). A defender pushed off the pitch gets no armour roll: the
+// server rolls the injury straight away (InjuryTypeCrowd.java: armour broken, 2D6 injury with the victim's Stunty /
+// Thick Skull, Mighty Blow only when a Fan Interaction prayer names the blocker as the attacker - bb2025
+// StepPushback.java:176-187), and a result short of a KO or casualty sends him to the RESERVES for the rest of the
+// drive. So a crowd stun scores like a KO without its recovery roll: the turns left in the half (`crowdStun`), counted
+// live like a KO (the drive in progress, approximated by the rest of the half - the same "one drive per half" estimate).
+// Whether a push goes into the crowd is the server's call, not the attacker's: UtilServerPushback.findPushbackSquares
+// offers the free pitch squares of the three away from the attacker, and pushes into the crowd only when none of them
+// is free and at least one is off the pitch (crowdPushForced). A chain push (all three on the pitch and occupied) is
+// not treated as crowd-able: the player at the end of the chain is not the block's defender.
 
 import { distKey, injuryLevelFor, parseDist, type InjuryLevel } from './diceLuck';
 
@@ -47,11 +62,13 @@ export interface TurnsScore {
   /** The KO when the next recovery roll passes, and when it fails (`koFail6` faces of 6). */
   ko: number; koFailed: number; koFail6: number;
   cas: number;
+  /** A stun from a crowd push: the player is in the reserves for the rest of the drive (see the header). */
+  crowdStun: number;
 }
 export function turnsScore(half: number, turnNr: number, koFail6: number): TurnsScore {
   const halfLeft = turnsLeftInHalf(turnNr);
   return {
-    stun: Math.min(1, halfLeft),
+    stun: Math.min(1, halfLeft), crowdStun: halfLeft,
     ko: halfLeft, koFailed: halfLeft + (half === 1 ? TURNS_PER_HALF : 0), koFail6: Math.max(0, Math.min(6, Math.round(koFail6))),
     cas: turnsLeftInGame(half, turnNr),
   };
@@ -105,17 +122,29 @@ export function reportArmourTiers(threshold: number, either: readonly number[], 
 
 function gcd(a: number, b: number): number { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; }
 
+/** The crowd push of a block: `num` of the block's `reach.den` dice outcomes send the defender into the crowd, whose
+ *  injury roll takes `injuryShift` (Mighty Blow under Fan Interaction, else 0) on the victim's table. */
+export interface CrowdReach { num: number; injuryShift: number }
 /**
  * The fair distribution of the turns one attack costs the victim's team, as a diceLuck distribution key (score in
  * sixths = 6 x turns): P(the attack reaches the armour roll) x P(the armour breaks, tier by tier) x P(each injury result
- * on the victim's table with that tier's injury modifier) x its cost, the KO split by its recovery roll. Exact counts
- * over reachDen x 36 x 36 x 6, reduced.
+ * on the victim's table with that tier's injury modifier) x its cost, the KO split by its recovery roll; plus, for a
+ * block with a crowd push, P(the defender goes into the crowd) x P(each injury result, no armour roll) x its crowd
+ * cost (a stun = `crowdStun`). Exact counts over reachDen x 36 x 36 x 6, reduced.
  */
-export function turnsKey(reach: { num: number; den: number }, tiers: readonly ArmourTier[], table: { stunty: boolean; thickSkull: boolean }, score: TurnsScore): string {
+export function turnsKey(reach: { num: number; den: number }, tiers: readonly ArmourTier[], table: { stunty: boolean; thickSkull: boolean }, score: TurnsScore, crowd?: CrowdReach | null): string {
   const points = new Map<number, number>();
   const add = (turns: number, count: number) => { if (count > 0) points.set(turns * 6, (points.get(turns * 6) ?? 0) + count); };
   const unit = 36 * 36 * 6;
-  add(0, (reach.den - reach.num) * unit);
+  const surf = crowd ? crowd.num : 0;
+  add(0, (reach.den - reach.num - surf) * unit);
+  // the crowd: no armour roll (every armour outcome counts as broken), so each injury total weighs 36 x 6
+  if (crowd && surf > 0) for (let b1 = 1; b1 <= 6; b1++) for (let b2 = 1; b2 <= 6; b2++) {
+    const level = injuryLevelFor(b1 + b2 + crowd.injuryShift, table.stunty, table.thickSkull);
+    if (level === 0) add(score.crowdStun, surf * 36 * 6);
+    else if (level === 2) add(score.cas, surf * 36 * 6);
+    else { add(score.ko, surf * 36 * (6 - score.koFail6)); add(score.koFailed, surf * 36 * score.koFail6); }
+  }
   for (let a1 = 1; a1 <= 6; a1++) for (let a2 = 1; a2 <= 6; a2++) {
     const tier = tiers.find((t) => a1 + a2 >= t.threshold);
     if (!tier) { add(0, reach.num * 36 * 6); continue; }
@@ -134,6 +163,51 @@ export function turnsKey(reach: { num: number; den: number }, tiers: readonly Ar
 }
 /** The expected turns of a distribution key. */
 export function expectedTurns(key: string): number { return parseDist(key).mean6 / 6; }
+/** The variance of a distribution key, in turns squared: sum p x turns^2 - expected^2 over every outcome (0 included). */
+export function varianceTurns(key: string): number { return parseDist(key).var36 / 36; }
+
+/** One attack's outcomes as exact counts of `den`: no injury (`nothing`), a stun, a KO, a casualty, and a stun in the
+ *  crowd (scored like a KO: the rest of the drive). Valued by outcomeKey once the drive's turns are known. */
+export interface AttackOutcomes { den: number; nothing: number; stun: number; ko: number; cas: number; crowdStun: number }
+/**
+ * The chain of turnsKey as outcome counts: P(the attack reaches the armour roll) x P(the armour breaks, tier by tier)
+ * x P(each injury result on the victim's table), plus P(the crowd) x P(each injury result, no armour roll). Exact counts
+ * over reach.den x 36 x 36, reduced.
+ */
+export function attackOutcomes(reach: { num: number; den: number }, tiers: readonly ArmourTier[], table: { stunty: boolean; thickSkull: boolean }, crowd?: CrowdReach | null): AttackOutcomes {
+  const o = { nothing: 0, stun: 0, ko: 0, cas: 0, crowdStun: 0 };
+  const surf = crowd ? crowd.num : 0;
+  o.nothing += (reach.den - reach.num - surf) * 36 * 36;
+  if (crowd && surf > 0) for (let b1 = 1; b1 <= 6; b1++) for (let b2 = 1; b2 <= 6; b2++) {
+    const level = injuryLevelFor(b1 + b2 + crowd.injuryShift, table.stunty, table.thickSkull);
+    if (level === 0) o.crowdStun += surf * 36; else if (level === 2) o.cas += surf * 36; else o.ko += surf * 36;
+  }
+  for (let a1 = 1; a1 <= 6; a1++) for (let a2 = 1; a2 <= 6; a2++) {
+    const tier = tiers.find((t) => a1 + a2 >= t.threshold);
+    if (!tier) { o.nothing += reach.num * 36; continue; }
+    for (let b1 = 1; b1 <= 6; b1++) for (let b2 = 1; b2 <= 6; b2++) {
+      const level = injuryLevelFor(b1 + b2 + tier.injuryShift, table.stunty, table.thickSkull);
+      if (level === 0) o.stun += reach.num; else if (level === 2) o.cas += reach.num; else o.ko += reach.num;
+    }
+  }
+  let den = reach.den * 36 * 36;
+  let g = den;
+  for (const v of Object.values(o)) g = gcd(g, v);
+  den /= g;
+  return { den, nothing: o.nothing / g, stun: o.stun / g, ko: o.ko / g, cas: o.cas / g, crowdStun: o.crowdStun / g };
+}
+/** The distribution key of an attack's outcomes, with a stun worth `stun` turns, a KO and a crowd stun `drive` (the
+ *  victim team's turns of the drive), a casualty `cas`. */
+export function outcomeKey(o: AttackOutcomes, values: { stun: number; drive: number; cas: number }): string {
+  return distKey(o.den, [[0, o.nothing], [values.stun * 6, o.stun], [values.drive * 6, o.ko + o.crowdStun], [values.cas * 6, o.cas]]);
+}
+/** P(a KO recovery roll fails), as faces of 6 (DiceInterpreter.isRecoveringFromKnockout: recovers when roll > 1 and
+ *  roll + modifier > 3). */
+export function koRecoveryFail6(modifier: number): number {
+  let fail = 0;
+  for (let roll = 1; roll <= 6; roll++) if (!(roll > 1 && roll + modifier > 3)) fail += 1;
+  return fail;
+}
 
 /** A block die face (1 attacker down .. 6 pow) and whether it puts the DEFENDER on the ground with an armour roll,
  *  under the same match-up reading as diceLuck.blockFaceScores (`scores` = its result, index 1..6):
@@ -153,20 +227,78 @@ export function defenderDownOn(face: number, scores: readonly number[], defender
  * defender: staying up).
  */
 export function blockKnockdownChance(dice: number, attackerChooses: boolean, scores: readonly number[], defenderBlock: boolean): { num: number; den: number } {
-  const den = 6 ** dice;
-  let num = 0;
-  for (let combo = 0; combo < den; combo++) {
-    let best: { score: number; down: boolean } | null = null;
-    for (let k = 0, c = combo; k < dice; k++, c = Math.floor(c / 6)) {
-      const face = (c % 6) + 1;
-      const cand = { score: scores[face] ?? 0, down: defenderDownOn(face, scores, defenderBlock) };
-      if (!best) { best = cand; continue; }
-      const better = attackerChooses
-        ? cand.score > best.score || (cand.score === best.score && cand.down && !best.down)
-        : cand.score < best.score || (cand.score === best.score && !cand.down && best.down);
-      if (better) best = cand;
-    }
-    if (best?.down) num += 1;
+  const o = blockOutcomeChance(dice, attackerChooses, scores, defenderBlock, null);
+  return { num: o.down, den: o.den };
+}
+/** Whether the face the picker takes from `faces` knocks the defender down (see blockKnockdownChance). */
+function pickFace(faces: readonly number[], attackerChooses: boolean, scores: readonly number[], defenderBlock: boolean): number {
+  let best: { face: number; score: number; down: boolean } | null = null;
+  for (const face of faces) {
+    const cand = { face, score: scores[face] ?? 0, down: defenderDownOn(face, scores, defenderBlock) };
+    if (!best) { best = cand; continue; }
+    const better = attackerChooses
+      ? cand.score > best.score || (cand.score === best.score && cand.down && !best.down)
+      : cand.score < best.score || (cand.score === best.score && !cand.down && best.down);
+    if (better) best = cand;
   }
-  return { num, den };
+  return best?.face ?? 0;
+}
+/** Owner 10-15 (the blocker's own fall): a face that knocks the ATTACKER down with an armour roll - a skull, and a both
+ *  down that the attacker falls on (score -1: neither Block nor Wrestle, not turned into a push by Juggernaut). */
+export function attackerDownOn(face: number, scores: readonly number[]): boolean {
+  return face === 1 || (face === 2 && (scores[2] ?? 0) < 0);
+}
+/**
+ * The block's outcomes for `dice` dice, as exact counts of 6^dice: `down` = knocked down with an armour roll, `surf` =
+ * pushed into the crowd. `crowd` null = no crowd push this block (blockKnockdownChance). With a crowd push forced
+ * (crowdPushForced, and no Stand Firm / Side Step - the caller decides), every face that pushes the defender sends him
+ * into the crowd instead of to the armour roll: a push, a stumble (a push with Dodge, a knock-down without), a pow, and
+ * a both down when Juggernaut on a Blitz may turn it into a push (`bothDownPushes`, JuggernautBehaviour). The picker is
+ * taken to rank the crowd above every other result (the attacker) or below it (the defender): an injury roll with no
+ * armour roll is worse for the defender than any knock-down. A pick among faces that do not push follows
+ * blockKnockdownChance.
+ */
+export function blockOutcomeChance(dice: number, attackerChooses: boolean, scores: readonly number[], defenderBlock: boolean,
+  crowd: { bothDownPushes: boolean } | null): { down: number; surf: number; attackerDown: number; den: number } {
+  const den = 6 ** dice;
+  let down = 0, surf = 0, attackerDown = 0;
+  const pushes = (face: number) => !!crowd && (face >= 3 || (face === 2 && crowd.bothDownPushes));
+  for (let combo = 0; combo < den; combo++) {
+    const faces: number[] = [];
+    for (let k = 0, c = combo; k < dice; k++, c = Math.floor(c / 6)) faces.push((c % 6) + 1);
+    const still = faces.filter((f) => !pushes(f));
+    if (still.length < faces.length && (attackerChooses || still.length === 0)) { surf += 1; continue; }
+    const face = pickFace(still, attackerChooses, scores, defenderBlock);
+    if (defenderDownOn(face, scores, defenderBlock)) down += 1;
+    if (attackerDownOn(face, scores)) attackerDown += 1;
+  }
+  return { down, surf, attackerDown, den };
+}
+
+/** FieldCoordinateBounds.FIELD: the pitch squares (x 0..25, y 0..14). */
+export function onPitch(x: number, y: number): boolean { return x >= 0 && x <= 25 && y >= 0 && y <= 14; }
+/**
+ * Whether pushing the defender back from the attacker goes into the crowd (UtilServerPushback.findPushbackSquares,
+ * PushbackMode.REGULAR): the three squares away from the attacker, kept when on the pitch; a free one is always taken;
+ * none free and fewer than three on the pitch = the crowd; three on the pitch and all taken = a chain push (false).
+ * null when the two are not adjacent (no block geometry to read).
+ */
+export function crowdPushForced(attacker: readonly [number, number], defender: readonly [number, number], occupied: (x: number, y: number) => boolean): boolean | null {
+  const dx = defender[0] - attacker[0], dy = defender[1] - attacker[1];
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return null;
+  const [x, y] = defender;
+  const squares: [number, number][] = dx === 0 ? [[x - 1, y + dy], [x, y + dy], [x + 1, y + dy]]
+    : dy === 0 ? [[x + dx, y - 1], [x + dx, y], [x + dx, y + 1]]
+    : [[x + dx, y], [x + dx, y + dy], [x, y + dy]];
+  const inside = squares.filter(([sx, sy]) => onPitch(sx, sy));
+  if (inside.length === 3) return false;
+  return inside.every(([sx, sy]) => occupied(sx, sy));
+}
+/** StepPushback.freeSquareAroundDefender: an empty pitch square next to the defender (Side Step needs one). */
+export function freeSquareAround(defender: readonly [number, number], occupied: (x: number, y: number) => boolean): boolean {
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    const x = defender[0] + dx, y = defender[1] + dy;
+    if ((dx || dy) && onPitch(x, y) && !occupied(x, y)) return true;
+  }
+  return false;
 }
