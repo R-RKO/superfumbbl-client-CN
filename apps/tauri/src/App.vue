@@ -3030,6 +3030,12 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <p class="hint">Graphical: each line is a row in the acting team's colour, with the action's icon (and a reroll's source) on the left.</p>
+            <label v-if="settings.logStyle === 'graphical'" class="row">
+              <span>Row colour strength</span>
+              <input v-model.number="settings.logTintStrength" v-fill-range type="range" min="0" max="100" step="5" data-testid="log-tint-strength" />
+              <span>{{ settings.logTintStrength }}%</span>
+            </label>
+            <p v-if="settings.logStyle === 'graphical'" class="hint">How strongly the team colours paint the Graphical rows.</p>
           </fieldset>
 
           <fieldset class="settings-group">

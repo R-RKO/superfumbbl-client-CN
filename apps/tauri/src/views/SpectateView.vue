@@ -789,6 +789,14 @@ function logRowLine(entry: (typeof logEntries.value)[number]) {
 function logRowIndent(entry: (typeof logEntries.value)[number]): number | undefined {
   return settings.logStyle === 'graphical' && entry.g && entry.g.indent > 0 ? entry.g.indent : undefined;
 }
+/** Owner 10-15 (second indent): '' when an indented Graphical row OPENS with an outcome icon (stun stars, KO lettering,
+ *  the apothecary, the armour shield) - the row hangs that icon in the indent gutter left of its text (CSS data-lead-icon).
+ *  Timestamps on: the time precedes the icon, so the icon is not :first-child and stays in the flow (no overlap). */
+function logRowLeadIcon(entry: (typeof logEntries.value)[number]): '' | undefined {
+  if (logRowIndent(entry) == null) return undefined;
+  const tk = logSegmentsFor(logRowLine(entry))[0]?.tk;
+  return tk === 'armour' || tk === 'apothecary' || tk === 'ko' || tk === 'stun' ? '' : undefined;
+}
 /** Owner 10-15: each row's plate - a step row drops an icon that only repeats its parent's action (logRowPlates). */
 const logRowPlateList = computed(() => logRowPlates(logEntries.value.map((entry) => ({ action: entry.action, indent: logRowIndent(entry) ?? 0 }))));
 const apothecaryLogIconUrl = new URL('../assets/resources/apothecary.png', import.meta.url).href;
@@ -1131,6 +1139,7 @@ watch(() => settings.bottomBarsSwapped, async () => {
 const logTextStyle = computed(() => ({
   fontSize: `${settings.logFontSize}px`,
   fontFamily: LOG_FONTS[settings.logFont] ?? LOG_FONTS.nuffle!,
+  '--log-row-strength': String(Math.min(100, Math.max(0, settings.logTintStrength)) / 100), // owner 10-15: row tint slider
 }));
 
 // Owner 2026-07-03: the quick config-bar sits UNDER the top-left coach panel and
@@ -14667,7 +14676,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)" :data-lead-icon="logRowLeadIcon(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -20935,10 +20944,10 @@ function sendChat() {
 .log.log-graphical {
   /* Row tints - the ONE place to tune them (owner 10-15: "too subtle, home/away need to be visually distinct"): a
      saturated, brighter blue / red than the dice colours, alpha-blended over the dark panel; -alt = the zebra row. */
-  --log-row-home: rgb(40 110 235 / 0.55);
-  --log-row-home-alt: rgb(40 110 235 / 0.40);
-  --log-row-away: rgb(225 35 40 / 0.52);
-  --log-row-away-alt: rgb(225 35 40 / 0.37);
+  --log-row-home: rgb(40 110 235 / calc(0.55 * var(--log-row-strength, 1)));
+  --log-row-home-alt: rgb(40 110 235 / calc(0.40 * var(--log-row-strength, 1)));
+  --log-row-away: rgb(225 35 40 / calc(0.52 * var(--log-row-strength, 1)));
+  --log-row-away-alt: rgb(225 35 40 / calc(0.37 * var(--log-row-strength, 1)));
   --log-row-neutral: transparent;
   --log-row-neutral-alt: rgb(255 255 255 / 0.05);
   --log-icon-size: clamp(20px, calc(1.45em * 1.7), 42px);
@@ -20957,9 +20966,16 @@ function sendChat() {
   text-shadow: 0 1px 1px rgb(0 0 0 / 0.9), 0 0 2px rgb(0 0 0 / 0.75);
 }
 .log.log-graphical .log-text { display: block; grid-column: 3; min-width: 0; }
-/* Owner 10-15 (block flow): indent levels inside the text column; a wrapped line wraps at its own indent */
-.log.log-graphical .log-text[data-indent='1'] { padding-left: 1.4em; }
-.log.log-graphical .log-text[data-indent='2'] { padding-left: 2.8em; }
+/* Owner 10-15 (block flow): indent levels inside the text column; a wrapped line wraps at its own indent.
+   Owner 10-15 (second indent): each indent step is an icon column (--log-indent = one inline icon + a gap), so a row
+   that opens with an outcome icon (stun stars, KO lettering, the apothecary) hangs that icon in the gutter to the LEFT
+   of its text and its first word lines up with the other rows at that indent. */
+.log.log-graphical { --log-indent: calc(var(--log-icon-size) + 0.45em); }
+.log.log-graphical .log-text[data-indent='1'] { padding-left: var(--log-indent); }
+.log.log-graphical .log-text[data-indent='2'] { padding-left: calc(var(--log-indent) * 2); }
+.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour:first-child { margin-left: calc(-1 * var(--log-indent)); margin-right: max(0.2em, calc(var(--log-indent) - var(--log-icon-size) - 0.12em)); }
+/* the KO lettering is 1.6 icons wide: it overhangs further LEFT so its text still starts at the indent column */
+.log.log-graphical .log-text[data-indent][data-lead-icon] > .log-armour.log-ko:first-child { margin-left: calc(-1 * var(--log-indent) - 0.6 * var(--log-icon-size)); }
 /* Owner 10-15 (live 1.0.220): in the Graphical style every inline die / roll glyph - d6 faces, block dice, the armour
    shield and the apothecary injury icon - is the SAME size as the row's action icon (--log-icon-size: 1.7 x one text
    line, 20-42 px), vertically centred on the line; the line box grows to fit, so nothing clips and wrapping stays in

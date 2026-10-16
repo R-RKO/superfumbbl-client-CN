@@ -8,6 +8,7 @@ import catchIconUrl from '@fumbbl40k/ffb-pitch/assets/status/catch.png';
 import dodgeIconUrl from '@fumbbl40k/ffb-pitch/assets/status/dodge.png';
 import rushIconUrl from '@fumbbl40k/ffb-pitch/assets/status/gfi.png';
 import pickupIconUrl from '@fumbbl40k/ffb-pitch/assets/status/pickup.png';
+import stallingIconUrl from '@fumbbl40k/ffb-pitch/assets/status/stalling.png';
 import rerollIconUrl from '@fumbbl40k/ffb-pitch/assets/tokens/reroll_icon.png';
 import mascotIconUrl from '../assets/resources/team_mascot.png';
 import teamRerollIconUrl from '../assets/resources/re_roll.png';
@@ -28,7 +29,7 @@ import { LOG_ACTION_ICONS, LOG_ACTION_KINDS, LOG_ACTION_LABELS, logRowIcons, typ
 const ART_URLS: Readonly<Record<string, string>> = {
   block: blockIconUrl, pass: passIconUrl, handoff: handoffIconUrl, foul: foulIconUrl,
   catch: catchIconUrl, dodge: dodgeIconUrl, rush: rushIconUrl, pickup: pickupIconUrl,
-  reroll: rerollIconUrl, mascot: mascotIconUrl, apothecary: apothecaryIconUrl,
+  reroll: rerollIconUrl, mascot: mascotIconUrl, apothecary: apothecaryIconUrl, stalling: stallingIconUrl,
 };
 const iconOf = (kind: LogActionKind): LogIconSpec => LOG_ACTION_ICONS[kind].icon as LogIconSpec;
 /** Per-kind views of the icon table, derived (the table in logActionPlates.ts is the one place to edit). */

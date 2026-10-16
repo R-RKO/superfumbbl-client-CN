@@ -217,6 +217,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-15 (Settings > Display > Log > Log style): 'text' = the plain log (default); 'graphical' = every line a
    *  row tinted with the acting team's colour, with the action's icon (and a reroll's source icon) on its left. */
   logStyle: 'text' | 'graphical';
+  /** Owner 10-15 (Settings > Display > Log > Row colour strength): 0-100, how strong the Graphical rows' team tints
+   *  paint (100 = the launch look, which the owner found a little bright). */
+  logTintStrength: number;
   /** Display-only match-log preference. Internal plan/play sequencing remains stored
    *  for bug reports and developer diagnostics when hidden. */
   showServerSequencingEvents: boolean;
@@ -678,6 +681,7 @@ const DEFAULTS: AppSettings = {
   logDiceAsNumbers: false,
   logNeededAsNumbers: false,
   logStyle: 'text', // owner 10-15: Graphical is opt-in while the owner tests it
+  logTintStrength: 75,
   showServerSequencingEvents: false,
   logPos: null,
   chatDockRosterTab: false, // owner 10-02: roster lives in the Helmet pop-out; Settings > UI brings the dock tab back
@@ -1160,6 +1164,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;
     merged.logStyle = raw.logStyle === 'graphical' ? 'graphical' : 'text'; // owner 10-15: Text unless the user picked Graphical
+    { const v = Number(raw.logTintStrength); merged.logTintStrength = Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : DEFAULTS.logTintStrength; }
     // Fail closed to the quiet match log for fresh, older, or corrupted settings blobs.
     merged.showServerSequencingEvents = raw.showServerSequencingEvents === true;
     // Only an explicit false disables the default cursor theme. Older or malformed

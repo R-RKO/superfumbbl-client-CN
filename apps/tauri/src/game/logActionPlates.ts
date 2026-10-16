@@ -86,7 +86,7 @@ export const LOG_ACTION_ICONS = {
   argueTheCall: { icon: { type: 'emoji', emoji: '\u{1F5E3}\u{FE0F}' }, label: 'Argue the Call' },
   bribe: { icon: { type: 'emoji', emoji: '\u{1F4B5}' }, label: 'Bribe' },
   secretWeapon: { icon: { type: 'emoji', emoji: '\u{1F7E5}' }, label: 'Secret Weapon' },
-  stalling: { icon: { type: 'emoji', emoji: '\u{1F40C}' }, label: 'Stalling' },
+  stalling: { icon: { type: 'art', art: 'stalling' }, label: 'Stalling' }, // owner 10-15: the pitch's STALLING die badge, not an emoji
   raiseDead: { icon: { type: 'emoji', emoji: '\u{1F9DF}' }, label: 'Raise Dead' },
   bite: { icon: { type: 'emoji', emoji: '\u{1F9DB}' }, label: 'Bite' },
   chomp: { icon: { type: 'emoji', emoji: '\u{1F444}' }, label: 'Chomp' },
