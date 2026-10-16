@@ -22,7 +22,7 @@
 
 /** Single source of truth for tag kinds. The spectator checkpoint validator reads THIS list — a kind added
  *  to the union alone (09-09 'fail') left the validator rejecting live checkpoints and froze paused/live spectating. */
-export const LOG_TAG_KINDS = ['title', 'armour', 'hidden', 'stat-down-ni', 'fail', 'apothecary', 'direction', 'ko', 'stun'] as const;
+export const LOG_TAG_KINDS = ['title', 'armour', 'hidden', 'stat-down-ni', 'fail', 'apothecary', 'direction', 'ko', 'stun', 'dead'] as const;
 export type LogTagKind = (typeof LOG_TAG_KINDS)[number];
 
 /** One tagged run inside a formatted log line. `index` is an offset into the entry text. */

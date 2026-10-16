@@ -7749,6 +7749,8 @@ function isAlwaysVisibleEffectReport(r: Record<string, unknown>): boolean {
   if (id === 'modifiedDodgeResultSuccessful' || id === 'modifiedPassResult') return true;
   // Owner 10-15: "<Player> hands off to <Target>" is part of the match narrative (it carries no dice)
   if (id === 'handOver') return true;
+  // Owner 10-16: the action declaration ("<Player> starts a Move action.") is part of the match log, as upstream
+  if (id === 'playerAction') return true;
   return id === 'playerEvent' && typeof r.message === 'string' && r.message.trim().length > 0;
 }
 
@@ -8818,6 +8820,16 @@ function applyFrameContents(frame: QueuedFrame) {
       return (id === 'block' || id === 'blockChoice' || id === 'blockRoll') && typeof (r as { defenderId?: unknown }).defenderId === 'string';
     });
     if (hint) setBlockDefenderHint(String((hint as { defenderId?: unknown }).defenderId), visibleReportLogContext);
+  }
+  // Owner 10-16: the frame's turnEnd line names the side that was playing BEFORE the frame flipped it, and says
+  // "turns over!" when the turnover verdict below (turnoverArmStep, the same inputs) will apply to it. A preview: the
+  // state itself advances once, in the turnEnd handling further down.
+  {
+    const playingIds = new Set((wasHomePlaying ? game.value.teamHome : game.value.teamAway).playerArray.map((player) => player.playerId));
+    const preview = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury }, playingIds, reports, game.value.turnMode);
+    const scored = reports.some((r) => String(r.reportId ?? '') === 'turnEnd' && !!(r as { playerIdTouchdown?: unknown }).playerIdTouchdown);
+    visibleReportLogContext.turnEndSide = wasHomePlaying ? 'home' : 'away';
+    visibleReportLogContext.turnEndTurnover = !ownRegularEndTurnAcked && preview.context.turnoverArmed && !scored && String(game.value.turnMode ?? '') === 'regular';
   }
   for (const [reportIndex, report] of reports.entries()) {
     // Owner 10-15 (Graphical log): an undisplayed handOver report still marks the next catch as the Hand-off's, and a

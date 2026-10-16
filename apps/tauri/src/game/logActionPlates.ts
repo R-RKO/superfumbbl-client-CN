@@ -22,6 +22,7 @@ import { playerServerSide, teamServerSide, type ServerSide } from '@fumbbl40k/ff
  */
 export const LOG_ACTION_ICONS = {
   // pitch / resource art
+  move: { icon: { type: 'art', art: 'move' }, label: 'Move' }, // owner 10-16: the declaration line ("starts a Move action.")
   block: { icon: { type: 'art', art: 'block' }, label: 'Block' },
   pass: { icon: { type: 'art', art: 'pass' }, label: 'Pass' },
   handoff: { icon: { type: 'art', art: 'handoff' }, label: 'Hand-off' },
@@ -209,6 +210,9 @@ export interface LogActionPlate {
   kind: LogActionKind | null;
   side: ServerSide | null;
   source?: string;
+  /** Owner 10-16: a 'skill' row (skillUse / skillUseOtherPlayer / skillWasted) names the skill it used, so the plate
+   *  shows THAT skill's icon from the active skill icon family instead of the generic sparkle. */
+  skill?: string;
 }
 
 type Report = Record<string, unknown>;
@@ -377,6 +381,7 @@ export function logRowIcons(plate: LogActionPlate | null | undefined): { source:
 /** The wire playerAction -> action kind, for the (debug-log) playerAction line. */
 export function logActionForPlayerAction(action: unknown): LogActionKind | null {
   switch (String(action ?? '')) {
+    case 'move': case 'moveLeap': case 'standUp': return 'move';
     case 'block': case 'blitz': case 'blitzMove': case 'multipleBlock': return 'block';
     case 'pass': case 'passMove': return 'pass';
     case 'handOver': case 'handOverMove': return 'handoff';
@@ -413,7 +418,8 @@ export function logActionPlate(report: Report, game: GameJson | null, context: L
   const side = action ? action.side ?? fallbackSide : fallbackSide;
   const kind = action?.kind ?? null;
   if (!kind && !source && !side) return null;
-  return source ? { kind, side, source } : { kind, side };
+  const skill = action?.skill;
+  return { kind, side, ...(source ? { source } : {}), ...(skill ? { skill } : {}) };
 }
 
 /**
@@ -437,7 +443,7 @@ export function logRowPlates(rows: readonly { action?: LogActionPlate | null; in
   });
 }
 
-function logActionKindPlate(report: Report, game: GameJson | null, context: LogActionContext | null): { kind: LogActionKind; side: ServerSide | null } | null {
+function logActionKindPlate(report: Report, game: GameJson | null, context: LogActionContext | null): { kind: LogActionKind; side: ServerSide | null; skill?: string } | null {
   const id = String(report.reportId ?? '');
   const plate = (kind: LogActionKind, side: ServerSide | null) => ({ kind, side });
   const rollerSide = () => sideOfFirst(game, report.playerId) ?? teamServerSide(game, report.teamId);
@@ -535,6 +541,12 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       // (side null: the icon keeps the row's existing dice-owner tint)
       return plate(/shadow/i.test(String(report.skill ?? '')) ? 'shadowing' : 'tentacles', null);
     default: {
+      // Owner 10-16 ("Genesis Besur uses Dodge" wore stars): a skill-use row carries the skill it names - its icon
+      if (id === 'skillUse' || id === 'skillUseOtherPlayer' || id === 'skillWasted') {
+        // Astra 10-16: only a string names a skill (a malformed report must not throw inside checkpoint reduction)
+        const skill = typeof report.skill === 'string' ? report.skill.trim() : '';
+        return skill ? { ...plate('skill', null), skill } : plate('skill', null);
+      }
       // owner 10-15: every other report type takes its icon from REPORT_ACTION_KIND (null = no icon). Astra 10-15: the
       // icon never changes the row's tint - side null keeps the report's dice owner (fallbackSide, reportDiceOwner)
       const kind = REPORT_ACTION_KIND[id];
@@ -548,9 +560,12 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
 export function isLogActionPlate(value: unknown): value is LogActionPlate {
   if (!value || typeof value !== 'object') return false;
   const keys = Object.keys(value).sort().join(',');
-  const plate = value as { kind?: unknown; side?: unknown; source?: unknown };
+  const plate = value as { kind?: unknown; side?: unknown; source?: unknown; skill?: unknown };
   const kindOk = plate.kind === null || (LOG_ACTION_KINDS as readonly unknown[]).includes(plate.kind);
   const sideOk = plate.side === null || plate.side === 'home' || plate.side === 'away';
-  const sourceOk = keys === 'kind,side' || (keys === 'kind,side,source' && typeof plate.source === 'string' && plate.source.length > 0);
+  const nonEmpty = (v: unknown) => typeof v === 'string' && v.length > 0;
+  // optional keys: source (a reroll source) and skill (owner 10-16: the skill a skill-use row names)
+  const sourceOk = keys === 'kind,side' || (keys === 'kind,side,source' && nonEmpty(plate.source))
+    || (keys === 'kind,side,skill' && nonEmpty(plate.skill)) || (keys === 'kind,side,skill,source' && nonEmpty(plate.skill) && nonEmpty(plate.source));
   return kindOk && sideOk && sourceOk && (plate.kind !== null || plate.side !== null || plate.source !== undefined);
 }

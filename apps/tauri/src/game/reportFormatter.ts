@@ -157,7 +157,7 @@ function decodeDisplay(marked: string, owner: ServerSide | null = null): ReportD
   const tags: LogTagToken[] = [];
   let text = '';
   let cursor = 0;
-  const marker = /([RT])([HAN]?)([1-6])|([1-6])|([HA])([^]*)|([TSWNFVADKUC])([^]*)/g;
+  const marker = /([RT])([HAN]?)([1-6])|([1-6])|([HA])([^]*)|([TSWNFVADKUCX])([^]*)/g;
   for (let match = marker.exec(marked); match; match = marker.exec(marked)) {
     text += marked.slice(cursor, match.index);
     if (match[7]) {
@@ -179,6 +179,8 @@ function decodeDisplay(marked: string, owner: ServerSide | null = null): ReportD
         title = 'Casualty result';
       } else if (match[7] === 'U') {
         title = 'Stunned';
+      } else if (match[7] === 'X') {
+        title = 'Killed';
       } else if (match[7] === 'D') {
         // Owner 10-15: a field direction - "Northeast|NE (field)"; the name rides `title`, the view turns it into the
         // screen arrow for the current projection
@@ -191,7 +193,7 @@ function decodeDisplay(marked: string, owner: ServerSide | null = null): ReportD
         length: run.length,
         kind: match[7] === 'T' ? 'title' : match[7] === 'S' || match[7] === 'V' ? 'armour' : match[7] === 'N' ? 'stat-down-ni'
           : match[7] === 'F' ? 'fail' : match[7] === 'A' || match[7] === 'C' ? 'apothecary' : match[7] === 'D' ? 'direction'
-          : match[7] === 'K' ? 'ko' : match[7] === 'U' ? 'stun' : 'hidden',
+          : match[7] === 'K' ? 'ko' : match[7] === 'U' ? 'stun' : match[7] === 'X' ? 'dead' : 'hidden',
         ...(title ? { title } : {}),
       });
       text += run;
@@ -521,6 +523,11 @@ export interface ReportLogContext {
   /** The player / team the pending grant named (Graphical log / reroll lead). Optional for the same reason. */
   lastRerollPlayerId?: string | null;
   lastRerollTeamId?: string | null;
+  /** Owner 10-16: the side whose turn the frame's `turnEnd` closes (the side playing BEFORE the frame flipped it) and
+   *  whether the store's turnover verdict applies to it, so the line can name the coach ("<Coach>'s turn ends" /
+   *  "<Coach> turns over!"). Set per frame by the store; absent (older checkpoints, tests) = the plain "turn ends". */
+  turnEndSide?: ServerSide | null;
+  turnEndTurnover?: boolean;
   /** Owner 10-15 (Graphical block flow): the open block sequence - attacker, defender, and the chosen result once the
    *  blockChoice names it ('pow' | 'stumble' | 'push' | 'bothDown' | 'skull'). Null = no open sequence. Optional for
    *  the same reason. */
@@ -614,9 +621,19 @@ export function formatRecoveryLines(recoveries: readonly Report[], game: GameJso
  *  formatRecoveryLines; heat exhaustion keeps its PRE-EXISTING joined-with-'; ' text
  *  (unregressed) as its own trailing line. Shared by the `turnEnd` formatter (single-line,
  *  legacy callers) and formatReportLines (multi-line). */
-function turnEndLines(r: Report, g: GameJson | null): string[] {
+/** Owner 10-16: the coach of a side, tagged with that side (tinted like a player name in the view). */
+function coachTagOfSide(game: GameJson | null, side: ServerSide): string {
+  const team = side === 'home' ? game?.teamHome : game?.teamAway;
+  const name = String(team?.coach || team?.teamName || '').trim();
+  return name ? `${NAME_MARK}${side === 'home' ? 'H' : 'A'}${name}${NAME_END}` : '';
+}
+
+function turnEndLines(r: Report, g: GameJson | null, context: ReportLogContext | null = null): string[] {
   // Owner 08-19: "TOUCHDOWN!" / "scores!" ride title tags -> gold in the view, copy unchanged.
-  const lines = [r.playerIdTouchdown ? `${titleTag('TOUCHDOWN!')} ${pn(g, r.playerIdTouchdown)} ${titleTag('scores!')}` : 'turn ends'];
+  // Owner 10-16: a plain turn end names whose turn it was, and says so when it was a turnover.
+  const coach = context?.turnEndSide ? coachTagOfSide(g, context.turnEndSide) : '';
+  const plainEnd = coach ? (context?.turnEndTurnover ? `${coach} turns over!` : `${coach}'s turn ends`) : 'turn ends';
+  const lines = [r.playerIdTouchdown ? `${titleTag('TOUCHDOWN!')} ${pn(g, r.playerIdTouchdown)} ${titleTag('scores!')}` : plainEnd];
   const recoveries = Array.isArray(r.knockoutRecoveryArray) ? (r.knockoutRecoveryArray as Report[]) : [];
   lines.push(...formatRecoveryLines(recoveries, g));
   const heat = Array.isArray(r.heatExhaustionArray) ? r.heatExhaustionArray : [];
@@ -1157,7 +1174,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // log line — TD always its own line, KO recoveries grouped+split by outcome, heat
   // exhaustion kept joined exactly as before (unregressed) but on its own line.
   turnEnd: (r, g) => turnEndLines(r, g).join('; '),
-  playerAction: (r, g) => `${pn(g, r.actingPlayerId ?? r.playerId)} ${humanize(String(r.playerAction ?? 'acts'))}`,
+  // Owner 10-16: the declaration line reads as upstream's ("<Player> starts a Move action."); shown in the match log.
+  playerAction: (r, g) => `${pn(g, r.actingPlayerId ?? r.playerId)} starts a ${playerActionLabel(r.playerAction)} action.`,
   skillUse: (r, g) => String(r.skill ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase() === 'reliable'
       && String(r.skillUse ?? '') === 'fumbledPlayerLandsSafely'
     ? `play: Reliable used (${pn(g, r.playerId)})`
@@ -1484,6 +1502,36 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
  *  generic line renders with their dice - so a test can keep each one in the action icon table. */
 export const LOG_REPORT_TYPES: readonly string[] = [...Object.keys(formatters), ...Object.keys(genericD6Fields)];
 
+/** Owner 10-16: the wire playerAction as the action's name ("Move", "Blitz", "Hand-off", "Throw Team-Mate"). */
+function playerActionLabel(action: unknown): string {
+  switch (String(action ?? '')) {
+    case 'move': case 'moveLeap': return 'Move';
+    case 'blitz': case 'blitzMove': return 'Blitz';
+    case 'block': return 'Block';
+    case 'multipleBlock': return 'Multiple Block';
+    case 'pass': case 'passMove': return 'Pass';
+    case 'handOver': case 'handOverMove': return 'Hand-off';
+    case 'foul': case 'foulMove': return 'Foul';
+    case 'throwTeamMate': case 'throwTeamMateMove': return 'Throw Team-Mate';
+    case 'kickTeamMate': case 'kickTeamMateMove': return 'Kick Team-Mate';
+    case 'standUp': return 'Stand Up';
+    case 'standUpBlitz': return 'Stand Up and Blitz';
+    case 'gaze': case 'gazeMove': return 'Hypnotic Gaze';
+    case 'throwBomb': return 'Throw Bomb';
+    case 'throwKeg': return 'Throw Keg';
+    case 'swoop': return 'Swoop';
+    case 'maximumCarnage': return 'Maximum Carnage';
+    case 'raidingParty': return 'Raiding Party';
+    case 'lookIntoMyEyes': return 'Look Into My Eyes';
+    case 'balefulHex': return 'Baleful Hex';
+    case 'theFlashingBlade': return 'The Flashing Blade';
+    case 'breatheFire': return 'Breathe Fire';
+    case 'putridRegurgitation': case 'projectileVomit': return 'Projectile Vomit';
+    case '': return 'new';
+    default: return titleCase(humanize(String(action)));
+  }
+}
+
 function humanize(id: string): string {
   // split camelCase, then collapse underscores / repeated spaces to a single
   // space (B9-12 G3: a reRollSource like "team_reRoll" rendered "team  re roll").
@@ -1611,7 +1659,7 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   // player's team (turnEndLines order: TD / "turn ends", recoveries, heat). A row tint per line, never per report.
   if (String(report.reportId ?? '') === 'turnEnd' && lines.length) {
     const recoveries = Array.isArray(report.knockoutRecoveryArray) ? (report.knockoutRecoveryArray as Report[]) : [];
-    const sides = [playerServerSide(game, report.playerIdTouchdown), ...recoveries.map((r) => playerServerSide(game, r.playerId))];
+    const sides = [playerServerSide(game, report.playerIdTouchdown) ?? context?.turnEndSide ?? null, ...recoveries.map((r) => playerServerSide(game, r.playerId))];
     safeLatchBlockFlow(report, game, context); // a turn end closes any open block sequence
     return lines.map((line, index) => {
       const side = sides[index] ?? null;
@@ -1877,7 +1925,9 @@ function graphicalInjury(r: Report, game: GameJson | null, head: string, headInd
     const base = typeof r.injury === 'number' ? r.injury & 0xff : -1;
     // owner 10-15: the outcome row leads with its icon - the KO lettering for a KO, the apothecary icon for a
     // casualty, and a 'stun' slot (renders nothing until the stun art arrives) for a stun
-    const lead = cr || base >= 6 && base <= 8 ? `${TAG_MARK}Ccasualty${TAG_END} `
+    // owner 10-16: a kill leads with the skull instead of the apothecary icon
+    const lead = base === 8 ? `${TAG_MARK}Xkilled${TAG_END} `
+      : cr || base >= 6 && base <= 8 ? `${TAG_MARK}Ccasualty${TAG_END} `
       : base === 5 ? `${TAG_MARK}KKO${TAG_END} `
         : base === 4 && STUN_OUTCOME_ICON ? `${TAG_MARK}Ustunned${TAG_END} ` : '';
     const outcomeText = base === 9 && !cr
@@ -1888,9 +1938,18 @@ function graphicalInjury(r: Report, game: GameJson | null, head: string, headInd
         ? `${name} is ${titleCase(outcome)}!`
         : injuryEffectSentence(r.injury, name) ?? (outcome ? `${name} is ${outcome}!` : '');
     const outcomeLine = outcomeText ? `${lead}${outcomeText}` : '';
-    return [graphicalOf(parts.join(' | '), headIndent, owner), outcomeLine ? graphicalOf(outcomeLine, (headIndent + 1) as 1 | 2, owner) : null];
+    return [graphicalOf(twoLineHead(head, parts), headIndent, owner), outcomeLine ? graphicalOf(outcomeLine, (headIndent + 1) as 1 | 2, owner) : null];
   }
-  return [graphicalOf(parts.join(' | '), headIndent, owner), null];
+  return [graphicalOf(twoLineHead(head, parts), headIndent, owner), null];
+}
+
+/** Owner 10-16: the armour / injury dice of a Graphical head row sit on a SECOND LINE of the same row, under the
+ *  sentence ("<P> fouls <T>" / "AV | INJ"), instead of wrapping mid-dice; a row with no sentence keeps one line. */
+function twoLineHead(head: string, parts: string[]): string {
+  const dice = head ? parts.slice(1) : parts;
+  if (!head || !dice.length) return parts.join(' | ');
+  return `${head}
+${dice.join(' | ')}`;
 }
 
 /** Owner 10-15: the stun outcome icon (the owner's three gold stars, apps/tauri/src/assets/status/stunned.png): the
@@ -2021,7 +2080,7 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
 function formatReportLinesPlain(report: Report, game: GameJson | null, context: ReportLogContext): ReportDisplay[] {
   if (String(report.reportId ?? '') === 'turnEnd') {
     try {
-      return turnEndLines(report, game).map((line) => decodeDisplay(line));
+      return turnEndLines(report, game, context).map((line) => decodeDisplay(line));
     } catch {
       // fall through to the single-line generic path
     }

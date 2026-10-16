@@ -2,9 +2,9 @@
   "file": "stunned.png",
   "purpose": "Graphical log: the leading inline icon of the \"<Player> is stunned!\" injury outcome row (tooltip \"Stunned\").",
   "license": "Super FUMBBL Media License (original art)",
-  "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/stunned/stunned-v1.png",
-  "sha256": "0c67b0a432ed78638f6489406efc18dd05604cb53acd25f7150e1088e6408384",
-  "tool": "Built-in image_gen (art lane, owner-supplied 10-15); the source is byte-identical to three-stars-square-v2.png, whose manifest beside it records the prompt (three gold stars, square game log icon). The stunned-v1.provenance.json beside the source describes an earlier STUNNED text image and does not match this file.",
-  "processing": "Same pipeline as stalling.png: hidden RGB under alpha 0 zeroed, trimmed to the alpha bounds (1254x1254 -> 1230x1187), centred on a square canvas, premultiplied Lanczos downscale to 256x256 RGBA. No redraw or recolour.",
+  "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/stunned/stun-stars-square-v3.png",
+  "sha256": "7aea4ce2edef2638dc7a8bb4efa0b64f6aab1eade713d82d3a37118472023800",
+  "tool": "Built-in image_gen (art lane, owner-supplied 10-16): stun-stars-square-v3.png (three gold stars around STUN lettering) replaces the 10-15 three-stars image; its provenance json sits beside the source.",
+  "processing": "Same pipeline as stalling.png: hidden RGB under alpha 0 zeroed, trimmed to the alpha bounds (1254x1254 -> 1244x1229), centred on a square canvas, premultiplied Lanczos downscale to 256x256 RGBA. No redraw or recolour.",
   "note": "No FUMBBL or Games Workshop material."
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 import { displayDiceSide, type ServerSide } from '@fumbbl40k/ffb-pitch';
 import blockIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/block-attacker-fist.png';
+import moveIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/action-move.png';
 import passIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/action-pass.png';
 import handoffIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/action-handoff.png';
 import foulIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/action-foul.png';
@@ -27,7 +28,7 @@ import { LOG_ACTION_ICONS, LOG_ACTION_KINDS, LOG_ACTION_LABELS, logRowIcons, typ
  */
 /** The art files of the `art` entries in the icon table (logActionPlates.LOG_ACTION_ICONS). */
 const ART_URLS: Readonly<Record<string, string>> = {
-  block: blockIconUrl, pass: passIconUrl, handoff: handoffIconUrl, foul: foulIconUrl,
+  move: moveIconUrl, block: blockIconUrl, pass: passIconUrl, handoff: handoffIconUrl, foul: foulIconUrl,
   catch: catchIconUrl, dodge: dodgeIconUrl, rush: rushIconUrl, pickup: pickupIconUrl,
   reroll: rerollIconUrl, mascot: mascotIconUrl, apothecary: apothecaryIconUrl, stalling: stallingIconUrl,
 };
@@ -75,13 +76,15 @@ const sourceLabel = computed(() => (icons.value.source ? rerollSourceLabel(icons
 const actionUrl = computed(() => {
   const action = icons.value.action;
   if (!action) return '';
+  // owner 10-16: a skill-use row shows the icon of the skill it names (falls back to the generic icon when unknown)
+  if (action === 'skill' && props.plate?.skill) { const own = reactiveSkillIconUrl(props.plate.skill); if (own) return own; }
   const skill = LOG_ACTION_SKILL_ICONS[action];
   return skill ? reactiveSkillIconUrl(skill) : LOG_ACTION_ICON_URLS[action] ?? '';
 });
 const actionEmoji = computed(() => (icons.value.action ? LOG_ACTION_EMOJI[icons.value.action] ?? '' : ''));
 // owner 10-15: the KO recovery rows' icon - the dugout-label "KO" lettering (koLettering.ts); plain "KO" until composed
 const koUrl = koLetteringUrl();
-const actionLabel = computed(() => (icons.value.action ? LOG_ACTION_LABELS[icons.value.action] : ''));
+const actionLabel = computed(() => (icons.value.action === 'skill' && props.plate?.skill ? props.plate.skill : icons.value.action ? LOG_ACTION_LABELS[icons.value.action] : ''));
 </script>
 
 <template>
