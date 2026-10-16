@@ -22,7 +22,7 @@
 
 /** Single source of truth for tag kinds. The spectator checkpoint validator reads THIS list — a kind added
  *  to the union alone (09-09 'fail') left the validator rejecting live checkpoints and froze paused/live spectating. */
-export const LOG_TAG_KINDS = ['title', 'armour', 'hidden', 'stat-down-ni', 'fail'] as const;
+export const LOG_TAG_KINDS = ['title', 'armour', 'hidden', 'stat-down-ni', 'fail', 'apothecary', 'direction', 'ko', 'stun'] as const;
 export type LogTagKind = (typeof LOG_TAG_KINDS)[number];
 
 /** One tagged run inside a formatted log line. `index` is an offset into the entry text. */
@@ -30,11 +30,14 @@ export interface LogTagToken {
   index: number;
   length: number;
   kind: LogTagKind;
+  /** Owner 10-15 (Graphical log): the hover tooltip of an inline icon ("Armour roll: needs 9+ to break",
+   *  "Injury roll"). Only Graphical lines carry it; Text lines never do. */
+  title?: string;
 }
 
 /** A split piece of a text run. `start` is the piece's ABSOLUTE offset in the entry text so
  *  untagged pieces can be handed straight on to logNameParts (which is entry-absolute too). */
-export type LogTagPart = { text: string; start: number; kind?: LogTagKind };
+export type LogTagPart = { text: string; start: number; kind?: LogTagKind; title?: string };
 
 /**
  * Split ONE contiguous text run of a log entry into plain / tagged pieces.
@@ -54,7 +57,7 @@ export function logTagParts(run: string, start: number, tokens: readonly LogTagT
   for (const token of inRun) {
     if (token.index < cursor) continue; // overlapping tags: first one wins
     if (token.index > cursor) parts.push({ text: run.slice(cursor - start, token.index - start), start: cursor });
-    parts.push({ text: run.slice(token.index - start, token.index + token.length - start), start: token.index, kind: token.kind });
+    parts.push({ text: run.slice(token.index - start, token.index + token.length - start), start: token.index, kind: token.kind, ...(token.title ? { title: token.title } : {}) });
     cursor = token.index + token.length;
   }
   if (cursor < end) parts.push({ text: run.slice(cursor - start), start: cursor });

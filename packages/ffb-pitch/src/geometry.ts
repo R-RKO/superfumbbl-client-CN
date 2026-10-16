@@ -198,6 +198,18 @@ export function geometryStateKey(): string {
 export function isFieldFlip(): boolean {
   return fieldFlip;
 }
+
+/** Owner 10-15 (log directions): where a FIELD step (dx, dy in game coordinates) points ON SCREEN for a projection -
+ *  `right` / `up` in screen terms (signs only matter). The same mapping every screen mapper above uses: depth grows
+ *  toward the far (top) edge, width to the right, and the field flip (spectator drive-north XOR the user's pitch
+ *  flip) turns both axes. Pure: the caller passes the projection, so a log can follow a view change at render time. */
+export function fieldDeltaOnScreen(dx: number, dy: number, o: Orientation, flipped: boolean): { right: number; up: number } {
+  const proj = o === 'ns' ? NS : EW;
+  let up = proj.depthOf(dx, dy) - proj.depthOf(0, 0);
+  let right = proj.widthOf(dx, dy) - proj.widthOf(0, 0);
+  if (flipped) { up = -up; right = -right; }
+  return { right, up };
+}
 /** Flip a SQUARE near-index (depth d in 0..rows-1, width w in 0..cols-1). */
 function flipSquareIndex(d: number, w: number): [number, number] {
   return fieldFlip ? [P.rows - 1 - d, P.cols - 1 - w] : [d, w];

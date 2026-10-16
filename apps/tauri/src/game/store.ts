@@ -61,8 +61,9 @@ import {
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
-import { createReportLogContext, formatReportLines, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
+import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
+import type { GraphicalLine, LogLineTokens } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
 import type { LogNameToken } from './logNames';
@@ -332,6 +333,13 @@ export interface LogEntry {
   /** Owner 10-15: the action plate (icon + acting team's server side) for Settings > Display > Log > Action icons.
    *  Display-only: bug-report and diagnostic text read `text` alone. */
   action?: LogActionPlate;
+  /** Owner 10-15: this line in the Graphical log style (absent = as `text`; null = left out there). Display-only. */
+  g?: GraphicalLine | null;
+  /** Owner 10-15: a line only the Graphical style shows (a block flow step the Text log never listed: the push, a
+   *  Fend / Stand Firm / Juggernaut use). The Text style leaves it out. */
+  graphicalOnly?: true;
+  /** Owner 10-15: the rare easter-egg wording both styles show instead of `text` (bug-report logs keep `text`). */
+  alt?: LogLineTokens;
   /** Server-authoritative talk author classification; missing team/coach truth stays neutral. */
   side?: ChatAuthorSide;
 }
@@ -4741,8 +4749,9 @@ export function joinReplayRerollReconstructionWorthwhile(joinedGame: GameJson): 
 
 /** Repair only TurnData fields omitted by the upstream snapshot. A live incremental setter
  *  that lands while the replay download is in flight creates the property first and wins. */
-/** One replay download per join snapshot, shared by the pre-join backfill and the standing re-roll repair. Keyed by
- *  history generation + game so a reconnect or another match fetches afresh; a failed fetch is not cached. */
+/** One replay download per join snapshot for the standing re-roll repair. Keyed by history generation + game so a
+ *  reconnect or another match fetches afresh; a failed fetch is not cached. The pre-join backfill never reuses it: that
+ *  download may predate every live command (Astra 10-15 round 10) - see backfillReplayBundle. */
 let sharedJoinReplay: { key: string; promise: Promise<ReplayBundle> } | null = null;
 function joinReplayBundle(request: { url: string; coach: string; compression?: boolean }, gameId: number, key: string): Promise<ReplayBundle> {
   if (sharedJoinReplay?.key === key) return sharedJoinReplay.promise;
@@ -4750,6 +4759,17 @@ function joinReplayBundle(request: { url: string; coach: string; compression?: b
   sharedJoinReplay = { key, promise };
   promise.catch(() => { if (sharedJoinReplay?.promise === promise) sharedJoinReplay = null; });
   return promise;
+}
+/** The pre-join backfill's own download, requested only once live commands exist, remembering how many live commands of
+ *  the segment had ARRIVED when it was requested: the server's replay holds them, so the placement must cover them
+ *  (freshness evidence, Astra 10-15 round 10). A needle-short re-run reuses the same entry (same key). */
+let backfillDownload: { key: string; promise: Promise<ReplayBundle>; liveAtRequest: number } | null = null;
+function backfillReplayBundle(request: { url: string; coach: string; compression?: boolean }, gameId: number, key: string, liveNow: number) {
+  if (backfillDownload?.key === key) return backfillDownload;
+  const entry = { key, promise: downloadReplay({ ...request, gameId }), liveAtRequest: liveNow };
+  backfillDownload = entry;
+  entry.promise.catch(() => { if (backfillDownload === entry) backfillDownload = null; });
+  return entry;
 }
 /** Owner 09-14: a spectator who joins mid-match gets the turns BEFORE the join too. The server streams the in-progress
  *  game's replay (commands 1..joinCommandNr); reduced from the replay seed they become a sealed "Before you joined"
@@ -4781,7 +4801,12 @@ async function backfillSpectatorHistoryFromReplay(
   if (backfillInFlight.has(inFlightKey)) { backfillRetryRequested.add(inFlightKey); return; }
   const last = backfillOutcomes.get(inFlightKey);
   if (last && last !== 'boundary-unverified' && last !== 'needle-short') return; // final for this segment
-  const attempt = (backfillAttempts.get(inFlightKey) ?? 0) + 1;
+  // Bug report 2026-10-15: a needle-short outcome means the download could place the join once more live commands
+  // exist, so it re-runs on the SAME download and does not spend a fresh-download attempt. It is bounded: prepare
+  // reports needle-short only while the live segment is shorter than the match window, and each re-run is triggered
+  // by a committed live event.
+  const reuse = last === 'needle-short' && (backfillAttempts.get(inFlightKey) ?? 0) > 0;
+  const attempt = (backfillAttempts.get(inFlightKey) ?? 0) + (reuse ? 0 : 1);
   if (attempt > BACKFILL_MAX_ATTEMPTS) return;
   backfillAttempts.set(inFlightKey, attempt);
   backfillRetryRequested.delete(inFlightKey);
@@ -4821,8 +4846,11 @@ async function backfillSpectatorHistoryFromReplayOnce(
   liveIdentity: SpectatorIdentity, inFlightKey: string, attempt: number,
 ): Promise<void> {
   let bundle: ReplayBundle;
-  // Attempt 1 shares the join download with the re-roll repair; a retry must see the live tail, so it fetches afresh.
-  try { bundle = await joinReplayBundle(request, gameId, `${history.sessionId}:${generation}:${gameId}${attempt > 1 ? `:retry${attempt}` : ''}`); }
+  // Every attempt fetches its own download after the live commands it must cover arrived (never the repair's join-time
+  // download); a needle-short re-run keeps the same attempt number, so the same download and its liveAtRequest.
+  // Keyed by the live SEGMENT too: a replacement snapshot's attempt never inherits another segment's download (Astra round 11).
+  const download = backfillReplayBundle(request, gameId, `${inFlightKey}:${gameId}:backfill${attempt}`, history.liveSegmentEvents);
+  try { bundle = await download.promise; }
   catch (error) { backfillOutcomes.set(inFlightKey, 'download-failed'); log('system', `earlier history unavailable: ${String(error)}`); return; }
   if (history.generation !== generation || history.head?.model.gameId !== joinedHead.model.gameId) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
   let seed: GameJson;
@@ -4831,7 +4859,7 @@ async function backfillSpectatorHistoryFromReplayOnce(
   const diceOf = () => (spectatorDice?.history === history ? spectatorDice : detachedSpectatorDice?.history === history ? detachedSpectatorDice : null);
   const dice = diceOf();
   const diceImport = dice?.ledger.beginImport();
-  const prepared = await history.prepareBackfill(seed, bundle.commands, liveIdentity, undefined, diceImport);
+  const prepared = await history.prepareBackfill(seed, bundle.commands, liveIdentity, undefined, diceImport, { liveAtRequest: download.liveAtRequest });
   if (history.generation !== generation) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
   const outcome = prepared.kind === 'ok' ? history.commitBackfill(prepared.prepared) : prepared;
   backfillOutcomes.set(inFlightKey, outcome.kind);
@@ -5913,10 +5941,10 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate) {
+function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens) {
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
   const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
-  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
+  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}), ...(g !== undefined ? { g } : {}), ...(graphicalOnly ? { graphicalOnly: true as const } : {}), ...(alt ? { alt } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
 }
 /** Owner 10-10: my own follow-up answer as a match log line ("<Player> does not follow the block"), the name tagged
@@ -5930,10 +5958,13 @@ function logFollowUpChoice(playerId: string | null | undefined, follow: boolean)
   const names: LogNameToken[] | undefined = home || away ? [{ index: 0, length: name.length, team: home ? 'home' : 'away', playerId: id }] : undefined;
   // Owner 10-15: the follow-up belongs to the block, so it wears the blocker's Block plate when action icons are on.
   const action: LogActionPlate = { kind: 'block', side: home ? 'home' : away ? 'away' : null };
-  log('report', `${name} ${follow ? 'follows the block' : 'does not follow the block'}`, undefined, undefined, undefined, names, undefined, undefined, action);
+  const text = `${name} ${follow ? 'follows the block' : 'does not follow the block'}`;
+  // Graphical block flow: the follow-up is a step of the block (indent 1)
+  const graphical: GraphicalLine = { text, d6: [], blockDice: [], names: names ?? [], tags: [], indent: 1 };
+  log('report', text, undefined, undefined, undefined, names, undefined, undefined, action, graphical);
 }
-function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], action?: LogActionPlate): void {
-  log(kind, text, side, d6, blockDice, names, tags, 'match', action);
+function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens): void {
+  log(kind, text, side, d6, blockDice, names, tags, 'match', action, g, graphicalOnly, alt);
 }
 const railDiagnostic: RailDiagnosticSink = (diagnostic) => {
   log('system', `⚠ rail: ${diagnostic.message}`);
@@ -7710,9 +7741,14 @@ function isDiceRoll(r: Record<string, unknown>): boolean {
 /** Prayer effect reports carry no dice, but are part of the normal match narrative. Owner 09-06: so are the
  *  dice-less SKILL modifications of a roll (Swift as the Breeze turning a failed dodge good, a modified pass
  *  result) — without them the log showed a bare "fails" and the coach read a turnover that never happened. */
+/** Owner 10-15: reports the Text log does not list but the Graphical block flow shows as steps (when the formatter
+ *  gives them a Graphical row). */
+export const GRAPHICAL_ONLY_REPORTS = new Set(['pushback', 'skillUse', 'skillUseOtherPlayer']);
 function isAlwaysVisibleEffectReport(r: Record<string, unknown>): boolean {
   const id = String(r.reportId);
   if (id === 'modifiedDodgeResultSuccessful' || id === 'modifiedPassResult') return true;
+  // Owner 10-15: "<Player> hands off to <Target>" is part of the match narrative (it carries no dice)
+  if (id === 'handOver') return true;
   return id === 'playerEvent' && typeof r.message === 'string' && r.message.trim().length > 0;
 }
 
@@ -8786,7 +8822,7 @@ function applyFrameContents(frame: QueuedFrame) {
   for (const [reportIndex, report] of reports.entries()) {
     // Owner 10-15 (Graphical log): an undisplayed handOver report still marks the next catch as the Hand-off's, and a
     // reroll grant the source of the rerolled roll line it leads to.
-    noteReportLogContext(report, visibleReportLogContext);
+    noteReportLogContext(report, visibleReportLogContext, game.value);
     if (String(report.reportId) === 'dwarfenWisdomRoll') {
       const roll = Number(report.roll);
       const teamId = String(report.teamId ?? '');
@@ -8841,13 +8877,20 @@ function applyFrameContents(frame: QueuedFrame) {
           && report.successful === false && foulAppearanceFrameContext
         ? { ...report, defenderId: foulAppearanceFrameContext.defenderId }
         : report;
-      const lines = formatReportLines(reportForDisplay, game.value, visibleReportLogContext);
+      const lines = applyLogEasterEgg(reportForDisplay, game.value, formatReportLines(reportForDisplay, game.value, visibleReportLogContext),
+        // the event identity (game id + the server's report), the same key spectate and replay hash
+        logEventKey(game.value, report));
       const surfaceLog = () => {
-        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action);
+        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt);
       };
       const fireballReport = (String(report.reportId) === 'spellEffectRoll' && String(report.specialEffect) === 'fireball')
         || (String(report.reportId) === 'injury' && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
       if (!fireballReport || !enqueueBehindFireball(`fireballLog:${String((cmd as { commandNr?: unknown }).commandNr)}:${reportIndex}`, surfaceLog)) surfaceLog();
+    } else if (GRAPHICAL_ONLY_REPORTS.has(String(report.reportId))) {
+      // Owner 10-15 (Graphical block flow): steps the Text log never listed; only their Graphical rows are logged
+      for (const formatted of formatReportLines(report, game.value, visibleReportLogContext)) {
+        if (formatted.g) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, true);
+      }
     }
   }
   if (reports.some((report) => String(report.reportId) === 'foulAppearanceRoll'
@@ -29399,7 +29442,7 @@ export const gameStore = {
     for (const report of sampleReports) {
       if (settings.debugLog || isDiceRoll(report) || isAlwaysVisibleEffectReport(report)) {
         for (const formatted of formatReportLines(report, g, visibleReportLogContext)) {
-          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, undefined, formatted.action);
+          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, undefined, formatted.action, formatted.g);
         }
       }
     }

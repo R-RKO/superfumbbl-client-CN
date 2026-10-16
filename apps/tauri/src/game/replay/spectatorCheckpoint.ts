@@ -1,6 +1,7 @@
 import { createFollowupProjection, reduceFollowupProjection, type FollowupProjection } from '../followupProjection';
 import { LOG_TAG_KINDS } from '../logTags';
 import { isLogActionPlate } from '../logActionPlates';
+import { trimLogRows } from '../logLanes';
 import { TEAM_SIDES } from '../teamSide';
 import { D6_LOG_TOKEN_KINDS } from '../d6Log';
 import { OBSERVED_MOVEMENT_PHASES } from '../movementOccurrenceProjection';
@@ -23,7 +24,7 @@ import { reduceDriveProjection, type DriveProjection } from '../driveProjection'
 import { reduceBlitzProjection, type BlitzProjection } from '../blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers, type HeldTeamMate, type FumblerooskieMarker } from '../persistentPlayerMarkers';
 import { NetCommandId, type GameJson } from '@fumbbl40k/ffb-protocol';
-import { createReportLogContext, formatReportLines, injuryReportDedupeKey, setBlockDefenderHint, type ReportDisplay, type ReportLogContext } from '../reportFormatter';
+import { applyLogEasterEgg, logEventKey, createReportLogContext, formatReportLines, injuryReportDedupeKey, setBlockDefenderHint, type ReportDisplay, type ReportLogContext } from '../reportFormatter';
 import { reportCarriesDisplayedDice } from '../d6Log';
 import { EMPTY_END_GAME, reduceEndGame, type EndGameState } from '../endGameHandler';
 import { endGameFrameFromServer } from '../endGameFrame';
@@ -68,6 +69,8 @@ export interface SpectatorDecision {
   payload: Record<string, unknown>;
 }
 export interface SpectatorLogEntry extends ReportDisplay {
+  /** Owner 10-15: a row only the Graphical log style shows (block flow push / skill use). */
+  graphicalOnly?: true;
   ingressOrder: number;
   receivedWallAt: number;
   source: SpectatorCursor;
@@ -300,18 +303,23 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     if (injury && injuries.has(injury)) continue;
     if (injury) injuries.add(injury);
     // Always advance formatter context, even when the normal log filters this report.
-    const lines = formatReportLines(report, next.model, projection.logContext);
+    const lines = applyLogEasterEgg(report, next.model, formatReportLines(report, next.model, projection.logContext),
+      logEventKey(next.model, report));
     const id = String(report.reportId);
-    if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow'].includes(id)
+    if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver'].includes(id)
       || (id === 'playerEvent' && typeof report.message === 'string' && report.message.trim())) {
       projection.log.push(...lines.map((line) => ({ ...line, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+    } else if (['pushback', 'skillUse', 'skillUseOtherPlayer'].includes(id)) {
+      // Owner 10-15 (Graphical block flow): steps only the Graphical style shows
+      projection.log.push(...lines.filter((line) => line.g).map((line) => ({ ...line, graphicalOnly: true as const, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
     }
   }
   // Owner 10-13 (reroll re-tumble, Astra): the card before this frame and its roll occurrence, for rerolledDice below.
   const priorBlockCard = projection.blockCard;
   const priorBlockRollOccurrence = projection.block.rollOccurrence;
   projection.block = reduceBlockContext(projection.block, next.model, reports, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])));
-  projection.log = projection.log.slice(-500);
+  // owner 10-15: Graphical-only rows ride along without counting against the 500 ordinary rows (logLanes.trimLogRows)
+  projection.log = trimLogRows(projection.log, 500, (row) => row.graphicalOnly === true);
   projection.drive = reduceDriveProjection(projection.drive, reports, next.model);
   projection.heldTeamMate = reduceHeldTeamMate(projection.heldTeamMate, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])), next.model);
   projection.fumblerooskie = reduceFumblerooskie(projection.fumblerooskie, reports, next.model);
@@ -387,8 +395,30 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
  *  four token arrays and every token), so a remembered row cannot change; the cursor-relative `source` check
  *  still runs on every validation. */
 const validatedLogRows = new WeakSet<object>();
+/** A log line's tokens (a Text row or its Graphical `g`): every token in range and in its exact shape. */
+function validLogLineTokens(line: Pick<SpectatorLogEntry, 'text' | 'd6' | 'blockDice' | 'names' | 'tags'>): boolean {
+  const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  const keys = (item: object, expected: string[]) => Object.keys(item).sort().join(',') === [...expected].sort().join(',');
+  for (const tokens of [line.d6, line.blockDice, line.names, line.tags]) for (const token of tokens as unknown[]) {
+    if (!object(token) || !Number.isInteger(token.index) || Number(token.index) < 0 || Number(token.index) >= line.text.length) return false;
+  }
+  // owner 10-13: an optional `team` (the server side that rolled the die) rides a d6 token;
+  // owner 10-15: an optional `title` (an inline icon's tooltip, Graphical lines) rides a tag token
+  return !(line.d6.some((t) => !(keys(t, ['index', 'value', 'kind']) || (keys(t, ['index', 'value', 'kind', 'team']) && TEAM_SIDES.includes((t as { team?: never }).team as never))) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || !(D6_LOG_TOKEN_KINDS as readonly unknown[]).includes(t.kind))
+    || line.blockDice.some((t) => !keys(t, ['index', 'value', 'result']) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || typeof t.result !== 'string')
+    || line.tags.some((t) => !(keys(t, ['index', 'length', 'kind']) || (keys(t, ['index', 'length', 'kind', 'title']) && typeof t.title === 'string'))
+      || !Number.isInteger(t.length) || t.length < 0 || t.index + t.length > line.text.length || !(LOG_TAG_KINDS as readonly unknown[]).includes(t.kind))
+    || line.names.some((t) => !(keys(t, ['index', 'length', 'team']) || (keys(t, ['index', 'length', 'team', 'playerId']) && typeof t.playerId === 'string'))
+      || !Number.isInteger(t.length) || t.length < 0 || t.index + t.length > line.text.length || !TEAM_SIDES.includes(t.team as never)));
+}
+
+const deepFrozenLine = (line: { d6: unknown[]; blockDice: unknown[]; names: unknown[]; tags: unknown[] }): boolean => Object.isFrozen(line)
+  && [line.d6, line.blockDice, line.names, line.tags].every((tokens) => Object.isFrozen(tokens) && tokens.every((token) => Object.isFrozen(token)));
 const deepFrozenRow = (entry: SpectatorLogEntry): boolean => Object.isFrozen(entry) && Object.isFrozen(entry.source)
   && (entry.action === undefined || Object.isFrozen(entry.action))
+  && (entry.alt === undefined || deepFrozenLine(entry.alt))
+  && (entry.g === undefined || entry.g === null || entry.g.more === undefined || (Object.isFrozen(entry.g.more) && entry.g.more.every(deepFrozenLine)))
+  && (entry.g === undefined || entry.g === null || (Object.isFrozen(entry.g) && [entry.g.d6, entry.g.blockDice, entry.g.names, entry.g.tags].every((tokens) => Object.isFrozen(tokens) && tokens.every((token) => Object.isFrozen(token)))))
   && [entry.d6, entry.blockDice, entry.names, entry.tags].every((tokens) => Object.isFrozen(tokens) && tokens.every((token) => Object.isFrozen(token)));
 
 export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
@@ -441,28 +471,44 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   // owner 10-15: the Graphical-log latches are optional so checkpoints written before them still validate
   const contextKeys = object(p.logContext) ? Object.keys(p.logContext) : [];
   const requiredContextKeys = ['lastBlockAttackerId', 'lastBlockDefenderId', 'lastBlockChoosingTeamId'];
-  const optionalContextKeys = ['lastHandOverCatcherId', 'lastRerollSource', 'lastRerollPlayerId', 'lastRerollTeamId'];
+  const optionalContextKeys = ['lastHandOverCatcherId', 'lastRerollSource', 'lastRerollPlayerId', 'lastRerollTeamId', 'flowAttackerId', 'flowDefenderId', 'flowResult', 'flowPushed'];
   if (!object(p.logContext) || !requiredContextKeys.every((k) => contextKeys.includes(k))
     || !contextKeys.every((k) => requiredContextKeys.includes(k) || optionalContextKeys.includes(k))
     || !Object.values(p.logContext).every(nullableString) || !strings(p.gazeVictimIds) || !strings(p.recoveringIds)) fail(11);
   if (value.clock !== null && (!object(value.clock) || !keys(value.clock, ['gameTime', 'turnTime', 'receivedMonotonicAt']) || !Object.values(value.clock).every(finite))) fail(12);
-  if (!Array.isArray(p.log) || p.log.length > 500) fail(13);
+  if (!Array.isArray(p.log) || p.log.filter((row) => !(row as { graphicalOnly?: unknown }).graphicalOnly).length > 500
+    || p.log.filter((row) => (row as { graphicalOnly?: unknown }).graphicalOnly).length > 500) fail(13);
   for (const entry of p.log) {
     if (!object(entry) || !source(entry.source as SpectatorCursor)) fail(14);
     if (validatedLogRows.has(entry)) continue;
-    // Owner 10-15: an optional `action` plate (kind + acting team's server side) rides a report's first line.
+    // Owner 10-15: an optional `action` plate (kind + acting team's server side) and an optional Graphical-style line
+    // `g` (null = left out in the Graphical style) ride a report's lines.
     const rowKeys = ['text', 'd6', 'blockDice', 'names', 'tags', 'receivedWallAt', 'ingressOrder', 'source'];
-    if (!(keys(entry, rowKeys) || (keys(entry, [...rowKeys, 'action']) && isLogActionPlate(entry.action))) || typeof entry.text !== 'string'
+    const extraKeys = Object.keys(entry).filter((k) => !rowKeys.includes(k));
+    if (!rowKeys.every((k) => k in entry) || !extraKeys.every((k) => k === 'action' || k === 'g' || k === 'graphicalOnly' || k === 'alt')
+      || ('alt' in entry && !(object(entry.alt) && keys(entry.alt as object, ['text', 'd6', 'blockDice', 'names', 'tags'])
+        && typeof (entry.alt as { text?: unknown }).text === 'string'
+        && [(entry.alt as { d6?: unknown }).d6, (entry.alt as { blockDice?: unknown }).blockDice, (entry.alt as { names?: unknown }).names, (entry.alt as { tags?: unknown }).tags].every(Array.isArray)
+        && validLogLineTokens(entry.alt as never)))
+      || ('graphicalOnly' in entry && (entry as { graphicalOnly?: unknown }).graphicalOnly !== true)
+      || ('action' in entry && !isLogActionPlate(entry.action)) || typeof entry.text !== 'string'
       || ![entry.d6, entry.blockDice, entry.names, entry.tags].every(Array.isArray) || !finite(entry.receivedWallAt) || !Number.isSafeInteger(entry.ingressOrder) || entry.ingressOrder < 0) fail(14);
-    for (const tokens of [entry.d6, entry.blockDice, entry.names, entry.tags]) for (const token of tokens) {
-      if (!object(token) || !Number.isInteger(token.index) || Number(token.index) < 0 || Number(token.index) >= entry.text.length) fail(15);
+    if (!validLogLineTokens(entry)) fail(16);
+    if ('g' in entry && entry.g !== null) {
+      const g = entry.g as unknown;
+      // a Graphical line, optionally expanding into further rows (`more`, one level, never nested)
+      const graphicalLine = (line: unknown, allowMore: boolean): boolean => {
+        if (!object(line)) return false;
+        const base = ['text', 'd6', 'blockDice', 'names', 'tags', 'indent'];
+        const hasMore = 'more' in line;
+        if (!(keys(line, base) || (allowMore && hasMore && keys(line, [...base, 'more'])))) return false;
+        const l = line as { text?: unknown; indent?: unknown; d6?: unknown; blockDice?: unknown; names?: unknown; tags?: unknown; more?: unknown };
+        if (typeof l.text !== 'string' || ![0, 1, 2].includes(l.indent as number) || ![l.d6, l.blockDice, l.names, l.tags].every(Array.isArray)) return false;
+        if (!validLogLineTokens(line as unknown as SpectatorLogEntry)) return false;
+        return !hasMore || (Array.isArray(l.more) && l.more.every((m) => graphicalLine(m, false)));
+      };
+      if (!graphicalLine(g, true)) fail(16);
     }
-    // owner 10-13: an optional `team` (the server side that rolled the die) rides a d6 token
-    if (entry.d6.some((t) => !(keys(t, ['index', 'value', 'kind']) || (keys(t, ['index', 'value', 'kind', 'team']) && oneOf(TEAM_SIDES, (t as { team?: unknown }).team))) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || !oneOf(D6_LOG_TOKEN_KINDS, t.kind))
-      || entry.blockDice.some((t) => !keys(t, ['index', 'value', 'result']) || !Number.isInteger(t.value) || t.value < 1 || t.value > 6 || typeof t.result !== 'string')
-      || entry.tags.some((t) => !keys(t, ['index', 'length', 'kind']) || !Number.isInteger(t.length) || t.length < 0 || t.index + t.length > entry.text.length
-        || !oneOf(LOG_TAG_KINDS, t.kind))
-      || entry.names.some((t) => !Number.isInteger(t.length) || t.length < 0 || t.index + t.length > entry.text.length || !oneOf(TEAM_SIDES, t.team))) fail(16);
     if (deepFrozenRow(entry)) validatedLogRows.add(entry);
   }
   const follow = p.followup;

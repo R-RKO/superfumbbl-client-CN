@@ -13,6 +13,7 @@ import PostGameRoster from './PostGameRoster.vue';
 import RosterBadge from './RosterBadge.vue';
 import { formatPlayerValue } from '../game/playerValue';
 import { settings } from '../game/settings';
+import { DICE_EXPECTED_HELP, DICE_EXPECTED_HELP_LABEL } from '../game/diceExpectedHelp';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
@@ -193,6 +194,36 @@ watch(() => diceTip.key !== null, listenForDiceTipDismiss, { flush: 'sync' });
 watch([diceModalOpen, diceSide, () => props.showStats], closeDiceTip);
 onBeforeUnmount(() => { closeDiceTip(); listenForDiceTipDismiss(false); });
 
+// Owner 10-15: the "i" in the header toggles a short note on how the expected figures are worked out. Escape (which
+// closes only the note) or a click anywhere else closes it; it also closes with the pane.
+const diceHelpOpen = ref(false);
+const diceHelpBtn = ref<HTMLElement | null>(null);
+const diceHelpPop = ref<HTMLElement | null>(null);
+function closeDiceHelp(): void { diceHelpOpen.value = false; }
+function onDiceHelpPointerDown(event: Event): void {
+  const target = event.target as Node | null;
+  if (target && (diceHelpBtn.value?.contains(target) || diceHelpPop.value?.contains(target))) return;
+  closeDiceHelp();
+}
+function onDiceHelpKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  event.stopPropagation();
+  event.preventDefault();
+  closeDiceHelp();
+}
+watch(diceHelpOpen, (on) => {
+  if (typeof document === 'undefined') return;
+  if (on) {
+    document.addEventListener('pointerdown', onDiceHelpPointerDown, true);
+    document.addEventListener('keydown', onDiceHelpKeyDown, true);
+  } else {
+    document.removeEventListener('pointerdown', onDiceHelpPointerDown, true);
+    document.removeEventListener('keydown', onDiceHelpKeyDown, true);
+  }
+}, { flush: 'sync' });
+watch([diceModalOpen, () => props.showStats], closeDiceHelp);
+onBeforeUnmount(() => { closeDiceHelp(); });
+
 defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 </script>
 
@@ -353,7 +384,17 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 <img v-if="side.logo" :src="side.logo" alt="" /><span>{{ side.team }}</span>
               </button>
             </div>
-            <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
+            <span class="pg-dice-actions">
+              <!-- Owner 10-15: an "i" in the top-right corner folds out how the expected figures are worked out. -->
+              <span class="pg-dice-help">
+                <button ref="diceHelpBtn" type="button" class="pg-dice-info pg-dice-help-btn" :aria-label="DICE_EXPECTED_HELP_LABEL" :title="DICE_EXPECTED_HELP_LABEL"
+                  :aria-expanded="diceHelpOpen" aria-controls="pg-dice-help-pop" :data-open="diceHelpOpen" @click="diceHelpOpen = !diceHelpOpen"><span aria-hidden="true">i</span></button>
+                <div v-if="diceHelpOpen" id="pg-dice-help-pop" ref="diceHelpPop" class="pg-dice-help-pop" role="note">
+                  <p v-for="line in DICE_EXPECTED_HELP" :key="line.key" :data-help="line.key">{{ line.text }}</p>
+                </div>
+              </span>
+              <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
+            </span>
           </header>
           <div class="pg-dice-grid">
             <section class="pg-dice-left">
@@ -855,7 +896,13 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-head .pg-title { font-size: 1.5em; } /* the header scales with the card too */
 /* Owner 10-10: the coverage note shares the title's side of the header; the coach tabs stay centred whatever it says. */
 .pg-dice-head:has(.pg-dice-coverage) { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); column-gap: 12px; }
-.pg-dice-head:has(.pg-dice-coverage) .pg-dice-close { justify-self: end; }
+.pg-dice-head:has(.pg-dice-coverage) .pg-dice-actions { justify-self: end; }
+.pg-dice-actions { display: flex; align-items: center; gap: 8px; }
+.pg-dice-help { position: relative; display: inline-flex; }
+.pg-dice-help-btn { width: 1.8em; height: 1.8em; cursor: pointer; }
+.pg-dice-help-pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; width: min(24em, 70vw); padding: 0.6em 0.8em; background: var(--ui-surface-2); color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 8px; box-shadow: 0 8px 24px #000a; font-size: 0.9em; line-height: 1.35; }
+.pg-dice-help-pop p { margin: 0 0 0.4em; }
+.pg-dice-help-pop p:last-child { margin-bottom: 0; }
 .pg-dice-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .pg-dice-coverage { font-size: 0.85em; line-height: 1.2; color: var(--ui-muted); min-width: 0; }
 .pg-dice-coverage:not([data-coverage='whole']) { color: var(--ui-text); padding: 2px 8px; border: 1px solid var(--ui-border); border-left: 3px solid #d9a441; border-radius: 4px; background: var(--ui-surface); }

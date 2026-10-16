@@ -1,4 +1,4 @@
-import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { effectiveArmour, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { isD6FaceValue, playerServerSide, teamServerSide, type D6FaceValue, type ServerSide } from '@fumbbl40k/ffb-pitch';
 import type { D6LogToken } from './d6Log';
 import { isBlockDieFaceValue, type BlockDieLogToken } from './blockDieLog';
@@ -8,7 +8,8 @@ import { quickSnapAllowanceText, quickSnapCountText, quickSnapExhaustedText } fr
 import { prayerForRoll } from './prayerCatalog';
 import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
-import { isGateRerollSource, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
+import { FIELD_DIRECTION_ABBR, isFieldDirection } from './logDirection';
+import { isGateRerollSource, isHandoffCatch, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
 
 /**
  * First-pass port of the FFB report texts (upstream: ffb-client-logic
@@ -52,6 +53,11 @@ const TAG_MARK = '\ue008';
 const TAG_END = '\ue009';
 
 function titleTag(text: string): string { return `${TAG_MARK}T${text}${TAG_END}`; }
+/** Owner 10-15: a field direction - the stored text reads "NE (field)" (bug reports, replays); the view shows the
+ *  screen arrow + word for the current projection (logDirection.screenDirectionText), from the name in the tag. */
+function dirTag(name: unknown): string {
+  return isFieldDirection(name) ? `${TAG_MARK}D${name}|${FIELD_DIRECTION_ABBR[name]} (field)${TAG_END}` : String(name ?? '?');
+}
 function armourTag(glyph: string): string { return `${TAG_MARK}S${glyph}${TAG_END}`; }
 function niStatDownTag(text: string): string { return `${TAG_MARK}N${text}${TAG_END}`; }
 // Owner 08-19: a HIDDEN word — stays in the text (copy keeps it) but renders zero-visual
@@ -111,6 +117,36 @@ export interface ReportDisplay {
   /** Owner 10-15: the action plate (icon + acting team) of this line, set by formatReportLines on a report's first
    *  line when it belongs to a plated action. Absent = no plate. Display-only; `text` never changes with it. */
   action?: LogActionPlate;
+  /** Owner 10-15 (Graphical log style only): this line as the Graphical style shows it. Absent = the same line as the
+   *  Text style; null = the Graphical style leaves the line out (another row already says it). The Text style and the
+   *  bug report text log never read it. */
+  g?: GraphicalLine | null;
+  /** Owner 10-15: a rare (about 1 in 100) easter-egg wording BOTH log styles show instead of `text`, chosen once per
+   *  server event (applyLogEasterEgg). `text` keeps the normal wording, so bug-report text logs never carry it. */
+  alt?: LogLineTokens;
+}
+
+/** A log line's text and its tokens. */
+export interface LogLineTokens {
+  text: string;
+  d6: D6LogToken[];
+  blockDice: BlockDieLogToken[];
+  names: LogNameToken[];
+  tags: LogTagToken[];
+}
+
+/** Owner 10-15: a Graphical-style line - same token structure as a Text line, plus its indent level inside the text
+ *  column (0 = a sequence head such as "<A> blocks <D>", 1 = a step of it, 2 = a detail of a step). */
+export interface GraphicalLine {
+  text: string;
+  d6: D6LogToken[];
+  blockDice: BlockDieLogToken[];
+  names: LogNameToken[];
+  tags: LogTagToken[];
+  indent: 0 | 1 | 2;
+  /** Further Graphical rows this line expands into, right after it (each with its own indent; never nested deeper).
+   *  E.g. "<P> vomits all over themselves!" then its armour / injury row and casualty row. */
+  more?: GraphicalLine[];
 }
 
 /** `owner` = the report-level dice owner (reportDiceOwner); a die marked H / A / N overrides it for that die alone. */
@@ -121,17 +157,42 @@ function decodeDisplay(marked: string, owner: ServerSide | null = null): ReportD
   const tags: LogTagToken[] = [];
   let text = '';
   let cursor = 0;
-  const marker = /([RT])([HAN]?)([1-6])|([1-6])|([HA])([^]*)|([TSWNF])([^]*)/g;
+  const marker = /([RT])([HAN]?)([1-6])|([1-6])|([HA])([^]*)|([TSWNFVADKUC])([^]*)/g;
   for (let match = marker.exec(marked); match; match = marker.exec(marked)) {
     text += marked.slice(cursor, match.index);
     if (match[7]) {
       // Owner 08-18: a kind-tagged decoration run -- marks dropped, run recorded by offset.
-      const run = match[8] ?? '';
+      let run = match[8] ?? '';
+      // Owner 10-15 (Graphical log): 'V' = the armour word with its break target riding in front ("9|armour"), shown
+      // as the armour icon with a tooltip; 'A' = the injury word under the apothecary icon. Graphical lines only.
+      let title: string | undefined;
+      if (match[7] === 'V') {
+        const sep = run.indexOf('|');
+        const target = sep > 0 ? run.slice(0, sep) : '';
+        run = sep >= 0 ? run.slice(sep + 1) : run;
+        title = target ? `Armour roll: needs ${target}+ to break` : 'Armour roll';
+      } else if (match[7] === 'A') {
+        title = 'Injury roll';
+      } else if (match[7] === 'K') {
+        title = 'Knocked out';
+      } else if (match[7] === 'C') {
+        title = 'Casualty result';
+      } else if (match[7] === 'U') {
+        title = 'Stunned';
+      } else if (match[7] === 'D') {
+        // Owner 10-15: a field direction - "Northeast|NE (field)"; the name rides `title`, the view turns it into the
+        // screen arrow for the current projection
+        const sep = run.indexOf('|');
+        title = sep > 0 ? run.slice(0, sep) : undefined;
+        run = sep >= 0 ? run.slice(sep + 1) : run;
+      }
       if (run) tags.push({
         index: text.length,
         length: run.length,
-        kind: match[7] === 'T' ? 'title' : match[7] === 'S' ? 'armour' : match[7] === 'N' ? 'stat-down-ni'
-          : match[7] === 'F' ? 'fail' : 'hidden',
+        kind: match[7] === 'T' ? 'title' : match[7] === 'S' || match[7] === 'V' ? 'armour' : match[7] === 'N' ? 'stat-down-ni'
+          : match[7] === 'F' ? 'fail' : match[7] === 'A' || match[7] === 'C' ? 'apothecary' : match[7] === 'D' ? 'direction'
+          : match[7] === 'K' ? 'ko' : match[7] === 'U' ? 'stun' : 'hidden',
+        ...(title ? { title } : {}),
       });
       text += run;
     } else if (match[5]) {
@@ -194,6 +255,14 @@ function teamName(game: GameJson | null, teamId: unknown): string {
   if (game.teamHome.teamId === teamId) return game.teamHome.teamName;
   if (game.teamAway.teamId === teamId) return game.teamAway.teamName;
   return teamId;
+}
+
+/** Owner 10-15: a team name tagged with its side (the same name marks as a player name, without a player id), so the
+ *  view colours it by seat like the player names. An unknown team stays plain. */
+function teamTag(game: GameJson | null, teamId: unknown): string {
+  const name = teamName(game, teamId);
+  const side = teamServerSide(game, teamId);
+  return side ? `${NAME_MARK}${side === 'home' ? 'H' : 'A'}${name}${NAME_END}` : name;
 }
 
 function coachName(game: GameJson | null, teamId: unknown): string {
@@ -370,6 +439,34 @@ function skillRoll(verb: string) {
   };
 }
 
+/** The Hatred keyword a Getting Even roll is about, as the server names it; "their foe" without one. */
+function hatredTrait(r: Report): string {
+  const keyword = typeof r.keyword === 'string' && r.keyword.trim() ? r.keyword.trim() : '';
+  return keyword ? titleCase(humanize(keyword)) : 'their foe';
+}
+
+/** The team's captain (the player whose server skill list holds Team Captain), name-tagged; else "<team>'s captain". */
+function teamCaptainName(game: GameJson | null, teamId: unknown): string {
+  const team = game && typeof teamId === 'string'
+    ? (game.teamHome.teamId === teamId ? game.teamHome : game.teamAway.teamId === teamId ? game.teamAway : null) : null;
+  const captain = team?.playerArray.find((p) => (p.skillArray ?? []).some((s) => String(s).replace(/[^a-z]/gi, '').toLowerCase() === 'teamcaptain'));
+  return captain ? pn(game, captain.playerId) : `${teamTag(game, teamId)}'s captain`;
+}
+
+/** The player standing on a field square (the game model's own coordinates), or null. */
+function playerOnSquare(game: GameJson | null, square: unknown): string | null {
+  if (!game || !Array.isArray(square) || square.length < 2) return null;
+  const hit = game.fieldModel.playerDataArray.find((p) => Array.isArray(p.playerCoordinate)
+    && p.playerCoordinate[0] === square[0] && p.playerCoordinate[1] === square[1]);
+  return hit ? hit.playerId : null;
+}
+
+/** The roll die and its "(n+)" target, the dice part every reworded skill line ends with. */
+function rollWithTarget(r: Report): string {
+  const roll = r.roll != null ? `${hiddenTag('rolls ')}${d6(r.roll)}` : '?';
+  return `${roll}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}`;
+}
+
 function actingPlayerHasBallAndChain(game: GameJson | null): string | null {
   const playerId = String(game?.actingPlayer?.playerId ?? '');
   if (!game || !playerId) return null;
@@ -424,15 +521,25 @@ export interface ReportLogContext {
   /** The player / team the pending grant named (Graphical log / reroll lead). Optional for the same reason. */
   lastRerollPlayerId?: string | null;
   lastRerollTeamId?: string | null;
+  /** Owner 10-15 (Graphical block flow): the open block sequence - attacker, defender, and the chosen result once the
+   *  blockChoice names it ('pow' | 'stumble' | 'push' | 'bothDown' | 'skull'). Null = no open sequence. Optional for
+   *  the same reason. */
+  flowAttackerId?: string | null;
+  flowDefenderId?: string | null;
+  flowResult?: string | null;
+  /** Players pushed during the open block sequence (comma-joined ids): a chain-pushed player's crowd injury,
+   *  casualty and apothecary rows are steps of the block too. */
+  flowPushed?: string | null;
 }
 export function createReportLogContext(): ReportLogContext {
-  return { lastBlockDefenderId: null, lastBlockAttackerId: null, lastBlockChoosingTeamId: null, lastHandOverCatcherId: null, lastRerollSource: null, lastRerollPlayerId: null, lastRerollTeamId: null };
+  return { lastBlockDefenderId: null, lastBlockAttackerId: null, lastBlockChoosingTeamId: null, lastHandOverCatcherId: null, lastRerollSource: null, lastRerollPlayerId: null, lastRerollTeamId: null, flowAttackerId: null, flowDefenderId: null, flowResult: null, flowPushed: null };
 }
-/** Owner 10-15: advance the Graphical-log latches (hand-off receiver, reroll source) from a report the live log may
- *  not display (`handOver` carries no dice, so the live display gate skips formatting it). Idempotent with
- *  formatReportLines, which latches them too. */
-export function noteReportLogContext(report: Report, context: ReportLogContext): void {
+/** Owner 10-15: advance the Graphical-log latches (hand-off receiver, reroll source, block sequence) from a report the
+ *  live log may not display (`handOver` / `block` / `pushback` carry no dice, so the live display gate skips formatting
+ *  them). Idempotent with formatReportLines, which latches them too. */
+export function noteReportLogContext(report: Report, context: ReportLogContext, game: GameJson | null = null): void {
   latchLogActionContext(report, context);
+  safeLatchBlockFlow(report, game, context);
 }
 const legacyReportLogContext = createReportLogContext();
 
@@ -538,10 +645,11 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   scatterPlayer: (r, g) => {
     const playerId = actingPlayerHasBallAndChain(g);
     const rolls = Array.isArray(r.rolls) ? r.rolls : [];
-    const directions = Array.isArray(r.directionArray) ? r.directionArray.map(String) : [];
+    const directions = Array.isArray(r.directionArray) ? r.directionArray : [];
     const roll = rolls[0];
     const result = `${roll != null ? `${hiddenTag('rolls ')}${d6(roll)}` : 'direction resolved'}`
-      + `${directions.length ? ` → ${directions.join(' → ')}` : ''}`;
+      // owner 10-15: no arrow glyphs in the stored text (bug reports); the view draws each direction's arrow
+      + `${directions.length ? ` then ${directions.map(dirTag).join(' then ')}` : ''}`;
     return playerId ? `${pn(g, playerId)} | Ball & Chain: ${result}` : `scatter player: ${result}`;
   },
   standUpRoll: (r, g) => {
@@ -582,21 +690,40 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // These two ReportSkillRoll shapes previously fell through to the generic key/value dump
   // (`successful true`). Give them the same concise success trimming as every action roll;
   // a server-stated failure remains explicit and a successful reroll retains its provenance.
-  bloodLustRoll: namedSkillRoll('Blood Lust'),
-  hypnoticGazeRoll: namedSkillRoll('Hypnotic Gaze'),
+  // Owner 10-15 (both styles): sentence first, then the dice; only a literal wire true / false claims an outcome, a
+  // partial report keeps the neutral named form.
+  bloodLustRoll: (r, g) => {
+    const dice = rollWithTarget(r);
+    if (r.successful === true) return `${pn(g, r.playerId)} resists their bloodlust: ${dice}`;
+    if (r.successful === false) return `${pn(g, r.playerId)} gives in to their bloodlust and must feed! | ${dice}`;
+    return namedSkillRoll('Blood Lust')(r, g);
+  },
+  hypnoticGazeRoll: (r, g) => {
+    const dice = rollWithTarget(r);
+    const target = r.defenderId ? pn(g, r.defenderId) : 'their target';
+    if (r.successful === true) return `${pn(g, r.playerId)} hypnotizes ${target}: ${dice}`;
+    if (r.successful === false) return `${pn(g, r.playerId)} tries to hypnotize ${target} but fails! | ${dice}`;
+    return namedSkillRoll('Hypnotic Gaze')(r, g);
+  },
   // Owner 09-05: ReportSteadyFootingRoll fell through to the generic dump (", successful false") — same family.
-  steadyFootingRoll: namedSkillRoll('Steady Footing'),
+  // Owner 10-15 (both styles): ReportSteadyFootingRoll (bb2025) is a ReportSkillRoll; a partial report stays neutral.
+  steadyFootingRoll: (r, g) => {
+    if (r.successful === true) return `${pn(g, r.playerId)} keeps their footing! | ${rollWithTarget(r)}`;
+    if (r.successful === false) return `${pn(g, r.playerId)} doesn't manage to keep their steady footing! | ${rollWithTarget(r)}`;
+    return namedSkillRoll('Steady Footing')(r, g);
+  },
   dauntlessRoll: skillRoll('uses Dauntless'),
   regenerationRoll: skillRoll('regenerates'),
+  // Owner 10-15 (both styles). Upstream StepFoulAppearance: the ACTING player (playerId) rolls against the Foul
+  // Appearance player (the defender: the report's defenderId when sent, else the game's current defender).
   foulAppearanceRoll: (r, g) => {
-    if (r.successful === false) {
-      const attacker = pn(g, r.playerId);
-      const defender = r.defenderId ? pn(g, r.defenderId) : 'their opponent';
-      const roll = r.roll != null ? d6(r.roll) : '?';
-      const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-      return `${attacker} is disgusted by ${defender}'s Foul Appearance | ${roll}${min}`;
-    }
-    return skillRoll('overcomes Foul Appearance')(r, g);
+    const actor = pn(g, r.playerId);
+    const faId = r.defenderId ?? (g as { defenderId?: unknown } | null)?.defenderId;
+    const fa = typeof faId === 'string' && faId ? pn(g, faId) : 'their opponent';
+    const dice = rollWithTarget(r);
+    return r.successful === false
+      ? `${actor} is too disgusted by ${fa} to act! | ${dice}`
+      : `${actor} resists how gross ${fa} looks! | ${dice}`;
   },
   escapeRoll: skillRoll('escapes'),
   rightStuffRoll: skillRoll('lands'),
@@ -681,7 +808,11 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   },
   // Direction is D8. Distance is D6 normally but D3 after pre-roll Kick, and the
   // report has no die-base discriminator, so both stay numeric.
-  kickoffScatter: (r) => `kick-off scatter: direction ${r.rollScatterDirection ?? '?'} · distance ${r.rollScatterDistance ?? '?'}`,
+  // Owner 10-15 (both styles): the direction as the viewer sees it (rendered from the field direction); the D8 roll
+  // stays compact after it. Without the server's direction name, the old roll-only line.
+  kickoffScatter: (r) => isFieldDirection(r.scatterDirection)
+    ? `Kick-off scatters ${dirTag(r.scatterDirection)}${r.rollScatterDirection != null ? ` (${r.rollScatterDirection})` : ''}, ${r.rollScatterDistance ?? '?'} square${r.rollScatterDistance === 1 ? '' : 's'}`
+    : `kick-off scatter: direction ${r.rollScatterDirection ?? '?'} · distance ${r.rollScatterDistance ?? '?'}`,
   // owner 2026-07-03 r6: surface the 2d6 weather roll alongside the result
   weather: (r) => {
     const roll = Array.isArray(r.weatherRoll) ? ` (rolled ${d6List(r.weatherRoll, ' + ')})` : '';
@@ -754,29 +885,51 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   chompRemoved: (r, g) =>
     r.successful ? `${pn(g, r.playerId)} is no longer chomped` : `${pn(g, r.playerId)} stays chomped`,
   // #138 log batch (ReportSkillRoll-family: playerId/successful/roll/minimumRoll/reRolled):
-  animosityRoll: skillRoll('overcomes Animosity'),
+  // Owner 10-15 (both styles). ReportAnimosityRoll names only the thrower (upstream AnimosityBehaviour: the catcher
+  // lives in the step state); the intended receiver is the player on the game's pass target square, else unnamed.
+  animosityRoll: (r, g) => {
+    const receiverId = playerOnSquare(g, (g as { passCoordinate?: unknown } | null)?.passCoordinate);
+    const target = receiverId ? pn(g, receiverId) : 'their team-mate';
+    const dice = rollWithTarget(r);
+    return r.successful === false
+      ? `${pn(g, r.playerId)} cannot overcome their animosity toward ${target} | ${dice}`
+      : `${pn(g, r.playerId)} overcomes their animosity against ${target}: ${dice}`;
+  },
   alwaysHungryRoll: skillRoll('resists Always Hungry'),
   saboteurRoll: skillRoll('sabotages'),
   // #138 custom: Chainsaw carries a defenderId target; Getting Even carries a keyword; Dwarfen Wisdom is a
   // team-level re-roll grant.
+  // Owner 10-15 (both styles). Upstream bb2025 StepBlockChainsaw: roll >= minimumRoll hits the defender (an injury
+  // with injuryType chainsaw for them follows); a failed roll is rerolled or kicks back (an injury for the chainsaw
+  // player, who is both attacker and defender). ReportChainsawRoll often sends defenderId null: the game's defender.
   chainsawRoll: (r, g) => {
-    const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    const tgt = r.defenderId ? ` vs ${pn(g, r.defenderId)}` : '';
-    return `${pn(g, r.playerId)} | Chainsaw${tgt}: ${hiddenTag('rolls ')}${d6(r.roll)}${min} | ${r.successful ? 'hits' : 'kicks back'}`;
+    const targetId = r.defenderId ?? (g as { defenderId?: unknown } | null)?.defenderId;
+    const target = typeof targetId === 'string' && targetId ? pn(g, targetId) : 'their target';
+    const dice = rollWithTarget(r);
+    // Owner 10-15 (correction): the failed roll IS the kickback (bb2025 minimumRollChainsaw 2, so a 1), drawn when the
+    // roll arrives; a reroll of it is logged like every rerolled roll (the reroll line, then "Rerolled | ...").
+    return r.successful === false
+      ? `${pn(g, r.playerId)}'s chainsaw kicks back and they hit themselves! | ${dice}`
+      : `${pn(g, r.playerId)} attacks ${target} with their chainsaw! | ${dice}`;
   },
+  // Owner 10-15 (both styles). ReportGettingEvenRoll (bb2025) carries the Hatred keyword the roll would grant as
+  // `keyword` (Keyword.getName()); without one the trait reads "their foe".
   gettingEvenRoll: (r, g) => {
-    const kw = r.keyword ? ` (${humanize(String(r.keyword))})` : '';
-    const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    return `${pn(g, r.playerId)} | Getting Even${kw}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${outcomeSuffix(r.successful)}`;
+    const dice = rollWithTarget(r);
+    return r.successful === false
+      ? `${pn(g, r.playerId)} doesn't let the hate toward ${hatredTrait(r)} settle in their heart. | ${dice}`
+      : `${pn(g, r.playerId)} learns to hate ${hatredTrait(r)}: ${dice}`;
   },
   dwarfenWisdomRoll: (r, g) => `${teamName(g, r.teamId)} | Dwarfen Wisdom: ${hiddenTag('rolls ')}${r.roll ?? '?'}`, // D3
   // #141 (GAP-WAVE-2, ball-flight): the punt/swoop DIRECTION rolls (owner: show a direction ARROW — Voss's
   // #122 renderer, fed by state.ballDirection). `direction` = the Direction enum display name ("North"/…).
-  puntDirectionRoll: (r, g) => `${pn(g, r.playerId)} punts the ball ${r.direction ?? '?'}${r.directionRoll ? ` (direction ${d6(r.directionRoll)})` : ''}${r.outOfBounds ? ' (out of bounds)' : ''}`,
+  puntDirectionRoll: (r, g) => `${pn(g, r.playerId)} punts the ball ${dirTag(r.direction)}${r.directionRoll ? ` (direction ${d6(r.directionRoll)})` : ''}${r.outOfBounds ? ' (out of bounds)' : ''}`,
   puntDistanceRoll: (r) => `the ball is punted ${d6(r.roll)} squares${r.outOfBounds ? ' (out of bounds)' : ''}`,
-  swoopDirectionRoll: (r, g) => `${pn(g, r.playerId)} swoops ${r.direction ?? '?'}${r.directionRoll ? ` (direction ${d6(r.directionRoll)})` : ''}${r.outOfBounds ? ' (out of bounds)' : ''}`,
+  swoopDirectionRoll: (r, g) => `${pn(g, r.playerId)} swoops ${dirTag(r.direction)}${r.directionRoll ? ` (direction ${d6(r.directionRoll)})` : ''}${r.outOfBounds ? ' (out of bounds)' : ''}`,
   // ReportPassDeviate carries a D8 direction plus a D6 distance in every upstream producer.
-  passDeviate: (r) => `the pass deviates ${r.scatterDirection ?? '?'} (direction ${r.rollScatterDirection ?? '?'}, distance ${d6(r.rollScatterDistance)})`,
+  passDeviate: (r) => isFieldDirection(r.scatterDirection)
+    ? `The pass deviates ${dirTag(r.scatterDirection)}${r.rollScatterDirection != null ? ` (${r.rollScatterDirection})` : ''}, ${d6(r.rollScatterDistance)} squares`
+    : `the pass deviates ${r.scatterDirection ?? '?'} (direction ${r.rollScatterDirection ?? '?'}, distance ${d6(r.rollScatterDistance)})`,
   // #142 (GAP-WAVE-2, stalling + modified results — the last family). throwAtStallingPlayer pairs with the
   // wired stallerDetected (#51): the crowd throws at a detected staller (5+ hits). modified* name WHICH skill
   // improved a pass/dodge outcome (owner: "which skill improved the outcome"). twoForOne = the star-pair skill.
@@ -809,29 +962,57 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       const shadower = pn(g, r.defenderId);
       const runnerId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       const runner = runnerId && runnerId !== r.defenderId ? ` ${pn(g, runnerId)}` : '';
-      return `${shadower} shadows${runner}: ${hiddenTag('rolls ')}${rolls}${min} | ${r.successful ? 'follows him' : 'loses him'}`;
+      // Owner 10-15 (both styles): "<Player> fails to shadow <Target>: [dice] (n+)"; a success reads "<Player> shadows
+      // <Target>: [dice] (n+)" - the old "| follows him" / "| loses him" tails are gone.
+      return `${shadower} ${r.successful ? 'shadows' : `${FAILS} to shadow`}${runner}: ${hiddenTag('rolls ')}${rolls}${min}`;
     }
     // The chosen defenderId is the player USING Tentacles; the mover remains the acting player.
     // Phrase the result from the holder's perspective and trim successful hold text.
     const holder = pn(g, r.defenderId);
     const targetId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     const target = targetId && targetId !== r.defenderId ? pn(g, targetId) : 'their target';
-    return `${holder} tries to hold ${target} with ${r.skill ?? 'Tentacles'}! ${hiddenTag('rolls ')}${rolls}${min}${r.successful ? ` | ${FAILS}` : ''}`;
+    // Owner 10-15 (both styles), the same pattern as a failed shadow. Upstream bb2020/bb2025 TentaclesBehaviour: the
+    // HOLDER (defenderId) rolls and `successful` means they hold the mover; bb2016 has the mover roll to escape, so
+    // there `successful` means the hold failed.
+    const held = rulesVersion(g) === 'BB2016' ? r.successful === false : r.successful === true;
+    return held
+      ? `${holder} holds ${target} with ${r.skill ?? 'Tentacles'}: ${hiddenTag('rolls ')}${rolls}${min}`
+      : `${holder} ${FAILS} to hold ${target} with ${r.skill ?? 'Tentacles'}: ${hiddenTag('rolls ')}${rolls}${min}`;
   },
   animalSavagery: (r, g) => `${pn(g, r.attackerId)} (Animal Savagery) turns on team-mate ${pn(g, r.defenderId)}`,
+  // Owner 10-15 (both styles). Upstream bb2025 StepProjectileVomit: roll >= minimumRoll (2) hits the defender (an
+  // armour roll for them follows); a failed roll is either rerolled (a new report) or the vomit lands on the vomiter
+  // (an injury report for the vomiter follows, which reads "<P> vomits all over themselves!").
   projectileVomit: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    return `${pn(g, r.playerId)}'s Projectile Vomit${r.defenderId ? ` on ${pn(g, r.defenderId)}` : ''}: ${hiddenTag('rolls ')}${d6(r.roll)}${min} | ${r.successful ? 'hits' : 'misses'}`;
+    const target = r.defenderId ? pn(g, r.defenderId) : 'their target';
+    const dice = `${hiddenTag('rolls ')}${d6(r.roll)}${min}`;
+    return r.successful
+      ? `${pn(g, r.playerId)} vomits all over ${target}: ${dice}`
+      : `${pn(g, r.playerId)} tried to vomit on ${target} but missed! | ${dice}`;
+  },
+  // Owner 10-15 (both styles): the server's ReportHandOver names the receiver; the giver is the acting player.
+  handOver: (r, g) => {
+    const giver = g?.actingPlayer?.playerId;
+    const receiver = r.catcherId ? pn(g, r.catcherId) : 'a team-mate';
+    return giver ? `${pn(g, giver)} hands off to ${receiver}` : `hand-off to ${receiver}`;
   },
   // Owner 10-10: ReportBreatheFire had no line of its own (generic dump, "successful false" on a 4). Its `successful`
   // is true only for the knock-down; the outcome is the server's `status` (see breatheFireOutcome).
   breatheFire: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    const target = r.defenderId ? ` on ${pn(g, r.defenderId)}` : '';
-    const outcome = breatheFireOutcome(r);
-    const result = outcome === 'failure' ? FAILS : outcome === 'noEffect' ? 'no effect' : outcome === 'prone' ? 'placed prone'
-      : outcome === 'knockDown' ? 'knocked down' : breatheFirePassed(r) === false ? FAILS : '';
-    return `${pn(g, r.playerId)}'s Breathe Fire${target}: ${hiddenTag('rolls ')}${d6(r.roll)}${min}${result ? ` | ${result}` : ''}`;
+    // Owner 10-15 (both styles): sentence first, then the dice. The server's BreatheFireResult (`status`) decides, never
+    // the roll bands: FAILURE = the breather sets themself on fire (placed prone, turnover); NO_EFFECT = the fire misses;
+    // PRONE / KNOCK_DOWN = the target is placed prone / knocked down (the report distinguishes them, so the result
+    // stays after the dice). Without a known status, a failed roll (breatheFirePassed) is the backfire.
+    const breather = pn(g, r.playerId);
+    const target = r.defenderId ? pn(g, r.defenderId) : 'their target';
+    const dice = `${hiddenTag('rolls ')}${d6(r.roll)}`;
+    const outcome = breatheFireOutcome(r) ?? (breatheFirePassed(r) === false ? 'failure' : null);
+    if (outcome === 'failure') return `${breather} sets themself on fire! | ${dice}`;
+    if (outcome === 'noEffect') return `${breather} failed to blow fire on ${target}: ${dice}${min}`;
+    const result = outcome === 'prone' ? ' | placed prone' : outcome === 'knockDown' ? ' | knocked down' : '';
+    return `${breather} blows fire on ${target}: ${dice}${min}${result}`;
   },
   lookIntoMyEyesRoll: skillRoll('uses Look Into My Eyes'),
   weepingDaggerRoll: skillRoll('uses Weeping Dagger'),
@@ -856,8 +1037,20 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   raidingParty: (r, g) => `${pn(g, r.playerId)} uses Raiding Party`,
   thrownKeg: (r, g) =>
     `${pn(g, r.playerId)} throws a keg at ${pn(g, r.targetPlayerId)}: ${hiddenTag('rolls ')}${d6(r.roll)} | ${r.fumble ? 'fumbles' : r.successful ? 'hits' : 'misses'}`,
-  mascotUsed: (r, g) => `${teamName(g, r.teamId)} | Mascot: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful)}`,
-  teamCaptainRoll: (r, g) => `${teamName(g, r.teamId)} | Team Captain: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful)}`,
+  // Owner 10-15 (both styles): "<team>'s mascot rallies the team! | [die] (n+)" / "<team>'s mascot tries to rally the
+  // team but fails! | [die] (n+)", the team name coloured by its side like a player name.
+  mascotUsed: (r, g) => {
+    const dice = `${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}`;
+    const team = teamTag(g, r.teamId);
+    return r.successful === true
+      ? `${team}'s mascot rallies the team! | ${dice}`
+      : `${team}'s mascot tries to rally the team but fails! | ${dice}`;
+  },
+  // Owner 10-15 (both styles). ReportTeamCaptainRoll (bb2025) names only the team; the captain is the team's player
+  // with the Team Captain skill in the server's roster data, else "<team>'s captain".
+  teamCaptainRoll: (r, g) => r.successful === false
+    ? `${teamCaptainName(g, r.teamId)} fails to be inspiring and the reroll is lost | ${rollWithTarget(r)}`
+    : `${teamCaptainName(g, r.teamId)} leads the way and keeps their reroll! | ${rollWithTarget(r)}`,
   weatherMageRoll: (r) => `Weather Mage: ${hiddenTag('rolls ')}${d6List(r.weatherRoll)}`,
   weatherMageResult: () => 'Weather Mage alters the weather',
   pumpUpTheCrowdReRoll: (r, g) => `${pn(g, r.playerId)} earns a Pump Up The Crowd reroll`,
@@ -873,16 +1066,22 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     return `${pn(g, r.playerId)}${msg && !/^[\s,.!?;:')]/.test(msg) ? ' ' : ''}${msg}`;
   },
   // COMPLETENESS SWEEP · tranche 3 — ball-flight residual + misc log lines.
-  placedBallDirection: (r, g) => `${pn(g, r.playerId)} places the ball ${r.direction ?? '?'}`,
+  placedBallDirection: (r, g) => `${pn(g, r.playerId)} places the ball ${dirTag(r.direction)}`,
   bombOutOfBounds: () => 'the bomb sails out of bounds',
   kickTeamMateFumble: () => 'the Kick Team-Mate throw fumbles',
   swoopPlayer: (r, g) => {
-    if (Array.isArray(r.rolls)) return `a player swoops across the pitch (direction ${d6List(r.rolls)})`;
+    if (Array.isArray(r.rolls)) {
+      const dirs = Array.isArray(r.directionArray) ? r.directionArray.filter(isFieldDirection) : [];
+      return dirs.length
+        ? `a player swoops across the pitch ${dirs.map(dirTag).join(' then ')} (direction ${d6List(r.rolls)})`
+        : `a player swoops across the pitch (direction ${d6List(r.rolls)})`;
+    }
     const swoopDistance = gameOption(g, 'swoopDistance');
     const distance = rulesVersion(g) === 'BB2025' && (swoopDistance == null || swoopDistance === '0')
       ? d6(r.distance)
       : String(r.distance ?? '?');
-    return `a player swoops ${distance} square${r.distance === 1 ? '' : 's'} ${r.scatterDirection ?? r.direction ?? ''}`.trim();
+    const dir = r.scatterDirection ?? r.direction;
+    return `a player swoops ${distance} square${r.distance === 1 ? '' : 's'} ${dir != null ? dirTag(dir) : ''}`.trim();
   },
   // #236: ReportId.java:54 wires `fumblerooskie`; ReportFumblerooskie.java:18-19,38-50 carries playerId + used.
   // Wording mirrors bb2025/UseFumblerooskieMessage.java:15-23, including the used:false reset/expiry report.
@@ -965,7 +1164,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     : /^cancel[A-Z]/.test(String(r.skillUse ?? ''))
       // Owner 09-05: automatic cancels (Juggernaut vs Wrestle/Fend/Stand Firm, Tackle vs Dodge…) read as a cancel.
       ? `${pn(g, r.playerId)}: ${r.skill ?? 'a skill'} cancels ${String(r.skillUse).slice(6).replace(/([a-z])([A-Z])/g, '$1 $2')}!`
-      : `${pn(g, r.playerId)} uses ${r.skill ?? 'a skill'}`,
+      // Astra 10-15: the server reports a declined skill too (used: false) - it is not "used"
+      : r.used === false ? `${pn(g, r.playerId)} does not use ${r.skill ?? 'a skill'}` : `${pn(g, r.playerId)} uses ${r.skill ?? 'a skill'}`,
   // Owner #83 (07-18): a GATED reroll source (Loner, Pro) must roll to GRANT the reroll — the `reRoll` report
   // (ReportReRoll) carries that roll + pass/fail (wire fields `roll`/`successful`), which the old formatter dropped,
   // so a failed Loner/Pro vanished from the log (the reported "Loner roll missing"). Surface roll + outcome whenever
@@ -1040,6 +1240,12 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const foulerId = isFoulInjury
       ? (typeof r.attackerId === 'string' && r.attackerId ? r.attackerId : g?.actingPlayer?.playerId)
       : undefined;
+    // Owner 10-15 (both styles): a Stab names the stabber (attackerId) and the stabbed player: "<A> stabs <D>!" when
+    // the armour broke, "<A> fails to stab <D>." when it held, then the armour (and injury) roll like a foul line.
+    const stabberId = normalizedInjuryType === 'stab' && typeof r.attackerId === 'string' && r.attackerId ? r.attackerId : undefined;
+    // Owner 10-15: the vomit landing on the vomiter (upstream passes the vomiter as both attacker and defender)
+    const selfVomitId = normalizedInjuryType === 'projectilevomit' && isSelfVomit(r, g) ? String(r.defenderId ?? r.playerId) : undefined;
+    const attributedId = foulerId ?? stabberId ?? selfVomitId;
     const attacker = typeof r.attackerId === 'string' && r.attackerId ? pn(g, r.attackerId) : '';
     const genericCause = humanize(injuryTypeName || 'injury');
     const armourCause = isBlockFamily
@@ -1055,6 +1261,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       ? `${name} is pushed into the crowd`
       : foulerId
         ? `${pn(g, foulerId)} fouls ${name}`
+        : stabberId
+          ? (broke ? `${pn(g, stabberId)} stabs ${name}!` : `${pn(g, stabberId)} ${FAILS} to stab ${name}.`)
+        : selfVomitId
+          ? `${name} vomits all over themselves!`
         : isBlockFamily
           ? ''
           : isFailedMove
@@ -1070,9 +1280,14 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       const armourMods = armourModifierSuffix(r.armorModifiers, broke);
       const armourPart = `${armourTag('armour')} ${d6Pair(ar)}${armourMods}${broke ? ' broken!' : ''}`;
       parts.push(armourPart);
-      const attributedArmour = foulerId ? `${lead} | ${armourPart}` : `${name} | ${armourCause} | ${armourPart}`;
+      const attributedArmour = attributedId ? `${lead} | ${armourPart}` : `${name} | ${armourCause} | ${armourPart}`;
       // An armour roll that held never has an injury phase. Preserve that normal
       // report grammar even if a malformed payload happens to carry extra dice.
+      // Owner 10-15: a chainsaw HIT whose armour holds says so (both styles; owner spelling "armor")
+      const sawId = typeof r.attackerId === 'string' && r.attackerId ? r.attackerId : g?.actingPlayer?.playerId;
+      if (!broke && (normalizedInjuryType === 'chainsaw' || normalizedInjuryType === 'chainsawforspp') && sawId && sawId !== (r.defenderId ?? r.playerId)) {
+        return `${attributedArmour}\n${pn(g, sawId)}'s chainsaw ${FAILS} to cut through ${name}'s armor!`;
+      }
       if (!broke || !ir) return attributedArmour;
     }
     // Crowd pushes bypass armour by rule, so their authoritative report has no
@@ -1096,8 +1311,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       ? `${name} is ${r.seriousInjury ? casualtyResultLabel(r.seriousInjury) : titleCase(outcome ?? 'a casualty')}!`
       : '';
     parts.push(`Injury: ${d6Pair(ir)}${injuryMods}`);
-    const body = parts.join(foulerId ? ' | ' : '; ');
-    const head = ar && !foulerId ? `${name} | ${armourCause} | ${body}` : lead ? `${lead} | ${body}` : body;
+    const body = parts.join(attributedId ? ' | ' : '; ');
+    const head = ar && !attributedId ? `${name} | ${armourCause} | ${body}` : lead ? `${lead} | ${body}` : body;
     return [head, effect, casualtyLine].filter(Boolean).join('\n');
   },
   // Owner 2026-07-06 (finding C): the apothecary report is NOT a pass/fail d6 — it
@@ -1143,10 +1358,20 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // Keep direction numeric; the two distance dice are always D6.
   throwIn: (r) => {
     const distance = Array.isArray(r.distanceRoll) ? d6Pair(r.distanceRoll) : '';
+    if (isFieldDirection(r.direction)) {
+      const squares = Array.isArray(r.distanceRoll) ? (r.distanceRoll as number[]).reduce((sum, die) => sum + (Number(die) || 0), 0) : null;
+      return `The crowd throws the ball back in ${dirTag(r.direction)}${r.directionRoll != null ? ` (${r.directionRoll})` : ''}`
+        + `${squares != null ? `, ${squares} squares (${distance})` : ''}`;
+    }
     return `the crowd throws the ball back in ${r.direction ?? '?'}${r.directionRoll != null ? ` (direction ${r.directionRoll})` : ''}${distance ? `, distance ${distance}` : ''}`;
   },
   scatterBall: (r) => {
-    const rolls = Array.isArray(r.rolls) ? (r.rolls as number[]).join(', ') : '';
+    const rollList = Array.isArray(r.rolls) ? (r.rolls as number[]) : [];
+    const dirs = Array.isArray(r.directionArray) ? r.directionArray.filter(isFieldDirection) : [];
+    if (dirs.length) {
+      return `The ball scatters ${dirs.map((dir, i) => `${dirTag(dir)}${rollList[i] != null ? ` (${rollList[i]})` : ''}`).join(', ')}`;
+    }
+    const rolls = rollList.join(', ');
     return `ball scatters${rolls ? ` (${rolls})` : ''}`;
   },
   startHalf: (r) => `--- half ${r.half ?? ''} begins ---`,
@@ -1254,6 +1479,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     return `penalty shootout ${round}: ${home} ${d6(r.rollHome)}, ${away} ${d6(r.rollAway)} | ${outcome} (${r.penaltyScoreHome ?? 0}–${r.penaltyScoreAway ?? 0})${decided}`;
   },
 };
+
+/** Owner 10-15 (icon audit): every report type the log has a line for - the formatter table, plus the types the
+ *  generic line renders with their dice - so a test can keep each one in the action icon table. */
+export const LOG_REPORT_TYPES: readonly string[] = [...Object.keys(formatters), ...Object.keys(genericD6Fields)];
 
 function humanize(id: string): string {
   // split camelCase, then collapse underscores / repeated spaces to a single
@@ -1372,6 +1601,8 @@ export function formatReport(report: Report, game: GameJson | null, context = le
  *  should log() each returned entry as its own line, in order. */
 export function formatReportLines(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay[] {
   const lines = formatReportLinesPlain(report, game, context);
+  // read before logActionPlate consumes the hand-off latch: is this the receiver's catch of a hand-off?
+  const handoffCatch = isHandoffCatch(report, context);
   // Owner 10-15: after the formatter ran, so a `block` report has already latched its attacker into the context.
   // Every line of the report belongs to the same action (an injury's dice line, its effect sentence and its casualty
   // line are all the block's / foul's / failed move's), so each wears the plate.
@@ -1381,12 +1612,410 @@ export function formatReportLines(report: Report, game: GameJson | null, context
   if (String(report.reportId ?? '') === 'turnEnd' && lines.length) {
     const recoveries = Array.isArray(report.knockoutRecoveryArray) ? (report.knockoutRecoveryArray as Report[]) : [];
     const sides = [playerServerSide(game, report.playerIdTouchdown), ...recoveries.map((r) => playerServerSide(game, r.playerId))];
+    safeLatchBlockFlow(report, game, context); // a turn end closes any open block sequence
     return lines.map((line, index) => {
       const side = sides[index] ?? null;
-      return side ? { ...line, action: { kind: null, side } } : line;
+      // owner 10-15: each KO recovery row (index 1..n) wears the KO lettering as its action icon
+      const isRecovery = index >= 1 && index <= recoveries.length;
+      if (isRecovery) return { ...line, action: { kind: 'ko' as const, side } };
+      // the first row: the touchdown (the scorer's team) or "turn ends"; any row after the recoveries: heat exhaustion
+      if (index === 0) return { ...line, action: { kind: report.playerIdTouchdown ? 'touchdown' as const : 'turnEnd' as const, side } };
+      return { ...line, action: { kind: 'heat' as const, side } };
     });
   }
-  return action ? lines.map((line) => ({ ...line, action })) : lines;
+  const decorated = action ? lines.map((line) => ({ ...line, action })) : lines;
+  // Owner 10-15 (Graphical only): the Graphical version of each line, from the same report and the block sequence the
+  // context holds; then advance the sequence. A failure here never touches the Text line.
+  let graphical: (GraphicalLine | null | undefined)[] = [];
+  try {
+    graphical = graphicalLines(report, game, context, decorated, handoffCatch);
+  } catch {
+    graphical = [];
+  }
+  // A block sequence's step rows wear the BLOCKER's tint (the server names the opposing player as the "attacker" of a
+  // self knockdown's injury, so the report's own owner would flip the colour mid-sequence).
+  // Astra 10-15: only a report that actually pairs with the sequence (an injury must pass injuryPairsWithFlow) - an
+  // unpaired injury's casualty row is indented under ITS injury, not the block, and keeps its own tint.
+  const pairsWithFlow = String(report.reportId ?? '') !== 'injury' || injuryPairsWithFlow(report, context);
+  const flowSide = context.flowAttackerId && pairsWithFlow && BLOCK_FLOW_REPORTS.has(String(report.reportId ?? '')) ? playerServerSide(game, context.flowAttackerId) : null;
+  safeLatchBlockFlow(report, game, context);
+  return decorated.map((line, index) => {
+    const g = graphical[index];
+    if (g === undefined) return line;
+    const stepAction = flowSide && g && g.indent > 0 ? { ...(line.action ?? { kind: null }), side: flowSide } : line.action;
+    return stepAction ? { ...line, action: stepAction, g } : { ...line, g };
+  });
+}
+
+// ---- Easter eggs (owner 10-15) ------------------------------------------------------------------------------------
+//
+// About 1 in 100 of these rolls read a joke wording instead, in both log styles. The pick is deterministic per server
+// event - a stable hash of the event identity (game id, server command number, report index) - so the same roll shows
+// the same words on every re-render, for both coaches, spectators and replays. The plain `text` (bug-report logs)
+// always keeps the normal wording.
+
+/** FNV-1a 32-bit of the event key, a stable spread for the 1-in-100 pick. */
+export function logEventHash(eventKey: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < eventKey.length; i++) {
+    hash ^= eventKey.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+/** Does this event get its easter egg? About 1 in 100 event keys do. */
+export function logEasterEggHit(eventKey: string): boolean {
+  return logEventHash(eventKey) % 100 === 0;
+}
+/** The event identity the egg pick hashes. Owner asked for game id + command number / report index, but downloaded
+ *  replays renumber commands (liveSpectateHistory), so the stable identity is the game id plus the server's report
+ *  itself (its fields in key order): the same in live play for both coaches, in spectate and in replay. Two reports
+ *  identical in every field share their pick, which keeps it deterministic. `commandNr` / `reportIndex` are kept in
+ *  the signature for the callers but are not part of the key. */
+export function logEventKey(game: GameJson | null, report: Record<string, unknown>, _commandNr?: unknown, _reportIndex?: number): string {
+  return `${String((game as { gameId?: unknown } | null)?.gameId ?? '?')}:${stableReportKey(report)}`;
+}
+function stableReportKey(report: Record<string, unknown>): string {
+  const sorted = (value: unknown): unknown => Array.isArray(value) ? value.map(sorted)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sorted((value as Record<string, unknown>)[k])]))
+    : value;
+  return JSON.stringify(sorted(report));
+}
+
+const EASTER_EGGS: Record<string, (r: Report, g: GameJson | null) => string | null> = {
+  steadyFootingRoll: (r, g) => (r.successful === false ? `${pn(g, r.playerId)} doesn't argue the fall! | ${rollWithTarget(r)}` : null),
+  teamCaptainRoll: (r, g) => (r.successful === false ? `${teamCaptainName(g, r.teamId)} fails to argue the reroll! | ${rollWithTarget(r)}` : null),
+  gettingEvenRoll: (r, g) => (r.successful === false
+    ? `${pn(g, r.playerId)} does not learn to be racist toward ${hatredTrait(r)} | ${rollWithTarget(r)}`
+    : r.successful === true ? `${pn(g, r.playerId)} learns to be racist toward ${hatredTrait(r)}: ${rollWithTarget(r)}` : null),
+};
+
+/** Give a report's first line its easter-egg wording when this event is one of the ~1 in 100 (both styles: `alt`, and
+ *  the Graphical row too). Lines are returned unchanged otherwise. */
+export function applyLogEasterEgg(report: Report, game: GameJson | null, lines: ReportDisplay[], eventKey: string): ReportDisplay[] {
+  const egg = EASTER_EGGS[String(report.reportId ?? '')];
+  if (!egg || !lines.length || !logEasterEggHit(eventKey)) return lines;
+  let marked: string | null;
+  try {
+    marked = egg(report, game);
+  } catch {
+    marked = null;
+  }
+  if (!marked) return lines;
+  const display = decodeDisplay(marked, reportDiceOwner(report, game));
+  const alt: LogLineTokens = { text: display.text, d6: display.d6, blockDice: display.blockDice, names: display.names, tags: display.tags };
+  const first = lines[0]!;
+  const g: GraphicalLine | null = first.g === null ? null : { ...alt, indent: first.g?.indent ?? 0 };
+  return [{ ...first, alt, g }, ...lines.slice(1)];
+}
+
+// ---- Graphical log style: block flow (owner 10-15) -------------------------------------------------------------
+//
+// The Graphical style reads a block as a sequence:
+//   <A> blocks <D>: [dice]                          (indent 0; the reroll source icon carries a reroll)
+//       <coach> chooses [die]                       (indent 1 - kept as its own child row)
+//       <D> is pushed back!                         (indent 1; left out on POW, the knockdown row says it)
+//       <D> is knocked down! | [armour] [AV] (9+) | [apothecary] [Inj] stunned   (indent 1)
+//           <D> is Seriously Hurt (MNG)!            (indent 2, casualties only)
+// derived only from the reports the server sent, in the order it sent them. A report that cannot be attributed to the
+// open sequence (a different player, a new action) closes it and renders flat, never guessed into the group.
+
+/** The die face (1-6) or BlockResult name -> flow result. */
+function blockFlowResult(r: Report): string | null {
+  const roll = Array.isArray(r.blockRoll) && typeof r.diceIndex === 'number' ? r.blockRoll[r.diceIndex] : undefined;
+  const byFace: Record<number, string> = { 1: 'skull', 2: 'bothDown', 3: 'push', 4: 'push', 5: 'stumble', 6: 'pow' };
+  if (typeof roll === 'number' && byFace[roll]) return byFace[roll]!;
+  switch (String(r.blockResult ?? '').toUpperCase().replace(/[\s/]+/g, '_')) {
+    case 'SKULL': return 'skull';
+    case 'BOTH_DOWN': return 'bothDown';
+    case 'PUSHBACK': case 'PUSH_BACK': return 'push';
+    case 'POW_PUSHBACK': case 'POW_PUSH': return 'stumble';
+    case 'POW': return 'pow';
+    default: return null;
+  }
+}
+
+function flowPushedIds(context: ReportLogContext): string[] {
+  return typeof context.flowPushed === 'string' && context.flowPushed ? context.flowPushed.split(',') : [];
+}
+/** Is this player part of the open block sequence (attacker, defender, or a player pushed during it)? */
+function inBlockFlow(context: ReportLogContext, playerId: unknown): boolean {
+  if (typeof playerId !== 'string' || !playerId || !context.flowAttackerId) return false;
+  return playerId === context.flowAttackerId || playerId === context.flowDefenderId || flowPushedIds(context).includes(playerId);
+}
+
+/** Astra 10-15: does this injury belong to the open block? A block injury needs its own attacker to match the
+ *  block's pair (the defender falling to the blocker, or the blocker falling to the defender on a self knockdown /
+ *  both down) - a missing or different attacker renders flat. A crowd push belongs when the victim was pushed in
+ *  this sequence (its attacker, when sent, must be one of the pair). Any other injury type is not a block step. */
+function injuryPairsWithFlow(report: Report, context: ReportLogContext): boolean {
+  const attacker = context.flowAttackerId ?? null;
+  const defender = context.flowDefenderId ?? null;
+  if (!attacker) return false;
+  const type = String(report.injuryType ?? '').toLowerCase();
+  const victim = String(report.defenderId ?? report.playerId ?? '');
+  const injuryAttacker = typeof report.attackerId === 'string' && report.attackerId ? report.attackerId : null;
+  if (type.startsWith('block')) {
+    return !!injuryAttacker && ((victim === defender && injuryAttacker === attacker) || (victim === attacker && injuryAttacker === defender));
+  }
+  if (type.startsWith('crowdpush')) {
+    return inBlockFlow(context, victim) && (!injuryAttacker || injuryAttacker === attacker || injuryAttacker === defender);
+  }
+  return false;
+}
+
+/** Reports that belong to an open block sequence (anything else closes it). */
+const BLOCK_FLOW_REPORTS = new Set(['block', 'blockRoll', 'blockChoice', 'blockReRoll', 'pushback', 'injury', 'apothecaryRoll',
+  'apothecaryChoice', 'regenerationRoll', 'skillUse', 'skillUseOtherPlayer', 'reRoll', 'mascotUsed', 'foulAppearanceRoll', 'steadyFootingRoll',
+  'dauntlessRoll', 'chompRoll', 'chompRemoved', 'blockDecision', 'standUpRoll']);
+
+function closeBlockFlow(context: ReportLogContext): void {
+  context.flowPushed = null;
+  context.flowAttackerId = null;
+  context.flowDefenderId = null;
+  context.flowResult = null;
+}
+
+/** latchBlockFlow behind a guard: a malformed report (a blockResult that cannot become a string...) closes the
+ *  sequence instead of throwing out of the formatter, whose Text line then falls back exactly as before. */
+function safeLatchBlockFlow(report: Report, game: GameJson | null, context: ReportLogContext): void {
+  try {
+    latchBlockFlow(report, game, context);
+  } catch {
+    closeBlockFlow(context);
+  }
+}
+
+/** Advance the open block sequence (idempotent). */
+function latchBlockFlow(report: Report, game: GameJson | null, context: ReportLogContext): void {
+  const id = String(report.reportId ?? '');
+  if (id === 'block') {
+    const attacker = blockAttacker(report, game, context) ?? null;
+    context.flowAttackerId = attacker;
+    context.flowDefenderId = typeof report.defenderId === 'string' ? report.defenderId : null;
+    context.flowResult = null;
+    context.flowPushed = null;
+  } else if (id === 'blockRoll') {
+    const attacker = blockAttacker(report, game, context) ?? null;
+    const defender = typeof report.defenderId === 'string' && report.defenderId ? report.defenderId : context.lastBlockDefenderId;
+    // a block roll for a different pair is a new sequence (multiple block, a second blitz block)
+    if (attacker !== context.flowAttackerId || defender !== context.flowDefenderId) { context.flowResult = null; context.flowPushed = null; }
+    context.flowAttackerId = attacker;
+    context.flowDefenderId = defender ?? null;
+  } else if (id === 'injury') {
+    // an injury that cannot be paired with the open sequence ends it: the treatment rows after it follow that injury
+    if (context.flowAttackerId && !injuryPairsWithFlow(report, context)) closeBlockFlow(context);
+  } else if (id === 'pushback') {
+    const pushed = typeof report.defenderId === 'string' ? report.defenderId : '';
+    if (context.flowAttackerId && pushed && !flowPushedIds(context).includes(pushed)) {
+      context.flowPushed = [...flowPushedIds(context), pushed].join(',');
+    }
+  } else if (id === 'blockChoice') {
+    // a choice that names a different defender cannot be paired with the open sequence: it closes it
+    if (typeof report.defenderId === 'string' && report.defenderId && report.defenderId !== context.flowDefenderId) closeBlockFlow(context);
+    else if (context.flowAttackerId) context.flowResult = blockFlowResult(report);
+  } else if (!BLOCK_FLOW_REPORTS.has(id)) {
+    closeBlockFlow(context);
+  }
+}
+
+function graphicalOf(marked: string, indent: 0 | 1 | 2, owner: ServerSide | null): GraphicalLine {
+  const display = decodeDisplay(marked, owner);
+  return { text: display.text, d6: display.d6, blockDice: display.blockDice, names: display.names, tags: display.tags, indent };
+}
+
+/** A Text line as-is at an indent (the same tokens), or with the reroll lead removed when the row's reroll source
+ *  icon already says it. */
+function graphicalFromLine(line: ReportDisplay, indent: 0 | 1 | 2): GraphicalLine {
+  let { text, d6, blockDice, names, tags } = line;
+  if (line.action?.source && text.startsWith(REROLL_LEAD)) {
+    const cut = REROLL_LEAD.length;
+    const shift = <T extends { index: number }>(tokens: readonly T[]): T[] => tokens.filter((t) => t.index >= cut).map((t) => ({ ...t, index: t.index - cut }));
+    text = text.slice(cut);
+    d6 = shift(d6); blockDice = shift(blockDice); names = shift(names); tags = shift(tags);
+  }
+  return { text, d6, blockDice, names, tags, indent };
+}
+
+/** The defender's armour value, the 2D6 total that breaks it: AV N breaks on N+ in BB2020/25 (the server's
+ *  DiceInterpreter: AV = defender.getArmourWithModifiers(); Claws in the modifier list lowers AV above 8 to 8). */
+function armourBreakTarget(game: GameJson | null, playerId: unknown, modifiers: unknown): number | null {
+  if (!game || typeof playerId !== 'string') return null;
+  const player = [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => p.playerId === playerId);
+  if (!player) return null;
+  let av: number;
+  try {
+    av = Number(effectiveArmour(player as never));
+  } catch {
+    av = Number(player.armour);
+  }
+  if (!Number.isFinite(av) || av <= 0) return null;
+  if (modifierNameList(modifiers).some((m) => normalizedModifierName(m) === 'claws') && av > 8) av = 8;
+  return av;
+}
+
+/** The Graphical injury rows: the head ("<who> <what> | armour (n+) | injury"), and a casualty row when present.
+ *  `head` is the lead phrase (already name-tagged); `headIndent` its level, the casualty one level deeper. */
+function graphicalInjury(r: Report, game: GameJson | null, head: string, headIndent: 0 | 1, owner: ServerSide | null): [GraphicalLine, GraphicalLine | null] {
+  const name = pn(game, r.defenderId ?? r.playerId);
+  const ar = Array.isArray(r.armorRoll) ? (r.armorRoll as number[]) : null;
+  const ir = Array.isArray(r.injuryRoll) ? (r.injuryRoll as number[]) : null;
+  const broke = !!r.armorBroken;
+  const parts = head ? [head] : [];
+  if (ar) {
+    const target = armourBreakTarget(game, r.defenderId ?? r.playerId, r.armorModifiers);
+    parts.push(`${TAG_MARK}V${target ?? ''}|armour${TAG_END} ${d6Pair(ar)}${target ? ` (${target}+)` : ''}${armourModifierSuffix(r.armorModifiers, broke)}`);
+  }
+  // owner 10-15: whenever the armour broke (or there was no armour roll and the server stated an injury - a crowd push,
+  // a guaranteed injury such as Saboteur's that carries no dice at all) the outcome is ALWAYS its own line one level
+  // deeper - the casualty result ("<P> is Badly Hurt!"), else the server-stated stun / KO ("<P> is stunned!")
+  const outcome = injuryOutcome(r.injury) ?? (typeof r.injury === 'number' && (r.injury & 0xff) === 9 ? 'placed in the reserves' : null);
+  if ((ir || outcome) && (broke || !ar)) {
+    const cr = Array.isArray(r.casualtyRoll) && (r.casualtyRoll as number[]).length ? (r.casualtyRoll as number[]) : null;
+    // the injury roll (when there is one) carries no outcome word
+    if (ir) parts.push(`${TAG_MARK}Ainjury${TAG_END} ${d6Pair(ir)}${injuryModifierSuffix(r.injuryModifiers, ir, r.injury)}`);
+    const base = typeof r.injury === 'number' ? r.injury & 0xff : -1;
+    // owner 10-15: the outcome row leads with its icon - the KO lettering for a KO, the apothecary icon for a
+    // casualty, and a 'stun' slot (renders nothing until the stun art arrives) for a stun
+    const lead = cr || base >= 6 && base <= 8 ? `${TAG_MARK}Ccasualty${TAG_END} `
+      : base === 5 ? `${TAG_MARK}KKO${TAG_END} `
+        : base === 4 && STUN_OUTCOME_ICON ? `${TAG_MARK}Ustunned${TAG_END} ` : '';
+    const outcomeText = base === 9 && !cr
+      ? `${name} is placed in the reserves!` // a crowd push the injury roll leaves unhurt (PlayerState RESERVE)
+      : cr
+      ? `${name} is ${r.seriousInjury ? casualtyResultLabel(r.seriousInjury) : titleCase(outcome ?? 'a casualty')}!`
+      : injuryEffectSentence(r.injury, name) === `${name} is injured!` && outcome
+        ? `${name} is ${titleCase(outcome)}!`
+        : injuryEffectSentence(r.injury, name) ?? (outcome ? `${name} is ${outcome}!` : '');
+    const outcomeLine = outcomeText ? `${lead}${outcomeText}` : '';
+    return [graphicalOf(parts.join(' | '), headIndent, owner), outcomeLine ? graphicalOf(outcomeLine, (headIndent + 1) as 1 | 2, owner) : null];
+  }
+  return [graphicalOf(parts.join(' | '), headIndent, owner), null];
+}
+
+/** Owner 10-15: the stun outcome icon (the owner's three gold stars, apps/tauri/src/assets/status/stunned.png): the
+ *  "<P> is stunned!" row leads with it (SpectateView `s.tk === 'stun'`). False would drop the icon again. */
+export const STUN_OUTCOME_ICON = true;
+
+/** The Graphical rows of an injury report's Text lines ([dice line, effect sentence, casualty?]): the dice row first,
+ *  then the outcome row (stun / KO / casualty, owner 10-15) in the effect sentence's slot; the casualty slot is left
+ *  out (the outcome row already says it). Armour that held has one Text line and no outcome row. */
+function injuryRows(lines: readonly ReportDisplay[], main: GraphicalLine, outcome: GraphicalLine | null): (GraphicalLine | null)[] {
+  // a report whose Text form is a single line (no injury dice, e.g. a guaranteed injury) still gets its outcome row
+  if (outcome && lines.length < 2) return [{ ...main, more: [...(main.more ?? []), outcome] }];
+  return lines.map((_line, index) => (index === 0 ? main : index === 1 ? outcome : null));
+}
+
+/** The Graphical version of each of a report's lines (undefined = the Text line unchanged, null = left out). */
+/** Upstream bb2025 StepProjectileVomit: the vomit landing on the vomiter is an injury whose defender is the vomiter
+ *  (passed as both attacker and defender; older steps pass no attacker while the vomiter is the acting player). */
+function isSelfVomit(r: Report, game: GameJson | null): boolean {
+  const victim = String(r.defenderId ?? r.playerId ?? '');
+  if (!victim) return false;
+  if (typeof r.attackerId === 'string' && r.attackerId) return r.attackerId === victim;
+  return game?.actingPlayer?.playerId === victim;
+}
+
+function graphicalLines(report: Report, game: GameJson | null, context: ReportLogContext, lines: readonly ReportDisplay[], handoffCatch = false): (GraphicalLine | null | undefined)[] {
+  const id = String(report.reportId ?? '');
+  const owner = reportDiceOwner(report, game);
+  const attacker = context.flowAttackerId ?? null;
+  const defender = context.flowDefenderId ?? null;
+  const result = context.flowResult ?? null;
+  const open = !!attacker && BLOCK_FLOW_REPORTS.has(id);
+  // the reroll lead stays only when no reroll source icon carries it
+  const keptLead = () => (lines[0]?.text.startsWith(REROLL_LEAD) && !lines[0]?.action?.source ? REROLL_LEAD : '');
+  const leadOnly = () => lines.map((line) => (line.action?.source && line.text.startsWith(REROLL_LEAD) ? graphicalFromLine(line, 0) : undefined));
+  switch (id) {
+    case 'blockRoll': {
+      const a = blockAttacker(report, game, context);
+      const d = report.defenderId ?? context.lastBlockDefenderId;
+      if (!a || !d || !Array.isArray(report.blockRoll)) return leadOnly();
+      const attackerTeamId = playerTeam(game, a) === 'home' ? game?.teamHome.teamId : game?.teamAway.teamId;
+      const uphill = !!report.choosingTeamId && !!attackerTeamId && report.choosingTeamId !== attackerTeamId;
+      // "Block" is the row's icon and "Rerolled" its reroll source icon: the line names who blocks whom.
+      return [graphicalOf(`${keptLead()}${pn(game, a)} blocks ${pn(game, d)}${uphill ? ' (uphill)' : ''}: ${blockDieList(report.blockRoll)}`, 0, owner)];
+    }
+    case 'blockChoice':
+      return open && (typeof report.defenderId !== 'string' || !report.defenderId || report.defenderId === defender)
+        ? lines.map((line) => graphicalFromLine(line, 1))
+        : leadOnly();
+    case 'steadyFootingRoll':
+      // a failed Steady Footing resumes the deferred fall of the block: a step of it for the sequence's players
+      return open && (report.playerId === attacker || report.playerId === defender) ? lines.map((line) => graphicalFromLine(line, 1)) : leadOnly();
+    case 'blockReRoll': {
+      if (!open) return leadOnly();
+      const who = pn(game, report.playerId);
+      const dice = Array.isArray(report.blockRoll) ? blockDieList(report.blockRoll) : '?';
+      // the source is the reroll source icon; with none, keep the named source
+      const src = lines[0]?.action?.source ? '' : report.reRollSource ? ` (${humanize(String(report.reRollSource))})` : '';
+      return [graphicalOf(`${keptLead()}${who} rerolls block dice${src}: ${dice}`, 1, owner)];
+    }
+    case 'pushback': {
+      // Every push is shown: a step in an open sequence (a chain push of a third player included), else a flat row.
+      // Astra 10-15: it is NOT left out on POW - a successful Steady Footing keeps the player up, and then no knockdown
+      // row would follow to say what happened (a POW therefore reads "pushed back!" then "knocked down!").
+      void result;
+      return [graphicalOf(`${pn(game, report.defenderId)} is pushed back!`, open ? 1 : 0, owner)];
+    }
+    case 'injury': {
+      const type = String(report.injuryType ?? '').toLowerCase();
+      const victim = String(report.defenderId ?? report.playerId ?? '');
+      const name = pn(game, victim);
+      const blockFamily = type.startsWith('block');
+      const inFlow = open && injuryPairsWithFlow(report, context);
+      let head: string;
+      if (type.startsWith('crowdpush')) head = `${name} is pushed into the crowd!`;
+      else if (blockFamily) head = inFlow && result === 'skull' && victim === attacker ? `${name} knocks themselves down!` : `${name} is knocked down!`;
+      else if (type.startsWith('foul')) {
+        const foulerId = typeof report.attackerId === 'string' && report.attackerId ? report.attackerId : game?.actingPlayer?.playerId;
+        head = `${pn(game, foulerId)} fouls ${name}`;
+      } else if (type === 'dropdodge' || type === 'dropgfi') head = `${name} falls down!`;
+      else if (type === 'chainsaw' || type === 'chainsawforspp') {
+        // owner 10-15: the chainsaw roll row above says who hit whom, or that it kicked back; this row is its armour /
+        // injury step for the player hit (the target, or the chainsaw player on a kickback), its outcome one level deeper
+        const [roll, outcome] = graphicalInjury(report, game, '', 1, owner);
+        // the one exception to "no outcome row when the armour holds": a chainsaw HIT whose armour holds reads
+        // "<P>'s chainsaw fails to cut through <T>'s armor!" (owner spelling "armor")
+        const held = Array.isArray(report.armorRoll) && !report.armorBroken && !isSelfVomit(report, game);
+        const attackerId = typeof report.attackerId === 'string' && report.attackerId ? report.attackerId : game?.actingPlayer?.playerId;
+        const heldRow = held && attackerId ? graphicalOf(`${pn(game, attackerId)}'s chainsaw ${FAILS} to cut through ${name}'s armor!`, 2, owner) : null;
+        return injuryRows(lines, roll, outcome ?? heldRow);
+      } else if (type === 'projectilevomit') {
+        // the vomit roll row above says who vomited on whom; this row is its armour / injury step
+        const [roll, casualty] = graphicalInjury(report, game, '', 1, owner);
+        if (isSelfVomit(report, game)) {
+          // "<P> vomits all over themselves!", then (indented) the armour / injury roll and the casualty
+          const selfHead = graphicalOf(`${name} vomits all over themselves!`, 0, owner);
+          const casualtyDeeper = casualty ? { ...casualty, indent: 2 as const } : null;
+          selfHead.more = [roll, ...(casualtyDeeper ? [casualtyDeeper] : [])];
+          return lines.map((_line, index) => (index === 0 ? selfHead : null));
+        }
+        return injuryRows(lines, roll, casualty);
+      } else if (type === 'stab' && typeof report.attackerId === 'string' && report.attackerId) {
+        head = report.armorBroken ? `${pn(game, report.attackerId)} stabs ${name}!` : `${pn(game, report.attackerId)} ${FAILS} to stab ${name}.`;
+      } else {
+        // any other injury (Chainsaw, Fireball, Lightning, Bomb...): "<P> | <Cause>" then the shared armour / injury form
+        const cause = titleCase(humanize(String(report.injuryType ?? 'injury')));
+        head = `${name} | ${cause}`;
+      }
+      const [main, casualty] = graphicalInjury(report, game, head, inFlow ? 1 : 0, owner);
+      // Text lines: [head, effect sentence, casualty?] - the effect word now rides the head, so its row is left out
+      return injuryRows(lines, main, casualty);
+    }
+    case 'handOver':
+      return [graphicalFromLine(lines[0]!, 0)];
+    case 'catchRoll':
+      // the receiver's catch after a hand-off is a step of it (Catch icon, indented under the hand-off row)
+      return handoffCatch ? lines.map((line) => graphicalFromLine(line, 1)) : leadOnly();
+    case 'apothecaryRoll': case 'apothecaryChoice': case 'regenerationRoll':
+      return open && inBlockFlow(context, report.playerId) ? lines.map((line) => graphicalFromLine(line, 2)) : leadOnly();
+    case 'skillUse': case 'skillUseOtherPlayer':
+      return lines.map((line) => graphicalFromLine(line,
+        open && (report.playerId === attacker || report.playerId === defender || report.playerIdOtherPlayer === attacker || report.playerIdOtherPlayer === defender) ? 1 : 0));
+    default:
+      return leadOnly();
+  }
 }
 
 function formatReportLinesPlain(report: Report, game: GameJson | null, context: ReportLogContext): ReportDisplay[] {

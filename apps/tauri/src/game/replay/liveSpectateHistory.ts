@@ -107,29 +107,219 @@ export type BackfillPrepareResult =
   | { kind: 'over-budget' };
 /** `observed`: the attempt's observer was fed the whole game up to the live head (see prepareBackfill). */
 export type BackfillCommitResult = { kind: 'ok'; events: number; anchors: number; observed?: boolean } | { kind: 'superseded' } | { kind: 'over-budget'; observed?: boolean };
-/** How many captured live commands are matched (consecutively) inside the replay stream to place the join boundary. */
+/** Exact matches the ONE consistent candidate needs before the join is placed (two suffice at the replay's end). */
 export const BACKFILL_NEEDLE_LENGTH = 3;
+/** How many leading live commands the matcher compares. Bounded so a needle that keeps growing while a download is in
+ *  flight never makes a later attempt harder (bug report 2026-10-15, game 1953710). Reaching it never releases a
+ *  placement: it can only refuse. */
+export const BACKFILL_MATCH_WINDOW = 16;
 /** A command's content identity independent of its number: the replay stream is renumbered by the server. */
 export function replayContentSignature(command: Readonly<Record<string, unknown>>): string {
   const { commandNr: _nr, ...content } = command;
   return JSON.stringify(content);
 }
-/** Index in `haystack` where the consecutive `needle` starts. The LAST full match wins when the needle repeats (the
- *  live capture is the most recent occurrence). A partial match is accepted only when NO full match exists, only at the
- *  very end of the stream (the download raced the live tail), and only with at least two matched elements — a single
- *  coincidental element at the tail must never override an earlier full match (Astra 09-14). Null when the needle is
- *  empty or never occurs. */
-export function findBackfillBoundary(haystack: readonly string[], needle: readonly string[]): number | null {
-  if (needle.length === 0) return null;
-  let full: number | null = null;
-  let partial: number | null = null;
-  for (let start = 0; start < haystack.length; start++) {
-    let matched = 0;
-    while (matched < needle.length && start + matched < haystack.length && haystack[start + matched] === needle[matched]) matched++;
-    if (matched === needle.length) full = start;
-    else if (matched >= 2 && start + matched === haystack.length) partial = start;
+export type BackfillCommandMatch = 'exact' | 'tolerated' | 'mismatch';
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+/** Structural equality of JSON data: own keys only (no prototype lookups), key order ignored, arrays in order. */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!jsonEqual(a[i], b[i])) return false;
+    return true;
   }
-  return full ?? partial;
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) if (!Object.hasOwn(b, key) || !jsonEqual(a[key], b[key])) return false;
+  return true;
+}
+/** Same own key set on both objects, every key compared by `compare` (own keys only). */
+function sameKeysEvery(a: Record<string, unknown>, b: Record<string, unknown>, compare: (key: string, x: unknown, y: unknown) => boolean): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) if (!Object.hasOwn(b, key) || !compare(key, a[key], b[key])) return false;
+  return true;
+}
+/** Compare a captured LIVE command with a REPLAY command, commandNr ignored. `exact`: every other field equal.
+ *  `tolerated`: the only differences sit INSIDE object values - object-valued modelChangeValues, or another top-level
+ *  object field such as serverAddPlayer.player - with the same netCommandId, clocks, sound, report list, model-change
+ *  ids and keys in the same order, and every primitive value equal. Anything else: `mismatch`.
+ *  Why this breadth (Astra 10-15 round 10): the server keeps model-change value objects by reference and serialises its
+ *  replay later. Evidenced: fieldModelSetTargetSelectionState (1953710: committed / playerStateOld); in upstream source
+ *  the same object also changes status (StepStandUp .failed()) and usedSkills (StepInitBlocking). A narrower tolerance
+ *  can reject the TRUE join's own copy and leave a lookalike as the unique candidate; a broader one can only add
+ *  consistent candidates, which makes placement refuse or wait, never place wrong. */
+export function compareBackfillCommands(live: Readonly<Record<string, unknown>>, replay: Readonly<Record<string, unknown>>): BackfillCommandMatch {
+  let tolerated = false;
+  // commandNr is ignored entirely - present, absent or different on either side (the replay is renumbered).
+  const { commandNr: _liveNr, ...liveContent } = live;
+  const { commandNr: _replayNr, ...replayContent } = replay;
+  const equal = sameKeysEvery(liveContent, replayContent, (key, a, b) => {
+    if (jsonEqual(a, b)) return true;
+    // Astra 10-15 round 11: other commands carry retained objects too (serverAddPlayer.player gains usedSkills later).
+    // Any other top-level OBJECT field may differ (tolerated); primitives, arrays and the report list stay exact.
+    if (key !== 'modelChangeList') {
+      if (key === 'reportList' || !isPlainObject(a) || !isPlainObject(b)) return false;
+      tolerated = true;
+      return true;
+    }
+    // The model-change list differs: tolerated only change by change, inside object-valued values.
+    if (!isPlainObject(a) || !isPlainObject(b)) return false;
+    return sameKeysEvery(a, b, (listKey, x, y) => {
+      if (listKey !== 'modelChangeArray') return jsonEqual(x, y);
+      if (!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
+      for (let i = 0; i < x.length; i++) {
+        const left = x[i], right = y[i];
+        if (jsonEqual(left, right)) continue;
+        if (!isPlainObject(left) || !isPlainObject(right)) return false;
+        const ok = sameKeysEvery(left, right, (changeKey, p, q) =>
+          changeKey === 'modelChangeValue' ? jsonEqual(p, q) || (isPlainObject(p) && isPlainObject(q)) : jsonEqual(p, q));
+        if (!ok) return false;
+        tolerated = true;
+      }
+      return true;
+    });
+  });
+  if (!equal) return 'mismatch';
+  return tolerated ? 'tolerated' : 'exact';
+}
+export interface BackfillPlacementOptions {
+  /** Exact matches the unique consistent candidate needs (default 3; capped by the needle length). */
+  minExact?: number;
+  /** The most needle elements the caller can ever supply (the live match window); default unbounded. */
+  maxWindow?: number;
+  /** Live commands known to be in the download (it was requested after they arrived): the placed candidate must have
+   *  that many of them compared inside the download (Astra 10-15 round 10: a download that predates the live
+   *  commands must never place). Default 0. */
+  minCovered?: number;
+}
+/** `index`: the replay index of needle[0], or null. `open`: no decision yet - more live commands could still discriminate
+ *  (wait, same download); false with a null index = refuse. */
+export interface BackfillPlacement { index: number | null; open: boolean }
+/** UNIQUE CONSISTENT CANDIDATE (Astra 10-15). Every replay position i is a candidate: the WHOLE captured needle is
+ *  compared against haystack[i...] element by element, stopping only at a mismatch or the haystack's end (never early
+ *  after a quota of matches). A candidate is consistent when every compared element is exact or tolerated. The join is
+ *  placed only when exactly ONE candidate is consistent AND it has at least `minExact` exact matches, or reaches the
+ *  haystack's end with at least two (the live commands past the end are simply not in the download yet). No consistent
+ *  candidate: refuse. Otherwise wait only while more live commands could still decide it (window not full, and at most
+ *  one consistent candidate already at the haystack's end - candidates at the end stay consistent forever in this
+ *  download); else refuse. Never "last wins" / "first wins"; the window limit never releases a placement. */
+export function placeBackfillJoin<T>(haystack: readonly T[], needle: readonly T[], compare: (live: T, replay: T) => BackfillCommandMatch,
+  options: BackfillPlacementOptions = {}): BackfillPlacement {
+  if (needle.length === 0) return { index: null, open: false };
+  const minExact = Math.max(1, Math.min(options.minExact ?? BACKFILL_NEEDLE_LENGTH, needle.length));
+  const maxWindow = options.maxWindow ?? Number.POSITIVE_INFINITY;
+  const minCovered = Math.max(0, options.minCovered ?? 0);
+  const consistent: { start: number; exact: number; atEnd: boolean; covered: number }[] = [];
+  for (let start = 0; start < haystack.length; start++) {
+    let exact = 0;
+    let index = 0;
+    let ok = true;
+    for (; index < needle.length && start + index < haystack.length; index++) {
+      const match = compare(needle[index]!, haystack[start + index]!);
+      if (match === 'mismatch') { ok = false; break; }
+      if (match === 'exact') exact++;
+    }
+    if (ok) consistent.push({ start, exact, atEnd: index < needle.length || start + index === haystack.length, covered: index });
+  }
+  if (consistent.length === 0) return { index: null, open: false };
+  const canGrow = needle.length < maxWindow;
+  if (consistent.length === 1) {
+    const only = consistent[0]!;
+    // atEnd counts only when the haystack ran out BEFORE the needle did (live commands not yet in the download), or
+    // exactly with it; either way more live commands cannot add evidence for this download.
+    const qualified = (only.exact >= minExact || (only.atEnd && only.exact >= Math.min(2, minExact)))
+      && only.covered >= Math.min(minCovered, needle.length);
+    if (qualified) return { index: only.start, open: false };
+    return { index: null, open: canGrow && !only.atEnd };
+  }
+  const atEnd = consistent.filter((candidate) => candidate.atEnd).length;
+  return { index: null, open: canGrow && atEnd <= 1 };
+}
+/** Exact-only placement over pre-computed signatures (see placeBackfillJoin); default minExact = the needle length. */
+export function findBackfillBoundary(haystack: readonly string[], needle: readonly string[], options: BackfillPlacementOptions = {}): number | null {
+  return placeBackfillJoin(haystack, needle, (a, b) => (a === b ? 'exact' : 'mismatch'), { minExact: needle.length, ...options }).index;
+}
+/** Placement of captured live commands inside replay commands (signature fast path for exact, structural compare
+ *  only when the signatures differ). */
+export function placeBackfillJoinCommands(replay: readonly Readonly<Record<string, unknown>>[], live: readonly Readonly<Record<string, unknown>>[],
+  options: BackfillPlacementOptions = {}): BackfillPlacement {
+  type Entry = { command: Readonly<Record<string, unknown>>; signature: string };
+  const entry = (command: Readonly<Record<string, unknown>>): Entry => ({ command, signature: replayContentSignature(command) });
+  return placeBackfillJoin<Entry>(replay.map(entry), live.map(entry), (a, b) => {
+    if (a.signature === b.signature) return 'exact';
+    // Differing signatures may still be structurally EXACT (key order): always decide structurally (Astra 10-15 round 8:
+    // a clock-based shortcut here rejected a reordered true join and left a wrong candidate unique). A different
+    // command id can never be exact or tolerated.
+    if (a.command.netCommandId !== b.command.netCommandId) return 'mismatch';
+    return compareBackfillCommands(a.command, b.command);
+  }, options);
+}
+/** Fields the server's join snapshot is KNOWN to report differently from the client's reduction of the replay up to the
+ *  same position. Evidence: five real FUMBBL downloads (in-progress games 1953744, 1953745, 1953748, 1953749 and the
+ *  finished 1953710, 2026-10-15), each comparing the download's own serverGameState with seed + every replay command:
+ *  - turnData.blitzingPlayerId: snapshot carries the id, the reduction null (1953744, 1953745, 1953710).
+ *  - turnData.leaderState: snapshot 'available', reduction 'none' (1953744, 1953710).
+ *  - turnData.inducementSet: same inducements in another order (1953749).
+ *  - turnData.rerollPumpUpTheCrowdOneDrive / rerollShowStarOneDrive / singleUseReRolls: upstream snapshots may omit them
+ *    and the store repairs the join head in place (repairStandingRerolls), so the anchor may carry inferred values.
+ *  - actingPlayer.strength / dodging / leaping / hasJumped: absent from every snapshot, present in the reduction.
+ *  - actingPlayer.skillsGrantedBy: the server fills it (ActingPlayer.addGrantedSkill, e.g. Wisdom of the White Dwarf)
+ *    without emitting a model change, so a replay reduction never reconstructs it (Astra 10-15 round 11, upstream source).
+ *  null and an absent field are treated alike (dialogParameter, targetSelectionState: null vs absent in the evidence).
+ *  Everything compared is listed in backfillContinuityProjection; anything else (markers, rosters, clocks, results
+ *  other than the score) is not part of the check. */
+export const BACKFILL_CONTINUITY_IGNORED: Readonly<{ turnData: ReadonlySet<string>; actingPlayer: ReadonlySet<string> }> = Object.freeze({
+  turnData: new Set(['blitzingPlayerId', 'leaderState', 'inducementSet', 'rerollPumpUpTheCrowdOneDrive', 'rerollShowStarOneDrive', 'singleUseReRolls']),
+  actingPlayer: new Set(['strength', 'dodging', 'leaping', 'hasJumped', 'skillsGrantedBy']),
+});
+/** Own-key copy without the ignored keys and without null/undefined values (null and absent compare alike). */
+function continuityRecord(value: unknown, ignored: ReadonlySet<string> = new Set()): unknown {
+  if (!isPlainObject(value)) return value ?? null;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    if (ignored.has(key)) continue;
+    const field = value[key];
+    if (field === null || field === undefined) continue;
+    out[key] = field;
+  }
+  return out;
+}
+/** The game state the continuity check compares: player positions and states, ball and bomb, both turn data blocks,
+ *  the acting player, half / homePlaying / turn mode, the scores and the open dialog. */
+export function backfillContinuityProjection(model: Readonly<GameJson>): Record<string, unknown> {
+  const game = model as unknown as Record<string, unknown>;
+  const field = isPlainObject(game.fieldModel) ? game.fieldModel : {};
+  const players = Array.isArray(field.playerDataArray) ? field.playerDataArray : [];
+  const result = isPlainObject(game.gameResult) ? game.gameResult : {};
+  const score = (side: unknown) => (isPlainObject(side) ? side.score ?? null : null);
+  return {
+    half: game.half ?? null, homePlaying: game.homePlaying ?? null, turnMode: game.turnMode ?? null,
+    players: players.map((player) => (isPlainObject(player)
+      ? { playerId: player.playerId ?? null, playerCoordinate: player.playerCoordinate ?? null, playerState: player.playerState ?? null } : player))
+      .sort((a, b) => String((a as { playerId?: unknown })?.playerId).localeCompare(String((b as { playerId?: unknown })?.playerId))),
+    ball: { ballCoordinate: field.ballCoordinate ?? null, ballInPlay: field.ballInPlay ?? null, ballMoving: field.ballMoving ?? null,
+      bombCoordinate: field.bombCoordinate ?? null, bombMoving: field.bombMoving ?? null },
+    turnDataHome: continuityRecord(game.turnDataHome, BACKFILL_CONTINUITY_IGNORED.turnData),
+    turnDataAway: continuityRecord(game.turnDataAway, BACKFILL_CONTINUITY_IGNORED.turnData),
+    actingPlayer: (() => {
+      // usedSkills is a server-side HashSet (ActingPlayer.toJsonValue): membership counts, order does not (Astra round 10).
+      const record = continuityRecord(game.actingPlayer, BACKFILL_CONTINUITY_IGNORED.actingPlayer);
+      if (isPlainObject(record) && Array.isArray(record.usedSkills)) record.usedSkills = [...record.usedSkills].map((skill) => JSON.stringify(skill)).sort();
+      return record;
+    })(),
+    score: [score(result.teamResultHome), score(result.teamResultAway)],
+    dialogParameter: game.dialogParameter ?? null,
+  };
+}
+/** Top-level continuity fields that differ between the replay reduced to a candidate join and the join snapshot (owner
+ *  10-15 option C: an independent check before any placement is committed; fails closed). Empty = continuous. */
+export function backfillContinuityDifferences(reduced: Readonly<GameJson>, joinSnapshot: Readonly<GameJson>): string[] {
+  const left = backfillContinuityProjection(reduced);
+  const right = backfillContinuityProjection(joinSnapshot);
+  return Object.keys(left).filter((key) => !jsonEqual(left[key], right[key]));
 }
 export type IngressResult =
   | { kind: 'connection' | 'annotation' | 'ignored' | 'duplicate' }
@@ -228,19 +418,33 @@ export class LiveSpectateHistory {
     return live && live.events.length > 0 ? { ...live.identity } : null;
   }
   async prepareBackfill(seedModel: GameJson, commands: readonly ReplayCommand[], liveIdentity: SpectatorIdentity, sliceMs = 12,
-    observer?: Pick<SpectatorMatchObserver, 'event'>): Promise<BackfillPrepareResult> {
+    observer?: Pick<SpectatorMatchObserver, 'event'>,
+    /** `liveAtRequest`: live commands of this segment already received when the download was REQUESTED - the download
+     *  holds them, so the placed candidate must cover them (Astra 10-15 round 10). */
+    freshness: { liveAtRequest?: number } = {}): Promise<BackfillPrepareResult> {
     const live = this.backfillTarget();
     if (!live || !sameSpectatorIdentity(live.identity, liveIdentity) || live.events.length === 0) return { kind: 'superseded' };
     const gameId = String(this.headValue!.model.gameId);
     // Replayable, reducible commands only; the join boundary is searched in this same filtered space.
+    const replayable = commands.filter((command) => classifySpectatorPacket(command) === 'match' && REPLAY_MODEL_COMMANDS.has(command.netCommandId));
+    // The needle must start at the join: a live segment whose front was trimmed under budget pressure no longer does.
+    if (live.start !== live.origin) return { kind: 'boundary-unverified', replayCommands: replayable.length };
     // A one-command needle is too easy to mistake for another command: wait for the full needle (the store retries).
     if (live.events.length < BACKFILL_NEEDLE_LENGTH) return { kind: 'needle-short', liveEvents: live.events.length };
-    const replayable = commands.filter((command) => classifySpectatorPacket(command) === 'match' && REPLAY_MODEL_COMMANDS.has(command.netCommandId));
-    const needle = live.events.slice(0, BACKFILL_NEEDLE_LENGTH).map((entry) => replayContentSignature(entry.event.command));
-    const boundary = findBackfillBoundary(replayable.map(replayContentSignature), needle);
+    // Bug report 2026-10-15 (game 1953710) + Astra 10-15: the join is placed only at the UNIQUE replay position consistent
+    // with the whole captured live window (see placeBackfillJoin); a replay copy may differ from the live command only in
+    // the allow-listed by-reference fields. Ambiguity or exhaustion refuses; undecided waits.
+    const window = live.events.slice(0, BACKFILL_MATCH_WINDOW).map((entry) => entry.event.command);
+    const placement = placeBackfillJoinCommands(replayable, window, { minExact: BACKFILL_NEEDLE_LENGTH, maxWindow: BACKFILL_MATCH_WINDOW, minCovered: freshness.liveAtRequest ?? 0 });
+    const boundary = placement.index;
+    // Undecided while more live commands could still decide it, from this same download: reported as needle-short so the
+    // store re-runs it on the next live event without a fresh fetch.
+    if (boundary === null && placement.open) return { kind: 'needle-short', liveEvents: live.events.length };
     if (boundary === null) return { kind: 'boundary-unverified', replayCommands: replayable.length };
     if (boundary === 0) return { kind: 'nothing-before-join' };
     const selected = replayable.slice(0, boundary);
+    // Owner 10-15 (option C): the join snapshot the reduced replay must arrive at, captured before any yield.
+    const joinSnapshot = live.anchors[0]!.checkpoint.model;
     const identity: SpectatorIdentity = { sessionId: this.sessionId, connectionGeneration: this.currentGeneration, segmentId: ++this.nextSegment };
     let checkpoint = seedSpectatorCheckpoint(seedModel, { ...identity, sequence: 0 }, null);
     if (String(checkpoint.model.gameId) !== gameId) return { kind: 'superseded' };
@@ -294,6 +498,13 @@ export class LiveSpectateHistory {
       if (overBudget()) { this.noticeValue = 'Earlier history limit reached'; return { kind: 'over-budget' }; }
       if (performance.now() - sliceStart >= sliceMs) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); sliceStart = performance.now(); }
     }
+    // Owner 10-15 (option C): independent state continuity. The replay reduced up to the single surviving candidate must
+    // arrive at the join snapshot (backfillContinuityProjection, fails closed). Reuses this reduction: no second pass.
+    const discontinuous = backfillContinuityDifferences(checkpoint.model, joinSnapshot);
+    if (discontinuous.length > 0) {
+      console.warn(`[spectate] backfill continuity refused the join at replay ${boundary}: ${discontinuous.join(', ')}`);
+      return { kind: 'boundary-unverified', replayCommands: replayable.length };
+    }
     // Owner 10-10: the observer's fold continues through the joined live segment, re-reduced from its join snapshot
     // (the history keeps the events, not a model per event), in the same time slices. Whatever arrives between here
     // and the commit is fed at the commit, so the fold ends exactly at the live head.
@@ -322,6 +533,8 @@ export class LiveSpectateHistory {
   commitBackfill(prepared: PreparedBackfill): BackfillCommitResult {
     const live = this.backfillTarget();
     if (!live || !sameSpectatorIdentity(live.identity, prepared.liveIdentity) || String(this.headValue!.model.gameId) !== prepared.gameId) return { kind: 'superseded' };
+    // Astra 10-15: the live front may have been trimmed while preparing yielded - the placement no longer joins up.
+    if (live.start !== live.origin) return { kind: 'superseded' };
     const { segment } = prepared;
     // Owner 10-10: bring the observer's fold to the live head first. It does not depend on the history budget below -
     // a backfill too large to keep for scrubbing has still been folded whole.

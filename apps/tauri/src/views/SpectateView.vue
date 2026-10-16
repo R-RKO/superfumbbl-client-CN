@@ -131,6 +131,9 @@ import { logTagParts, type LogTagKind, type LogTagToken } from '../game/logTags'
 import breastplateIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/breastplate.png';
 import niStatDownIconUrl from '@fumbbl40k/ffb-pitch/assets/status/stat-down/ni.png';
 import LogActionPlate, { logRowSide } from '../components/LogActionPlate.vue';
+import { logRowPlates } from '../game/logActionPlates';
+import { screenDirectionText } from '../game/logDirection';
+import { koLetteringUrl } from '../game/koLettering';
 import { kickoffCineHoldGuard } from '../game/kickElection';
 import { watchKickoffArcDecisionDwell } from '../game/kickoffArcDwell';
 import { quickSnapExhaustedText } from '../game/quickSnapController';
@@ -767,7 +770,39 @@ function chatParts(entry: { text: string }): { name: string; rest: string } {
 }
 // Owner 2026-07-08: chat lives ONLY in the Chat tab now — occlude 'talk' lines from
 // the Log pane so it stays a pure event log.
-const logEntries = computed(() => visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents));
+const logEntries = computed(() => {
+  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical');
+  // Owner 10-15 (Graphical block flow): a line whose Graphical version is null is left out there (another row says it)
+  if (settings.logStyle !== 'graphical') return entries;
+  // a Graphical line can expand into further rows (g.more: a self-vomit's armour / injury and casualty rows); each
+  // becomes its own row with the parent's time, kind and tint
+  return entries.flatMap((entry) => (entry.g === null ? [] : entry.g?.more?.length
+    ? [entry, ...entry.g.more.map((more) => ({ ...entry, g: more }))]
+    : [entry]));
+});
+/** Owner 10-15: the line a row renders - its Graphical version in the Graphical style when it has one, else itself. */
+function logRowLine(entry: (typeof logEntries.value)[number]) {
+  // a rare easter-egg wording (alt) shows in both styles; the Graphical row already carries it in `g`
+  return settings.logStyle === 'graphical' && entry.g ? entry.g : entry.alt ?? entry;
+}
+/** Owner 10-15: a Graphical row's indent inside the text column (undefined in the Text style and at level 0). */
+function logRowIndent(entry: (typeof logEntries.value)[number]): number | undefined {
+  return settings.logStyle === 'graphical' && entry.g && entry.g.indent > 0 ? entry.g.indent : undefined;
+}
+/** Owner 10-15: each row's plate - a step row drops an icon that only repeats its parent's action (logRowPlates). */
+const logRowPlateList = computed(() => logRowPlates(logEntries.value.map((entry) => ({ action: entry.action, indent: logRowIndent(entry) ?? 0 }))));
+const apothecaryLogIconUrl = new URL('../assets/resources/apothecary.png', import.meta.url).href;
+/** Owner 10-15: the KO outcome rows' inline icon, the dugout-label "KO" lettering (null = plain "KO" fallback). */
+const koLogLetteringUrl = koLetteringUrl();
+/** Owner 10-15: the stun outcome rows' inline icon (the owner's three gold stars; PROVENANCE beside the file). */
+const stunnedLogIconUrl = new URL('../assets/status/stunned.png', import.meta.url).href;
+/** Owner 10-15: a log line's field direction as the viewer sees it now - the pitch orientation and the field flip the
+ *  renderer applies (spectator drive-north XOR the user's pitch flip), read reactively so the line follows a view
+ *  change. */
+function logDirectionText(field: string | undefined): string {
+  // Astra 10-15: the projection the pitch SHOWS (the renderer turns it at rest), not the requested setting
+  return screenDirectionText(field, appliedPitchView.value.orientation, appliedPitchView.value.flipped);
+}
 // #157-v2 (owner 08-18): tint player names in the log by TEAM, relativised to the reader's SEAT.
 // The tags come from the formatter (LogEntry.names), not from re-matching roster names against
 // finished text -- a player called "Push" or a name carried by both rosters can no longer colour
@@ -795,7 +830,7 @@ function logNameColor(team: LogNameTeam): string | undefined {
   return tint[logNameSeatKey(team, gameStore.mySeat.value)];
 }
 /** Cache segmented log entries; entries are immutable once pushed, so a WeakMap keyed on them is safe. */
-type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind | 'dienum'; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string;
+type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind | 'dienum'; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string; title?: string;
   /** Owner 10-13: the server side of the team that rolled a d6 (home/away dice colour). */
   dteam?: 'home' | 'away' };
 const logSegCache = new WeakMap<object, LogSegment[]>();
@@ -815,7 +850,7 @@ function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 |
     if ('face' in part && part.face) { segs.push(part.team ? { face: part.face, kind: part.kind, dteam: part.team } : { face: part.face, kind: part.kind }); at += 1; continue; }
     const text = part.text ?? '';
     for (const piece of logTagParts(text, at, entry.tags)) {
-      if (piece.kind) { if (piece.text) segs.push({ t: piece.text, tk: piece.kind }); continue; }
+      if (piece.kind) { if (piece.text) segs.push({ t: piece.text, tk: piece.kind, ...(piece.title ? { title: piece.title } : {}) }); continue; }
       for (const named of logNameParts(piece.text, piece.start, entry.names)) {
         // Owner 08-19: `pid` makes the name CLICKABLE (locate cue) — additive, untagged names stay inert.
         if (named.text) segs.push(named.team ? { t: named.text, side: named.team, ...(named.playerId ? { pid: named.playerId } : {}) } : { t: named.text });
@@ -14632,7 +14667,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="entry.action" /><span class="log-text"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -20922,6 +20957,21 @@ function sendChat() {
   text-shadow: 0 1px 1px rgb(0 0 0 / 0.9), 0 0 2px rgb(0 0 0 / 0.75);
 }
 .log.log-graphical .log-text { display: block; grid-column: 3; min-width: 0; }
+/* Owner 10-15 (block flow): indent levels inside the text column; a wrapped line wraps at its own indent */
+.log.log-graphical .log-text[data-indent='1'] { padding-left: 1.4em; }
+.log.log-graphical .log-text[data-indent='2'] { padding-left: 2.8em; }
+/* Owner 10-15 (live 1.0.220): in the Graphical style every inline die / roll glyph - d6 faces, block dice, the armour
+   shield and the apothecary injury icon - is the SAME size as the row's action icon (--log-icon-size: 1.7 x one text
+   line, 20-42 px), vertically centred on the line; the line box grows to fit, so nothing clips and wrapping stays in
+   the text cell. Dice / targets shown as numbers (Settings > Display > Log) are text and keep the text size. */
+.log.log-graphical .log-d6 { --d6-size: var(--log-icon-size); margin: 0.04em 0.1em; vertical-align: middle; }
+.log.log-graphical .log-block-die { --block-die-size: var(--log-icon-size); margin: 0.04em 0.08em; vertical-align: middle; }
+.log.log-graphical .log-armour { width: var(--log-icon-size); height: var(--log-icon-size); margin: 0.04em 0.06em; vertical-align: middle; }
+/* Owner 10-15: the KO lettering is wider than tall - its box keeps the icon height and takes the lettering's width */
+.log.log-graphical .log-armour.log-ko { width: calc(var(--log-icon-size) * 1.6); }
+.log-ko-fallback { position: absolute; inset: 0; display: grid; place-items: center; font-family: 'Nuffle', serif; font-weight: 700; color: #fff; }
+/* Owner 10-15: the stun outcome icon (three gold stars) is a square inline icon like the armour shield */
+.log-stun img { image-rendering: auto; }
 /* Astra: the copy layers that keep selectable text under artwork use color: transparent, which does not hide a
    coloured shadow - the row outline must not paint through the dice, armour and NI artwork. */
 .log.log-graphical .log-hidden, .log.log-graphical .log-armour-glyph, .log.log-graphical .log-stat-down-copy,

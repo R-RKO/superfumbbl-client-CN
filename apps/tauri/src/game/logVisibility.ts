@@ -32,9 +32,13 @@ export function sequencingCategory(
 export function visibleMatchLogEntries<T extends MatchLogVisibilityEntry>(
   entries: readonly T[],
   showServerSequencingEvents: boolean,
+  /** Owner 10-15: rows only the Modern log's Graphical style shows (block flow pushes, skill uses). Every other
+   *  reader of this list - the Modern Text style and the Classic log - leaves them out, so their text is unchanged. */
+  includeGraphicalOnly = false,
 ): T[] {
   return entries.filter((entry) =>
     entry.kind !== 'talk'
+      && (includeGraphicalOnly || !(entry as { graphicalOnly?: unknown }).graphicalOnly)
       && (showServerSequencingEvents || entry.category !== 'server-sequencing'),
   );
 }

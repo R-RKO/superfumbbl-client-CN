@@ -14,20 +14,202 @@ import { playerServerSide, teamServerSide, type ServerSide } from '@fumbbl40k/ff
  *   source - the reroll source that actually provided this line's reroll, as the server named it ("Team ReRoll",
  *            "Pro", "Team Mascot", "Brawler", ...); absent when the line is not a reroll.
  */
-export const LOG_ACTION_KINDS = ['block', 'pass', 'handoff', 'catch', 'dodge', 'foul', 'reroll', 'mascot', 'rush', 'pickup'] as const;
-export type LogActionKind = (typeof LOG_ACTION_KINDS)[number];
+/**
+ * Owner 10-15 ("wherever possible, use an emoji to indicate the type of action"): THE icon table - one entry per action
+ * icon the Graphical log's left column can show. `art` = pitch / resource art (LogActionPlate.vue resolves the file),
+ * `skill` = the skill icon from the active skill icon family, `emoji` = an emoji, `ko` = the dugout-label KO lettering.
+ * `label` is the icon's tooltip. Swap any entry here; the report -> icon mapping is REPORT_ACTION_KIND below.
+ */
+export const LOG_ACTION_ICONS = {
+  // pitch / resource art
+  block: { icon: { type: 'art', art: 'block' }, label: 'Block' },
+  pass: { icon: { type: 'art', art: 'pass' }, label: 'Pass' },
+  handoff: { icon: { type: 'art', art: 'handoff' }, label: 'Hand-off' },
+  foul: { icon: { type: 'art', art: 'foul' }, label: 'Foul' },
+  catch: { icon: { type: 'art', art: 'catch' }, label: 'Catch' },
+  dodge: { icon: { type: 'art', art: 'dodge' }, label: 'Dodge' },
+  rush: { icon: { type: 'art', art: 'rush' }, label: 'Rush' },
+  pickup: { icon: { type: 'art', art: 'pickup' }, label: 'Pick-up' },
+  reroll: { icon: { type: 'art', art: 'reroll' }, label: 'Reroll' },
+  mascot: { icon: { type: 'art', art: 'mascot' }, label: 'Team Mascot' },
+  apothecary: { icon: { type: 'art', art: 'apothecary' }, label: 'Apothecary' },
+  // skill icons (active skill icon family)
+  bloodlust: { icon: { type: 'skill', skill: 'Bloodlust' }, label: 'Bloodlust' },
+  gaze: { icon: { type: 'skill', skill: 'Hypnotic Gaze' }, label: 'Hypnotic Gaze' },
+  foulAppearance: { icon: { type: 'skill', skill: 'Foul Appearance' }, label: 'Foul Appearance' },
+  animosity: { icon: { type: 'skill', skill: 'Animosity' }, label: 'Animosity' },
+  steadyFooting: { icon: { type: 'skill', skill: 'Steady Footing' }, label: 'Steady Footing' },
+  teamCaptain: { icon: { type: 'skill', skill: 'Team Captain' }, label: 'Team Captain' },
+  gettingEven: { icon: { type: 'skill', skill: 'Hatred' }, label: 'Getting Even' },
+  chainsaw: { icon: { type: 'skill', skill: 'Chainsaw' }, label: 'Chainsaw' },
+  // the dugout-label KO lettering
+  ko: { icon: { type: 'ko' }, label: 'Knocked out' },
+  // emoji
+  breatheFire: { icon: { type: 'emoji', emoji: '\u{1F525}' }, label: 'Breathe Fire' },
+  vomit: { icon: { type: 'emoji', emoji: '\u{1F92E}' }, label: 'Projectile Vomit' },
+  coin: { icon: { type: 'emoji', emoji: '\u{1FA99}' }, label: 'Coin toss' },
+  kickoff: { icon: { type: 'emoji', emoji: '\u{1F4E3}' }, label: 'Kick-off event' },
+  kickoffScatter: { icon: { type: 'emoji', emoji: '\u{1F3AF}' }, label: 'Kick-off scatter' },
+  weather: { icon: { type: 'emoji', emoji: '\u{1F326}\u{FE0F}' }, label: 'Weather' },
+  throwARock: { icon: { type: 'emoji', emoji: '\u{1FAA8}' }, label: 'Throw a Rock' },
+  dodgySnack: { icon: { type: 'emoji', emoji: '\u{1F32D}' }, label: 'Dodgy Snack' },
+  brilliantCoaching: { icon: { type: 'emoji', emoji: '\u{1F9E0}' }, label: 'Brilliant Coaching' },
+  kickoffBlitz: { icon: { type: 'emoji', emoji: '\u{26A1}' }, label: 'Blitz!' },
+  quickSnap: { icon: { type: 'emoji', emoji: '\u{1F3C3}' }, label: 'Quick Snap' },
+  solidDefence: { icon: { type: 'emoji', emoji: '\u{1F6E1}\u{FE0F}' }, label: 'Solid Defence' },
+  timeout: { icon: { type: 'emoji', emoji: '\u{23F1}\u{FE0F}' }, label: 'Time-out' },
+  halfStart: { icon: { type: 'emoji', emoji: '\u{1F514}' }, label: 'Half start' },
+  touchdown: { icon: { type: 'emoji', emoji: '\u{1F3C6}' }, label: 'Touchdown' },
+  turnEnd: { icon: { type: 'emoji', emoji: '\u{23F3}' }, label: 'Turn end' },
+  heat: { icon: { type: 'emoji', emoji: '\u{1F975}' }, label: 'Heat exhaustion' },
+  throwIn: { icon: { type: 'emoji', emoji: '\u{1F64C}' }, label: 'Throw-in' },
+  scatter: { icon: { type: 'emoji', emoji: '\u{1F4A8}' }, label: 'Scatter' },
+  ballAndChain: { icon: { type: 'emoji', emoji: '\u{26D3}\u{FE0F}' }, label: 'Ball & Chain' },
+  standUp: { icon: { type: 'emoji', emoji: '\u{1F9CD}' }, label: 'Stand up' },
+  jump: { icon: { type: 'emoji', emoji: '\u{1F998}' }, label: 'Jump' },
+  throwTeamMate: { icon: { type: 'emoji', emoji: '\u{1F93E}' }, label: 'Throw Team-Mate' },
+  landing: { icon: { type: 'emoji', emoji: '\u{1FA82}' }, label: 'Landing' },
+  bomb: { icon: { type: 'emoji', emoji: '\u{1F4A3}' }, label: 'Bomb' },
+  cloudBurster: { icon: { type: 'emoji', emoji: '\u{2601}\u{FE0F}' }, label: 'Cloud Burster' },
+  wizard: { icon: { type: 'emoji', emoji: '\u{1F9D9}' }, label: 'Wizard' },
+  prayer: { icon: { type: 'emoji', emoji: '\u{1F64F}' }, label: 'Prayer to Nuffle' },
+  card: { icon: { type: 'emoji', emoji: '\u{1F0CF}' }, label: 'Card' },
+  inducements: { icon: { type: 'emoji', emoji: '\u{1F6D2}' }, label: 'Inducements' },
+  masterChef: { icon: { type: 'emoji', emoji: '\u{1F373}' }, label: 'Master Chef' },
+  rookies: { icon: { type: 'emoji', emoji: '\u{1F423}' }, label: 'Riotous Rookies' },
+  hired: { icon: { type: 'emoji', emoji: '\u{1F91D}' }, label: 'Hired by both coaches' },
+  fans: { icon: { type: 'emoji', emoji: '\u{1F465}' }, label: 'Fans' },
+  winnings: { icon: { type: 'emoji', emoji: '\u{1F4B0}' }, label: 'Winnings' },
+  defecting: { icon: { type: 'emoji', emoji: '\u{1F6AA}' }, label: 'Defecting players' },
+  shootout: { icon: { type: 'emoji', emoji: '\u{1F945}' }, label: 'Penalty shootout' },
+  referee: { icon: { type: 'emoji', emoji: '\u{2696}\u{FE0F}' }, label: 'Referee' },
+  argueTheCall: { icon: { type: 'emoji', emoji: '\u{1F5E3}\u{FE0F}' }, label: 'Argue the Call' },
+  bribe: { icon: { type: 'emoji', emoji: '\u{1F4B5}' }, label: 'Bribe' },
+  secretWeapon: { icon: { type: 'emoji', emoji: '\u{1F7E5}' }, label: 'Secret Weapon' },
+  stalling: { icon: { type: 'emoji', emoji: '\u{1F40C}' }, label: 'Stalling' },
+  raiseDead: { icon: { type: 'emoji', emoji: '\u{1F9DF}' }, label: 'Raise Dead' },
+  bite: { icon: { type: 'emoji', emoji: '\u{1F9DB}' }, label: 'Bite' },
+  chomp: { icon: { type: 'emoji', emoji: '\u{1F444}' }, label: 'Chomp' },
+  alwaysHungry: { icon: { type: 'emoji', emoji: '\u{1F356}' }, label: 'Always Hungry' },
+  allYouCanEat: { icon: { type: 'emoji', emoji: '\u{1F37D}\u{FE0F}' }, label: 'All You Can Eat' },
+  saboteur: { icon: { type: 'emoji', emoji: '\u{1F4A5}' }, label: 'Saboteur' },
+  dwarfenWisdom: { icon: { type: 'emoji', emoji: '\u{1F9D4}' }, label: 'Dwarfen Wisdom' },
+  punt: { icon: { type: 'emoji', emoji: '\u{1F9B5}' }, label: 'Punt' },
+  swoop: { icon: { type: 'emoji', emoji: '\u{1F985}' }, label: 'Swoop' },
+  twoForOne: { icon: { type: 'emoji', emoji: '\u{1F46F}' }, label: 'Two For One' },
+  tentacles: { icon: { type: 'emoji', emoji: '\u{1F419}' }, label: 'Tentacles' },
+  shadowing: { icon: { type: 'emoji', emoji: '\u{1F464}' }, label: 'Shadowing' },
+  savagery: { icon: { type: 'emoji', emoji: '\u{1F43A}' }, label: 'Animal Savagery' },
+  confusion: { icon: { type: 'emoji', emoji: '\u{1F635}' }, label: 'Negative trait' },
+  dauntless: { icon: { type: 'emoji', emoji: '\u{1F4AA}' }, label: 'Dauntless' },
+  regeneration: { icon: { type: 'emoji', emoji: '\u{267B}\u{FE0F}' }, label: 'Regeneration' },
+  escape: { icon: { type: 'emoji', emoji: '\u{1F513}' }, label: 'Escape' },
+  lookIntoMyEyes: { icon: { type: 'emoji', emoji: '\u{1F441}\u{FE0F}' }, label: 'Look Into My Eyes' },
+  dagger: { icon: { type: 'emoji', emoji: '\u{1F5E1}\u{FE0F}' }, label: 'Weeping Dagger' },
+  stab: { icon: { type: 'emoji', emoji: '\u{1F52A}' }, label: 'Stab' },
+  swarming: { icon: { type: 'emoji', emoji: '\u{1F400}' }, label: 'Swarming' },
+  nervesOfSteel: { icon: { type: 'emoji', emoji: '\u{1F624}' }, label: 'Nerves of Steel' },
+  indomitable: { icon: { type: 'emoji', emoji: '\u{1F9BE}' }, label: 'Indomitable' },
+  oldPro: { icon: { type: 'emoji', emoji: '\u{1F393}' }, label: 'Old Pro' },
+  pickMeUp: { icon: { type: 'emoji', emoji: '\u{2B06}\u{FE0F}' }, label: 'Pick Me Up' },
+  raidingParty: { icon: { type: 'emoji', emoji: '\u{2694}\u{FE0F}' }, label: 'Raiding Party' },
+  keg: { icon: { type: 'emoji', emoji: '\u{1F37A}' }, label: 'Thrown keg' },
+  placedBall: { icon: { type: 'emoji', emoji: '\u{1F3C8}' }, label: 'Ball placement' },
+  trapDoor: { icon: { type: 'emoji', emoji: '\u{1F573}\u{FE0F}' }, label: 'Trap door' },
+  skill: { icon: { type: 'emoji', emoji: '\u{2728}' }, label: 'Skill' },
+  hex: { icon: { type: 'emoji', emoji: '\u{1F52E}' }, label: 'Baleful Hex' },
+  catchOfTheDay: { icon: { type: 'emoji', emoji: '\u{1F3A3}' }, label: 'Catch of the Day' },
+  thrownAt: { icon: { type: 'emoji', emoji: '\u{1F94F}' }, label: 'Thrown at' },
+  crowd: { icon: { type: 'emoji', emoji: '\u{1F3DF}\u{FE0F}' }, label: 'Crowd' },
+  fireball: { icon: { type: 'emoji', emoji: '\u{2604}\u{FE0F}' }, label: 'Fireball' },
+  lightning: { icon: { type: 'emoji', emoji: '\u{1F329}\u{FE0F}' }, label: 'Lightning' },
+} as const satisfies Record<string, { icon: LogIconSpec; label: string }>;
+
+export type LogIconSpec =
+  | { type: 'art'; art: string }
+  | { type: 'skill'; skill: string }
+  | { type: 'emoji'; emoji: string }
+  | { type: 'ko' };
+export type LogActionKind = keyof typeof LOG_ACTION_ICONS;
+export const LOG_ACTION_KINDS = Object.keys(LOG_ACTION_ICONS) as LogActionKind[];
+
+/** Display name of each action icon (its accessible label / tooltip). */
+export const LOG_ACTION_LABELS: Readonly<Record<LogActionKind, string>> = Object.fromEntries(
+  LOG_ACTION_KINDS.map((kind) => [kind, LOG_ACTION_ICONS[kind].label]),
+) as Record<LogActionKind, string>;
+
+/**
+ * Owner 10-15: every report type the log renders -> its action icon (null = no icon: bookkeeping without an action).
+ * A few types refine this in logActionPlate (a hand-off's catch, an injury by its type, a skill-specific roll, the
+ * turn end per line); the entry here is the type's own icon. A test keeps every formatter type in this table.
+ */
+export const REPORT_ACTION_KIND: Readonly<Record<string, LogActionKind | null>> = {
+  // movement and ball handling
+  dodgeRoll: 'dodge', goForItRoll: 'rush', catchRoll: 'catch', passRoll: 'pass', pickUpRoll: 'pickup', leapRoll: 'jump',
+  interceptionRoll: 'catch', scatterPlayer: 'ballAndChain', standUpRoll: 'standUp', jumpUpRoll: 'standUp',
+  modifiedPassResult: 'pass', modifiedDodgeResultSuccessful: 'dodge', passDeviate: 'pass', handOver: 'handoff',
+  safeThrowRoll: 'pass', throwIn: 'throwIn', scatterBall: 'scatter', placedBallDirection: 'placedBall', fumblerooskie: 'placedBall',
+  // block family
+  block: 'block', blockRoll: 'block', blockChoice: 'block', blockReRoll: 'reroll', pushback: 'block', foul: 'foul',
+  referee: 'foul', injury: null, apothecaryRoll: 'apothecary', apothecaryChoice: 'apothecary', regenerationRoll: 'regeneration',
+  // kick-off and game flow
+  coinThrow: 'coin', receiveChoice: 'coin', kickoffResult: 'kickoff', kickoffScatter: 'kickoffScatter', weather: 'weather',
+  kickoffTimeout: 'timeout', quickSnapRoll: 'quickSnap', kickoffSequenceActivationsCount: 'quickSnap',
+  kickoffSequenceActivationsExhausted: 'quickSnap', blitzRoll: 'kickoffBlitz', solidDefenceRoll: 'solidDefence',
+  extraReRoll: 'brilliantCoaching', cheeringFans: 'kickoff', kickoffDodgySnack: 'dodgySnack', dodgySnackRoll: 'dodgySnack',
+  kickoffPitchInvasion: 'kickoff', kickoffThrowARock: 'throwARock', kickoffRiot: 'kickoff', startHalf: 'halfStart',
+  turnEnd: 'turnEnd', weatherMageRoll: 'weather', weatherMageResult: 'weather',
+  // pre / post game
+  fanFactor: 'fans', fanFactorRoll: 'fans', spectators: 'fans', dedicatedFans: 'fans', winnings: 'winnings', winningsRoll: 'winnings',
+  defectingPlayers: 'defecting', penaltyShootout: 'shootout', masterChefRoll: 'masterChef', riotousRookies: 'rookies',
+  cardsAndInducementsBought: 'inducements', inducementsBought: 'inducements', cardsBought: 'inducements',
+  prayersAndInducementsBought: 'inducements', doubleHiredStarPlayer: 'hired', doubleHiredStaff: 'hired',
+  wizardUse: 'wizard', cardEffectRoll: 'card', prayerRoll: 'prayer', prayerAmount: 'prayer', prayerEnd: 'prayer',
+  prayerWasted: 'prayer', playerEvent: 'prayer', biasedRef: 'referee', secretWeaponBan: 'secretWeapon',
+  throwAtStallingPlayer: 'stalling',
+  // rerolls
+  reRoll: 'reroll', mascotUsed: 'mascot', teamCaptainRoll: 'teamCaptain', pumpUpTheCrowdReRoll: 'reroll',
+  showStarReRoll: 'reroll', briberyAndCorruptionReRoll: 'reroll', brilliantCoachingReRoll: 'brilliantCoaching',
+  pumpUpTheCrowdReRollLost: 'reroll', showStarReRollLost: 'reroll', oldPro: 'oldPro',
+  // skills and traits
+  confusionRoll: 'confusion', bloodLustRoll: 'bloodlust', hypnoticGazeRoll: 'gaze', steadyFootingRoll: 'steadyFooting',
+  dauntlessRoll: 'dauntless', foulAppearanceRoll: 'foulAppearance', escapeRoll: 'escape', rightStuffRoll: 'landing',
+  throwTeamMateRoll: 'throwTeamMate', kickTeamMateFumble: 'throwTeamMate', raiseDead: 'raiseDead', biteSpectator: 'bite',
+  chompRoll: 'chomp', chompRemoved: 'chomp', animosityRoll: 'animosity', alwaysHungryRoll: 'alwaysHungry',
+  saboteurRoll: 'saboteur', chainsawRoll: 'chainsaw', gettingEvenRoll: 'gettingEven', dwarfenWisdomRoll: 'dwarfenWisdom',
+  puntDirectionRoll: 'punt', puntDistanceRoll: 'punt', swoopDirectionRoll: 'swoop', swoopPlayer: 'swoop',
+  twoForOne: 'twoForOne', tentaclesShadowingRoll: 'tentacles', animalSavagery: 'savagery', projectileVomit: 'vomit',
+  breatheFire: 'breatheFire', lookIntoMyEyesRoll: 'lookIntoMyEyes', weepingDaggerRoll: 'dagger', swarmingPlayersRoll: 'swarming',
+  nervesOfSteel: 'nervesOfSteel', indomitable: 'indomitable', pickMeUp: 'pickMeUp', raidingParty: 'raidingParty',
+  thrownKeg: 'keg', bombOutOfBounds: 'bomb', bombExplodesAfterCatch: 'bomb', cloudBurster: 'cloudBurster',
+  trapDoor: 'trapDoor', skillUse: 'skill', skillUseOtherPlayer: 'skill', skillWasted: 'skill', throwAtPlayer: 'thrownAt',
+  balefulHex: 'hex', catchOfTheDay: 'catchOfTheDay', allYouCanEat: 'allYouCanEat', playerAction: null,
+  // report types without a formatter of their own (the generic line)
+  argueTheCall: 'argueTheCall', bribesRoll: 'bribe', kickTeamMateRoll: 'throwTeamMate', officiousRefRoll: 'referee',
+  spellEffectRoll: 'wizard', thenIStartedBlastin: 'saboteur',
+};
+
+/** Injury type families (lower case, any "ForSpp" suffix dropped) -> the icon of their cause (the row is the cause's
+ *  armour / injury step). Block and foul injuries are handled before this lookup (Block / Foul icons). */
+export const INJURY_ACTION_KIND: Readonly<Record<string, LogActionKind>> = {
+  dropdodge: 'dodge', dropgfi: 'rush', dropleap: 'jump', projectilevomit: 'vomit', chainsaw: 'chainsaw', stab: 'stab',
+  crowdpush: 'crowd', ktmcrowd: 'crowd', fireball: 'fireball', lightning: 'lightning', bomb: 'bomb', breathefire: 'breatheFire',
+  trapdoor: 'trapDoor', trapdoorfall: 'trapDoor', ttmlanding: 'landing', ttmhitplayer: 'landing', ktminjury: 'throwTeamMate',
+  ktmfumbleinjury: 'throwTeamMate', ktmfumbleapokoinjury: 'throwTeamMate', quickbite: 'bite', bitten: 'bite',
+  saboteur: 'saboteur', sabotaged: 'saboteur', startedblastin: 'saboteur', keghit: 'keg', eatplayer: 'alwaysHungry',
+  throwarock: 'throwARock', ballandchain: 'ballAndChain', pilingonarmor: 'block', pilingoninjury: 'block', pilingonknockedout: 'block',
+};
+
+/** The INJURY_ACTION_KIND key of an injury type: lower case, any "ForSpp" suffix dropped. */
+export function injuryTypeFamilyKey(injuryType: unknown): string {
+  return String(injuryType ?? '').toLowerCase().replace(/forspp$/, '');
+}
 
 export interface LogActionPlate {
   kind: LogActionKind | null;
   side: ServerSide | null;
   source?: string;
 }
-
-/** Display name of each action icon (its accessible label). */
-export const LOG_ACTION_LABELS: Readonly<Record<LogActionKind, string>> = {
-  block: 'Block', pass: 'Pass', handoff: 'Hand-off', catch: 'Catch', dodge: 'Dodge', foul: 'Foul',
-  reroll: 'Reroll', mascot: 'Team Mascot', rush: 'Rush', pickup: 'Pick-up',
-};
 
 type Report = Record<string, unknown>;
 
@@ -134,6 +316,16 @@ function clearPendingReroll(context: LogActionContext): void {
   context.lastRerollTeamId = null;
 }
 
+/** Is `report` the receiver's catch of the pending hand-off (or that catch's reroll)? Read-only - logActionPlate
+ *  consumes the latch afterwards. */
+export function isHandoffCatch(report: Report, context: Pick<LogActionContext, 'lastHandOverCatcherId'> | null | undefined): boolean {
+  if (String(report.reportId ?? '') !== 'catchRoll') return false;
+  const latch = context?.lastHandOverCatcherId ?? null;
+  const catcher = str(report.playerId);
+  if (!catcher || !latch) return false;
+  return latch === catcher || (latch === `${HANDOFF_RETRY}${catcher}` && report.reRolled === true);
+}
+
 /** Is `report` the roll a pending reroll grant leads to? A roll flagged reRolled; a full block reroll, which the server
  *  sends as a fresh unflagged blockRoll (mascotUsed / reRoll -> block -> blockRoll); or the granted player's own next
  *  roll even when flagged reRolled:false - the server does that for the replacement Pass roll (fixture
@@ -218,10 +410,31 @@ export function logActionPlate(report: Report, game: GameJson | null, context: L
     // Any other roll the server states was NOT rerolled ends a pending grant (it can only be stale by then).
     clearPendingReroll(context);
   }
-  const side = action ? action.side : fallbackSide;
+  const side = action ? action.side ?? fallbackSide : fallbackSide;
   const kind = action?.kind ?? null;
   if (!kind && !source && !side) return null;
   return source ? { kind, side, source } : { kind, side };
+}
+
+/**
+ * Owner 10-15 (Graphical style): the plate each displayed row shows. A step row (indent > 0) keeps its sequence's tint
+ * but drops an icon that only repeats its parent row's action (the block's push / knockdown under the Block row, a
+ * chainsaw's injury step under the chainsaw roll); a step of a different action type (a hand-off's Catch, the
+ * apothecary, regeneration, a skill, a crowd push) shows its own icon. A reroll row keeps only its reroll source icon.
+ * `rows` are in display order (oldest first); the parent is the nearest earlier row at a lower indent.
+ */
+export function logRowPlates(rows: readonly { action?: LogActionPlate | null; indent?: number }[]): (LogActionPlate | null | undefined)[] {
+  const kinds: (LogActionKind | null)[] = [];
+  return rows.map(({ action, indent = 0 }) => {
+    const kind = action?.kind ?? null;
+    let parent: LogActionKind | null | undefined;
+    for (let level = Math.min(indent, kinds.length) - 1; level >= 0 && parent === undefined; level--) parent = kinds[level];
+    kinds.length = indent;
+    kinds[indent] = kind;
+    if (!indent || !action || !kind) return action;
+    if (kind !== 'reroll' && kind !== parent) return action;
+    return action.source ? { kind: null, side: action.side, source: action.source } : { kind: null, side: action.side };
+  });
 }
 
 function logActionKindPlate(report: Report, game: GameJson | null, context: LogActionContext | null): { kind: LogActionKind; side: ServerSide | null } | null {
@@ -246,18 +459,15 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       // ReportHandOver names only the receiver; the giver is the acting player, a team-mate of the receiver.
       return plate('handoff', sideOfFirst(game, actingPlayerId(game), report.catcherId));
     case 'catchRoll': {
-      // The receiver's catch roll right after a `handOver` report is the Hand-off's catch (owner 10-15 asked for
-      // Hand-off icons), and so is its reroll: a failed first attempt leaves a RETRY latch that only the receiver's
-      // next catch flagged reRolled matches. Anything else (a bounce, whoever takes it; a later unrelated catch)
-      // clears the latch and is a plain Catch on the catcher's own team.
+      // The receiver's catch roll right after a `handOver` report belongs to the Hand-off sequence, and so does its
+      // reroll: a failed first attempt leaves a RETRY latch that only the receiver's next catch flagged reRolled
+      // matches. Owner 10-15 (later): the hand-off row itself now shows (the handOver report), so its catch wears the
+      // Catch icon, indented under it in the Graphical style (formatReportLines asks isHandoffCatch before this
+      // consumes the latch). Anything else (a bounce, a later unrelated catch) clears the latch.
       const latch = context?.lastHandOverCatcherId ?? null;
       const catcher = str(report.playerId);
       if (context) context.lastHandOverCatcherId = null;
-      if (catcher && latch === catcher) {
-        if (context && report.successful === false) context.lastHandOverCatcherId = `${HANDOFF_RETRY}${catcher}`;
-        return plate('handoff', sideOfFirst(game, catcher));
-      }
-      if (catcher && latch === `${HANDOFF_RETRY}${catcher}` && report.reRolled === true) return plate('handoff', sideOfFirst(game, catcher));
+      if (catcher && latch === catcher && context && report.successful === false) context.lastHandOverCatcherId = `${HANDOFF_RETRY}${catcher}`;
       return plate('catch', rollerSide());
     }
     case 'interceptionRoll':
@@ -270,6 +480,29 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       return plate('rush', rollerSide());
     case 'pickUpRoll':
       return plate('pickup', rollerSide());
+    case 'breatheFire':
+      // owner 10-15: the Graphical style shows a fire emoji for it
+      return plate('breatheFire', rollerSide());
+    case 'projectileVomit':
+      // owner 10-15: the pitch's Projectile Vomit marker (an emoji there too)
+      return plate('vomit', rollerSide());
+    // owner 10-15: these show their skill icon from the active skill icon family
+    case 'bloodLustRoll':
+      return plate('bloodlust', rollerSide());
+    case 'hypnoticGazeRoll':
+      return plate('gaze', rollerSide());
+    case 'foulAppearanceRoll':
+      return plate('foulAppearance', rollerSide());
+    case 'animosityRoll':
+      return plate('animosity', rollerSide());
+    case 'steadyFootingRoll':
+      return plate('steadyFooting', rollerSide());
+    case 'teamCaptainRoll':
+      return plate('teamCaptain', rollerSide());
+    case 'gettingEvenRoll':
+      return plate('gettingEven', rollerSide());
+    case 'chainsawRoll':
+      return plate('chainsaw', rollerSide());
     case 'foul':
       return plate('foul', sideOfFirst(game, report.playerId, report.attackerId, actingPlayerId(game)));
     case 'referee':
@@ -288,10 +521,25 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       // A failed dodge / rush: the falling player is the one acting.
       if (type === 'dropdodge') return plate('dodge', sideOfFirst(game, report.defenderId, report.playerId));
       if (type === 'dropgfi') return plate('rush', sideOfFirst(game, report.defenderId, report.playerId));
-      return null;
+      // the vomit's armour / injury roll: the vomiter's action (on a self-vomit the vomiter is the victim)
+      if (type === 'projectilevomit') return plate('vomit', sideOfFirst(game, report.attackerId, actingPlayerId(game), report.defenderId));
+      // a chainsaw injury (the hit's step, or the kickback head - the chainsaw player hit by their own saw)
+      if (type === 'chainsaw' || type === 'chainsawforspp') return plate('chainsaw', sideOfFirst(game, report.attackerId, actingPlayerId(game), report.defenderId));
+      // owner 10-15: any other injury takes its cause's icon (INJURY_ACTION_KIND); the icon does not change the row's
+      // tint (Astra 10-15): side null keeps the report's dice owner (logActionPlate's fallbackSide, reportDiceOwner)
+      const kind = INJURY_ACTION_KIND[injuryTypeFamilyKey(type)];
+      return kind ? plate(kind, null) : null;
     }
-    default:
-      return null;
+    case 'tentaclesShadowingRoll':
+      // one report for two skills: the Shadowing or the Tentacles icon (the shadower / holder is defenderId)
+      // (side null: the icon keeps the row's existing dice-owner tint)
+      return plate(/shadow/i.test(String(report.skill ?? '')) ? 'shadowing' : 'tentacles', null);
+    default: {
+      // owner 10-15: every other report type takes its icon from REPORT_ACTION_KIND (null = no icon). Astra 10-15: the
+      // icon never changes the row's tint - side null keeps the report's dice owner (fallbackSide, reportDiceOwner)
+      const kind = REPORT_ACTION_KIND[id];
+      return kind ? plate(kind, null) : null;
+    }
   }
 }
 
