@@ -4,7 +4,8 @@
  * fields the Details popup reads (results, MVPs, SPP, statistics) and a dice tally for its Dice tab. Deterministic.
  */
 import { emptyTally, type DiceTally } from './diceStats';
-import { addCount, addTrial, binaryKey, blockFaceScores, blockRollKey, emptyLuck, injuryKey } from './diceLuck';
+import { addCount, addTrial, binaryKey, blockFaceScores, blockRollKey, emptyBucket, emptyLuck, injuryKey, parseDist } from './diceLuck';
+import { blockArmourTiers, blockKnockdownChance, turnsKey, turnsScore } from './turnsLost';
 import type { PostGameSnapshot } from './postGameProjection';
 
 export const EXAMPLE_GAME_ID = 'example';
@@ -128,6 +129,17 @@ function tally(seed: number): DiceTally {
     addTrial(luck.block, blockRollKey(2, true, scores), good ? 6 : 0);
     addCount(luck.block, 'good', good ? 1 : 0); addCount(luck.block, 'goodExpected', 0.75); addCount(luck.block, 'badExpected', 1 / 36);
   }
+  // Owner 10-15: turns lost - eight two-dice blocks on AV 9 through the first half, and the turns their victims missed
+  const turns = (luck.turns ??= emptyBucket());
+  for (let i = 0; i < 8; i++) {
+    const key = turnsKey(blockKnockdownChance(2, true, scores, false), blockArmourTiers({ av: 9, mightyBlow: 0, claws: false, chainsaw: false, ironHardSkin: false, clawDoesNotStack: true }),
+      { stunty: false, thickSkull: false }, turnsScore(1, i, 3));
+    addTrial(turns, key, 0);
+    addCount(turns, 'attacks', 1); addCount(turns, 'expected', parseDist(key).mean6 / 6);
+  }
+  const lost = odd ? 14 : 3;
+  turns.x6 += lost * 6;
+  addCount(turns, 'lost', lost); addCount(turns, 'stuns', odd ? 1 : 3); addCount(turns, 'kos', odd ? 1 : 0); addCount(turns, 'casualties', odd ? 1 : 0);
   return t;
 }
 
@@ -135,7 +147,7 @@ export function exampleSnapshot(now: number = Date.now()): PostGameSnapshot {
   const home = team('EXH', 'Riverside Reavers', 'ExampleCoach', 'Human', HUMAN_POSITIONS, HUMANS);
   const away = team('EXA', 'Ironjaw Krumpaz', 'AnotherCoach', 'Orc', ORC_POSITIONS, ORCS);
   return {
-    version: 2,
+    version: 3,
     key: EXAMPLE_KEY,
     server: 'example',
     gameId: EXAMPLE_GAME_ID,

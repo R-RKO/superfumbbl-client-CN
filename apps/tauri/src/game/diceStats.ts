@@ -16,9 +16,14 @@ import { effectiveArmour, effectiveStat, playerSkillValue } from '@fumbbl40k/ffb
 import { dodgeSkillCancelledAt, hasSkill as hasSkillWithGrants } from './logic/availableActions';
 import { breatheFirePassed } from './breatheFireOutcome';
 import {
-  actionTrial, injuryTypeFamily, addCount, addTrial, armourBreakThreshold, binaryKey, blockFaceScores, blockRollKey, blockRollScore, emptyLuck, injuryKey,
-  injuryScore6, injuryTrial, koWeight6, likelihoodOf, parseDist, twoD6AtLeast, type DiceLuck, type Likelihood, type LuckBucket, type LuckRow,
+  actionTrial, injuryTypeFamily, addCount, addTrial, armourBreakThreshold, armourModifierValue, binaryKey, blockFaceScores, blockRollKey, blockRollScore, EITHER_BY_TYPE,
+  emptyBucket, emptyLuck, injuryKey, injuryModifierValue, injuryScore6, injuryTrial, koWeight6, likelihoodOf, parseDist, twoD6AtLeast,
+  type ArmourRollInput, type BlockMatchup, type DiceLuck, type InjuryLevel, type Likelihood, type LuckBucket, type LuckRow,
 } from './diceLuck';
+import {
+  blockArmourTiers, blockKnockdownChance, bookedTurns, expectedTurns, reportArmourTiers, turnIndex, turnsKey, turnsScore, TURNS_PER_HALF,
+  type ArmourTier, type TurnClock,
+} from './turnsLost';
 
 export { normalCdf, oneInOdds, type DiceLuck, type Likelihood } from './diceLuck';
 
@@ -126,6 +131,42 @@ export interface DiceStats {
   /** The spectator ledger's turnover context (turnPresentation.ts turnoverArmStep): it rides the tallies so that it
    *  crosses the join boundary with them. */
   turnover?: { turnoverArmed: boolean; turnoverAfterInjury: boolean };
+  /** Owner 10-15 (turns lost): the turn state at the end of the last frame taken in - the state an attack in the next
+   *  frame was made in (the model handed in is the one AFTER the frame, which may already have ended the turn). */
+  turnClock?: TurnClock | null;
+  /** The attack whose expected turns were booked at the BLOCK (or Chainsaw roll), per victim: its injury report books
+   *  the actual turns against it (or nothing when it was unmeasured). Dropped at every turn end. */
+  turnsLinks?: Record<string, TurnsLink>;
+  /** Knock-outs counted live, and casualties counted on into overtime (see advanceTurnsLost). */
+  turnsOpen?: TurnsEntry[];
+  turnsSeq?: number;
+  /** The model's defender at the end of the last frame taken in (a Chainsaw attack clears it as it resolves). */
+  turnDefender?: string | null;
+  /** `commandNr|defender|dice` of the last injury report taken for turns lost (one attack is one trial). */
+  lastTurnsTrial?: string | null;
+}
+/** What one attack's result booked, so a Piling On reroll of it can take it back. */
+export interface TurnsBooking { value: number; level: InjuryLevel | null; entry: number | null }
+export interface TurnsLink { attacker: string; measured: boolean; booked?: TurnsBooking | null; /** The trial booked at the attack (taken back if its report turns out unmeasurable). */ key?: string }
+export interface TurnsEntry {
+  id: number; kind: 'ko' | 'cas';
+  /** The attacking team and player the turns are counted for. */
+  teamId: string; attacker: string;
+  victimTeamId: string; playerId: string;
+  /** The drive the injury happened in (TurnClock.drive). */
+  drive: string;
+  /** The victim team's turn index (turnsLost.turnIndex) counted up to so far. */
+  idx: number;
+  /** Turns added live so far. */
+  added: number;
+  /** Turns booked up front at the injury (a regulation casualty's), still counted. */
+  booked: number;
+  /** The victim team's turn index at the injury. */
+  start: number;
+  /** The lowest index it may be re-synchronised to (a casualty counts only overtime turns live: 16). */
+  floor: number;
+  /** Over: the player is back, or the booking was taken back. */
+  done?: boolean;
 }
 
 /** The tally counters the Statistics rows read ("attempts / failed"), per team. */
@@ -181,7 +222,7 @@ export function emptyDiceStats(gameId: string | null = null): DiceStats {
 export function adoptDiceStats(target: DiceStats, source: DiceStats): void {
   const fresh = emptyDiceStats(source.gameId);
   const keys = new Set([...Object.keys(target), ...Object.keys(fresh), ...Object.keys(source)]) as Set<keyof DiceStats>;
-  const from = { ...fresh, openDodges: {}, pendingBlockRolls: [], multiBlockCounted: {}, ...source } as Record<string, unknown>;
+  const from = { ...fresh, openDodges: {}, pendingBlockRolls: [], multiBlockCounted: {}, turnsLinks: {}, turnsOpen: [], ...source } as Record<string, unknown>;
   for (const key of keys) {
     if (key in from) (target as unknown as Record<string, unknown>)[key] = from[key];
     else delete (target as unknown as Record<string, unknown>)[key];
@@ -298,6 +339,7 @@ const ARMOUR_PART_HIDDEN = new Set(['ARMOUR', 'ARMOUR_AND_CAS', 'ARMOUR_AND_INJU
 const INJURY_PART_HIDDEN = new Set(['INJURY', 'ARMOUR_AND_INJURY', 'EVERYTHING_BUT_CAS']);
 
 function luckOf(t: DiceTally, row: LuckRow): LuckBucket { return (t.luck ??= emptyLuck())[row]; }
+function turnsOf(t: DiceTally): LuckBucket { return (t.luck ??= emptyLuck()).turns ??= emptyBucket(); }
 /** The skill union the dodge helper reads: the player's own + roster position skills, or one granted for the game. */
 function has(game: GameJson | null, playerId: string | null, name: string): boolean {
   return !!game && !!playerId && (hasSkill(teamOf(game, playerId), playerId, name) || hasSkillWithGrants(game, playerId, name));
@@ -452,32 +494,40 @@ function inflictingAttacker(stats: DiceStats, game: GameJson | null, r: Report, 
  * The armour roll and the injury roll of one `injury` report, as luck trials for the ATTACKER's team (and the
  * attacker) only: the roll as it fell (a break / a removal is good). The defender's team gets no inverted trial.
  */
+/** The armour roll of an `injury` report, as diceLuck.armourBreakThreshold reads it. */
+function armourInputFor(game: GameJson | null, r: Report, attackerId: string, armour: [number, number]): ArmourRollInput {
+  const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
+  const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  const attackerTeam = teamOf(game, attackerId), own = teamOf(game, defenderId);
+  return {
+    av: effectiveArmour(playerJson(game, defenderId) as never), total: armour[0] + armour[1], broken: r.armorBroken === true, injuryType: String(r.injuryType ?? ''),
+    armourModifiers: names(r.armorModifiers), injuryModifiers: names(r.injuryModifiers), hasInjuryRoll: Array.isArray(r.injuryRoll) && r.injuryRoll.length === 2,
+    mightyBlow: mightyBlowValue(game, attackerId),
+    attackerHasClaws: has(game, attackerId, 'Claws') || has(game, attackerId, 'Claw'),
+    chainsawInvolved: has(game, attackerId, 'Chainsaw') || has(game, defenderId, 'Chainsaw'),
+    defenderHasIronHardSkin: has(game, defenderId, 'Iron Hard Skin'),
+    sameTeam: !!attackerTeam && !!own && attackerTeam.teamId === own.teamId,
+    clawDoesNotStack: gameOption(game, 'clawDoesNotStack') !== 'false',
+    mbStacksAgainstChainsaw: gameOption(game, 'mbStacksAgainstChainsaw') === 'true',
+  };
+}
+
 function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, attackerId: string, armour: [number, number] | null, injury: [number, number] | null): void {
   const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
   const own = teamOf(game, defenderId);
   const them = otherTeam(game, own);
   const defender = playerJson(game, defenderId);
   if (!game || !own || !them || !defender) return; // nobody to score it for
-  const attackerTeam = teamOf(game, attackerId);
   const theirs = tallyFor(stats, them.teamId, attackerId);
   const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
-  const armourModifiers = names(r.armorModifiers), injuryModifiers = names(r.injuryModifiers);
+  const injuryModifiers = names(r.injuryModifiers);
   const mightyBlow = mightyBlowValue(game, attackerId);
 
   if (armour && typeof r.armorBroken === 'boolean') {
     const key = `${commandNr}|${defenderId}|${armour[0]},${armour[1]}`;
     if (commandNr == null || key !== stats.lastArmourTrial) {
       stats.lastArmourTrial = key;
-      const threshold = armourBreakThreshold({
-        av: effectiveArmour(defender as never), total: armour[0] + armour[1], broken: r.armorBroken, injuryType: String(r.injuryType ?? ''),
-        armourModifiers, injuryModifiers, hasInjuryRoll: Array.isArray(r.injuryRoll) && r.injuryRoll.length === 2, mightyBlow,
-        attackerHasClaws: has(game, attackerId, 'Claws') || has(game, attackerId, 'Claw'),
-        chainsawInvolved: has(game, attackerId, 'Chainsaw') || has(game, defenderId, 'Chainsaw'),
-        defenderHasIronHardSkin: has(game, defenderId, 'Iron Hard Skin'),
-        sameTeam: !!attackerTeam && attackerTeam.teamId === own.teamId,
-        clawDoesNotStack: gameOption(game, 'clawDoesNotStack') !== 'false',
-        mbStacksAgainstChainsaw: gameOption(game, 'mbStacksAgainstChainsaw') === 'true',
-      });
+      const threshold = armourBreakThreshold(armourInputFor(game, r, attackerId, armour));
       // UNMEASURED: see armourBreakThreshold - an unvalued modifier, a result that disagrees with this client's
       // armour value, or a break whose left-over modifiers cannot be read
       if (threshold == null) { for (const t of theirs) luckOf(t, 'armour').unmeasured += 1; }
@@ -516,6 +566,304 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       }
     }
   }
+}
+
+// ---- turns lost (owner 10-15; the definitions and the maths live in turnsLost.ts) ----
+//
+// EXPECTED turns, summed at the ATTACK over every attack a team makes on its opponent (owner 10-15: "indicative of the
+// entire probability state" - an attack that misses still adds its chance):
+//   expected += P(the attack reaches the armour roll)
+//             x Σ over the ways the armour can break: P(2D6 breaks it that way)            (turnsLost.ArmourTier)
+//             x Σ over the injury results: P(result | that way's injury modifier, the victim's table: Stunty, Thick Skull)
+//             x turns(result, now)                                                         (turnsLost.turnsScore)
+// P(reaches the armour roll), per kind of attack:
+//   block            P(the defender is knocked down): the dice count and who picks (the `blockChoice`), and the match-up
+//                    the Block dice row already reads (Block, Wrestle, Dodge, Tackle, Juggernaut on a Blitz, tackle zones)
+//                    - turnsLost.blockKnockdownChance. Booked at the `blockChoice`, whatever is then picked; its armour from
+//                    the model (AV, Mighty Blow, Claws, Chainsaw, Iron Hard Skin - turnsLost.blockArmourTiers). Rerolls of
+//                    the block dice are not modelled: the chance is the dice count's own. A push into the crowd is not a
+//                    knock-down here and counts for nobody (a crowd push is nobody's attack).
+//   Chainsaw attack  the Chainsaw roll's own chance, (7 - minimum) / 6 (a 2+: 5/6), then armour +3 (none through Iron
+//                    Hard Skin), no injury modifier (InjuryTypeChainsaw) - booked at its first `chainsawRoll`.
+//   everything else  1 at the armour roll, read from the attack's own report (diceLuck.armourBreakThreshold and the
+//                    armour-or-injury hand-over, turnsLost.reportArmourTiers): a foul (the victim is already down: assists
+//                    +1 / -1 each on the armour only - InjuryTypeFoul.java:59-63 - and Dirty Player / A Sneaky Pair on the
+//                    armour when the roll without them fails, else on the injury; no Mighty Blow), a Chainsaw foul (the
+//                    Chainsaw roll is not modelled there), a stab, Breathe Fire, Projectile Vomit, bites, sabotage, bombs,
+//                    thrown players, kegs, Then I Started Blastin. A hit that breaks armour with no armour roll reaches the
+//                    injury roll with certainty.
+//   Piling On        a reroll of an attack already counted: no new chance; its result replaces the earlier one.
+// ACTUAL turns: the turns the victims actually missed from those attacks' results (turnsLost header): a stun and a
+// casualty booked at the injury, a knock-out counted live (advanceTurnsLost), a casualty counted on into overtime.
+// A sent-off fouler costs his own team, not the opponent: nothing here. An attack whose chance cannot be read soundly
+// (an unvalued modifier, a Multiple Block, a block whose `blockChoice` was not seen) is UNMEASURED for both figures.
+
+/** The turn state of a model: null when it carries no half / turn data (the turns row then goes unmeasured). */
+export function readTurnClock(game: GameJson | null): TurnClock | null {
+  if (!game) return null;
+  const half = Number(game.half);
+  const home = Number((game.turnDataHome as { turnNr?: unknown } | undefined)?.turnNr);
+  const away = Number((game.turnDataAway as { turnNr?: unknown } | undefined)?.turnNr);
+  if (!Number.isInteger(half) || half < 1 || half > 3 || !Number.isFinite(home) || !Number.isFinite(away)) return null;
+  const result = game.gameResult as { teamResultHome?: { score?: unknown }; teamResultAway?: { score?: unknown } } | undefined;
+  const score = (Number(result?.teamResultHome?.score) || 0) + (Number(result?.teamResultAway?.score) || 0);
+  return { half, turnHome: home, turnAway: away, drive: `${half}|${score}` };
+}
+function clockTurnOf(game: GameJson, clock: TurnClock, teamId: string): number {
+  return (game.teamHome as unknown as TeamLike).teamId === teamId ? clock.turnHome : clock.turnAway;
+}
+function playerBaseState(game: GameJson, playerId: string): number | null {
+  const data = (game.fieldModel?.playerDataArray as { playerId?: string; playerState?: unknown }[] | undefined)?.find((d) => d.playerId === playerId);
+  const state = Number(data?.playerState);
+  return data && Number.isFinite(state) ? state & 0xff : null;
+}
+const KNOCKED_OUT = 5, RESERVE = 9, FALLING = 11;
+function fallingWithTacklezones(game: GameJson, playerId: string): boolean {
+  const data = (game.fieldModel?.playerDataArray as { playerId?: string; playerState?: unknown }[] | undefined)?.find((d) => d.playerId === playerId);
+  const state = Number(data?.playerState);
+  return Number.isFinite(state) && (state & 0xff) === FALLING && (state & 0x200) === 0 && (state & 0x800) === 0;
+}
+function turnsUnmeasured(tallies: DiceTally[]): void { for (const t of tallies) turnsOf(t).unmeasured += 1; }
+function addTurnsTrial(tallies: DiceTally[], key: string, sign: 1 | -1 = 1): void {
+  const expected = expectedTurns(key);
+  for (const t of tallies) {
+    const b = turnsOf(t);
+    if (sign > 0) addTrial(b, key, 0); // the actual turns are added as they are lost (bookTurns, advanceTurnsLost)
+    else { b.n -= 1; b.kinds[key] = (b.kinds[key] ?? 0) - 1; if (b.kinds[key]! <= 0) delete b.kinds[key]; }
+    addCount(b, 'attacks', sign); addCount(b, 'expected', sign * expected);
+  }
+}
+function addLostTurns(stats: DiceStats, teamId: string, attacker: string, turns: number, result: InjuryLevel | null, sign: 1 | -1): void {
+  for (const t of tallyFor(stats, teamId, attacker)) {
+    const b = turnsOf(t);
+    b.x6 += sign * turns * 6;
+    addCount(b, 'lost', sign * turns);
+    if (result != null) addCount(b, result === 0 ? 'stuns' : result === 1 ? 'kos' : 'casualties', sign);
+  }
+}
+/** Book an attack's result for the attacking team: a stun and a casualty now, a knock-out live (an open entry). */
+function bookTurns(stats: DiceStats, game: GameJson, clock: TurnClock, teamId: string, attacker: string, victimTeamId: string, playerId: string, level: InjuryLevel | null): TurnsBooking {
+  if (level == null) return { value: 0, level: null, entry: null };
+  const turnNr = clockTurnOf(game, clock, victimTeamId);
+  const value = level === 2 && clock.half >= 3 ? 0 : bookedTurns(level, turnsScore(clock.half, turnNr, 0));
+  addLostTurns(stats, teamId, attacker, value, level, 1);
+  if (level === 0) return { value, level, entry: null };
+  const id = stats.turnsSeq = (stats.turnsSeq ?? 0) + 1;
+  // a regulation casualty's turns are booked above (none for an overtime one, Astra r1 #4: a golden goal can end the
+  // game before they are played); overtime turns are counted on as they start (from turn index 16)
+  const start = turnIndex(clock.half, turnNr);
+  const floor = level === 1 ? 0 : Math.max(start, 2 * TURNS_PER_HALF);
+  (stats.turnsOpen ??= []).push({ id, kind: level === 1 ? 'ko' : 'cas', teamId, attacker, victimTeamId, playerId, drive: clock.drive, idx: Math.max(start, floor), added: 0, booked: value, start, floor });
+  return { value: 0, level, entry: id };
+}
+function unbookTurns(stats: DiceStats, teamId: string, attacker: string, booking: TurnsBooking | null | undefined): void {
+  if (!booking) return;
+  let value = booking.value;
+  const entry = booking.entry == null ? null : (stats.turnsOpen ?? []).find((e) => e.id === booking.entry);
+  if (entry) { value += entry.booked + entry.added; entry.done = true; }
+  addLostTurns(stats, teamId, attacker, value, booking.level, -1);
+}
+/**
+ * Count the turns the victims of open knock-outs (and casualties, into overtime) miss as the victim's team starts its
+ * turns. A knock-out counts every team turn started during the injury's drive (the player cannot come back in it,
+ * apothecary or not), and in any later drive while the player is still knocked out (a failed recovery roll at that
+ * kick-off); the first later drive where the player is no longer knocked out ends it. Idempotent: an index counted
+ * once is never counted again, so a re-applied frame or a replay seek adds nothing.
+ */
+export function advanceTurnsLost(stats: DiceStats, game: GameJson | null): void {
+  const clock = readTurnClock(game);
+  if (!game || !clock || !stats.turnsOpen?.length) return;
+  // Astra r2 #3: team turns START only in regular play. Outside it (set-up, kick-off) a turn marker can move without a
+  // turn being played (a kick-off Time-out moves both by one, either way - StepApplyKickoffResult.handleTimeout): the
+  // entries follow the marker without counting
+  const regular = String(game.turnMode ?? '') === 'regular';
+  for (const e of stats.turnsOpen) {
+    if (e.done) continue;
+    const state = playerBaseState(game, e.playerId);
+    // Astra r2 #2: a casualty saved to the reserves (an apothecary's Badly Hurt, Regeneration) was never out for the
+    // game: its up-front booking is taken back and it is counted from the injury like a knock-out (the rest of that
+    // drive; nothing once he is available again)
+    if (e.kind === 'cas' && state === RESERVE) {
+      addLostTurns(stats, e.teamId, e.attacker, e.booked + e.added, null, -1);
+      Object.assign(e, { kind: 'ko', idx: e.start, floor: 0, booked: 0, added: 0 });
+    }
+    // Astra r1 #3: a later drive with the player no longer knocked out ends it, whether or not a turn has started yet
+    // (a recovered player can be knocked out again before his team's next turn: a new entry, never two)
+    if (e.kind === 'ko' && clock.drive !== e.drive && state !== KNOCKED_OUT) { e.done = true; continue; }
+    const cur = turnIndex(clock.half, clockTurnOf(game, clock, e.victimTeamId));
+    if (!regular) { e.idx = Math.max(cur, e.floor); continue; }
+    if (cur <= e.idx) continue;
+    // Astra r1 #2 / r2 #1: a team turn has started and the player is back ON the pitch in the injury's own drive - an
+    // apothecary turned the KO into a stun (StepApothecary.java:516-518), and the turn start has already turned him
+    // over (prone, unable to act: UtilPlayer.refreshPlayersForTurnStart). It costs what a stun costs: this one turn.
+    if (e.kind === 'ko' && state != null && state !== KNOCKED_OUT && state !== RESERVE) {
+      e.done = true;
+      if (e.added === 0) { e.added = 1; addLostTurns(stats, e.teamId, e.attacker, 1, null, 1); }
+      continue;
+    }
+    const add = cur - e.idx;
+    e.idx = cur; e.added += add;
+    addLostTurns(stats, e.teamId, e.attacker, add, null, 1);
+  }
+}
+function turnsScoreFor(game: GameJson, clock: TurnClock, victim: TeamLike) {
+  return turnsScore(clock.half, clockTurnOf(game, clock, victim.teamId), koWeightFor(game, victim));
+}
+
+/** A `blockChoice`: one block thrown. Books its expected turns (see the chain above) and links the victim to it. */
+function noteBlockTurns(stats: DiceStats, game: GameJson | null, attacker: string | null, nrOfDice: number | null, defender: string | null, multi: boolean, clock: TurnClock | null,
+  atRoll: { defenderTacklezones: boolean; blitz: boolean } | null): void {
+  const a = teamOf(game, attacker), d = teamOf(game, defender);
+  if (!game || !attacker || !defender || !a || !d || a.teamId === d.teamId) return;
+  const links = (stats.turnsLinks ??= {});
+  const tallies = tallyFor(stats, a.teamId, attacker);
+  const dice = nrOfDice == null ? 0 : Math.abs(nrOfDice);
+  const defenderJson = playerJson(game, defender);
+  const ironHardSkin = has(game, defender, 'Iron Hard Skin');
+  // Astra r2 #4: an ordinary block never uses the ATTACKER's Chainsaw (StepDropFallingPlayers.java:135 builds
+  // InjuryTypeBlock(REGULAR, false)): only a defender carrying one adds the +3
+  const chainsaw = has(game, defender, 'Chainsaw');
+  // UNMEASURED: a Multiple Block (who picks cannot be read), no dice count, no turn data, a Chainsaw block under
+  // mbStacksAgainstChainsaw (see diceLuck.armourBreakThreshold), or a Ball & Chain victim (Astra r4 #4: knocked down
+  // with no armour roll and a stun read as a KO, UtilServerInjury + BallAndChain.java - not modelled here)
+  if (multi || !clock || !Number.isInteger(dice) || dice < 1 || dice > 3 || !defenderJson || has(game, defender, 'Ball & Chain') || has(game, defender, 'Ball and Chain')
+    || (chainsaw && !ironHardSkin && gameOption(game, 'mbStacksAgainstChainsaw') === 'true')) {
+    turnsUnmeasured(tallies);
+    links[defender] = { attacker, measured: false };
+    return;
+  }
+  // Astra r1 #1: the match-up as it stood when the dice were ROLLED (latched at the blockRoll): by the blockChoice a
+  // knocked-down defender is already FALLING and would read as having no tackle zones
+  // (a blockRoll and its blockChoice in ONE frame both read the falling defender: falling, not confused or hypnotized,
+  // is a defender who stood with his tackle zones when the dice were rolled)
+  const tacklezones = (atRoll ? atRoll.defenderTacklezones : defenderHasTacklezones(game, defender)) || fallingWithTacklezones(game, defender);
+  const matchup: BlockMatchup = {
+    attackerBlock: has(game, attacker, 'Block'), attackerWrestle: has(game, attacker, 'Wrestle'), attackerTackle: has(game, attacker, 'Tackle'),
+    defenderBlock: tacklezones && has(game, defender, 'Block'), defenderDodge: has(game, defender, 'Dodge'),
+    defenderWrestle: tacklezones && has(game, defender, 'Wrestle'),
+    attackerJuggernautBlitz: (!!atRoll?.blitz || actingAction(game) === 'blitz') && has(game, attacker, 'Juggernaut'),
+  };
+  const reach = blockKnockdownChance(dice, nrOfDice! > 0, blockFaceScores(matchup), matchup.defenderBlock);
+  const tiers = blockArmourTiers({
+    av: effectiveArmour(defenderJson as never), mightyBlow: has(game, attacker, 'Mighty Blow') ? mightyBlowValue(game, attacker) : 0,
+    claws: has(game, attacker, 'Claws') || has(game, attacker, 'Claw'), chainsaw, ironHardSkin,
+    clawDoesNotStack: gameOption(game, 'clawDoesNotStack') !== 'false',
+  });
+  const key = turnsKey(reach, tiers, { stunty: has(game, defender, 'Stunty'), thickSkull: has(game, defender, 'Thick Skull') }, turnsScoreFor(game, clock, d));
+  addTurnsTrial(tallies, key);
+  links[defender] = { attacker, measured: true, key };
+}
+/** The first roll of a Chainsaw attack (a block made with the chainsaw): its chance to hit, then armour +3. */
+function noteChainsawTurns(stats: DiceStats, game: GameJson | null, attacker: string | null, r: Report, clock: TurnClock | null): void {
+  if (r.reRolled === true || actingAction(game) === 'foul') return; // a Chainsaw foul is counted at its armour roll
+  // Astra r3 #1: a Chainsaw attack that resolves inside this frame has already cleared the defender
+  // (StepEndBlocking.java:422): the one the last frame left is the target
+  const defender = (game as { defenderId?: unknown } | null)?.defenderId ?? stats.turnDefender;
+  const victim = typeof defender === 'string' ? defender : null;
+  const a = teamOf(game, attacker), d = teamOf(game, victim);
+  if (!game || !attacker || !victim || !a || !d || a.teamId === d.teamId) return;
+  const links = (stats.turnsLinks ??= {});
+  const tallies = tallyFor(stats, a.teamId, attacker);
+  const minimum = Number(r.minimumRoll);
+  const defenderJson = playerJson(game, victim);
+  if (!clock || !defenderJson || !Number.isInteger(minimum) || minimum < 1) { turnsUnmeasured(tallies); links[victim] = { attacker, measured: false }; return; }
+  const target = Math.min(6, Math.max(2, minimum));
+  const av = effectiveArmour(defenderJson as never);
+  const tiers: ArmourTier[] = [{ threshold: has(game, victim, 'Iron Hard Skin') ? av : av - 3, injuryShift: 0 }];
+  const key = turnsKey({ num: 7 - target, den: 6 }, tiers, { stunty: has(game, victim, 'Stunty'), thickSkull: has(game, victim, 'Thick Skull') }, turnsScoreFor(game, clock, d));
+  addTurnsTrial(tallies, key);
+  links[victim] = { attacker, measured: true, key };
+}
+/** Injury types whose injury roll never takes Mighty Blow (MightyBlow.java: foul, stab, vomit-like, Chainsaw); a thrown
+ *  player landing on an opponent takes Lethal Flight instead (InjuryTypeTTMHitPlayerForSpp.java:33-58, Astra r4 #2). */
+const NO_MB_INJURY = new Set(['foul', 'stab', 'projectileVomit', 'breatheFire', 'chainsaw', 'ttmHitPlayer',
+  // Astra r4 #1: InjuryTypeSabotaged applies no injury modifier at all
+  'sabotaged']);
+/** The families whose chance was booked at the block (or the Chainsaw roll): the report books only the result. */
+function linkedFamily(family: string): boolean { return BLOCK_FALL_FAMILIES.has(family) || family === 'chainsaw' || family.startsWith('pilingOn'); }
+
+/** An `injury` report of an attack on the opponent: the turns its result cost, and for the attacks counted at the
+ *  armour roll, their expected turns too. */
+function noteInjuryTurns(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, attackerId: string, armour: [number, number] | null, injury: [number, number] | null, clock: TurnClock | null): void {
+  const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
+  const own = teamOf(game, defenderId), attackerTeam = teamOf(game, attackerId);
+  if (!game || !defenderId || !own || !attackerTeam || own.teamId === attackerTeam.teamId) return;
+  if (!armour && !injury) return; // the twin report that shows neither roll (skipInjuryParts EVERYTHING_BUT_CAS)
+  const key = `${commandNr}|${defenderId}|${armour ?? ''}|${injury ?? ''}`;
+  if (commandNr != null && key === stats.lastTurnsTrial) return;
+  stats.lastTurnsTrial = key;
+  const family = injuryTypeFamily(String(r.injuryType ?? ''));
+  const tallies = tallyFor(stats, attackerTeam.teamId, attackerId);
+  const broken = r.armorBroken === true;
+  const base = Number(r.injury) & 0xff;
+  const level: InjuryLevel | null = !broken ? null : base === 4 ? 0 : base === KNOCKED_OUT ? 1 : base >= 6 && base <= 8 ? 2 : null;
+  const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  const injuryModifiers = names(r.injuryModifiers);
+  const mightyBlow = mightyBlowValue(game, attackerId);
+  // a stated modifier this client cannot value (Ram, Slayer, Niggling Injury ...): not a fair-dice outcome
+  const unvalued = names(r.armorModifiers).some((name) => armourModifierValue(name, mightyBlow) == null)
+    || injuryModifiers.some((name) => injuryModifierValue(name, mightyBlow) == null);
+  if (linkedFamily(family)) {
+    const link = stats.turnsLinks?.[defenderId];
+    if (!link || link.attacker !== attackerId) { if (!family.startsWith('pilingOn')) turnsUnmeasured(tallies); return; }
+    if (!link.measured || !clock) return;
+    if (unvalued) {
+      // Astra r1 #5: the attack is unmeasured for BOTH figures - take back its expected trial and anything booked
+      unbookTurns(stats, attackerTeam.teamId, attackerId, link.booked);
+      if (link.key) addTurnsTrial(tallies, link.key, -1);
+      turnsUnmeasured(tallies);
+      link.measured = false; link.booked = null;
+      return;
+    }
+    // one attack, one result: a Piling On reroll (or a repeat) replaces what was booked for it
+    unbookTurns(stats, attackerTeam.teamId, attackerId, link.booked);
+    link.booked = bookTurns(stats, game, clock, attackerTeam.teamId, attackerId, own.teamId, defenderId, level);
+    return;
+  }
+  if (!clock || unvalued) { turnsUnmeasured(tallies); return; }
+  const ironHardSkin = has(game, defenderId, 'Iron Hard Skin');
+  let tiers: ArmourTier[] | null = null;
+  if (armour) {
+    const input = armourInputFor(game, r, attackerId, armour);
+    const threshold = armourBreakThreshold(input);
+    // in hand: stated on either roll; through Iron Hard Skin a roll that does not break states nothing, so the
+    // skill's owner says it (Astra r1 #6) - it would have landed on the injury roll. The owner is the STATED attacker
+    // (the fouler; for a thrown player's Lethal Flight, the thrown player), else the one credited.
+    const stated = typeof r.attackerId === 'string' ? r.attackerId : null;
+    const owner = stated ?? attackerId;
+    const eitherNames = EITHER_BY_TYPE[family] ?? [];
+    // Astra r4 #1: A Sneaky Pair also needs its partner marking the victim (ASneakyPair.java), which this client does
+    // not read. Through Iron Hard Skin a held roll would not say whether it applied and a broken one would, so such an
+    // attack is unmeasured whichever way the armour fell
+    const sneakyUnknown = ironHardSkin && eitherNames.includes('A Sneaky Pair') && has(game, owner, 'A Sneaky Pair');
+    const either: (number | null)[] = eitherNames
+      .filter((name) => input.armourModifiers.includes(name) || injuryModifiers.includes(name) || (ironHardSkin && name !== 'A Sneaky Pair' && has(game, owner, name)))
+      .map((name) => armourModifierValue(name, mightyBlow));
+    // Astra r3 #2: an injury-only modifier lands on the injury roll whichever way the armour broke. Of the ones this
+    // client values that is Mighty Blow off a block (MightyBlow.java: any injury roll by the stated attacker that is not
+    // a foul, a stab, a vomit-like or a Chainsaw hit, when it was not used on the armour). It is read from the stated
+    // attacker's skills, so a held armour roll gets the same chance; a broken roll that states otherwise is unmeasured.
+    const mbInjury = !NO_MB_INJURY.has(family) && !input.armourModifiers.includes('Mighty Blow') && stated != null && has(game, stated, 'Mighty Blow') ? mightyBlowValue(game, stated) : 0;
+    // Astra r4 #2: a stated Mighty Blow is the stated attacker's (a rethrown bomb's original bombardier), valued as his
+    const statedMb = stated != null ? mightyBlowValue(game, stated) : mightyBlow;
+    const statedOnly = injuryModifiers.filter((name) => !eitherNames.includes(name)).reduce((s, name) => s + (injuryModifierValue(name, statedMb) ?? 0), 0);
+    const disagrees = broken && !!injury && statedOnly !== mbInjury;
+    if (threshold != null && !disagrees && !sneakyUnknown && either.every((v) => v != null)) {
+      tiers = reportArmourTiers(threshold, either as number[], ironHardSkin).map((t) => ({ ...t, injuryShift: t.injuryShift + mbInjury }));
+    }
+  } else if (broken && injury) {
+    // broken with no armour roll (a hit that goes straight to the injury roll): reached with certainty
+    const values = injuryModifiers.map((name) => injuryModifierValue(name, mightyBlow));
+    if (values.every((v) => v != null)) tiers = [{ threshold: 2, injuryShift: (values as number[]).reduce((s, v) => s + v, 0) }];
+  }
+  if (!tiers) { turnsUnmeasured(tallies); return; }
+  // Astra r4 #3: a thrown player landing on a victim adds only Lethal Flight to the injury roll
+  // (InjuryTypeTTMHitPlayerForSpp.java:55-62), never Stunty, and the server picks the Stunty table from the stated modifiers
+  // (Astra r5: only the ForSpp type skips Stunty; the ordinary ttmHitPlayer uses the usual factory, InjuryTypeTTMHitPlayer.java:45)
+  const stuntyFromSkill = String(r.injuryType ?? '') !== 'ttmHitPlayerForSpp' && has(game, defenderId, 'Stunty');
+  const table = { stunty: injuryModifiers.includes('Stunty') || stuntyFromSkill, thickSkull: has(game, defenderId, 'Thick Skull') };
+  addTurnsTrial(tallies, turnsKey({ num: 1, den: 1 }, tiers, table, turnsScoreFor(game, clock, own)));
+  bookTurns(stats, game, clock, attackerTeam.teamId, attackerId, own.teamId, defenderId, level);
 }
 
 function blockTallies(stats: DiceStats, game: GameJson | null, attacker: string | null): DiceTally[] {
@@ -625,6 +973,8 @@ function settleBlockRollLuck(stats: DiceStats, game: GameJson | null, attacker: 
 /** The four Likelihood rows of a tally, and all of them together. A tally without trial data reads "not measured". */
 export function armourLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.armour]); }
 export function injuryLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.injury]); }
+/** Owner 10-15: the Turns lost row (not part of All dice). A tally kept before it reads "not measured". */
+export function turnsLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.turns]); }
 export function actionLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.action]); }
 export function blockLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.block]); }
 export function allDiceLikelihood(t: DiceTally): Likelihood { return likelihoodOf([t.luck?.armour, t.luck?.injury, t.luck?.action, t.luck?.block]); }
@@ -639,6 +989,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     stats.lastBlockDefender = null; stats.blockRollArmed = false; stats.blockRollPartial = false; stats.pendingBlockRolls = []; stats.multiBlockCounted = {};
     stats.lastBlockActing = null; stats.rerollGateFailed = false;
     stats.lastArmourTrial = null; stats.lastInjuryTrial = null;
+    stats.turnClock = null; stats.turnDefender = null; stats.turnsLinks = {}; stats.turnsOpen = []; stats.turnsSeq = 0; stats.lastTurnsTrial = null;
     delete stats.coverage; delete stats.turnover; delete stats.revision;
   }
   if (commandNr != null) {
@@ -647,7 +998,12 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
   }
   const actingId = typeof game?.actingPlayer?.playerId === 'string' ? game.actingPlayer.playerId : null;
   stats.rerollGateFailed = false; // the gate and its dice share a frame (see below)
+  // Owner 10-15 (turns lost): the turn an attack in this frame was made in. `game` is the model AFTER the frame, so
+  // until a `turnEnd` report has gone by it is the state the last frame left (turnClock); after one, this model.
+  let turnEnded = false;
+  const rollClock = (): TurnClock | null => (turnEnded || !stats.turnClock ? readTurnClock(game) : stats.turnClock);
   for (const r of reports) {
+    if (String(r.reportId ?? '') === 'turnEnd') { turnEnded = true; stats.turnsLinks = {}; }
     // r4: remember who paid for a re-roll; the re-rolled roll that follows reads it (falls through: nothing else consumes it)
     if (String(r.reportId ?? '') === 'reRoll' && typeof r.playerId === 'string') stats.lastRerollSource = { playerId: r.playerId, source: String(r.reRollSource ?? '') };
     // Astra N4 / N4-R1 / N4-R2: the block-roll reroll GATE. Upstream adds, in one step result, `block`, then whatever
@@ -699,6 +1055,13 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       const bothDown = chosen === 2 || /both.?down/i.test(result);
       const failed = attackerDown || (bothDown && !hasSkill(team, attacker, 'Block', 'Wrestle'));
       if (failed) for (const t of tallyFor(stats, team?.teamId ?? null, attacker)) t.failedBlocks += 1;
+      {
+        const choiceDefender = typeof r.defenderId === 'string' ? r.defenderId : stats.lastBlockDefender ?? null;
+        const multi = actingAction(game) === 'multipleBlock' || (typeof r.defenderId === 'string' && r.defenderId in (stats.multiBlockCounted ?? {}));
+        const rolled = [...(stats.pendingBlockRolls ?? [])].reverse().find((p) => p.attacker === attacker && (p.defender == null || p.defender === choiceDefender));
+        noteBlockTurns(stats, game, attacker, typeof r.nrOfDice === 'number' ? r.nrOfDice : null, choiceDefender, multi, rollClock(),
+          rolled ? { defenderTacklezones: rolled.defenderTacklezones, blitz: rolled.blitz } : null);
+      }
       settleBlockRollLuck(stats, game, attacker, typeof r.nrOfDice === 'number' ? r.nrOfDice : null, typeof r.defenderId === 'string' ? r.defenderId : null);
       continue;
     }
@@ -718,6 +1081,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       if (armour.length === 2) for (const t of tallies) t.armour.push(armour[0]! + armour[1]!);
       if (injury.length === 2) for (const t of tallies) t.injury.push(injury[0]! + injury[1]!);
       noteInjuryReportLuck(stats, game, commandNr, r, attacker, armour.length === 2 ? [armour[0]!, armour[1]!] : null, injury.length === 2 ? [injury[0]!, injury[1]!] : null);
+      noteInjuryTurns(stats, game, commandNr, r, attacker, armour.length === 2 ? [armour[0]!, armour[1]!] : null, injury.length === 2 ? [injury[0]!, injury[1]!] : null, rollClock());
       continue;
     }
     if (id === 'dodgeRoll') {
@@ -824,8 +1188,15 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         pushTest(tallies, tested);
         pushActionLuck(tallies, tested, passingRuleUnknown(game, id, playerId ?? actingId));
       }
+      if (id === 'chainsawRoll') noteChainsawTurns(stats, game, playerId ?? actingId, r, rollClock());
     }
   }
+  // turns lost: knock-outs missing the turns that started in this frame; then this frame's state is the next one's
+  advanceTurnsLost(stats, game);
+  const end = readTurnClock(game);
+  if (end) stats.turnClock = end;
+  const target = (game as { defenderId?: unknown } | null)?.defenderId;
+  stats.turnDefender = typeof target === 'string' ? target : null;
 }
 
 export function d6Total(t: DiceTally): number { return t.d6.reduce((a, b) => a + b, 0); }

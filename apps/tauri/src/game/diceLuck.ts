@@ -30,11 +30,16 @@ export interface LuckBucket {
   c: Record<string, number>;
 }
 export type LuckRow = 'armour' | 'injury' | 'action' | 'block';
-export interface DiceLuck { armour: LuckBucket; injury: LuckBucket; action: LuckBucket; block: LuckBucket }
+export interface DiceLuck {
+  armour: LuckBucket; injury: LuckBucket; action: LuckBucket; block: LuckBucket;
+  /** Owner 10-15: TURNS LOST (turnsLost.ts) - one trial per attack on the opponent, scored in sixths of a turn. Not a dice
+   *  row: it is not part of "All dice". Absent on tallies kept before it (the row reads "not measured"). */
+  turns?: LuckBucket;
+}
 export const LUCK_ROWS: readonly LuckRow[] = ['armour', 'injury', 'action', 'block'];
 
 export function emptyBucket(): LuckBucket { return { n: 0, x6: 0, unmeasured: 0, kinds: {}, c: {} }; }
-export function emptyLuck(): DiceLuck { return { armour: emptyBucket(), injury: emptyBucket(), action: emptyBucket(), block: emptyBucket() }; }
+export function emptyLuck(): DiceLuck { return { armour: emptyBucket(), injury: emptyBucket(), action: emptyBucket(), block: emptyBucket(), turns: emptyBucket() }; }
 
 // ---- distributions ----
 
@@ -103,7 +108,7 @@ export function twoD6AtLeast(threshold: number): number {
 // in hand. Claws is the one armour-only conditional: it is derived from the attacker's skills (Claws.java:9-17).
 
 /** Modifiers the server moves to the injury roll when armour broke without them, per injury type. */
-const EITHER_BY_TYPE: Record<string, readonly string[]> = {
+export const EITHER_BY_TYPE: Record<string, readonly string[]> = {
   block: ['Mighty Blow'], foul: ['Dirty Player', 'A Sneaky Pair'], stab: ['A Sneaky Pair'],
   dropDodge: ['Arm Bar'], dropLeap: ['Arm Bar'], fireball: ['Fireball'], lightning: ['Lightning'],
   // a thrown player landing on an opponent: InjuryTypeTTMHitPlayerForSpp.java:33-58 (armour only on a fail, else injury)

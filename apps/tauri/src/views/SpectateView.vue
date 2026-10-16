@@ -13489,7 +13489,7 @@ const liveSnapshot = computed<PostGameSnapshot | null>(() => {
   if (!game) return null;
   const server = settings.activeServerTarget;
   return {
-    version: 2, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
+    version: 3, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
     game, tallies: { home: teamDiceTally(game, 'home'), away: teamDiceTally(game, 'away') },
     diceCoverage: props.mode === 'spectate' ? gameDiceCoverage(game) : null, // owner 10-10: whole game, or what is missing
     endGameStats: gameStore.state.endGameStats, defectors: gameStore.state.defectors?.names ?? null, portraits: {},

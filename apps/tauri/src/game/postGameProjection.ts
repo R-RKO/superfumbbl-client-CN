@@ -7,7 +7,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
-import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
+import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, turnsLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
 import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
@@ -19,8 +19,9 @@ import type { RosterInjuryBadge } from './rosterLevelArt';
 export type Side = 'home' | 'away';
 
 export interface PostGameSnapshot {
-  /** 2 (owner 10-13): armour / injury luck trials became attacker-only; a version-1 snapshot holds two-sided trial distributions. */
-  version: 2;
+  /** 2 (owner 10-13): armour / injury luck trials became attacker-only; a version-1 snapshot holds two-sided trial distributions.
+   *  3 (owner 10-15): the injury figure became TURNS LOST; an older snapshot has no turns trials, so it is re-tallied. */
+  version: 3;
   /** `${server}|${gameId}` — the Play blade looks a FUMBBL replay id up as `fumbbl|<id>`. */
   key: string;
   server: string;
@@ -433,7 +434,7 @@ export function pgHasMarker(like: Likelihood): boolean { return like.measured &&
 
 // Owner 10-09: each Likelihood row states the plain numbers behind it - what happened, and what fair dice expect.
 export interface PgLikelihoodRow {
-  key: 'all' | 'armour' | 'injury' | 'action' | 'block';
+  key: 'all' | 'armour' | 'turns' | 'action' | 'block';
   label: string;
   like: Likelihood;
   /** The row's numbers as one line (owner 10-10: no longer drawn under the row; `stats` carries the same numbers). */
@@ -457,19 +458,20 @@ function pgLikelihoodRow(key: PgLikelihoodRow['key'], label: string, like: Likel
   return { key, label, like, summary: summary + unmeasuredNote(like.unmeasured), stats: [...stats, ...unmeasuredStat(like.unmeasured)], detail: extra ? `${sentence} · ${extra}` : sentence };
 }
 export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
-  const c = (row: 'armour' | 'injury' | 'action' | 'block') => t.luck?.[row].c ?? {};
+  const c = (row: 'armour' | 'action' | 'block') => t.luck?.[row].c ?? {};
   const n = (v: number | undefined) => v ?? 0;
   const all = allDiceLikelihood(t);
-  const armour = c('armour'), injury = c('injury'), action = c('action'), block = c('block');
+  const armour = c('armour'), action = c('action'), block = c('block'), turns = t.luck?.turns?.c ?? {};
   // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled line.
   // Owner 10-13: armour and injury cover only the rolls the team made against its opponent, so there is one figure per row.
   const armourValue = n(armour.theirRolls) ? `${n(armour.theirBroken)} broken of ${n(armour.theirRolls)} (${exp1(armour.theirExpected)} expected)` : '';
   const armourParts = armourValue ? [armourValue] : [];
   const armourStats = armourValue ? [{ label: 'Armour', value: armourValue }] : [];
-  const injuryValueLine = n(injury.theirRolls) ? `${plural(n(injury.theirCasualties), 'casualty', 'casualties')} · ${plural(n(injury.theirKos), 'KO', 'KOs')} of ${plural(n(injury.theirRolls), 'roll', 'rolls')}` : '';
-  const injuryParts = injuryValueLine ? [injuryValueLine] : [];
-  const injuryStats = injuryValueLine ? [{ label: 'Injuries', value: injuryValueLine.replace(' · ', ', ') }] : [];
-  const injuryValue = n(injury.theirRolls) ? `${exp1(injury.theirValue)} (${exp1(injury.theirExpected)} expected)` : '';
+  // Owner 10-15: the injury row is TURNS LOST (turnsLost.ts): the turns the opponents' victims missed against the turns
+  // expected from every attack made (a block's chance to knock down included). Its "Injuries" figure is that number.
+  const turnsLike = turnsLikelihood(t);
+  const turnsValue = `${plural(n(turns.lost), 'turn', 'turns')} (${exp1(turns.expected)} expected)`;
+  const removals = `${plural(n(turns.casualties), 'casualty', 'casualties')}, ${plural(n(turns.kos), 'KO', 'KOs')}, ${plural(n(turns.stuns), 'stun', 'stuns')}`;
   const blockLike = blockLikelihood(t);
   const actionLike = actionLikelihood(t);
   const blockGood = `${n(block.good)} (${exp1(block.goodExpected)} expected)`;
@@ -478,8 +480,9 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
     pgLikelihoodRow('all', 'All dice', all, `${plural(all.n, 'roll', 'rolls')} measured`, [{ label: 'Rolls measured', value: String(all.n) }],
       'armour, injury, action and block rolls together'),
     pgLikelihoodRow('armour', 'Armour', armourLikelihood(t), armourParts.join(' · '), armourStats, 'armour broken against the fair chance of breaking that armour'),
-    pgLikelihoodRow('injury', 'Injury', injuryLikelihood(t), injuryParts.join(' · '), injuryStats,
-      `injury value, a KO counting as half a casualty (less against Bloodweiser Kegs): ${injuryValue}`),
+    pgLikelihoodRow('turns', 'Turns lost', turnsLike, `${turnsValue} · ${removals} · ${plural(turnsLike.n, 'attack', 'attacks')}`,
+      [{ label: 'Injuries', value: turnsValue }, { label: 'Results', value: removals }, { label: 'Attacks', value: String(turnsLike.n) }],
+      `turns the victims missed against the turns expected from every attack made: ${turnsValue}`),
     pgLikelihoodRow('action', 'Action dice', actionLike, `${n(action.passed)} of ${actionLike.n} passed · ${exp1(action.expected)} expected`,
       [{ label: 'Passed', value: `${n(action.passed)} of ${actionLike.n}` }, { label: 'Expected', value: exp1(action.expected) }],
       'every D6 rolled against a target number, rerolled rolls included'),
