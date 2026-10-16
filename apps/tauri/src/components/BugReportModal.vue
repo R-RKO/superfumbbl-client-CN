@@ -102,8 +102,12 @@ const reportShotLine = computed(() => {
 });
 
 /** The host's Report entry: capture the window, then open the dialog (the host calls this through a template ref). */
-function openReport() {
+/** Owner 10-15: `prefill` (the declaration watcher's Report button) is put in front of any draft the tester has. */
+function openReport(prefill?: string) {
   if (reportOpen.value || reportCaptureBusyGeneration !== 0) return;
+  if (prefill && !reportText.value.includes(prefill)) {
+    reportText.value = reportText.value.trim() ? `${prefill}\n${reportText.value}` : prefill;
+  }
   reportError.value = '';
   reportNotice.value = '';
   reportShot.value = null;

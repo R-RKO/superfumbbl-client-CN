@@ -166,7 +166,7 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -180,7 +180,8 @@ import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { blitzTargetCostText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
 import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } from '../game/logic/availableActions';
-import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
+import { deriveClientState, type ClientStateContext, type ClientStateId } from '../game/logic/clientStateMachine';
+import { localMoverId, selectPlayerLeftClick, commitLocalWalk, proneTeammateSwitchMenu } from '../game/logic/localSelection';
 import { prettySkillName } from '../game/logic/prettySkillName';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
 import { reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
@@ -198,8 +199,16 @@ import { spectatorConcedeOccurrenceKey, spectatorPenaltyShootoutOccurrenceKey } 
 import { shouldShowRejoinBrowser, startRejoin } from '../game/rejoinFlow';
 import { SHORTENED_NOTE, unknownPanelKeyDecision } from '../game/unknownDialogView';
 // Fives lane 08-19: project only the fresh auto-Move shell back through the menu's server-derived offer set.
-function quickClickBlitzAction(game: GameJson, ctx: ClientStateContext, actingId: string, targetId: string): CoachAction | null {
+function quickClickBlitzAction(game: GameJson, ctx: ClientStateContext, actingId: string, targetId: string, localSelection = false): CoachAction | null {
   const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; currentMove?: number } | undefined;
+  // Owner 10-15: a LOCAL selection (nothing declared, SELECT_PLAYER) reads the plain server-derived declare list; the
+  // Blitz pick is then the one declaration (blitzMove, upstream SelectLogicModule BLITZ:121-122).
+  if (localSelection) {
+    if (deriveClientState(game, ctx) !== 'SELECT_PLAYER' || String(acting?.playerId ?? '')
+        || adjacentStandingEnemyIds(game, actingId).includes(targetId) || !canBeBlocked(game, targetId)) return null;
+    return availableActions(game, ctx, actingId)
+      .find((action) => action.kind === 'declare' && action.action === 'blitzMove' && action.enabled) ?? null;
+  }
   if (deriveClientState(game, ctx) !== 'MOVE' || acting?.playerId !== actingId
       || acting.playerAction !== 'move' || Number(acting.currentMove ?? 0) !== 0
       || adjacentStandingEnemyIds(game, actingId).includes(targetId) || !canBeBlocked(game, targetId)) return null;
@@ -214,6 +223,38 @@ const o66ExplicitBlockChoice = ref<{ kind: BlockKind | null } | null>(null);
 // Owner o66 automove CONFIRM: first click on a move square previews the route (crosshair + path trail); a
 // second click on the SAME square confirms + sends. Cleared on confirm / re-plan / a fresh reach.
 const o66PendingMove = ref<{ dest: [number, number]; route: [number, number][] } | null>(null);
+// Owner 10-15 (FUMBBL upstream / Christer, "declare on action, not on click"): the own player a left-click SELECTED,
+// client-side only. Nothing is sent for it; the reach overlay and the route planner run off the client reach (see
+// game/logic/localSelection.ts), and the declaration goes out when the coach commits an action.
+const o66LocalSelection = ref<string | null>(null);
+// Astra r2 F8: a switch click routed through the End confirmation (a declared Blitz / Foul) remembers the clicked player;
+// once the server clears that activation the clicked player is selected locally. "Go back" forgets it.
+const o66SwitchAfterEnd = ref<{ fromId: string; toId: string } | null>(null);
+// Owner 10-15 decision: a prone teammate clicked while ours is declared and untouched. The click deselected the declared
+// player locally and opened the prone player's menu; until a row is picked nothing was sent. A dismissal shows the
+// still-declared player again (the local deselect never desyncs from the server's acting player).
+const o66ProneSwitchMenu = ref<{ fromId: string; toId: string } | null>(null);
+/** Astra r9 F1 / r10 F2: a right-click that dismissed the prone-teammate menu (pointerdown closes it) must not go on to
+ *  the empty-grass deselect, which would cancel the still-declared player. The dismissing GESTURE is consumed through
+ *  its release (a held right button included), not for a time window. */
+let pointerButtonDown = false;
+let proneDismissGesture = false;
+function onProneGesturePointerDown() { pointerButtonDown = true; }
+function onProneGesturePointerUp() {
+  pointerButtonDown = false;
+  if (proneDismissGesture) setTimeout(() => { proneDismissGesture = false; }, 0); // after this release's contextmenu
+}
+window.addEventListener('pointerdown', onProneGesturePointerDown, true);
+window.addEventListener('pointerup', onProneGesturePointerUp, true);
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onProneGesturePointerDown, true);
+  window.removeEventListener('pointerup', onProneGesturePointerUp, true);
+});
+function proneMenuJustDismissed(): boolean {
+  if (!proneDismissGesture) return false;
+  proneDismissGesture = false; // consumed by this gesture's deselect
+  return true;
+}
 // Owner 09-27: tile clicks hold while the actor's confirmed move is still on screen (fails open on a stalled token).
 const o66MoveClickGate = createMoveClickGate();
 // Owner 10-04: right-clicks get their own gate (same rule, separate bookkeeping) - see openContextMenu.
@@ -410,6 +451,8 @@ import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectat
 import { gameServiceFromTarget, resolveReportGameId, wireLogBasename } from '../game/bugReport';
 import type { BugReportHost } from '../game/bugReportHost';
 import BugReportModal from '../components/BugReportModal.vue';
+import MatchNoticeCard from '../components/MatchNoticeCard.vue';
+import { acknowledgeBetaNotice, betaNoticeDue, BETA_NOTICE_BUTTON, BETA_NOTICE_TEXT, BETA_NOTICE_TITLE } from '../game/betaNotice';
 // botGet/botPost: the token-auth seam (owner ruling 2026-08-17) lives once in forkChallenge.ts —
 // consolidated here rather than re-converting a 4th local copy; signatures are a drop-in match.
 import { botGet, botPost } from '../game/forkChallenge';
@@ -2052,6 +2095,34 @@ const reportHost: BugReportHost = {
 /** Report entry (quick bar, Esc menu, hotkey): the dialog captures the window first, then opens (BugReportModal). */
 function openReport() {
   reportModal.value?.openReport();
+}
+/** Owner 10-15: the declaration watcher's Report - the same dialog, its description prefilled. */
+function openReportPrefilled(text: string) {
+  reportModal.value?.openReport(text);
+}
+
+// Owner 10-15: the match-start BETA NOTICE (copy + version: game/betaNotice.ts). A seated coach only (never a spectator
+// or a replay), once per game joined, as soon as the game state has loaded (a mid-game join gets it on join). It sends
+// nothing and holds no server frame; it closes only on Acknowledge. It is the topmost card (a full-pitch backdrop that
+// owns the keyboard and the pad), so the setup cards and the inducements phase come up behind it and are seen once it
+// closes; nothing about them changes.
+const betaNoticeRevision = ref(0);
+const betaNoticeOpen = computed(() => {
+  void betaNoticeRevision.value;
+  return props.mode === 'play' && betaNoticeDue({
+    seatedCoach: gameStore.isPlaying.value, replay: false, gameId: gameStore.game.value?.gameId ?? null,
+  });
+});
+function acknowledgeMatchBetaNotice() {
+  acknowledgeBetaNotice(gameStore.game.value?.gameId ?? null);
+  betaNoticeRevision.value += 1;
+}
+// Owner 10-15 declaration watcher: "Report" opens the bug report prefilled with the occurrence; either answer closes it.
+const switchWatcherCard = computed(() => (props.mode === 'play' && gameStore.isPlaying.value ? gameStore.state.switchWatcherCard : null));
+function answerSwitchWatcherCard(index: number) {
+  const card = gameStore.state.switchWatcherCard;
+  gameStore.dismissSwitchWatcherCard();
+  if (index === 0 && card) openReportPrefilled(card.report);
 }
 
 watch(reportOpen, (open) => {
@@ -6282,7 +6353,7 @@ const o66MoveSquares = computed<[number, number][]>(() => {
   void o66SurfaceEpoch.value;
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return [];
-  const st = deriveClientState(g, o66Ctx());
+  const st = o66SurfaceState(g); // owner 10-15: a local selection presents its client reach as MOVE (nothing sent)
   // Swoop is a server-owned coordinate election, including reconnect snapshots that arrive directly in SWOOP.
   // Keep its legal-set derivation in the shared interaction layer used by both layouts.
   const swoopSquares = swoopCoordinateSquares(g, o66Ctx());
@@ -6303,7 +6374,7 @@ const o66MoveSquares = computed<[number, number][]>(() => {
   if (!fumblerooskieWalk) {
     if (!putridWalk && !ON_THE_BALL_MOVE_STATES.has(st) && st !== 'MOVE' && st !== 'PASS' && st !== 'PUNT' && st !== 'BOMB' && st !== 'FOUL' && !isBlitzMovementState(st) && st !== 'HAND_OVER' && !isGazeMovementState(st) && !isThrowMateState(st) && st !== 'SELECT_BLITZ_TARGET' && st !== 'HIT_AND_RUN' && st !== 'SWOOP' && st !== 'FURIOUS_OUTBURST') return []; // Star S8: shared Blitz reach + outburst server squares
   }
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const actingId = o66ActorId(g);
   if (!actingId || !renderer) return [];
   // Raw `punt` repurposes moveSquareArray as the four server-selected orthogonal targets; `puntMove` keeps the
   // normal client walk reach. Mirrors PuntLogicModule.java:56-69 and StepInitPunt.java:140-163.
@@ -6339,6 +6410,44 @@ const o66MoveSquares = computed<[number, number][]>(() => {
   // W17's live one-ring remains the fail-closed fallback if the client preview cannot be computed.
   return reach?.squares ?? (ON_THE_BALL_MOVE_STATES.has(st) ? serverMoveSquares(g) : []);
 });
+// Owner 10-15: the local selection lives only while it can be the undeclared mover. Once the server has an acting player
+// (a declaration was echoed: the real state owns every surface), the turn is not mine, or play stops, it is dropped.
+watch(() => [
+  String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''),
+  !!gameStore.myTurn.value, gameStore.isPlaying.value, settings.order66, String(gameStore.game.value?.gameId ?? ''),
+] as const, ([actingId, mine, playing, order66], previous) => {
+  // Astra r2 F8: a switch held by the End confirmation selects its player once that activation is cleared.
+  const held = o66SwitchAfterEnd.value;
+  if (held) {
+    if (!mine || !playing || (actingId && actingId !== held.fromId)) o66SwitchAfterEnd.value = null;
+    else if (!actingId && previous?.[0] === held.fromId) {
+      o66SwitchAfterEnd.value = null;
+      if (gameStore.iControl(held.toId)) selectO66LocalMover(held.toId);
+      return;
+    }
+  }
+  if (!o66LocalSelection.value) return;
+  const switchedFrom = previous?.[0] ?? '';
+  // A friendly switch selects the clicked player while the old actor is still on the server: keep it across that clear.
+  if (actingId && actingId === switchedFrom && actingId !== o66LocalSelection.value) return;
+  if (actingId || !mine || !playing || !order66) o66LocalSelection.value = null;
+});
+// Astra r7 F1: a No on the server's End confirmation re-opens the activation with no wire answer to wait for; the
+// surface that stood down while the cancel was pending is re-armed from state at once.
+watch(() => gameStore.cancelInFlight(), (pending, wasPending) => {
+  if (wasPending && !pending && String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '')) {
+    rearmO66MovementSurface();
+  }
+});
+/** Owner 10-15: the undeclared mover the renderer draws the client-local selection ring and tackle zones for. */
+const o66LocalMoverShown = computed(() => {
+  void o66LocalSelection.value;
+  return o66LocalMover(gameStore.game.value) || null;
+});
+watch(o66LocalMoverShown, (id) => {
+  if (!renderer) return;
+  renderer.setO66LocalSelection(id); // the renderer reads the actor's tackle zones for it too (my-turn play only)
+});
 const furiousOutburstInstruction = computed(() => {
   const g = gameStore.game.value;
   if (!g || !gameStore.isPlaying.value || !gameStore.myTurn.value) return null;
@@ -6368,6 +6477,7 @@ watch(jumpCrosshairSquares, (squares) => { renderer?.setJumpCrosshairs(squares);
 // P1: observe the server actor-null edge; an at-rest HMP has no o66MoveSquares transition to trigger teardown.
 watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66PendingPass, passTemplateForced,
   () => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''),
+  o66LocalSelection,
   () => gameStore.state.reRollPrompt?.seq, () => gameStore.state.skillChoice?.seq,
 ], ([squares]) => {
   if (!renderer || !settings.order66) return;
@@ -6417,8 +6527,8 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
     // beyond normal MA); the DODGE cost is path-dependent, so it shows on the previewed auto-path (setO66Path),
     // not per tile. BLITZ (server squares) has no client reach → no rush ring.
     const g = currentGame;
-    const st = g ? deriveClientState(g, o66Ctx()) : '';
-    const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const st = g ? o66SurfaceState(g) : ''; // owner 10-15: the local selection's rush ring rides its client reach
+    const actingId = o66ActorId(g);
     // #181 PU-5/PU-5a: rush rides the walk, so it takes the SAME raw-action guard — see putridWalkArmed.
     // JLeav 10-13 (g1953055, Ulfwerener jump on moves 5&6): while LEAPING the eligible squares are the server's
     //   JUMP set, priced per square (minimumRollDodge = AG + jump modifiers, minimumRollGfi = rush). The walk reach
@@ -7413,7 +7523,9 @@ watch(o66BlockTargetChosen, (chosen) => renderer?.setDeclaredBlockTargetChosen(c
 watch(() => settings.preClickBlockDice, (enabled) => renderer?.setPreClickBlockDice(enabled)); // owner 10-15: live toggle redraws
 // At a plain Block/Blitz nominate stage, surface the block-dice preview over the target. A selected special attack
 // uses BlockAttackConfirmModal instead; both retire from the same aggro stage.
-watch(o66AggroStage, (st) => {
+// Astra r1 F4: also re-run on the acting-player echo - a Block staged from a local selection declares at that click,
+// and the attacker exists only once the server echoes it.
+watch([o66AggroStage, () => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '')], ([st]) => {
   if (!renderer) return;
   const actingId = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   // #3/#4 (owner batch #3, 2026-07-14): the o66 block-dice preview surfaces ONLY at the CONFIRM
@@ -8160,6 +8272,14 @@ interface MenuItem {
   icon?: string;
 }
 const ctxMenu = reactive({ visible: false, x: 0, y: 0, items: [] as MenuItem[], playerId: '' });
+watch(() => ctxMenu.visible, (visible) => {
+  const held = o66ProneSwitchMenu.value;
+  if (visible || !held) return;
+  o66ProneSwitchMenu.value = null;
+  if (pointerButtonDown) proneDismissGesture = true; // Astra r9 F1 / r10 F2: the dismissing gesture itself sends nothing
+  const actingNow = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (actingNow === held.fromId) renderer?.selectPlayer(held.fromId); // dismissed: the declared player is shown again
+});
 /** Action chosen from a menu, carried into the planner + Confirm button label. */
 const plannedAction = ref<string | null>(null);
 
@@ -8201,6 +8321,42 @@ function adjacentToPathEnd(square: [number, number]): boolean {
 // ---- ORDER 66 (A.2): flag-gated action menu (surface ③) ----------------------------------------------
 /** The client-state context: mode + login + the local coach's TRUE side (myTeamIsHome, resolved by coach
  *  match — the owner's perspective correction). Feeds deriveClientState/availableActions via the router. */
+/** Owner 10-15: the locally selected, undeclared mover ('' = none; the server's acting player always wins). */
+function o66LocalMover(g = gameStore.game.value): string {
+  return localMoverId(g, o66Ctx(), {
+    localId: o66LocalSelection.value, order66: settings.order66, playing: gameStore.isPlaying.value,
+    myTurn: !!gameStore.myTurn.value, controls: (pid) => gameStore.iControl(pid),
+    // Astra r1 F1: after a commit the local surface stands down until the echo (no second declaration).
+    busy: (void gameStore.activePlanIdentity(), gameStore.isPlanActive() || gameStore.declarationInFlight() || gameStore.cancelInFlight()),
+  });
+}
+/** The player the movement surface belongs to: the server's acting player, else the local selection. */
+function o66ActorId(g: GameJson | null | undefined): string {
+  // Astra r3 F1: an activation whose cancel is unanswered owns no movement surface (a switch is in progress).
+  if (gameStore.cancelInFlight()) return '';
+  const serverId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return serverId || o66LocalMover(g);
+}
+/** The state the movement surface reads: a local selection presents as MOVE (upstream's Move menu pick is what the
+ *  first committed step will declare); the server-derived state everywhere else. */
+function o66SurfaceState(g: GameJson): ClientStateId {
+  return o66LocalMover(g) ? 'MOVE' : deriveClientState(g, o66Ctx());
+}
+/** Owner 10-15 P0 #3: the coach clicked another own player while this one has acted: nothing is sent. */
+function showMidActivationToast(g: GameJson, actingId: string) {
+  const actorSq = playerSquareById(actingId);
+  const p = actorSq ? renderer?.squareToCanvas(actorSq) : null;
+  const actorName = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === actingId)?.playerName || 'Your player';
+  showToast(`${actorName} is mid-activation — End Activation first`, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+}
+function selectO66LocalMover(playerId: string) {
+  o66LocalSelection.value = playerId;
+  renderer?.selectPlayer(playerId);
+}
+/** The coach committed a walk for the local selection: one plan declares `move`, then the ack-gated drip walks it. */
+function commitO66LocalWalk(playerId: string, route: [number, number][]) {
+  commitLocalWalk({ startPlan: (input) => gameStore.startPlan(input) }, playerId, route);
+}
 function o66Ctx(): ClientStateContext {
   return {
     mode: 'player', loggedIn: true, myIsHome: gameStore.myTeamIsHome.value ?? true,
@@ -8538,6 +8694,7 @@ onBeforeUnmount(clearPromptFront);
 // gate (above) stays — "Opponent's Turn" now reads off the End Turn button.
 /** Execute a chosen menu action against the store senders (declare / end-move). */
 function runO66Action(a: CoachAction, playerId: string) {
+  o66ProneSwitchMenu.value = null; // a pick is not a dismissal: the switch rule takes it from here (declareAction)
   if (localWideRailElectionOwnsAction(a)) { ctxMenu.visible = false; return; }
   // #236: Fumblerooski is not a PlayerAction declare: upstream MoveLogicModule.java:133-136 routes the pick to
   // sendUseFumblerooskie(), so intercept it before the generic CLIENT_ACTING_PLAYER declare path.
@@ -8578,6 +8735,8 @@ function runO66Action(a: CoachAction, playerId: string) {
     // Move row and the left-click auto-Move shortcut never do).
     // S42: a Chainsaw carrier's two Foul rows share `foulMove`; the row's flag is remembered for the activation.
     else if (a.action === 'foulMove' && a.usingChainsaw !== undefined) gameStore.declareAction(playerId, a.action, undefined, { foulChainsaw: a.usingChainsaw });
+    // Owner 10-15 (ratified, corrected): an explicit rail / menu pick, Move included, declares at once (upstream's
+    // menu pick, SelectLogicModule.performAvailableAction); only the bare click and a walk with no chosen action wait.
     else gameStore.declareAction(playerId, a.action, undefined, { bigGuyActivate: a.ruleId === BIG_GUY_ACTIVATE_RULE_ID });
   } else if (a.kind === 'endMove') {
     endActivationFromMenu();
@@ -9689,8 +9848,18 @@ function o66ConfirmPending(): boolean {
     }
     if (gameStore.state.reRollPrompt.options.length >= 2) return true;
   }
+  if (gameStore.cancelInFlight()) return false; // Astra r3 F1: no confirm acts for an activation being cancelled
   const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  if (!actingId) return false;
+  // Owner 10-15: a route plotted for the local (undeclared) selection: Space / the confirm bar commits it, and the
+  // commit is what declares `move`.
+  if (!actingId) {
+    const localMover = o66LocalMover(g);
+    const pendLocal = o66PendingMove.value;
+    if (!localMover || !pendLocal || o66AggroStage.value) return false;
+    commitO66LocalWalk(localMover, pendLocal.route);
+    o66PendingMove.value = null; renderer?.setO66Path([]);
+    return true;
+  }
   // #48 (Space parity, EX-1 blitz-flavor): a held #111 blitz-flavor commits the PLAIN block (the fast default —
   // mirrors the left-click on the target; a flavored block is the right-click pick). Never a pass/hand-off confirm.
   if (gameStore.foulChoiceHeld()) return true; // S42: the coach picks Foul or Chainsaw on the card; Space decides nothing
@@ -9808,7 +9977,7 @@ function showQuickClickBlitzUnavailable(targetId: string, reason: 'modern' | 'us
 function swallowBlockTargetSelection(targetId: string): void {
   const g = gameStore.game.value;
   if (!renderer || !g) return;
-  const atk = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const atk = o66ActorId(g); // owner 10-15: a local selection takes the selection back like a declared attacker
   const next = selectionAfterTargetConfirm(renderer.getSelectedPlayerId(), targetId, atk || null);
   if (next === 'keep') return;
   if (next === 'clear') renderer.clearSelection();
@@ -9816,7 +9985,7 @@ function swallowBlockTargetSelection(targetId: string): void {
 }
 function dismissO66OpponentInspection(g: GameJson): boolean {
   if (!renderer || !o66InspectedOpponent.value) return false;
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const actingId = o66ActorId(g); // owner 10-15: or the local selection
   if (actingId) renderer.selectPlayer(actingId);
   else renderer.clearSelection();
   o66InspectedOpponent.value = null;
@@ -9831,7 +10000,9 @@ function confirmAggroStage(): boolean {
   deferredFriendlySwitch.value = null; // owner 10-05: confirming the acting player's own attack drops a pending switch
   const st = o66AggroStage.value;
   if (!st) return false;
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const serverActingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const localAttacker = serverActingId ? '' : o66LocalMover(g); // owner 10-15: staged from a local selection
+  const actingId = serverActingId || localAttacker;
   if (st.kind === 'blitz') {
     // Owner 09-29 (S33): the click that confirmed the quick blitz selected the opposing target in the renderer; like
     // the `block` intent, hand the selection back so the target's reach never shows once the activation ends.
@@ -9870,7 +10041,7 @@ function confirmAggroStage(): boolean {
       showQuickClickBlitzUnavailable(st.target, 'used');
       return true;
     }
-    const blitzAction = quickClickBlitzAction(g, o66Ctx(), actingId, st.target);
+    const blitzAction = quickClickBlitzAction(g, o66Ctx(), actingId, st.target, !!localAttacker);
     if (!blitzAction) { showQuickClickBlitzUnavailable(st.target); return true; }
     const route = previewLeftClickBlitzRoute(actingId, st.target);
     if (!route) { showQuickClickBlitzUnavailable(st.target, 'unreachable'); return true; }
@@ -10018,6 +10189,9 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       askEndActivation(decision.confirmKind);
       return;
     case 'clear-selection':
+      // Astra r1 F2: a local commit whose declaration is still in flight is backed out with its (one) cancel.
+      if (gameStore.declarationInFlight()) { gameStore.cancelPlan(); gameStore.endActivation(); }
+      gameStore.abandonQueuedDeclaration(); // Astra r4 F2: a declaration queued behind an unanswered cancel goes too
       renderer?.clearSelection();
       return;
     case 'game-menu':
@@ -10893,11 +11067,39 @@ onMounted(async () => {
         if (clickState === 'HAND_OVER' && clickActingId && playerId !== clickActingId && gameStore.iControl(clickActingId)
             && gameStore.iControl(playerId) && armHandOffAtDestination(g, clickActingId, playerId)) return;
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
+        // Owner 10-15 decision: a PRONE teammate clicked while ours is declared and untouched. No wire: the declared
+        // player is deselected locally and the prone player's own menu opens (Stand Up, Stand Up and Blitz, ...). A pick
+        // runs the switch rule through declareAction (one cancel, the server's clear, then the pick's declaration); a
+        // dismissal shows the still-declared player again.
+        {
+          const proneRows = proneTeammateSwitchMenu(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid),
+            { foulConfirm: endActivationConfirmEnabled('foul', settings) });
+          if (proneRows && !endActConfirm.value) {
+            const fromId = clickActingId;
+            const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(proneRows), playerId, () => {});
+            renderer?.selectPlayer(playerId);
+            placeCtxMenu(items, clickX, clickY, playerId);
+            o66ProneSwitchMenu.value = { fromId, toId: playerId };
+            autoShowPopup(playerId);
+            return;
+          }
+        }
         if (ix.kind === 'switchFriendlyActivation') {
-          if (requiresBlitzEndConfirmation(clickState)) { requestEndActivation(); return; }
+          // Owner 10-15 P0 #3 / Astra r2 F5 + r3 F3: a player who HAS acted is never switched away from (upstream ignores
+          // the click). A declared Blitz / Foul routes to its own End confirmation (the orchestrator-sanctioned path) but
+          // remembers no switch; anything else is feedback only. The opt-in deferred two-click switch below (owner 10-05,
+          // default off) keeps its explicit second click as the confirmation.
+          if (ix.disposition === 'end' && !settings.deferFriendlySwitchEnd) {
+            if (requiresBlitzEndConfirmation(clickState)
+                || (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings))) { requestEndActivation(); return; }
+            renderer?.selectPlayer(clickActingId);
+            showMidActivationToast(g, clickActingId);
+            return;
+          }
+          if (requiresBlitzEndConfirmation(clickState)) { o66SwitchAfterEnd.value = { fromId: clickActingId, toId: ix.playerId }; requestEndActivation(); return; }
           // Owner 10-07: a declared Foul asks exactly like the Blitz above (before the deferred-switch gate, whatever that
           // setting says). Switched off, the click keeps its old immediate switch below.
-          if (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings)) { requestEndActivation(); return; }
+          if (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings)) { o66SwitchAfterEnd.value = { fromId: clickActingId, toId: ix.playerId }; requestEndActivation(); return; }
           // Owner 10-05 (setting, default off): an activation that has already been used is NOT ended by this click.
           // The click arms the switch; the end goes out when the new player is activated. An untouched declaration
           // (refund) keeps the direct switch below - nothing is lost there.
@@ -10920,7 +11122,11 @@ onMounted(async () => {
             gameStore.endActivation();
           } else {
             pendingFriendlyLeftClickMenu.value = null;
-            gameStore.switchFriendlyActivation(ix.playerId, ix.disposition);
+            // Owner 10-15: the switch ends the current activation with its exact cancel and SELECTS the clicked player
+            // locally; nothing is declared for it until the coach commits an action.
+            if (gameStore.switchFriendlyActivation(ix.playerId, ix.disposition, { declareMove: false })) {
+              selectO66LocalMover(ix.playerId); // Astra r2 F7: the renderer selection follows (Esc / right-click can deselect)
+            }
           }
           return;
         }
@@ -11159,8 +11365,11 @@ onMounted(async () => {
         // Owner o66ah CLICK-TO-ACT: while acting in MOVE, ADJACENT-enemy Block retains its staging, DISTANT-standing
         // Blitz stages then declares on confirm, and DOWN-enemy Foul stays menu-only.
         {
-          const actActingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-          if (actActingId && !gameStore.iControl(playerId) && deriveClientState(g, o66Ctx()) === 'MOVE') {
+          // Owner 10-15: a LOCAL selection (nothing declared) takes the same click-to-act; its Block / Blitz declare is
+          // then the activation's ONE declaration (no `move` first).
+          const actLocal = o66LocalMover(g);
+          const actActingId = actLocal || String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+          if (actActingId && !gameStore.iControl(playerId) && o66SurfaceState(g) === 'MOVE') {
             const pd = (g.fieldModel.playerDataArray as { playerId: string; playerState?: number; playerCoordinate?: unknown }[]).find((d) => d.playerId === playerId);
             const base = (pd?.playerState ?? 0) & 0xff;
             const enemySq = normSquare(pd?.playerCoordinate);
@@ -11208,7 +11417,7 @@ onMounted(async () => {
                 showQuickClickBlitzUnavailable(playerId, 'used');
                 return;
               }
-              const blitzAction = quickClickBlitzAction(g, o66Ctx(), actActingId, playerId);
+              const blitzAction = quickClickBlitzAction(g, o66Ctx(), actActingId, playerId, !!actLocal);
               if (!blitzAction) {
                 o66AggroStage.value = null;
                 showQuickClickBlitzUnavailable(playerId);
@@ -11264,9 +11473,46 @@ onMounted(async () => {
           // SR-244: an acting-player self-click in a declared state is an explicit menu request. Render it for a
           // standing actor too; the standing-player auto-Move shortcut below is only for a fresh/switch declare.
           const acting = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+          // Owner 10-15 P0 #3 (upstream MoveLogicModule.playerInteraction:335-357 ignores a click on another own player
+          // while one is acting; the coach deselects first, LogicModule.deselectActingPlayer:86-88). A click on another
+          // own player while OUR declared player has NOT acted: ONE cancel for it (the store latch), the clicked player
+          // is selected locally and declares only when its action is committed (after the server's actor clear: the
+          // local surface needs no acting player). A declared Blitz / Foul asks first through its End confirmation, as
+          // the friendly-switch preference does. A player who HAS acted: no switch and no send (upstream ignores it).
+          if (acting && ix.playerId !== acting && gameStore.iControl(acting) && !settings.leftClickOpensContextMenu) {
+            const switchState = deriveClientState(g, o66Ctx());
+            const disposition = friendlyActivationSwitchDisposition(g, { ...o66Ctx(), friendlyPlayerSwitch: true }, ix.playerId);
+            if (disposition === 'refund') {
+              if (endActConfirm.value) return;
+              if (requiresBlitzEndConfirmation(switchState)
+                  || (switchState === 'FOUL' && endActivationConfirmEnabled('foul', settings))) {
+                renderer?.selectPlayer(acting);
+                o66SwitchAfterEnd.value = { fromId: acting, toId: ix.playerId }; // Astra r2 F8
+                requestEndActivation();
+                return;
+              }
+              clearO66Arms();
+              gameStore.cancelPlan();
+              if (gameStore.switchFriendlyActivation(ix.playerId, 'refund', { declareMove: false })) {
+                selectO66LocalMover(ix.playerId); // Astra r2 F7
+              }
+              autoShowPopup(ix.playerId);
+              return;
+            }
+            renderer?.selectPlayer(acting);
+            showMidActivationToast(g, acting);
+            return;
+          }
           if (settings.leftClickOpensContextMenu && ix.playerId !== acting) {
             showFriendlyLeftClickMenu(ix.playerId, clickX, clickY);
             return;
+          }
+          // Astra r1 F3: any other own-player click replaces the local selection (and drops its plotted route) before
+          // the menu-only branches below can return.
+          if (!acting && o66LocalSelection.value && o66LocalSelection.value !== ix.playerId) {
+            o66LocalSelection.value = null;
+            if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); }
+            o66AggroStage.value = null;
           }
           if (ix.playerId === acting && deriveClientState(g, o66Ctx()) !== 'SELECT_PLAYER') {
             const refresh = () => {
@@ -11309,13 +11555,31 @@ onMounted(async () => {
             autoShowPopup(ix.playerId);
             return;
           }
-          // Owner 2026-07-14 (#5): a single LEFT-click on an own STANDING player declares Move directly (the
-          // two-click move confirm still gates the actual step). Players with no Move (off-pitch) fall to the popup.
-          if (ix.actions.some((a) => a.kind === 'declare' && a.action === 'move')) {
-            if (endActConfirm.value) return;
-            gameStore.declareAction(ix.playerId, 'move');
-            autoShowPopup(ix.playerId);
-            return;
+          // Owner 10-15 (FUMBBL upstream / Christer; replaces the 2026-07-14 #5 left-click auto-Move declare): a single
+          // LEFT-click on an own STANDING player SELECTS it client-side only. NOTHING is sent: upstream's
+          // SelectLogicModule.playerInteraction returns selectAction and sends nothing; the declaration goes out when the
+          // coach commits (the first confirmed walk declares `move`, a Block / Blitz target its own action, a rail pick
+          // its action). A second click on the selection opens the action menu (upstream's click); players that cannot
+          // walk (off-pitch) fall to the popup as before.
+          if (ix.actions.some((a) => a.kind === 'declare')) {
+            const local = o66LocalSelection.value;
+            if (selectPlayerLeftClick(g, o66Ctx(), ix.playerId, local) === 'select') {
+              if (endActConfirm.value) return;
+              if (local !== ix.playerId && o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); }
+              o66AggroStage.value = null;
+              selectO66LocalMover(ix.playerId);
+              autoShowPopup(ix.playerId);
+              return;
+            }
+            // Astra r1 F5: a second click on the selection, or a player that cannot take the local walk (Ball & Chain,
+            // Move not offered): the action menu, as upstream's click.
+            {
+              const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, () => {});
+              if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+              placeCtxMenu(items, clickX, clickY, ix.playerId);
+              autoShowPopup(ix.playerId);
+              return;
+            }
           }
         }
       }
@@ -11435,6 +11699,8 @@ onMounted(async () => {
     // Astra review 10-04: answer the open confirmation first. Re-review: a SERVER-requested square pick is never
     // swallowed - the server is waiting on it.
     if (pitchHeldByConfirmation() && !gameStore.state.squarePick && !unknownPickingTile.value) return;
+    // Astra r3 F1 (owner 10-15): while our cancel is unanswered no square click moves anyone (a switch is in progress).
+    if (gameStore.cancelInFlight() && !gameStore.state.squarePick && !unknownPickingTile.value) return;
     deferredFriendlySwitch.value = null; // owner 10-05: a square click means the acting player carries on
     if (wideRailActivationPrompt.value) return;
     // owner 09-06: hold clicks while a failed roll drains. Astra 10-09: or while frames wait behind its hold - never a
@@ -11478,8 +11744,10 @@ onMounted(async () => {
     if (settings.order66 && gameStore.isPlaying.value) {
       const g = gameStore.game.value;
       if (g) {
-        const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-        const st = deriveClientState(g, o66Ctx());
+        // Owner 10-15: a local selection walks on its client reach as MOVE; its first confirmed walk declares `move`.
+        const localWalk = !!o66LocalMover(g);
+        const actingId = o66ActorId(g);
+        const st = o66SurfaceState(g);
         // #91: a floor-tile click during a DECLARED-but-UNCONFIRMED blitz (SELECT_BLITZ_TARGET ∧ blitzUsed===false)
         //   surfaces the convert-to-move modal instead of moving (owner "click a floor tile to walk"). Gate on a
         //   walkable reach tile so this is a genuine move gesture; enemy clicks route to onPlayerClick (target
@@ -11587,7 +11855,8 @@ onMounted(async () => {
             const confirmsPlannedMove = reactingClick === 'confirm'
               || (reactingClick === null && pend !== null && pend.dest[0] === c[0] && pend.dest[1] === c[1]);
             if (confirmsPlannedMove && pend) { // confirm — send the whole path
-              if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.o66BlitzMove(actingId, pend.route); else gameStore.o66Move(actingId, pend.route);
+              if (localWalk) commitO66LocalWalk(actingId, pend.route); // owner 10-15: the declaration goes out HERE
+              else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.o66BlitzMove(actingId, pend.route); else gameStore.o66Move(actingId, pend.route);
               o66PendingMove.value = null; renderer?.setO66Path([]);
               return;
             }
@@ -11604,7 +11873,8 @@ onMounted(async () => {
             }
             const route = renderer?.o66AutoPath(actingId, c) ?? null;
             if (!route || route.length === 0) { // fallback: single step
-              if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.sendBlitzMove(actingId, c); else gameStore.stepMove(actingId, c);
+              if (localWalk) commitO66LocalWalk(actingId, [c]); // owner 10-15: declare `move`, then the one step
+              else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.sendBlitzMove(actingId, c); else gameStore.stepMove(actingId, c);
               return;
             }
             o66PendingMove.value = { dest: c, route }; // preview
@@ -11704,6 +11974,14 @@ onMounted(async () => {
       plannedAction.value = null;
       if (!hasSelection.value) popup.visible = false;
       return;
+    }
+    // Owner 10-15: a deselect (empty right-click, Esc, a received transition) drops the local selection - client-local,
+    // nothing is sent for it (the store's endActivation sends no cancel when nothing was declared).
+    if (!playerId && o66LocalSelection.value) {
+      o66LocalSelection.value = null;
+      if (o66PendingMove.value && !String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '')) {
+        o66PendingMove.value = null; renderer?.setO66Path([]);
+      }
     }
     hasSelection.value = !!playerId;
     plannedAction.value = null;
@@ -13535,8 +13813,10 @@ function o66HasPlan(): boolean {
 /** Owner 2026-07-13: the right-click-on-grass DESELECT (no plan pending). In o66 a left-click auto-declared Move, so the
  *  real deselect is the implicit end-activation (a safe no-op when nothing is active). Shared with the pad's B. */
 function deselectByClickOff(): void {
+  if (proneMenuJustDismissed()) return; // Astra r9 F1: this gesture only closed the prone-teammate menu
+  if (gameStore.declarationInFlight()) gameStore.cancelPlan(); // Astra r1 F2: the committed walk goes with the cancel
   renderer?.clearSelection();
-  gameStore.endActivation();
+  gameStore.endActivation(); // owner 10-15 P0 #2: sends only when a declaration of ours exists, and only once
 }
 /** A held pan (right stick / WASD) won over the crosshair follow; on its release the follow runs again. */
 function refollowCrosshair(): void {
@@ -13621,6 +13901,7 @@ function cancelEndActivation() {
   // live), not a bare dismiss. Other kinds (blitz/generic) only dismiss, no wire — unchanged.
   const kind = endActConfirm.value?.kind;
   endActConfirm.value = null;
+  o66SwitchAfterEnd.value = null; // Astra r2 F8: Go back keeps the activation; the switch is forgotten
   if (kind === 'punt') gameStore.returnPuntToMove();
   rearmO66MovementSurface(); // Astra 10-10: Go back re-arms from state; it never relies on nothing having been cleared
 }
@@ -13937,6 +14218,12 @@ function sendChat() {
     <!-- Owner 2026-08-18: the Report modal (owner 10-13: components/BugReportModal.vue, shared with the console shell's
          blade ribbon). Backdrop click does NOT close it; the dialog root owns the keyboard. -->
     <BugReportModal ref="reportModal" v-model:open="reportOpen" v-model:busy="reportBusy" :host="reportHost" @sent="onReportSent" />
+    <!-- Owner 10-15: the match-start beta notice (seated coach, once per game) and the declaration watcher's card. -->
+    <MatchNoticeCard v-if="betaNoticeOpen" test-id="match-beta-notice" :title="BETA_NOTICE_TITLE" :text="BETA_NOTICE_TEXT"
+      :buttons="[{ label: BETA_NOTICE_BUTTON, primary: true }]" @choose="acknowledgeMatchBetaNotice" />
+    <MatchNoticeCard v-else-if="switchWatcherCard && !reportOpen" test-id="switch-watcher-card" :title="switchWatcherCard.title"
+      :text="switchWatcherCard.text" :buttons="[{ label: 'Report', primary: true }, { label: 'Not now', cancel: true }]"
+      :escape-index="1" @choose="answerSwitchWatcherCard" />
 
     <div v-if="createGameOpen" class="modal-backdrop cg-backdrop" @click.self="createGameOpen = false">
       <div class="cg-menu">

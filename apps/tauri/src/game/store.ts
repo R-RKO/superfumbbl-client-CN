@@ -619,6 +619,12 @@ const legacyState = reactive({
    *  but presentation consumers must update when a plan starts, is replaced, or watchdog-flushes without a
    *  simultaneous game-model mutation. */
   plannerRevision: 0,
+  /** Owner 10-15 declaration watcher: the "Unexpected player switch" card (once per game; Report prefills the bug
+   *  report with the occurrence). Null = nothing to ask. */
+  switchWatcherCard: null as { title: string; text: string; report: string } | null,
+  /** Owner 10-15 (Astra r7): bumped whenever the pending-cancel state changes, so the view's movement surface (which
+   *  stands down while our cancel is unanswered) re-derives the moment a No on confirmEndAction re-opens it. */
+  cancelRevision: 0,
   /** #107/#119: move-trail CLEAR pulse — bumped at the received turnEnd frame (the server IS the signal, not a timer — ⚖ Voss); view calls renderer.clearMoveTrail(). Side-agnostic. */
   moveTrailClearSeq: 0,
   /** Owner 10-05 ("let's pin that die"): a reroll was ACCEPTED and its result is staged behind the reroll beat /
@@ -9103,6 +9109,9 @@ function applyFrameContents(frame: QueuedFrame) {
     if (turnKey !== priorBoardTurnKey) {
       // o66r #9 (activation-state root): NULL srvActingId + activePlayerId at each team-turn boundary — a stale carry-over caused phantom declares, #4/#6/#10/#13. Nulled here to WIN over the recompute above.
       srvActingId = null;
+      declarationAwaitingEcho = false;
+      setCancelInFlight(false); serverClearedActor = true; declarationAwaitingEchoFor = null; // P0 #2: a new team turn, no activation
+      wakeActorClearWaiters(); // Astra r7 F2: a turn boundary is an actor clear too (each waiter re-checks its own validity)
       state.activePlayerId = null;
       // Owner 07-04: flush unresolved pushes per turn — a dialog/turnover otherwise strands a pending entry + hanging arrow.
       pendingPushes.clear();
@@ -11878,6 +11887,8 @@ function resetPlayback() {
   blitzDriving = false; blitzAttackerId = null; // C2/C7: fresh game — drop any in-flight blitz-drive guard
   maximumCarnageInstanceKey = ''; maximumCarnageConfirmedInstanceKey = ''; state.maximumCarnageTargeting = false; state.actionNotice = null; clearBlockWatch(); releaseChainsawDeclare(); chainsawBlockSent = null; // g315 / row #334: fresh game — clear action notices + their state-entry key, then the block debounce/watchdog
   srvActingId = null; srvActingAction = null; // g330: fresh game — reset the receive-time acting-player mirror
+  state.switchWatcherCard = null; // Astra r12: an unanswered watcher card never carries into another game
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear();
   pendingWideRailDeclare = null; acknowledgedWideRailDeclare = null; completedWideRailDeclare = null;
   deferredStandUpWideRail = null; // client-owned activation elections never cross connection/game boundaries
   clearShotToNothingElection(); // post-Pass client election never crosses connection/game boundaries
@@ -12280,6 +12291,78 @@ function captureFoulAppearanceFrameContext(
 // Track acting-player acknowledgements at receive time so presentation lag cannot delay commands.
 let srvActingId: string | null = null;
 let srvActingAction: string | null = null;
+/** Owner 10-15 (declare on action, not on click): an accepted clientActingPlayer naming a player whose
+ *  actingPlayerSetPlayerId echo has not been received yet. With it, srvActingId and the model's acting player tell
+ *  endActivation whether there is a server-side activation to cancel at all: a deselect of a merely selected player
+ *  sends nothing (upstream never sends the null cancel from SELECT_PLAYER). */
+let declarationAwaitingEcho = false;
+/** The player that in-flight declaration names (Astra r2: a switch must cancel it before declaring another player). */
+let declarationAwaitingEchoFor: string | null = null;
+let declarationAwaitingEchoAction: string | null = null;
+/** Owner 10-15 P0 #2 ("Client should only ever be sending a single cancel"): our null cancel was accepted and the server
+ *  has not cleared the actor yet. While set, no further cancel goes out and no other player is declared. Cleared ONLY by
+ *  the server's answer: actingPlayerSetPlayerId null, a snapshot, a team-turn boundary, or a server dialog opened in
+ *  reply (an unused Hypnotic Gaze's confirmEndAction: a No keeps the activation, and a later End is a new request).
+ *  A delayed non-null echo of the declaration being cancelled does NOT clear it (Astra r2 F4). Upstream sends the null
+ *  declaration only as the one change-of-mind cancel of a declared acting player (LogicModule.deselectActingPlayer).
+ *  JLeav g1953483 had back-to-back cancel pairs: two at turn start with no activation at all, and one after the
+ *  server had already echoed the activation's end. */
+let cancelInFlight = false;
+/** The server said there is no activation (null echo, team-turn boundary, snapshot without an actor) and nothing was
+ *  declared since: a presentation-paced model still showing the old actor is not an activation to cancel. */
+let serverClearedActor = false;
+/** The dialog object standing when the cancel went out: only a NEW server question answers that cancel. */
+let cancelInFlightDialog: unknown = null;
+/** Owner 10-15 DECLARATION WATCHER (detect only, never alters a send): occurrences of a declaration for player B that
+ *  went out while a different player A was still the server's acting player or still awaiting the echo of our own
+ *  declaration, with no cancel sent and answered in between. Every occurrence is logged (bug reports carry them); the
+ *  coach is asked to report ONCE per game, and never again in that game once Report was pressed. */
+let declarationWatcherOccurrences = 0;
+/** Games (by id) in which the coach was already asked - once per game for the whole session (Astra r12). */
+const declarationWatcherAskedGames = new Set<string>();
+type DeclarationSwitch = { live: string; liveAction: string; next: string; nextAction: string };
+/** Judged BEFORE the send (the in-flight state still describes the previous declaration); reported only once the
+ *  transport accepted it (Astra r12: a failed send is no occurrence). Both the server's actor and our own in-flight
+ *  declaration are checked - neither masks the other. */
+function detectDeclarationSwitch(cmd: Record<string, unknown>): DeclarationSwitch | null {
+  if (cmd.netCommandId !== NetCommandId.CLIENT_ACTING_PLAYER || cmd.playerId == null || !play.active) return null;
+  const next = String(cmd.playerId);
+  const nextAction = String(cmd.playerAction ?? '?');
+  if (srvActingId && srvActingId !== next) return { live: srvActingId, liveAction: String(srvActingAction ?? '?'), next, nextAction };
+  if (declarationAwaitingEcho && declarationAwaitingEchoFor && declarationAwaitingEchoFor !== next) {
+    return { live: declarationAwaitingEchoFor, liveAction: String(declarationAwaitingEchoAction ?? '?'), next, nextAction };
+  }
+  return null; // nothing live, or a same-player re-declaration (a change of action)
+}
+function reportDeclarationSwitch(found: DeclarationSwitch): void {
+  declarationWatcherOccurrences += 1;
+  const detail = `switch from ${found.live}/${found.liveAction} to ${found.next}/${found.nextAction} without a cancel`;
+  log('system', `⚠ declaration watcher: ${detail} [#${declarationWatcherOccurrences}]`);
+  const gameKey = String(game.value?.gameId ?? '');
+  if (declarationWatcherAskedGames.has(gameKey)) return; // once per game (and never again after Report)
+  declarationWatcherAskedGames.add(gameKey);
+  state.switchWatcherCard = {
+    title: 'Unexpected player switch',
+    text: 'The client switched players without a cancel. Please submit a bug report so we can fix it.',
+    report: `Declaration watcher: ${detail}`,
+  };
+}
+/** The one rule for a null cancel: an activation of OURS exists on the server (receive-time mirror; the applied model
+ *  only while the server has not cleared it) or a declaration of ours is in flight, and no cancel is in flight. */
+/** The one writer of the pending-cancel state outside test resets: every change bumps state.cancelRevision. */
+function setCancelInFlight(value: boolean): void {
+  if (cancelInFlight === value) return;
+  cancelInFlight = value;
+  state.cancelRevision += 1;
+}
+function cancelPermitted(): boolean {
+  const g = game.value;
+  if (!g || cancelInFlight) return false;
+  const mine = myPlayIds(g);
+  const modelId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return (!!srvActingId && mine.has(srvActingId)) || declarationAwaitingEcho
+    || (!serverClearedActor && !!modelId && mine.has(modelId));
+}
 
 /** Spec S15B: the coach explicitly chose a Big Guy's Activate row (a `move` declaration). While it is live and the
  *  mover has not acted, End Activation sends removeConfusion (the server rolls the negatrait and ends the activation)
@@ -12659,6 +12742,9 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
       explicitPlayerId = true;
       explicitPlayerIdNonNull = ch.modelChangeValue != null;
       srvActingId = (ch.modelChangeValue as string | null) ?? null;
+      declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; // the server answered (owner 10-15)
+      if (srvActingId == null) { setCancelInFlight(false); serverClearedActor = true; wakeActorClearWaiters(); } // P0 #2: the activation is over
+      else serverClearedActor = false; // (a delayed echo of a declaration being cancelled keeps cancelInFlight: Astra r2 F4)
       if (pendingWideRailDeclare && srvActingId === pendingWideRailDeclare.playerId) {
         pendingWideRailDeclare.sawPlayerIdEcho = true;
       }
@@ -12733,6 +12819,9 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   const ap = g?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
   srvActingId = ap?.playerId ?? null;
   srvActingAction = ap?.playerAction ?? null;
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; // a snapshot is the server's whole answer (owner 10-15)
+  setCancelInFlight(false); serverClearedActor = !srvActingId; // P0 #2
+  if (!srvActingId) wakeActorClearWaiters();
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null; // never rebuilt from a snapshot (first action / reconnect)
   foulChoice = null; // S42: same — a snapshot cannot say which Foul row the coach picked
   pendingWideRailDeclare = null;
@@ -12803,29 +12892,60 @@ function watchActivationTook(playerId: string, label: string) {
   }, 700);
 }
 // End the prior moving activation before a plain block; StepInitMoving accepts CLIENT_BLOCK only for Blitz.
-function whenPriorActivationEnded(attackerId: string, cb: () => void, maxWaitMs = 900) {
-  // Clean state (no live activation) or re-declaring on the SAME player → nothing to end, go now.
-  if (srvActingId == null || srvActingId === attackerId) { cb(); return; }
+let priorActivationEndSeq = 0;
+function whenPriorActivationEnded(attackerId: string, cb: () => void, maxWaitMs = 2500) {
+  // The activation to end: the server's actor, else a declaration of ours still in flight (Astra r2 F1).
+  const prior = srvActingId ?? (declarationAwaitingEcho ? declarationAwaitingEchoFor : null);
+  // Clean state (no live activation, no cancel awaiting its answer) or re-declaring on the SAME player → go now.
+  if ((!prior || prior === attackerId) && !cancelInFlight) { priorActivationEndSeq += 1; cb(); return; }
+  // Owner 10-15 P0 #3 / Astra r2 F3: ONE pending switch. A newer request supersedes an older one still waiting, so a
+  // repeated pick never declares twice after the one cancel.
+  const seq = ++priorActivationEndSeq;
   gazeEndRequest = null; // this acting-null is not the coach's confirmed End: a Yes given for an earlier one is never spent on it
-  sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
+  // Owner 10-15 P0 #2 / #3: upstream's switch is declare A -> cancel -> declare B. ONE cancel: when one is already in
+  // flight this waits for the server's answer instead of sending a second.
+  if (prior && prior !== attackerId && cancelPermitted()) sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
   const start = Date.now();
   const tick = () => {
-    if (srvActingId == null || Date.now() - start >= maxWaitMs) { cb(); return; }
+    if (seq !== priorActivationEndSeq) return; // superseded
+    // Astra r2 F2: declare only once the server has CLEARED the actor (no cancel or declaration still unanswered).
+    if (srvActingId == null && !declarationAwaitingEcho && !cancelInFlight) { cb(); return; }
+    // P0 #3: the bounded fallback REFUSES (never declares over a live activation).
+    if (Date.now() - start >= maxWaitMs) {
+      const text = 'Not declared: the previous activation did not end in time. Try again.';
+      log('system', `⚠ ${text}`);
+      state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+      return;
+    }
     scheduleGameTimeout(tick, 20);
   };
   tick();
 }
 
+/** Astra r7 F2: continuations waiting for the server to clear the acting player. Woken by the clear itself (the null
+ *  actingPlayerSetPlayerId echo, a snapshot without an actor, a team-turn boundary), never by a short poll. */
+const actorClearWaiters = new Set<() => void>();
+function wakeActorClearWaiters(): void {
+  if (actorClearWaiters.size === 0) return;
+  const waiters = [...actorClearWaiters];
+  actorClearWaiters.clear();
+  for (const waiter of waiters) waiter();
+}
 /** Wait for an already-sent cancellation/refund to clear the receive-time actor. Unlike
- * whenPriorActivationEnded this never sends a second generic cancel and never fires on timeout. */
-function afterActivationCleared(cb: () => void, maxWaitMs = 1500) {
-  const start = Date.now();
-  const tick = () => {
-    if (srvActingId == null) { cb(); return; }
-    if (Date.now() - start >= maxWaitMs) return;
-    scheduleGameTimeout(tick, 20);
-  };
-  tick();
+ * whenPriorActivationEnded this never sends a second generic cancel. The wait wakes on the clear (Astra r7 F2: a late
+ * echo used to lose the continuation silently after 1.5 s); only a server that never answers within `maxWaitMs`
+ * drops it, and then it says so instead of disappearing. */
+function afterActivationCleared(cb: () => void, maxWaitMs = 30000, onGiveUp?: () => void) {
+  if (srvActingId == null) { cb(); return; }
+  let done = false;
+  const waiter = () => { if (done) return; done = true; cb(); };
+  actorClearWaiters.add(waiter);
+  scheduleGameTimeout(() => {
+    if (done) return;
+    done = true;
+    actorClearWaiters.delete(waiter);
+    onGiveUp?.();
+  }, maxWaitMs);
 }
 function blitzEndConfirmationRequired(g: GameJson): boolean {
   const turnMode = String(g.turnMode ?? '');
@@ -13466,6 +13586,9 @@ function plannerStart(input: {
   if (!settings.order66 && !onTheBall) return false;
   const { playerId, actKind } = input;
   if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
+  // Owner 10-15 P0 #3: no plan starts while our cancel is unanswered - the previous activation still stands on the
+  // server, and a plan's declaration must follow its clear (the view's surfaces stand down meanwhile).
+  if (cancelInFlight && plannerActingId() !== playerId) { log('system', 'ignored: the previous activation is still being cancelled'); return false; }
   // Match the direct action offer: a fresh Blitz plan is legal only while the server's team-turn flag is clear.
   // `blitzWalk` is the continuation of an already-declared Blitz and must remain available after the flag flips.
   if (actKind === 'blitz') {
@@ -13964,7 +14087,7 @@ export function installProFailureSplashTestHarness(
   const priorSplash = state.rerollSplash;
   const priorSkillUsed = state.skillUsed;
   clearCinematics(true);
-  game.value = structuredClone(fixture);
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.half = Math.max(1, Number(game.value.half ?? 0));
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
@@ -14029,6 +14152,10 @@ export function installMovePlannerTestHarness(
     }>,
   ): void;
   apply(changes: Record<string, unknown>[], reports?: Record<string, unknown>[]): void;
+  /** Owner 10-15: a full receive - the receive-time acting mirror (enqueueSync's trackActingPlayer), then the apply. */
+  receive(changes: Record<string, unknown>[], reports?: Record<string, unknown>[]): void;
+  /** Owner 10-15: the production send boundary (sendCommand) with a hand-made command (declaration watcher tests). */
+  sendRaw(command: Record<string, unknown>): boolean;
   fail(playerId: string, reportId: 'dodgeRoll' | 'goForItRoll' | 'pickUpRoll'): void;
   failAndFall(playerId: string, reportId: 'dodgeRoll' | 'goForItRoll', injuryType: 'dropDodge' | 'dropGfi'): void;
   failAndEndActivation(playerId: string, reportId: 'dodgeRoll' | 'goForItRoll' | 'pickUpRoll'): void;
@@ -14065,7 +14192,9 @@ export function installMovePlannerTestHarness(
   state.movementIntent = null;
   movementRttEwmaMs = 90;
   lastAppliedCommandNr = -1;
-  game.value = fixture;
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear();
+  declarationWatcherAskedGames.clear(); state.switchWatcherCard = null;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveSetup = true;
@@ -14121,6 +14250,18 @@ export function installMovePlannerTestHarness(
           reportList: { reports },
         },
       });
+    },
+    sendRaw: (command) => sendCommand(command),
+    receive(changes, reports = []) {
+      isolatedPresentationTestCommandNr += 1;
+      const cmd = {
+        netCommandId: NetCommandId.SERVER_MODEL_SYNC,
+        commandNr: isolatedPresentationTestCommandNr,
+        modelChangeList: { modelChangeArray: changes },
+        reportList: { reports },
+      };
+      trackActingPlayer(cmd);
+      applyFrame({ receivedAt: Date.now(), cmd });
     },
     fail(playerId, reportId) {
       confirmFailedMovementIntent([{ reportId, playerId, successful: false }]);
@@ -14185,6 +14326,7 @@ export function installMovePlannerTestHarness(
       plannerClearAbort();
       plannerSet(null);
       srvActingId = null; srvActingAction = null; // mirrorActing seam must not leak across tests
+      declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear();
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active;
@@ -14227,7 +14369,7 @@ export function installFoulAppearanceBlockWatchTestHarness(
   const priorNotice = state.actionNotice;
   const logStart = state.log.length;
   clearBlockWatch();
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = true;
@@ -14309,7 +14451,7 @@ export function installBlitzTargetLockTestHarness(
   blockInFlight = false;
   blitzDriving = false;
   blitzAttackerId = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'owner'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -14317,7 +14459,7 @@ export function installBlitzTargetLockTestHarness(
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'spectator';
   interactiveSetup = true;
-  srvActingId = String(fixture.actingPlayer?.playerId ?? '') || null;
+  srvActingId = String(fixture.actingPlayer?.playerId ?? '') || null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   srvActingAction = String(fixture.actingPlayer?.playerAction ?? '') || null;
   session = {
     send(command: Record<string, unknown>) {
@@ -14341,7 +14483,7 @@ export function installBlitzTargetLockTestHarness(
       interactiveSetup = priorInteractiveSetup;
       lastAppliedCommandNr = priorCommandNr;
       sentBlitzTargetOccurrence = priorSentOccurrence;
-      srvActingId = priorSrvId;
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       blockInFlight = priorBlockInFlight;
       blitzDriving = priorBlitzDriving;
@@ -14358,6 +14500,8 @@ export function installGazeIntentTestHarness(
 ): {
   declare(playerId: string): void;
   echoDeclared(playerId: string): void;
+  /** Owner 10-15: the server's answer to a cancel (actingPlayerSetPlayerId null, received and applied). */
+  echoEnded(): void;
   /** A later applied frame: re-run the intent lifecycle over the model as it stands. */
   echoModel(): void;
   /** Switch the UI mode mid-activation (the production settings write; the store's watcher converts the intent). */
@@ -14388,7 +14532,7 @@ export function installGazeIntentTestHarness(
   const priorMoveOfferRevision = moveOfferRevision;
   plannerClearAbort();
   plannerSet(null);
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = true;
@@ -14403,6 +14547,11 @@ export function installGazeIntentTestHarness(
     setUiMode(mode) { settings.uiMode = mode; },
     armTarget: (victimId) => gameStore.armGazeTarget(victimId),
     armedVictim: () => gameStore.armedGazeVictimId(),
+    echoEnded() {
+      trackActingPlayer({ modelChangeList: { modelChangeArray: [{ modelChangeId: 'actingPlayerSetPlayerId', modelChangeKey: null, modelChangeValue: null }] } });
+      game.value!.actingPlayer = { ...(game.value!.actingPlayer ?? {}), playerId: null, playerAction: null } as GameJson['actingPlayer'];
+      gazeIntentOnModelApplied();
+    },
     echoDeclared(playerId) {
       game.value!.actingPlayer = { ...(game.value!.actingPlayer ?? {}), playerId, playerAction: 'gazeMove' } as GameJson['actingPlayer'];
       seedMoveOfferSnapshot(playerId);
@@ -14515,7 +14664,7 @@ export function installApothecaryTestHarness(
   visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear();
   playback.catchingUp = false;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -14655,7 +14804,7 @@ export function installSelectSkillTestHarness(
   state.selectSkill = null;
   selectPositionHandledInstanceKey = null;
   state.selectPosition = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -14745,7 +14894,7 @@ export function installPrayerPresentationTestHarness(
   state.playerPick = null;
   state.rockThrow = null;
   prayerDialogDrainArms.clear();
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat !== 'spectator';
   play.coach = seat === 'home' || seat === 'classicHome'
@@ -14842,7 +14991,7 @@ export function installWizardTargetConfirmationTestHarness(
   const teamId = fixture.teamHome.teamId;
   fixture.turnMode = 'wizard';
   fixture.dialogParameter = { dialogId: 'wizardSpell', teamId };
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'spectator' ? 'spectator' : String(fixture.teamHome.coach ?? 'home-coach');
   lastAppliedCommandNr = commandNr;
@@ -14932,7 +15081,7 @@ export function installSkillUseClearTestHarness(
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null;
   visibleSkillDecisionProjection = createSkillDecisionProjection();
   visibleSkillDialog = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -15012,7 +15161,7 @@ export function installWatchOutToastTestHarness(
   const priorCommandNr = lastAppliedCommandNr;
   const priorAnnouncements = new Set(watchOutAnnouncedPlayers);
 
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat === 'home' || seat === 'away';
   play.coach = seat === 'home'
@@ -15081,7 +15230,7 @@ export function installBlitzTokenReplayTestHarness(fixture: GameJson): {
   clearCinematics(true);
   visibleSkillDecisionProjection = createSkillDecisionProjection(); // frames carrying reports start from a clean skill trail
   state.hmpScatterMarks = null;
-  game.value = structuredClone(fixture);
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   replay.active = true;
   playback.catchingUp = true;
   let commandNr = 0;
@@ -15140,7 +15289,7 @@ export function installConfirmedMovementDrainTestHarness(
   const priorCommandNr = lastAppliedCommandNr;
 
   resetPresentation();
-  game.value = structuredClone(fixture);
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.half = Math.max(1, Number(game.value.half ?? 0));
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
@@ -15228,7 +15377,7 @@ export function installTouchdownPacingTestHarness(
   const priorInteractive = interactiveReRolls;
   resetPresentation();
   resetPlayback();
-  game.value = structuredClone(fixture);
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   if (options.uiMode) settings.uiMode = options.uiMode;
   if (options.interactive !== undefined) interactiveReRolls = options.interactive;
   play.active = mode === 'play';
@@ -15306,7 +15455,7 @@ export function installBlockPartialTestHarness(
   followupHandled.clear();
   state.blockPartial = null;
   state.multiBlockResolution = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -15420,7 +15569,7 @@ export function installMultiBlockTargetDialogTestHarness(
   clearAnsweredDialogInstance();
   clearMultiBlockTargetDialogs();
   clearUnknownCall(); unknownDialogInstance = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home' ? String((fixture.teamHome as { coach?: string }).coach ?? '')
     : seat === 'away' ? String((fixture.teamAway as { coach?: string }).coach ?? '') : 'multi-target-spectator';
@@ -15507,7 +15656,7 @@ export function installInterceptionTestHarness(
   liveInterceptionDialog = null;
   liveInterceptionCommandNr = 0;
   interceptionSkillElection = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat !== 'spectator';
   // spectator = a coach on NEITHER roster (myPlayTeam's strict non-participant result, play.active false).
@@ -15667,7 +15816,7 @@ export function installPlayerChoiceTestHarness(
   clearAnsweredDialogInstance();
   state.playerPick = null;
   state.bloodlust = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = seat !== 'spectator';
@@ -15839,7 +15988,7 @@ export function installGoredBlitzTestHarness(
   followupHandled.clear();
   state.blitzBlockChoice = null;
   blockInFlight = false;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   (game.value as { homePlaying?: boolean }).homePlaying = true;
@@ -15958,14 +16107,14 @@ export function installChainsawDeclareTestHarness(
   state.blitzBlockChoice = null;
   state.actionNotice = null;
   blockInFlight = false;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = true;
   play.coach = seat === 'opponent'
     ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
     : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  srvActingId = null;
+  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   srvActingAction = null;
   session = { send } as unknown as GameSession;
   // The first frame of a game id is a fresh-game boundary (resetPlayback); take it now, so the test's frames are mid-game.
@@ -16003,7 +16152,7 @@ export function installChainsawDeclareTestHarness(
       state.maximumCarnageTargeting = false;
       blockInFlight = priorBlockInFlight;
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvId;
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       session = priorSession;
       game.value = priorGame;
@@ -16023,7 +16172,7 @@ export function installStarUseSkillTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat === 'player' || seat === 'opponent';
   const actingId = String(fixture.actingPlayer?.playerId ?? '');
   const actingTeam = fixture.teamHome.playerArray.some((player) => player.playerId === actingId)
@@ -16097,14 +16246,14 @@ export function installWideRailActivationTestHarness(
   const priorPendingRailCommands = new Map(pendingRailCommands);
   const priorCommandNr = lastAppliedCommandNr;
   lastAppliedCommandNr = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'player'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
     : seat === 'opponent'
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'watcher-not-on-either-roster';
-  srvActingId = null;
+  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   srvActingAction = null;
   pendingWideRailDeclare = null;
   acknowledgedWideRailDeclare = null;
@@ -16218,7 +16367,7 @@ export function installWideRailActivationTestHarness(
       game.value = priorGame;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
-      srvActingId = priorSrvId;
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       pendingWideRailDeclare = priorPendingWideRailDeclare;
       acknowledgedWideRailDeclare = priorAcknowledgedWideRailDeclare;
@@ -16273,7 +16422,7 @@ export function installStarDeclareTestHarness(
   const priorPendingShotToNothingDeclare = pendingShotToNothingDeclare;
   const priorAcknowledgedShotToNothingDeclare = acknowledgedShotToNothingDeclare;
   const priorSkillChoice = state.skillChoice;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat === 'player';
   play.coach = seat === 'player'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -16310,7 +16459,7 @@ export function installStarDeclareTestHarness(
     wideUse(ruleId) { gameStore.useWideRailActivationRule(ruleId); },
     setInteractive(on) { interactiveReRolls = on; },
     dispose() {
-      srvActingId = priorSrvId;
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       pendingWideRailDeclare = priorPendingWideRailDeclare;
       acknowledgedWideRailDeclare = priorAcknowledgedWideRailDeclare;
@@ -16377,7 +16526,7 @@ export function installStarTerminalTrioTestHarness(
   const priorMoveOfferOccurrences = new Map(moveOfferOccurrences);
   const priorEndTurnInFlight = endTurnInFlight;
   const priorEndTurnInFlightTurnKey = endTurnInFlightTurnKey;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   let currentSeat = seat;
   const applySeat = () => {
     const home = currentSeat === 'player' || currentSeat === 'home';
@@ -16393,7 +16542,7 @@ export function installStarTerminalTrioTestHarness(
     interactiveSetup = play.active;
   };
   applySeat();
-  srvActingId = null; // clean slate: declares fire immediately (whenPriorActivationEnded fast path)
+  srvActingId = null; // clean slate: declares fire immediately (whenPriorActivationEnded fast path) declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   settings.order66 = true;
   clearPlayerPick();
   clearYesNo();
@@ -16431,7 +16580,7 @@ export function installStarTerminalTrioTestHarness(
       game.value = priorGame;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
-      srvActingId = priorSrvActingId;
+      srvActingId = priorSrvActingId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       state.demoMode = priorDemoMode;
@@ -16493,7 +16642,7 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   state.bncScatter = null;
   liveReRollDialog = null;
   liveReRollOfferEpoch = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   settings.order66 = false;
   play.active = true;
@@ -16562,7 +16711,7 @@ export function installConcedeConfirmTestHarness(
   const priorAppliedFrameSeq = state.appliedFrameSeq;
   const priorYesNo = state.yesNo;
   const priorYesNoResolver = yesNoResolver;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveReRolls = true;
@@ -16643,7 +16792,7 @@ export function installPassPickupReRollPlannerTestHarness(
   state.reRollPrompt = null;
   liveReRollDialog = null;
   liveReRollOfferEpoch = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -16731,7 +16880,7 @@ export function installServerAddPlayerTestHarness(
   const priorSetup = state.setupPhase;
   const priorPuff = state.addPlayerPuff;
 
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = mode === 'player';
   play.coach = mode === 'player' ? String((fixture.teamHome as { coach?: string }).coach ?? '') : '';
   play.autoPregame = true;
@@ -16828,12 +16977,13 @@ export function installSetupErrorRecoveryTestHarness(
   const priorSrvActing = { id: srvActingId, action: srvActingAction };
   const priorBigGuyActivate = { intent: bigGuyActivateIntent, latch: bigGuyRollEndLatch };
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null;
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   const logStart = state.log.length;
 
   pregameHandled.clear();
   clearAnsweredDialogInstance();
   lastAppliedCommandNr = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home'
     ? String((fixture.teamHome as { coach?: string }).coach ?? '')
@@ -16895,7 +17045,7 @@ export function installSetupErrorRecoveryTestHarness(
       clearAnsweredDialogInstance();
       if (priorAnsweredKey) latchAnsweredDialogInstance(priorAnsweredKey, priorAnsweredRef);
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvActing.id; srvActingAction = priorSrvActing.action;
+      srvActingId = priorSrvActing.id; srvActingAction = priorSrvActing.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       bigGuyActivateIntent = priorBigGuyActivate.intent; bigGuyRollEndLatch = priorBigGuyActivate.latch;
       session = priorSession;
       game.value = priorGame;
@@ -16943,7 +17093,7 @@ export function installIllCarryYouTestHarness(
   pregameHandled.clear();
   state.playerPick = null;
   state.squarePick = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.autoPregame = true;
   play.coach = seat === 'player'
@@ -17021,7 +17171,7 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
   const priorTurnToastKey = turnToastKey;
   const priorTurnoverArmed = turnoverArmed;
   const priorTurnoverArmedAfterInjury = turnoverArmedAfterInjury;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   state.turnStart = null;
   state.turnToast = null;
   state.turnover = null;
@@ -17193,7 +17343,7 @@ export function installSwoopCommandTestHarness(
   const priorChoice = state.skillChoice;
   const priorPendingRailCommands = new Map(pendingRailCommands);
   pendingRailCommands.clear();
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   const actingId = String(fixture.actingPlayer?.playerId ?? '');
   const actingIsHome = fixture.teamHome.playerArray.some((player) => player.playerId === actingId);
@@ -17259,7 +17409,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   injuryQueue.length = 0;
   injuryPlaying = false; injuryPresenting = null;
   pendingFireballBeats = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = false;
@@ -17340,7 +17490,7 @@ export function installPassPacingTestHarness(fixture: GameJson): {
 
   clearPassPacing(true);
   const next = structuredClone(fixture);
-  game.value = next;
+  game.value = next; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   const throwerId = String(next.teamHome.playerArray[0]?.playerId ?? '');
   const interceptorId = String(next.teamAway.playerArray[0]?.playerId ?? '');
   const place = (playerId: string, coordinate: [number, number]) => {
@@ -17475,7 +17625,7 @@ export function installCoinPresentationTestHarness(
   };
 
   resetCoinQueue(false);
-  game.value = structuredClone(fixture);
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   settings.clickDismissCinematics = clickDismiss;
   settings.debugLog = true;
   playback.catchingUp = false;
@@ -17602,7 +17752,7 @@ export function installKickoffPresentationTestHarness(
   // This keeps the local-aim assertion on the real resolveKickPlacement/send lock.
   if (seat === 'home') fixture.homePlaying = true;
   else if (seat === 'away') fixture.homePlaying = false;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -17711,7 +17861,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
   pendingFollowup = null;
   armourAfterFollow = null;
   lastPushFrom.clear();
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = false; // spectator/passive seat — the toast path
   settings.order66 = false;
   state.armorDice = null;
@@ -17769,7 +17919,7 @@ export function installSppPacingTestHarness(fixture: GameJson): {
   const priorInjury = state.injurySplash;
   clearCinematics(true);
   clearAllGameTimeouts();
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = false;
   playback.catchingUp = false;
   return {
@@ -17838,7 +17988,7 @@ export function installSendOffTestHarness(
   const priorSendOffKey = sendOffKey;
   const priorSendOffAnsweredKey = sendOffAnsweredKey;
 
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = seat === 'home' || seat === 'away';
@@ -18195,7 +18345,7 @@ export function installPuntToCrowdTestHarness(
   yesNoResolver = null;
   clearUnknownCall(); unknownDialogInstance = 0;
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   const actingId = askedPlayerId ?? String(fixture.actingPlayer?.playerId ?? '');
   const actorHome = fixture.teamHome.playerArray.some((player) => player.playerId === actingId);
   const ownerTeam = actorHome ? fixture.teamHome : fixture.teamAway;
@@ -18275,13 +18425,13 @@ export function installUnknownDialogFrameTestHarness(
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
   interactiveSetup = true;
   lastAppliedCommandNr = 0;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   const actorHome = fixture.teamHome.playerArray.some((p) => p.playerId === String(fixture.actingPlayer?.playerId ?? ''));
   const ownerTeam = actorHome ? fixture.teamHome : fixture.teamAway;
   play.active = true;
   play.coach = String((ownerTeam as { coach?: string }).coach ?? '');
-  srvActingId = null; srvActingAction = null;
+  srvActingId = null; srvActingAction = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   session = { send(command: Record<string, unknown>) { if (send(command) === false) throw new Error('test transport refusal'); } } as unknown as GameSession;
   let nr = 0;
   const sync = (changes: Record<string, unknown>[]) => applyFrame({
@@ -18300,7 +18450,7 @@ export function installUnknownDialogFrameTestHarness(
       endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
       interactiveSetup = priorInteractive;
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvId; srvActingAction = priorSrvAction;
+      srvActingId = priorSrvId; srvActingAction = priorSrvAction; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -18347,7 +18497,7 @@ export function installFoulChoiceTestHarness(
   const priorSrv = { id: srvActingId, action: srvActingAction };
   pendingRailCommands.clear();
   state.log = [];
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.homePlaying ? fixture.teamHome : fixture.teamAway as { coach?: string }).coach ?? '');
   session = {
@@ -18406,7 +18556,7 @@ export function installFoulChoiceTestHarness(
       pendingRailCommands.clear();
       for (const [rail, pending] of priorPending) pendingRailCommands.set(rail, pending);
       state.log = priorLog;
-      srvActingId = priorSrv.id; srvActingAction = priorSrv.action;
+      srvActingId = priorSrv.id; srvActingAction = priorSrv.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
       session = priorSession;
       game.value = priorGame;
       settings.order66 = priorOrder66;
@@ -18434,7 +18584,7 @@ export function installFoulTargetTestHarness(
   const priorLog = [...state.log];
   pendingRailCommands.clear();
   state.log = [];
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.homePlaying ? fixture.teamHome : fixture.teamAway as { coach?: string }).coach ?? '');
   session = {
@@ -18636,6 +18786,25 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     console.warn('[play-gate] dropped outbound command:', cmd.netCommandId);
     return false;
   }
+  // Owner 10-15 P0 #2: the backstop for every caller - a null cancel goes out only under cancelPermitted() (one per
+  // activation, never with no activation of ours on the server).
+  // Astra r3 F1: while our cancel is unanswered nothing acts for the activation being cancelled (a confirm that raced
+  // the switch must not walk / block / throw for it). Dialog answers carry no actingPlayerId and still go out.
+  // Astra r4 F1: and no declaration goes out over it (a Jump / Hail Mary toggle re-sends clientActingPlayer); the
+  // queued switch declaration waits in whenPriorActivationEnded until the server clears the actor.
+  if (cancelInFlight && play.active && (cmd.actingPlayerId != null
+      || (cmd.netCommandId === NetCommandId.CLIENT_ACTING_PLAYER && cmd.playerId != null))) {
+    observeOutgoingShadow(cmd, 'dropped');
+    log('system', `play: ${String(cmd.netCommandId)} not sent - that activation is being cancelled`);
+    return false;
+  }
+  if (cmd.netCommandId === NetCommandId.CLIENT_ACTING_PLAYER && cmd.playerId == null && play.active && !cancelPermitted()) {
+    observeOutgoingShadow(cmd, 'dropped');
+    log('system', cancelInFlight
+      ? 'play: cancel already sent - not sent again until the server answers'
+      : 'play: nothing declared - no cancel sent');
+    return false;
+  }
   // #173: no ACTIONS while an opponent choice is pending (or during the opponent's turn/setup). Answers to my own live dialog and Call Time-Out still go out — see commandActionClass + actionSurfaceLock.
   if (!commandPermittedByLock(cmd)) {
     observeOutgoingShadow(cmd, 'dropped');
@@ -18683,8 +18852,20 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
   try {
     verboseTee('out', outgoing); // owner 2026-07-07: tee outbound commands actually sent (wire log)
     if (!session) return false;
+    const declarationSwitch = detectDeclarationSwitch(cmd); // owner 10-15: detect only - the command goes out unchanged
     session.send(outgoing as never);
     emittedCommandCount += 1; // Astra pass 3: only after the transport accepted it (past every late refusal above)
+    if (declarationSwitch) reportDeclarationSwitch(declarationSwitch); // after the count: a throwing report must not lose it
+    // Owner 10-15: a declaration is in flight until its acting-player echo; an accepted null cancel answers it and
+    // latches (P0 #2: one cancel per activation); a new declaration re-opens it.
+    if (cmd.netCommandId === NetCommandId.CLIENT_ACTING_PLAYER) {
+      declarationAwaitingEcho = cmd.playerId != null;
+      declarationAwaitingEchoFor = cmd.playerId != null ? String(cmd.playerId) : null;
+      declarationAwaitingEchoAction = cmd.playerId != null ? String(cmd.playerAction ?? '') : null;
+      setCancelInFlight(cmd.playerId == null);
+      cancelInFlightDialog = cmd.playerId == null ? (game.value?.dialogParameter ?? null) : null;
+      if (cmd.playerId != null) serverClearedActor = false;
+    }
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
     // send). Always-allowed commands (concede, time-out call, chat, ping ...) say nothing about the activation.
@@ -21354,6 +21535,10 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   if (dlg === 'confirmEndAction' && (!dp?.teamId || dp.teamId === myTeamId)) {
     const instanceKey = dialogInstanceKey(g);
     const instanceRef = g.dialogParameter as object | null;
+    // Owner 10-15 P0 #2 / Astra r2 F6 + r5 F1: the server answered our cancel with this question. A No keeps the
+    // activation going, so a later End is a new change-of-mind cancel; a Yes leaves the cancel in flight until the
+    // server clears the actor (never two cancels in a row).
+    const reopenCancelOnNo = () => { if (cancelInFlight && instanceRef !== cancelInFlightDialog) setCancelInFlight(false); };
     if (dialogAlreadyAnswered()) {
       if (state.yesNo?.key.startsWith('confirmEnd:')) clearYesNo();
       return;
@@ -21382,6 +21567,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           text: 'Cancel the Hypnotic Gaze? This ends the action.',
           onAnswer: (yes) => {
             if (yes) { sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef); return; }
+            reopenCancelOnNo();
             if (!acknowledgeAnsweredDialogInstance(instanceKey, instanceRef)) return;
             const now = game.value;
             if (now && gazerId && iControlPlayer(gazerId)) {
@@ -21415,6 +21601,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           text: 'Cancel the Hypnotic Gaze? This ends the action.',
           onAnswer: (yes) => {
             if (yes) { sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef); return; }
+            reopenCancelOnNo();
             if (!acknowledgeAnsweredDialogInstance(instanceKey, instanceRef)) return;
             // The end that raised this dropped the local gaze intent; the server kept the activation, so bring it back.
             const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
@@ -21438,7 +21625,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         text: endActionConfirmText(dp?.playerAction, endingId ? playerName(g, endingId) : '', actingTeamBlitzUsed(g, endingId), `End the current ${action}?`),
         onAnswer: (yes) => {
           if (yes) sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef);
-          else acknowledgeAnsweredDialogInstance(instanceKey, instanceRef);
+          else { reopenCancelOnNo(); acknowledgeAnsweredDialogInstance(instanceKey, instanceRef); } // Astra r6: every No re-opens End
         },
       });
       return;
@@ -22543,7 +22730,7 @@ export function installOnTheBallWaitingTestHarness(
   const sent: Record<string, unknown>[] = [];
   const priorSession = session;
   session = { send: (command: Record<string, unknown>) => sent.push(structuredClone(command)) } as unknown as GameSession;
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   const syncSeat = () => {
     play.active = currentSeat === 'home' || currentSeat === 'away';
     play.coach = currentSeat === 'home' ? String(fixture.teamHome.coach ?? '')
@@ -22596,7 +22783,7 @@ export function installOnTheBallActionTestHarness(
   let currentTransport = transport;
   const sent: Record<string, unknown>[] = [];
 
-  game.value = fixture;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   playback.catchingUp = false;
   onTheBallAppliedPhaseIdentity = Math.max(1, onTheBallAppliedPhaseIdentity + 1);
   onTheBallAppliedModelRevision = Math.max(1, onTheBallAppliedModelRevision + 1);
@@ -26856,7 +27043,7 @@ export const gameStore = {
   /** Gameplay friendly-player switch. Re-check the pure server-derived disposition at the wire boundary.
    * Refundable ordinary Move uses upstream's direct replacement; other untouched rails send their exact cancel,
    * wait for the authoritative actor clear, then declare Move. Consumed activations only end. */
-  switchFriendlyActivation(playerId: string, expected: FriendlyActivationSwitchDisposition): boolean {
+  switchFriendlyActivation(playerId: string, expected: FriendlyActivationSwitchDisposition, options: { declareMove?: boolean } = {}): boolean {
     if (!play.active || !game.value) return false;
     // The view converts a friendly-token click into the same Blitz confirmation card. Refuse direct/test callers
     // here so this alternate activation-switch seam cannot bypass the central end-action authorization.
@@ -26883,22 +27070,30 @@ export const gameStore = {
       };
       const actual = friendlyActivationSwitchDisposition(game.value, ctx, playerId);
       if (!actual || (requireExpected && actual !== expected)) return false;
-      if (actual === 'end') {
+      // Owner 10-15 (Modern, declare on action, not on click): the switch only ENDS the current activation with its
+      // exact cancel; the clicked player is then selected client-side by the view and declares nothing until the coach
+      // commits an action. Classic keeps the old declare-after-switch (declareMove defaults to true).
+      if (actual === 'end' || options.declareMove === false) {
         gameStore.endActivation();
         return true;
       }
-      if (canSwitchMoveActingPlayer(game.value, ctx, playerId)) {
-        gameStore.declareAction(playerId, 'move', false);
-        return true;
-      }
+      // P0 #3: the old direct pristine-Move replacement (declare B over a declared A) is gone: every switch is
+      // cancel -> the server's actor clear -> declare.
       gameStore.endActivation();
+      const endSeq = priorActivationEndSeq; // Astra r4 F3: a later End / deselect / cancelPlan abandons this declare
       afterActivationCleared(() => {
+        if (endSeq !== priorActivationEndSeq) return;
         if (requestSeq !== friendlySwitchRequestSeq || !play.active || !game.value
             || String(game.value.gameId ?? '') !== switchGameId || !iControlPlayer(playerId)) return;
         followupHandled.clear();
         if (sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: 'move', leaping: false })) {
           log('system', `play: DECLARE move ${playerName(game.value, playerId)} (server resolves)`);
         }
+      }, 30000, () => {
+        if (endSeq !== priorActivationEndSeq || requestSeq !== friendlySwitchRequestSeq) return;
+        const text = 'Not switched: the previous activation did not end. Try again.';
+        log('system', `⚠ ${text}`);
+        state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
       });
       return true;
     };
@@ -26952,18 +27147,11 @@ export const gameStore = {
     const acting0 = game.value.actingPlayer as { playerId?: string | null; playerAction?: string | null; currentMove?: number } | undefined;
     const actingId0 = String(acting0?.playerId ?? '');
     const actingAction0 = String(acting0?.playerAction ?? '');
-    const directMoveSwitch = playerAction === 'move' && actingId0 !== playerId
-      && canSwitchMoveActingPlayer(game.value, {
-        mode: 'player', loggedIn: true, myIsHome: myPlayTeam(game.value) === game.value.teamHome,
-      }, playerId);
+    // Owner 10-15 P0 #3: no declare-over-declare. Upstream never replaces a declared acting player with another one; its
+    // switch is cancel -> echo -> declare (whenPriorActivationEnded below). The direct pristine-Move replacement is gone.
+    const directMoveSwitch = false;
     if (actingId0 && actingId0 !== playerId
         && (Number(acting0?.currentMove ?? 0) > 0 || (actingAction0 !== '' && actingAction0 !== 'move'))) {
-      const text = `${playerName(game.value, actingId0)} is mid-activation — End Activation first before activating ${playerName(game.value, playerId)}.`;
-      log('system', `⚠ ${text}`);
-      state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
-      return;
-    }
-    if (actingId0 && actingId0 !== playerId && playerAction === 'move' && actingAction0 === 'move' && !directMoveSwitch) {
       const text = `${playerName(game.value, actingId0)} is mid-activation — End Activation first before activating ${playerName(game.value, playerId)}.`;
       log('system', `⚠ ${text}`);
       state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
@@ -26990,6 +27178,15 @@ export const gameStore = {
       ? standUpWideRailOptions(game.value, playerId)
       : [];
     if (deferredStandUpOptions.length > 0) {
+      // Astra r10 F1: the held special-action Stand Up sends its declaration later (sendDeferredStandUp / the null-action
+      // star declaration) without passing whenPriorActivationEnded. When another activation of ours is still live or
+      // being cancelled, end it first (one cancel, the server's clear), then come back here.
+      const priorLive = (srvActingId != null && srvActingId !== playerId) || cancelInFlight
+        || (declarationAwaitingEcho && declarationAwaitingEchoFor !== playerId);
+      if (priorLive) {
+        whenPriorActivationEnded(playerId, () => gameStore.declareAction(playerId, playerAction, leapingOverride, options));
+        return;
+      }
       pendingWideRailDeclare = null;
       acknowledgedWideRailDeclare = null;
       completedWideRailDeclare = null;
@@ -27411,6 +27608,7 @@ export const gameStore = {
   },
 
   endActivation(options: { blitzConfirmed?: boolean; rollActivate?: boolean; gazeEndConfirmed?: boolean } = {}) {
+    priorActivationEndSeq += 1; // Astra r3 F2: an End / deselect abandons a declaration queued behind a cancel
     const coachConfirmedEnd = options.gazeEndConfirmed === true || endActivationConfirmedByCoach;
     endActivationConfirmedByCoach = false;
     if (!play.active || !game.value) { gazeEndRequest = null; return; }
@@ -27418,7 +27616,8 @@ export const gameStore = {
     // End gesture (a second right-click before the reply) sends nothing and leaves the coach's Yes where it is - it
     // used to wipe that Yes and send a second acting-null, so the server asked and the coach was prompted twice.
     const pendingEnd = gazeEndRequestUnanswered();
-    if (pendingEnd && Date.now() - pendingEnd.sentAt < GAZE_END_REPEAT_MS) {
+    // Owner 10-15 P0 #2: while our one cancel is unanswered every repeat is this same request (its Yes stays on it).
+    if (pendingEnd && (cancelInFlight || Date.now() - pendingEnd.sentAt < GAZE_END_REPEAT_MS)) {
       if (coachConfirmedEnd) pendingEnd.confirmed = true;
       log('system', 'play: END MOVE already sent - waiting for the server');
       return;
@@ -27501,6 +27700,15 @@ export const gameStore = {
       return;
     }
     bigGuyActivateIntent = null; // every other end drops the intent (cancel / Esc / switch / deselect)
+    // Owner 10-15 (declare on action, not on click; upstream parity): the null cancel exists only for a server-side
+    // activation. With no acting player on the server (receive-time mirror and model) and no declaration in flight,
+    // the coach is deselecting a merely SELECTED player, which is client-local: nothing is sent.
+    // P0 #2: and only once per activation - a second End / Esc / right-click while the first cancel is in flight, or
+    // after the server already ended the activation, sends nothing.
+    if (!cancelPermitted()) {
+      log('system', cancelInFlight ? 'play: END MOVE already sent - waiting for the server' : 'play: deselect (nothing declared, nothing sent)');
+      return;
+    }
     const endSent = sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
     // Owner 10-08: the coach confirmed ending this gaze activation on the client's card. If the server now asks its
     // own confirmEndAction for it (unused gaze), that Yes answers it - the coach is not asked twice.
@@ -28663,6 +28871,17 @@ export const gameStore = {
   /** ORDER 66 (#6.4): is a planner command-queue plan currently in flight? (SpectateView suppresses re-entry
    *  / shows a "planning…" affordance while true.) */
   isPlanActive(): boolean { return plannerActive(); },
+  /** Owner 10-15: a declaration of ours was accepted and its acting-player echo has not been received yet. */
+  declarationInFlight(): boolean { return declarationAwaitingEcho; },
+  /** Astra r4 F2: a back-out gesture (Escape's deselect) abandons a declaration queued behind a cancel. */
+  abandonQueuedDeclaration(): void { priorActivationEndSeq += 1; },
+  /** Owner 10-15 declaration watcher: occurrences detected this session (dev-visible counter). */
+  declarationWatcherCount(): number { return declarationWatcherOccurrences; },
+  /** The coach answered the watcher card ("Report" or "Not now"): it closes; it is not asked again in this game. */
+  dismissSwitchWatcherCard(): void { state.switchWatcherCard = null; },
+  /** Owner 10-15 P0 #2: our cancel was accepted and the server has not answered it yet (the surface stands down).
+   *  Reactive through state.cancelRevision (Astra r7 F1). */
+  cancelInFlight(): boolean { void state.cancelRevision; return cancelInFlight; },
   activePlanIdentity(): { seq: number; playerId: string; playerAction: string; actKind: PlanActKind } | null {
     // Establish a Vue dependency even though the private plan object itself is intentionally non-reactive.
     void state.plannerRevision;
@@ -28675,7 +28894,7 @@ export const gameStore = {
   emittedCommandCount(): number { return emittedCommandCount; },
   isPlanWalking(playerId: string): boolean { return plannerPlan != null && plannerPlan.phase === 'moving' && plannerPlan.playerId === playerId; },
   /** ORDER 66 (#6.4): cancel the in-flight plan (e.g. user Esc / right-click clear). */
-  cancelPlan() { plannerFlush('cancelled by you'); },
+  cancelPlan() { priorActivationEndSeq += 1; plannerFlush('cancelled by you'); }, // Astra r3 F2: and any queued declaration
   /** The coach confirmed End Activation / End Turn: the plan goes with it. Expected, so no "Plan cancelled" notice. */
   retirePlanForConfirmedEnd() { plannerRetireQuietly('the coach confirmed the end'); },
   /** Astra 10-10 (P2): the view reports its End prompts (End Activation / End Turn warning). Open = the planner sends

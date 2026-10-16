@@ -3968,6 +3968,10 @@ export class PitchRenderer {
    *  player on BOTH turns, so the my-turn gate lives in the host). The legacy property name is retained for
    *  host compatibility; tackleZoneMode chooses opposition, friendly, or both. */
   o66OppTzActive = false;
+  /** Owner 10-15 (declare on action, not on click): the host's client-local selection of an own player that has NOT
+   *  been declared to the server (no acting player yet). It gets its own selection ring and the actor's tackle-zone
+   *  read; the acting-player badge and every acting decoration stay keyed on the server's echo. */
+  private o66LocalSelectionId: string | null = null;
 
   /**
    * o66-dispatch guard surface (unit-tested in renderer.test.ts — the PERMANENT regression tooth for the
@@ -7807,6 +7811,30 @@ export class PitchRenderer {
     resetWalkerFacing(null);
   }
 
+  /** Owner 10-15: see o66LocalSelectionId. Presentation only. */
+  setO66LocalSelection(playerId: string | null): void {
+    if (playerId === this.o66LocalSelectionId) return;
+    this.o66LocalSelectionId = playerId;
+    this.redrawOverlays();
+  }
+
+  /** Owner 10-15: the client-local selection ring (the static selection halo) for an undeclared own player. */
+  private drawO66LocalSelectionHalo(): void {
+    const id = this.o66LocalSelectionId;
+    if (!id || !this.game || !this.order66 || id === this.activePlayerId) return;
+    const data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === id);
+    if (!data || !isOnPitch(data.playerCoordinate)) return;
+    const [px, py] = data.playerCoordinate!;
+    const anchor = squareAnchor(px, py);
+    const scale = depthScale(px, py);
+    const halo = new Graphics();
+    for (const [radius, alpha] of [[0.62, 0.16], [0.5, 0.28], [0.4, 0.5]] as [number, number][]) {
+      halo.ellipse(anchor.x, anchor.y - 3, TILE_W * radius * scale, TILE_H * radius * 0.72 * scale)
+        .fill({ color: 0xf5c542, alpha });
+    }
+    this.overlayLayer.addChild(halo);
+  }
+
   setActivePlayer(playerId: string | null): void {
     if (playerId === this.activePlayerId) return;
     this.noteAutoDirectorActivity();
@@ -9530,6 +9558,7 @@ export class PitchRenderer {
     // Owner 2026-07-04c: aura shading draws in 'always' mode even with nothing
     // selected (the 'selected' mode filters to the selection inside drawAuras).
     this.drawAuras();
+    this.drawO66LocalSelectionHalo(); // owner 10-15: drawn whatever the renderer selection (a target click selects the enemy)
     const info = this.selectionInfo();
     if (!info) return;
     // Order 66 disables the command planner in live play, but selecting an opposing player is a
@@ -11123,8 +11152,9 @@ export class PitchRenderer {
    *  opposition, and both retains drawTackleZones' opposition-on-overlap precedence. Team membership remains
    *  server-absolute (home/away); viewer seat and field flip affect only the downstream projection. */
   private drawO66TackleZones(): void {
-    if (!this.order66 || !this.o66OppTzActive || !this.game) return;
-    const actId = String((this.game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    // Owner 10-15: an undeclared local selection (host-set in my-turn play only) reads the zones as the actor would.
+    if (!this.order66 || (!this.o66OppTzActive && !this.o66LocalSelectionId) || !this.game) return;
+    const actId = String((this.game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || (this.o66LocalSelectionId ?? '');
     if (!actId) return;
     const selectedIsHome = this.game.teamHome.playerArray.some((player) => player.playerId === actId);
     // Owner 10-13: in 'both' (relevant zones) an opposing selection made BEFORE the actor moves (an inspection or a
@@ -11139,9 +11169,10 @@ export class PitchRenderer {
    *  plotted, or the actor has already moved), so the actor's opponent zones return for judging dodges and the
    *  inspection read stands down. 'none' = any other case (other modes, no actor, own-team or no selection). */
   private o66BothZoneOwner(): 'none' | 'selection' | 'actor' {
-    if (!this.order66 || this.tackleZoneMode !== 'both' || !this.o66OppTzActive || !this.game || !this.selectedPlayerId) return 'none';
+    if (!this.order66 || this.tackleZoneMode !== 'both' || (!this.o66OppTzActive && !this.o66LocalSelectionId) || !this.game || !this.selectedPlayerId) return 'none';
     const acting = this.game.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
-    const actId = String(acting?.playerId ?? '');
+    // Astra r1 F6: the same actor resolution as drawO66TackleZones (owner 10-15 local selection).
+    const actId = String(acting?.playerId ?? '') || (this.o66LocalSelectionId ?? '');
     if (!actId || this.selectedPlayerId === actId) return 'none';
     const actorIsHome = this.game.teamHome.playerArray.some((player) => player.playerId === actId);
     if (this.selectedIsHome() === actorIsHome) return 'none';

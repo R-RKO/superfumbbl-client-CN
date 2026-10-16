@@ -40,6 +40,11 @@ export interface PadFocusOptions {
   /** A MANDATORY server choice (block dice pick, team chooser, a required list, the Kick election, ...): it outranks
    *  every confirmation / dismissable card while open (Astra P2-a), and B is always inert on it. */
   mandatory?: boolean;
+  /** Owner 10-15 (Astra r12): a client MODAL notice (the match-start beta notice, the declaration watcher's card). It
+   *  outranks every other scope, mandatory server cards included, and swallows every pad input it does not use, so
+   *  nothing behind it (a hidden server card, View's End Turn / Confirm Setup) is reachable while it is up. B runs its
+   *  cancel / decline when it has one, otherwise it is inert. */
+  exclusive?: boolean;
 }
 
 /** Host priorities, applied AFTER the mandatory rank (a mandatory server card always comes first): among the rest the
@@ -128,6 +133,9 @@ function stackZ(el: HTMLElement): number {
 }
 /** Positive when `a` stacks above `b`. */
 function compareStack(a: Scope, b: Scope): number {
+  const ea = a.options.exclusive ? 1 : 0;
+  const eb = b.options.exclusive ? 1 : 0;
+  if (ea !== eb) return ea - eb; // a client modal notice above everything
   const ma = a.options.mandatory ? 1 : 0;
   const mb = b.options.mandatory ? 1 : 0;
   if (ma !== mb) return ma - mb; // a mandatory server card first, whatever its priority
@@ -187,7 +195,7 @@ function liveScopes(): Scope[] {
   if (!enabled) return [];
   const pitchHeld = mandatoryPitch();
   return scopes.filter((s) => !s.options.disabled && s.el.isConnected && focusableControls(s.el).length > 0
-    && (!pitchHeld || !!s.options.mandatory));
+    && (!pitchHeld || !!s.options.mandatory || !!s.options.exclusive)); // Astra r13: a modal notice keeps the pad
 }
 /** The card that owns the pad (topmost focus-owning scope), or null. */
 function activeScope(): Scope | null {
@@ -326,7 +334,7 @@ export function handlePadFocusEvent(event: PadEvent): boolean {
       return true;
     }
     case 'B': {
-      if (scope.options.mandatory) return true; // never answers a mandatory server choice
+      if (scope.options.mandatory && !scope.options.exclusive) return true; // never answers a mandatory server choice
       if (scope.options.cancel) { scope.options.cancel(); return true; }
       const decline = focusableControls(scope.el).find((c) => c.hasAttribute('data-pad-cancel'));
       if (decline) { padActivate(decline); return true; }
@@ -339,9 +347,12 @@ export function handlePadFocusEvent(event: PadEvent): boolean {
         return true;
       }
       // X / Y must not open the pitch context menu / player card behind a focus-owning card.
+      if (scope.options.exclusive) { consumedPress.add(event.input); return true; } // a modal notice swallows the rest
       return !pitch && (event.input === 'X' || event.input === 'Y');
     }
-    default: return false;
+    default:
+      if (scope.options.exclusive) { consumedPress.add(event.input); return true; }
+      return false;
   }
 }
 
