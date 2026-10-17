@@ -96,12 +96,15 @@ function recordTurnBoundary(segment: Segment, before: SpectatorCheckpoint, after
   if (started && !sameReplayTurnPosition(finished, started)) segment.turnMarkers.push({ ...started, cursor, boundary: 'start' });
 }
 /** A reduced pre-join segment awaiting an atomic commit (see prepareBackfill / commitBackfill). */
-export interface PreparedBackfill { segment: Segment; gameId: string; liveIdentity: SpectatorIdentity; bytes: number; snapshotBytes: number; observation?: BackfillObservation }
+export interface PreparedBackfill { segment: Segment; gameId: string; liveIdentity: SpectatorIdentity; bytes: number; snapshotBytes: number; observation?: BackfillObservation;
+  /** Owner 10-16: how many of the first live commands the join snapshot already carried (0 = none, the usual case). */
+  snapshotAhead?: number }
 export type BackfillPrepareResult =
   | { kind: 'ok'; prepared: PreparedBackfill }
   | { kind: 'superseded' }
   | { kind: 'nothing-before-join' }
-  | { kind: 'boundary-unverified'; replayCommands: number }
+  /** Owner 10-16 (bug report g1953896): WHY the join could not be placed, for the system log / bug reports. */
+  | { kind: 'boundary-unverified'; replayCommands: number; reason: 'trimmed-front' | 'no-candidate' | 'continuity'; detail?: string }
   | { kind: 'needle-short'; liveEvents: number }
   | { kind: 'reducer-failed'; at: number; commandNr: number | undefined; reason: string }
   | { kind: 'over-budget' };
@@ -197,7 +200,8 @@ export interface BackfillPlacementOptions {
 }
 /** `index`: the replay index of needle[0], or null. `open`: no decision yet - more live commands could still discriminate
  *  (wait, same download); false with a null index = refuse. */
-export interface BackfillPlacement { index: number | null; open: boolean }
+/** `covered`: how many leading live commands the placed candidate was compared against (all consistent). */
+export interface BackfillPlacement { index: number | null; open: boolean; covered?: number }
 /** UNIQUE CONSISTENT CANDIDATE (Astra 10-15). Every replay position i is a candidate: the WHOLE captured needle is
  *  compared against haystack[i...] element by element, stopping only at a mismatch or the haystack's end (never early
  *  after a quota of matches). A candidate is consistent when every compared element is exact or tolerated. The join is
@@ -232,7 +236,7 @@ export function placeBackfillJoin<T>(haystack: readonly T[], needle: readonly T[
     // exactly with it; either way more live commands cannot add evidence for this download.
     const qualified = (only.exact >= minExact || (only.atEnd && only.exact >= Math.min(2, minExact)))
       && only.covered >= Math.min(minCovered, needle.length);
-    if (qualified) return { index: only.start, open: false };
+    if (qualified) return { index: only.start, open: false, covered: only.covered };
     return { index: null, open: canGrow && !only.atEnd };
   }
   const atEnd = consistent.filter((candidate) => candidate.atEnd).length;
@@ -428,7 +432,7 @@ export class LiveSpectateHistory {
     // Replayable, reducible commands only; the join boundary is searched in this same filtered space.
     const replayable = commands.filter((command) => classifySpectatorPacket(command) === 'match' && REPLAY_MODEL_COMMANDS.has(command.netCommandId));
     // The needle must start at the join: a live segment whose front was trimmed under budget pressure no longer does.
-    if (live.start !== live.origin) return { kind: 'boundary-unverified', replayCommands: replayable.length };
+    if (live.start !== live.origin) return { kind: 'boundary-unverified', replayCommands: replayable.length, reason: 'trimmed-front' };
     // A one-command needle is too easy to mistake for another command: wait for the full needle (the store retries).
     if (live.events.length < BACKFILL_NEEDLE_LENGTH) return { kind: 'needle-short', liveEvents: live.events.length };
     // Bug report 2026-10-15 (game 1953710) + Astra 10-15: the join is placed only at the UNIQUE replay position consistent
@@ -440,7 +444,7 @@ export class LiveSpectateHistory {
     // Undecided while more live commands could still decide it, from this same download: reported as needle-short so the
     // store re-runs it on the next live event without a fresh fetch.
     if (boundary === null && placement.open) return { kind: 'needle-short', liveEvents: live.events.length };
-    if (boundary === null) return { kind: 'boundary-unverified', replayCommands: replayable.length };
+    if (boundary === null) return { kind: 'boundary-unverified', replayCommands: replayable.length, reason: 'no-candidate' };
     if (boundary === 0) return { kind: 'nothing-before-join' };
     const selected = replayable.slice(0, boundary);
     // Owner 10-15 (option C): the join snapshot the reduced replay must arrive at, captured before any yield.
@@ -500,10 +504,44 @@ export class LiveSpectateHistory {
     }
     // Owner 10-15 (option C): independent state continuity. The replay reduced up to the single surviving candidate must
     // arrive at the join snapshot (backfillContinuityProjection, fails closed). Reuses this reduction: no second pass.
-    const discontinuous = backfillContinuityDifferences(checkpoint.model, joinSnapshot);
+    let discontinuous = backfillContinuityDifferences(checkpoint.model, joinSnapshot);
+    // Owner 10-16 (bug report g1953896, a join at the kick-off): the server builds the join snapshot from its live model,
+    // which can already carry the effects of the first live commands it sends right after it (the same commands the
+    // needle matched at replay[boundary...]). The pre-join segment is still replay[0..boundary): only the CHECK walks on,
+    // through at most the live commands the placement compared, and accepts the first state equal to the snapshot. A
+    // snapshot that matches nowhere in that window still refuses (fails closed).
+    let snapshotAhead = 0;
     if (discontinuous.length > 0) {
-      console.warn(`[spectate] backfill continuity refused the join at replay ${boundary}: ${discontinuous.join(', ')}`);
-      return { kind: 'boundary-unverified', replayCommands: replayable.length };
+      const atJoin = discontinuous;
+      let probe = checkpoint;
+      for (let k = 1; k <= Math.min(placement.covered ?? 0, replayable.length - boundary); k++) {
+        const command = replayable[boundary + k - 1]!;
+        try { probe = reduceSpectatorCheckpoint(probe, freezeSpectatorValue({ cursor: { ...identity, sequence: sequence + k }, command: structuredClone(command) as ReplayCommand, receivedWallAt: 0, receivedMonotonicAt: 0, ingressOrder: 0, clock: null })); }
+        catch { break; }
+        discontinuous = backfillContinuityDifferences(probe.model, joinSnapshot);
+        if (discontinuous.length === 0) {
+          // Astra 10-16 (P1): equality k steps past the candidate does not prove the candidate (a download that lost a
+          // command can meet the snapshot by coincidence). A snapshot that truly ran ahead already CONTAINS the first k
+          // live commands: applying them to it changes nothing. Anything else refuses.
+          let again = live.anchors[0]!.checkpoint;
+          let noop = true;
+          for (let i = 0; i < k; i++) {
+            const entry = live.events[i];
+            if (!entry) { noop = false; break; }
+            try { again = reduceSpectatorCheckpoint(again, entry.event); } catch { noop = false; break; }
+            // EACH step must leave the snapshot's state as it is (a net no-op over k steps is not enough: Astra's lost-B case)
+            if (backfillContinuityDifferences(again.model, joinSnapshot).length > 0) { noop = false; break; }
+          }
+          if (noop) { snapshotAhead = k; break; }
+          discontinuous = atJoin;
+          break;
+        }
+      }
+      if (discontinuous.length > 0) {
+        console.warn(`[spectate] backfill continuity refused the join at replay ${boundary}: ${atJoin.join(', ')}`);
+        return { kind: 'boundary-unverified', replayCommands: replayable.length, reason: 'continuity', detail: atJoin.join(', ') };
+      }
+      console.warn(`[spectate] backfill: the join snapshot was ${snapshotAhead} frame(s) ahead of the first live command (${atJoin.join(', ')})`);
     }
     // Owner 10-10: the observer's fold continues through the joined live segment, re-reduced from its join snapshot
     // (the history keeps the events, not a model per event), in the same time slices. Whatever arrives between here
@@ -517,7 +555,7 @@ export class LiveSpectateHistory {
         if (performance.now() - sliceStart >= sliceMs) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); sliceStart = performance.now(); }
       }
     }
-    return { kind: 'ok', prepared: { segment, gameId, liveIdentity: { ...live.identity }, bytes, snapshotBytes, ...(observation ? { observation } : {}) } };
+    return { kind: 'ok', prepared: { segment, gameId, liveIdentity: { ...live.identity }, bytes, snapshotBytes, snapshotAhead, ...(observation ? { observation } : {}) } };
   }
   /** Feed the observation the next live event of `live` (re-reduced from the observation's own checkpoint). */
   private advanceObservation(observation: BackfillObservation, live: Segment): void {

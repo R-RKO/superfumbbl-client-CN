@@ -4879,11 +4879,18 @@ async function backfillSpectatorHistoryFromReplayOnce(
     if (changed) spectatorDiceDetailsRefreshForTest = refreshSavedSpectatorDice(dice);
   }
   switch (outcome.kind) {
-    case 'ok': log('system', `earlier history loaded: ${outcome.events} commands before you joined`); break;
+    case 'ok': log('system', `earlier history loaded: ${outcome.events} commands before you joined${prepared.kind === 'ok' && prepared.prepared.snapshotAhead ? ` (the join snapshot was ${prepared.prepared.snapshotAhead} frame${prepared.prepared.snapshotAhead === 1 ? '' : 's'} ahead of the first live command)` : ''}`); break;
     case 'nothing-before-join': break; // joined at the very start: nothing to add
     case 'superseded': break; // a newer snapshot/connection owns the next attempt
     case 'over-budget': log('system', 'earlier history not loaded: over the history budget'); break;
-    case 'boundary-unverified': log('system', `earlier history not loaded: could not place the join inside the ${outcome.replayCommands}-command replay${attempt < BACKFILL_MAX_ATTEMPTS ? ' — will retry' : ''}`); break;
+    case 'boundary-unverified': {
+      // Owner 10-16 (g1953896): the reason is in the system log, so a bug report says which gate refused
+      const why = outcome.reason === 'trimmed-front' ? 'the first live commands were already trimmed from memory'
+        : outcome.reason === 'continuity' ? `the join snapshot differs from the replay at the join (${outcome.detail ?? ''})`
+        : 'the first live commands match nowhere unique in the replay';
+      log('system', `earlier history not loaded: could not place the join inside the ${outcome.replayCommands}-command replay: ${why}${attempt < BACKFILL_MAX_ATTEMPTS ? ' — will retry' : ''}`);
+      break;
+    }
     case 'needle-short': break; // retried once the full needle exists
     case 'reducer-failed': log('system', `earlier history not loaded: replay command ${outcome.commandNr ?? outcome.at} could not be followed (${outcome.reason.slice(0, 120)})`); break;
   }
@@ -8867,19 +8874,27 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 10-16 (FUMBBL log style): once a report waits behind the fireball beat (this frame or an earlier one still
   // pending), every later report's upstream lines queue behind it too, so the FUMBBL log keeps the server's order
   let upstreamQueued = upstreamLogBehindFireball && pendingFireballBeats > 0;
-  const upstreamOnlyInOrder = (lines: UpstreamLogLine[], key: string) => {
+  // Astra 10-16 (r4 / r5): a surface deferred behind the fireball beat (Text rows, FUMBBL-only rows) keeps THIS frame's
+  // log receipt, so the composed log (sorted by order, stable) puts it after this frame's other rows and BEFORE anything
+  // a later frame logged meanwhile (the next player's declaration). A frame applied without a receipt (a test harness)
+  // reserves its order now. Known and pre-existing: within ONE frame a deferred row still lands after the frame's later
+  // rows (equal orders keep append order).
+  const frameReceipt: SpectatorReceipt = activeLogReceipt ?? { order: ++nextVisibleLogOrder, receivedWallAt: Date.now(), receivedMonotonicAt: performance.now() };
+  const reportReceipt = (_reportIndex: number): SpectatorReceipt => frameReceipt;
+  const upstreamOnlyInOrder = (lines: UpstreamLogLine[], key: string, receipt: SpectatorReceipt) => {
     if (!lines.length) return;
-    if (!upstreamQueued) { logUpstreamOnly(lines); return; }
+    if (!upstreamQueued) { withLogReceipt(receipt, () => logUpstreamOnly(lines)); return; }
     pendingUpstreamLogs.set(key, { lines, gameId: (game.value as { gameId?: unknown } | null)?.gameId });
-    const surface = () => {
+    const surface = () => withLogReceipt(receipt, () => {
       const waiting = pendingUpstreamLogs.get(key);
       if (!waiting) return;
       pendingUpstreamLogs.delete(key);
       logUpstreamOnly(waiting.lines);
-    };
+    });
     if (!enqueueBehindFireball(key, surface)) surface();
   };
   for (const [reportIndex, report] of reports.entries()) {
+    const rowReceipt = reportReceipt(reportIndex);
     // Owner 10-15 (Graphical log): an undisplayed handOver report still marks the next catch as the Hand-off's, and a
     // reroll grant the source of the rerolled roll line it leads to.
     noteReportLogContext(report, visibleReportLogContext, game.value);
@@ -8918,7 +8933,7 @@ function applyFrameContents(frame: QueuedFrame) {
       if (!key) continue;
       if (seenInjuryKeys.has(key)) {
         // the twin — skip both the log AND the dice; upstream prints its parts (in order behind a pending fireball beat)
-        upstreamOnlyInOrder(upstreamLines, upstreamKey);
+        upstreamOnlyInOrder(upstreamLines, upstreamKey, rowReceipt);
         continue;
       }
       seenInjuryKeys.add(key);
@@ -8959,7 +8974,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // a fireball report's own upstream lines wait with its Text lines, but their content is kept outside the callback
       // (pendingUpstreamLogs): a reset that drops the queue still logs them (resetPresentation)
       if (fireballReport && upstreamLines.length) pendingUpstreamLogs.set(upstreamKey, { lines: upstreamLines, gameId: (game.value as { gameId?: unknown } | null)?.gameId });
-      const surfaceLog = () => {
+      const surfaceLog = () => withLogReceipt(rowReceipt, () => {
         let own = upstreamHere ? upstreamLines : [];
         if (fireballReport && upstreamLines.length) {
           if (pendingUpstreamLogs.has(upstreamKey)) pendingUpstreamLogs.delete(upstreamKey);
@@ -8967,19 +8982,21 @@ function applyFrameContents(frame: QueuedFrame) {
         }
         lines.forEach((formatted, index) => logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt, { u: index === 0 ? own : [] }));
         if (!lines.length) logUpstreamOnly(own);
-      };
+      });
       if (!fireballReport || !enqueueBehindFireball(`fireballLog:${String((cmd as { commandNr?: unknown }).commandNr)}:${reportIndex}`, surfaceLog)) surfaceLog();
       else upstreamQueued = upstreamLogBehindFireball = true;
-      if (!upstreamHere) upstreamOnlyInOrder(upstreamLines, upstreamKey);
+      if (!upstreamHere) upstreamOnlyInOrder(upstreamLines, upstreamKey, rowReceipt);
     } else if (GRAPHICAL_ONLY_REPORTS.has(String(report.reportId))) {
       // Owner 10-15 (Graphical block flow): steps the Text log never listed; only their Graphical rows are logged
-      for (const formatted of formatReportLines(report, game.value, visibleReportLogContext)) {
-        if (formatted.g) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, true);
-      }
-      upstreamOnlyInOrder(upstreamLines, upstreamKey);
+      withLogReceipt(rowReceipt, () => {
+        for (const formatted of formatReportLines(report, game.value, visibleReportLogContext)) {
+          if (formatted.g) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, true);
+        }
+      });
+      upstreamOnlyInOrder(upstreamLines, upstreamKey, rowReceipt);
     } else if (!deferCoinReportLogUntilCine(report.reportId, playback.catchingUp)) {
       // a live coin result keeps its post-cinematic line (no spoiler before the reveal) in every style
-      upstreamOnlyInOrder(upstreamLines, upstreamKey);
+      upstreamOnlyInOrder(upstreamLines, upstreamKey, rowReceipt);
     }
   }
   if (reports.some((report) => String(report.reportId) === 'foulAppearanceRoll'
@@ -11830,7 +11847,11 @@ function verboseTee(dir: 'in' | 'out', cmd: Record<string, unknown>) {
     if (s) devLog(dir, s.label, s.detail);
   }
   if (!settings.wireLog) { wireLog.gameId = null; wireLog.file = ''; return; }
-  const gid = (game.value?.gameId ?? null) as number | string | null;
+  // Owner 10-16 (g1953896): the join snapshot arrives BEFORE the model knows the game, so it was never captured; the file
+  // rolls on ITS game id and the whole command is written like any other (Astra: wire consumers select serverGameState
+  // and read `game`), and the header's team block comes from that snapshot, not the still-empty model.
+  const snapshotGame = dir === 'in' && String(cmd.netCommandId ?? '') === 'serverGameState' ? (cmd.game as GameJson | undefined) : undefined;
+  const gid = ((snapshotGame?.gameId ?? game.value?.gameId) ?? null) as number | string | null;
   if (gid == null) return; // no game observed yet — nothing to attribute
   if (gid !== wireLog.gameId) {
     // ROLL to a new file for this newly-observed game (one file per game)
@@ -11848,8 +11869,9 @@ function verboseTee(dir: 'in' | 'out', cmd: Record<string, unknown>) {
         positions: [...new Set((team?.roster?.positionArray ?? []).map((p) => p.positionName).filter(Boolean))],
       };
     };
-    const homeTeam = teamInfo(game.value?.teamHome);
-    const awayTeam = teamInfo(game.value?.teamAway);
+    const headerGame = snapshotGame ?? game.value;
+    const homeTeam = teamInfo(headerGame?.teamHome);
+    const awayTeam = teamInfo(headerGame?.teamAway);
     void writeWireLine(JSON.stringify({ seq: wireLog.seq++, t: Date.now(), header: {
       gameId: gid, appVersion: APP_VERSION, gitSha: GIT_SHA, home: homeTeam.coach, away: awayTeam.coach, homeTeam, awayTeam, startedAt: new Date().toISOString() } }));
   }
