@@ -18,7 +18,7 @@ import { luckChart } from '../game/luckChart';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence, pgTeamBreaks,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence, pgPlayerDetail, pgTeamBreaks,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 
@@ -144,20 +144,42 @@ function placeDiceTip(): void {
   diceTip.left = Math.max(DICE_TIP_MARGIN, Math.min(start, vw - DICE_TIP_MARGIN - box.width));
 }
 function openDiceTip(key: PgLikelihoodKey, anchor: HTMLElement, pinned: boolean): void {
+  cancelDiceTipLeave(); // Astra r2: a close pending from a hover-opened popover must not take this one down
   const icon = anchor.getBoundingClientRect();
   diceTipAnchor = anchor;
   diceTip.key = key; diceTip.pinned = pinned;
   diceTip.left = icon.left; diceTip.top = icon.bottom + DICE_TIP_GAP; diceTip.below = true; // provisional; placed once measured
   void nextTick(placeDiceTip);
 }
-function closeDiceTip(): void { diceTip.key = null; diceTip.pinned = false; diceTipAnchor = null; }
+function closeDiceTip(): void { cancelDiceTipLeave(); diceTip.key = null; diceTip.pinned = false; diceTipAnchor = null; diceTipName.value = null; }
+/** Owner 10-17: the one name chip whose detail is shown inline ("i:j" = line : part); a click on it again hides it. */
+const diceTipName = ref<string | null>(null);
+function toggleDiceTipName(key: string): void {
+  diceTipName.value = diceTipName.value === key ? null : key;
+  diceTip.pinned = true; // the coach is reading the popover: it stays until dismissed
+  void nextTick(placeDiceTip); // the detail may change the popover's height
+}
 function onDiceInfoEnter(key: PgLikelihoodKey, event: Event): void {
+  cancelDiceTipLeave();
   if (diceTip.pinned) return; // a pinned popover stays until it is dismissed
+  if (diceTip.key === key) return; // back on the same "i" within the grace: nothing to reopen
   openDiceTip(key, event.currentTarget as HTMLElement, false);
 }
-function onDiceInfoLeave(key: PgLikelihoodKey): void { if (diceTip.key === key && !diceTip.pinned) closeDiceTip(); }
+/** Astra 10-17: a hover-opened popover used to close the instant the pointer left the "i", so its name chips could
+ *  never be reached. Leaving the "i" (or the popover) now schedules the close; entering either cancels it. */
+const DICE_TIP_LEAVE_GRACE_MS = 350;
+let diceTipLeaveTimer: ReturnType<typeof setTimeout> | null = null;
+function cancelDiceTipLeave(): void { if (diceTipLeaveTimer) { clearTimeout(diceTipLeaveTimer); diceTipLeaveTimer = null; } }
+function scheduleDiceTipLeave(): void {
+  cancelDiceTipLeave();
+  diceTipLeaveTimer = setTimeout(() => { diceTipLeaveTimer = null; if (diceTip.key !== null && !diceTip.pinned) closeDiceTip(); }, DICE_TIP_LEAVE_GRACE_MS);
+}
+function onDiceInfoLeave(key: PgLikelihoodKey): void { if (diceTip.key === key && !diceTip.pinned) scheduleDiceTipLeave(); }
+function onDiceTipPointerEnter(): void { cancelDiceTipLeave(); }
+function onDiceTipPointerLeave(): void { if (!diceTip.pinned) scheduleDiceTipLeave(); }
 let diceTipRefocus = false;
 function onDiceInfoFocus(key: PgLikelihoodKey, event: Event): void {
+  cancelDiceTipLeave(); // Astra r2: focus returning to the "i" within the grace keeps its popover
   if (diceTip.key === key || diceTipRefocus) return; // (Astra chart r3: focus handed back by Escape does not reopen it)
   openDiceTip(key, event.currentTarget as HTMLElement, false); // keyboard focus moving to another row's icon replaces a pinned one
 }
@@ -170,24 +192,31 @@ function onDiceInfoBlur(key: PgLikelihoodKey, event?: FocusEvent): void {
 }
 /** Owner 10-16 (Astra chart r1 B1): Tab from the Luck "i" goes into its popover's "By turn" button (the popover is
  *  teleported after the pane, so the natural Tab order would skip it and close it). */
+/** The popover's focusable controls in order: the name chips of its lines, then the Luck "By turn" button (Astra 10-17). */
+const diceTipFocusables = (): HTMLElement[] => Array.from(diceTipEl.value?.querySelectorAll<HTMLElement>('.pg-dice-tip-name, .pg-luck-chart-btn') ?? []);
 function onDiceInfoKeydown(key: PgLikelihoodKey, event: KeyboardEvent): void {
   if (event.key !== 'Tab' || event.shiftKey || diceTip.key !== key) return;
-  const btn = diceTipEl.value?.querySelector<HTMLElement>('.pg-luck-chart-btn');
-  if (!btn) return;
+  const first = diceTipFocusables()[0];
+  if (!first) return;
   event.preventDefault();
   diceTip.pinned = true;
-  btn.focus();
+  first.focus();
 }
-/** From "By turn": Shift+Tab back to the Luck "i"; Tab on to the next row's "i" (closing the popover). */
+/** Inside the popover (a name chip or "By turn"): Tab moves along its controls; from the last, Tab goes on to the next
+ *  row's "i" (closing the popover); from the first, Shift+Tab goes back to the row's own "i". */
 function onLuckChartBtnKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Tab') return;
+  const controls = diceTipFocusables();
+  const at = controls.indexOf(event.currentTarget as HTMLElement);
+  if (at < 0) return;
+  if (event.shiftKey ? at > 0 : at < controls.length - 1) return; // the next / previous control is the natural Tab stop
   const icons = Array.from(document.querySelectorAll<HTMLElement>('.pg-dice-gauge-row .pg-dice-info'));
-  const luck = icons.findIndex((el) => el.closest('[data-row="luck"]'));
-  if (luck < 0) return;
+  const own = diceTipAnchor ? icons.indexOf(diceTipAnchor) : icons.findIndex((el) => el.closest(`[data-row="${diceTip.key}"]`));
+  if (own < 0) return;
   event.preventDefault();
-  if (event.shiftKey) { icons[luck]!.focus(); return; }
+  if (event.shiftKey) { icons[own]!.focus(); return; }
   closeDiceTip();
-  icons[luck + 1]?.focus();
+  icons[own + 1]?.focus();
 }
 function onDiceInfoClick(key: PgLikelihoodKey, event: Event): void {
   if (diceTip.key === key && diceTip.pinned) { closeDiceTip(); return; }
@@ -606,9 +635,12 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
       </div>
       <!-- Owner 10-10: the open row's numbers. A sibling of the pane (not inside its scrolling block), fixed to the viewport. -->
       <div v-if="diceModalOpen && showStats && diceTipRow" :id="diceTipId(diceTipRow.key)" ref="diceTipEl" class="skill-tip pg-dice-tip" role="tooltip"
-        :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px' }">
+        :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px' }"
+        @pointerenter="onDiceTipPointerEnter" @pointerleave="onDiceTipPointerLeave">
         <b class="skill-tip-name">{{ diceTipRow.label }}</b>
-        <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span class="pg-dice-tip-value">{{ stat.value }}</span></span>
+        <!-- Owner 10-17: a story line's player names are chips - hover for who it was (#nr position, team), a click (or Enter) pins that detail inline.
+             Astra 10-17: the chips are in the popover's keyboard route (Tab from the "i" reaches the first of them, then "By turn"). -->
+        <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span v-if="stat.parts" class="pg-dice-tip-value"><template v-for="(part, j) in stat.parts" :key="j"><template v-if="typeof part === 'string'">{{ part }}</template><template v-else><button type="button" class="pg-dice-tip-name" :title="pgPlayerDetail(game, part.playerId)" :aria-expanded="diceTipName === `${i}:${j}`" :data-open="diceTipName === `${i}:${j}`" @click.stop="toggleDiceTipName(`${i}:${j}`)" @keydown="onLuckChartBtnKeydown">{{ part.name }}</button><span v-if="diceTipName === `${i}:${j}`" class="pg-dice-tip-name-detail"> ({{ pgPlayerDetail(game, part.playerId) }})</span></template></template></span><span v-else class="pg-dice-tip-value">{{ stat.value }}</span></span>
         <!-- Owner 10-16: the Luck popover opens the chart of the breaks turn by turn. -->
         <button v-if="diceTipRow.key === 'luck' && diceTipRow.like.measured" type="button" class="pg-luck-chart-btn" @click="openLuckChart" @keydown="onLuckChartBtnKeydown">By turn</button>
       </div>
@@ -1120,6 +1152,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-info[data-pinned='true'] { background: color-mix(in srgb, var(--ui-accent) 25%, var(--ui-surface)); }
 .skill-tip.pg-dice-tip { z-index: 220; transform: none; align-items: flex-start; text-align: left; gap: 0.2rem; max-width: min(26rem, calc(100vw - 16px)); pointer-events: auto; font-variant-numeric: tabular-nums; }
 .pg-dice-tip-line { overflow-wrap: anywhere; }
+.pg-dice-tip-name { all: unset; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.pg-dice-tip-name:hover, .pg-dice-tip-name[data-open="true"] { color: #ffd166; text-decoration-style: solid; }
+.pg-dice-tip-name:focus-visible { outline: 2px solid #ffd166; outline-offset: 2px; border-radius: 2px; } /* Astra r2: all: unset dropped the global focus ring */
+.pg-dice-tip-name-detail { opacity: 0.8; }
 .pg-dice-tip-label { color: var(--ui-muted); }
 /* Owner 10-16: the Luck chart button and subpane. Home blue, away red (the seat tints of the pane). */
 .pg-luck-chart-btn { margin-top: 0.3rem; padding: 0.15rem 0.6rem; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface-2); color: var(--ui-text); font: inherit; cursor: pointer; }

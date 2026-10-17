@@ -1117,6 +1117,8 @@ const TRAIL_ECHO_Z = -2;
 const TRAIL_NUMBER_Z = -1;
 /** Owner 09-07: the server's EYE_GOUGED player-state bit (view constant moved here with the marker). */
 const EYE_GOUGED_BIT = 0x20000;
+/** Owner 10-17: the Eye Gouge plate's fill opacity (its edge stays crisp). */
+const EYE_GOUGE_PLATE_FILL_ALPHA = 0.3;
 /** Per-channel mix between two tints (0 = a, 1 = b). */
 function mixTint(a: number, b: number, k: number): number {
   const t = Math.min(1, Math.max(0, k));
@@ -19789,8 +19791,10 @@ export class PitchRenderer {
       sprite.anchor.set(0.5, 0.5);
       const walker = isWalkerToken(token);
       const ratio = walker ? (walkerFigureRatio(token) ?? 1) : 1;
-      const pad = crowded ? 4 : 8;
-      const stroke = 6;
+      // Owner 10-17 ("Eye gouge plate is much too large ... 30% opacity fill ... tighten the margins against the
+      // artwork"): the plate hugs the art (3 px, 2 crowded) with a thin edge and a translucent fill.
+      const pad = crowded ? 2 : 3;
+      const stroke = 3;
       const w = tex.width + pad * 2;
       const h = tex.height + pad * 2;
       const unit = 14 / tex.height; // texture px -> token-local units at multiplier 1
@@ -19834,11 +19838,11 @@ export class PitchRenderer {
       dy = drop ? lo + halfH - centre0 : 0;
       const seat = isHome === false ? COLORS.awayBody : COLORS.homeBody;
       const ring = eyeGougeRingColor((walker ? walkerKitColor(token) : null) ?? seat);
-      // Vector plate in texture pixels, so it scales with the sprite and stays crisp at every zoom: an opaque pill `pad`
-      // px past the art with an opposite-pole edge.
+      // Vector plate in texture pixels, so it scales with the sprite and stays crisp at every zoom: a pill `pad` px past
+      // the art, its fill at 30% (owner 10-17) with a crisp opposite-pole edge.
       const plate = new Graphics()
         .roundRect(-w / 2, -h / 2, w, h, h / 2)
-        .fill({ color: ring.fill, alpha: 1 })
+        .fill({ color: ring.fill, alpha: EYE_GOUGE_PLATE_FILL_ALPHA })
         .stroke({ color: ring.edge, width: stroke, alpha: 1 });
       plate.label = 'eyeGougeRing';
       const group = new Container();

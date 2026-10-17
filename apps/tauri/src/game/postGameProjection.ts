@@ -312,8 +312,8 @@ export function postGamePublic(game: GameJson | null | undefined): PostGamePubli
 /** Owner 09-09: the POSITIONAL only — no race prefix ("Tomb Kings Tomb Guardian" -> "Tomb Guardian"). */
 export function positionNameFor(game: GameJson, side: Side, positionId: string): string {
   const team = side === 'home' ? game.teamHome : game.teamAway;
-  const roster = team.roster as Roster;
-  const rawPosition = roster.positionArray?.find((p) => p.positionId === positionId)?.positionName ?? positionId.split('.').pop() ?? '';
+  const roster = team.roster as Roster | null | undefined;
+  const rawPosition = roster?.positionArray?.find((p) => p.positionId === positionId)?.positionName ?? positionId.split('.').pop() ?? ''; // Astra 10-17: a partial snapshot may carry no roster
   const race = (team as { race?: string }).race?.trim();
   const startsWithRace = !!race && rawPosition.toLowerCase().startsWith(race.toLowerCase() + ' ');
   return startsWithRace ? rawPosition.slice(race!.length + 1).trim() || rawPosition : rawPosition;
@@ -458,7 +458,24 @@ export interface PgLikelihoodRow {
   /** The hover text of the "1 in N". */
   detail: string;
 }
-export interface PgLikelihoodStat { label: string; value: string }
+/** Owner 10-17: a story line as tokens - plain text and the players it names (the view makes each a name chip). */
+export type PgStatPart = string | { playerId: string; name: string };
+export interface PgLikelihoodStat { label: string; value: string; parts?: PgStatPart[] }
+/** Owner 10-17 ("a popup when the user highlights / clicks the name to show which player it was"): who a player id is
+ *  on this game's rosters - "#7 Blitzer, Reikland Reavers"; the id itself when he is on neither. */
+export function pgPlayerDetail(game: GameJson | null, playerId: string): string {
+  if (!game) return playerId;
+  for (const side of ['home', 'away'] as Side[]) {
+    const team = side === 'home' ? game.teamHome : game.teamAway;
+    const player = team.playerArray.find((p) => p.playerId === playerId) as (typeof team.playerArray[number] & { playerNr?: unknown; nr?: unknown; positionId?: unknown }) | undefined;
+    if (!player) continue;
+    const nr = Number(player.playerNr ?? player.nr);
+    const position = typeof player.positionId === 'string' ? positionNameFor(game, side, player.positionId) : '';
+    const teamName = String((team as { teamName?: unknown }).teamName ?? '').trim();
+    return [Number.isFinite(nr) && nr > 0 ? `#${nr}` : '', position].filter(Boolean).join(' ') + (teamName ? `, ${teamName}` : '') || playerId;
+  }
+  return playerId;
+}
 const PG_NOT_MEASURED = 'Not measured for this game';
 const exp1 = (v: number | undefined) => (v ?? 0).toFixed(1);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -569,10 +586,11 @@ export function pgTeamBreaks(t: DiceTally): LuckBreaks | null {
 }
 /** Owner 10-16: one turnover of the Turns cut short line as a story line: "0.9 of a turn: 3+ dodge failed, Bob, turn 2
  *  (first action, second turn in a row)". */
-export function pgCutShortLine(e: CutShortEntry): string {
-  const when = e.half <= 1 ? `turn ${e.turn}` : e.half === 2 ? `turn ${e.turn} of half 2` : `turn ${e.turn} of overtime`;
+export function pgCutShortLine(e: CutShortEntry): string { return pgCutShortParts(e).map((part) => typeof part === 'string' ? part : part.name).join(''); }
+/** Owner 10-17: the same line as tokens (the roller is a name chip). */
+export function pgCutShortParts(e: CutShortEntry): PgStatPart[] {
   const flag = e.streak ? ' (first action, second turn in a row)' : e.firstAction ? ' (first action)' : '';
-  return `${e.cost.toFixed(1)} of a turn: ${e.label}, ${e.playerName || e.player}, ${when}${flag}`;
+  return [`${e.cost.toFixed(1)} of a turn: ${e.label}, `, { playerId: e.player, name: e.playerName || e.player }, `, ${pgWhen(e)}${flag}`];
 }
 /**
  * Owner 10-16: TURNS CUT SHORT, its own line under Luck (turnsCutShort.ts): the share of each turn the team lost to its
@@ -591,13 +609,23 @@ function pgCutShortRow(t: DiceTally): PgLikelihoodRow {
   return {
     key: 'cut', label: 'Turns cut short', like, value, valueTitle: diff, valueAverage: like.average, sentence: `${value}; ${diff}`, summary: `${value} · ${diff}`, detail: diff,
     stats: [{ label: 'Turns cut short', value: c.actual.toFixed(1) }, { label: 'Expected', value: c.expected.toFixed(1) },
-      ...(c.log.length ? [{ label: '', value: 'Turnovers' }, ...c.log.map((e) => ({ label: '', value: pgCutShortLine(e) }))] : [])],
+      ...(c.log.length ? [{ label: '', value: 'Turnovers' }, ...c.log.map((e) => ({ label: '', value: pgCutShortLine(e), parts: pgCutShortParts(e) }))] : [])],
   };
 }
+const pgWhen = (e: { half: number; turn: number }) => e.half <= 1 ? `turn ${e.turn}` : e.half === 2 ? `turn ${e.turn} of half 2` : `turn ${e.turn} of overtime`;
 /** One break as a story line: "1 in 6: 5+ dodge made, Bob, turn 3". */
 export function pgBreakLine(e: BreakEntry): string {
-  const when = e.half <= 1 ? `turn ${e.turn}` : e.half === 2 ? `turn ${e.turn} of half 2` : `turn ${e.turn} of overtime`;
-  return `${oneInX(e.p)}: ${e.label}, ${e.playerName || e.player}, ${when}`;
+  return `${oneInX(e.p)}: ${e.label}, ${e.playerName || e.player}, ${pgWhen(e)}`;
+}
+/** Owner 10-17: the same line as tokens; the attacker and (on an attack) the victim are name chips. Joined, the parts
+ *  read exactly as pgBreakLine. */
+export function pgBreakParts(e: BreakEntry): PgStatPart[] {
+  const who = { playerId: e.player, name: e.playerName || e.player };
+  const tail = `, ${pgWhen(e)}`;
+  if (e.victim && e.labelHead != null && e.labelTail != null) {
+    return [`${oneInX(e.p)}: ${e.labelHead}`, { playerId: e.victim, name: e.victimName || e.victim }, `${e.labelTail}, `, who, tail].filter((part) => part !== '');
+  }
+  return [`${oneInX(e.p)}: ${e.label}, `, who, tail];
 }
 const breaksText = (n: number, e: number, kind: 'lucky' | 'bad') => `${n} ${kind} ${n === 1 ? 'break' : 'breaks'} (${e.toFixed(1)} expected)`;
 function pgLuckRow(t: DiceTally): PgLikelihoodRow {
@@ -608,7 +636,7 @@ function pgLuckRow(t: DiceTally): PgLikelihoodRow {
   if (b.events === 0) return pgLikelihoodRow('luck', 'Luck', like, '', [], '');
   const value = breaksText(b.lucky, b.luckyExpected, 'lucky');
   const bad = breaksText(b.bad, b.badExpected, 'bad');
-  const rarest = (lucky: boolean) => b.log.filter((e) => e.lucky === lucky).sort((x, y) => x.p - y.p || x.half - y.half || x.slot - y.slot).slice(0, 3).map((e) => ({ label: '', value: pgBreakLine(e) }));
+  const rarest = (lucky: boolean) => b.log.filter((e) => e.lucky === lucky).sort((x, y) => x.p - y.p || x.half - y.half || x.slot - y.slot).slice(0, 3).map((e) => ({ label: '', value: pgBreakLine(e), parts: pgBreakParts(e) }));
   const luckyLines = rarest(true), badLines = rarest(false);
   const title = `${bad.charAt(0).toUpperCase()}${bad.slice(1)}`;
   return {

@@ -240,7 +240,8 @@ export interface DiceStats {
   turnsFooting?: Record<string, { teamId: string; attackId: number }> | null;
 }
 /** Owner 10-16 (Turns cut short): a turnover-capable roll or block of the acting team. */
-export interface TcsHit { share: number; measured: boolean; label: string; player: string; teamId: string; half: number; slot: number; turn: number; col?: number; after?: number }
+/** `player` = the roller's id, `playerName` his name (Astra 10-17: the id drives the name chip's detail). */
+export interface TcsHit { share: number; measured: boolean; label: string; player: string; playerName: string; teamId: string; half: number; slot: number; turn: number; col?: number; after?: number }
 /** Owner 10-16: the chain-push surf trial of a block (see DiceStats.turnsChain). */
 export interface TurnsChain {
   blockDefender: string;
@@ -460,6 +461,13 @@ function has(game: GameJson | null, playerId: string | null, name: string): bool
 }
 function playerJson(game: GameJson | null, playerId: string | null): (PlayerLike & Record<string, unknown>) | null {
   return (teamOf(game, playerId)?.playerArray.find((p) => p.playerId === playerId) as (PlayerLike & Record<string, unknown>) | undefined) ?? null;
+}
+/** Owner 10-17 ("our luck chart is using player ids rather than names"): the wire's player carries `playerName`; the
+ *  tallies read `name`, which no FUMBBL player has, so every break line fell back to the id. */
+function playerDisplayName(game: GameJson | null, playerId: string | null): string | null {
+  const player = playerJson(game, playerId);
+  const name = player?.playerName ?? player?.name;
+  return typeof name === 'string' && name ? name : null;
 }
 function otherTeam(game: GameJson | null, team: TeamLike | null): TeamLike | null {
   if (!game || !team) return null;
@@ -878,7 +886,7 @@ function openAttack(stats: DiceStats, game: GameJson, clock: TurnClock, teamId: 
   const score = turnsScore(clock.half, turnNr, 0);
   const id = stats.turnsAttackSeq = (stats.turnsAttackSeq ?? 0) + 1;
   const eventSeq = stats.breakSeq = (stats.breakSeq ?? 0) + 1;
-  const name = playerJson(game, victim)?.name;
+  const name = playerDisplayName(game, victim);
   const rec: TurnsAttackRecord = {
     id, attacker, victimTeamId: victimTeam.teamId, victim, victimName: typeof name === 'string' && name ? name : victim,
     // the credited team's turn; the victim's for a fall or a recovery; `turnTeam` (the blocking team) for a chain surf
@@ -886,7 +894,7 @@ function openAttack(stats: DiceStats, game: GameJson, clock: TurnClock, teamId: 
     stun: opts.recovery ? 0 : score.stun, cas: opts.recovery ? 0 : score.cas,
     drive: opts.recovery ? null : clock.drive, fromDrive: opts.fromDrive, idx: turnIndex(clock.half, turnNr), d: 0,
     open: true, provisional: turnsLeftInHalf(turnNr), key: '', expected: 0, variance: 0, actual: 0, outcome, idle: outcome, recovery: opts.recovery, fall: opts.fall,
-    seq: eventSeq, slot: clockSlot(clock).slot, ...playedCol(stats, (game.teamHome as unknown as TeamLike).teamId, clockSlot(clock)), attackerName: (() => { const n = playerJson(game, attacker)?.name; return typeof n === 'string' && n ? n : attacker; })(),
+    seq: eventSeq, slot: clockSlot(clock).slot, ...playedCol(stats, (game.teamHome as unknown as TeamLike).teamId, clockSlot(clock)), attackerName: playerDisplayName(game, attacker) ?? attacker,
     ...(opts.chain ? { chain: true } : {}),
   };
   rec.key = recordKey(rec, rec.provisional); rec.expected = expectedTurns(rec.key); rec.variance = varianceTurns(rec.key);
@@ -1500,7 +1508,7 @@ function noteBreakEvent(stats: DiceStats, game: GameJson | null, outcomes: reado
   if (!home || !away) return;
   const seq = stats.breakSeq = (stats.breakSeq ?? 0) + 1;
   const at = { ...clockSlot(clock), ...playedCol(stats, home, clockSlot(clock)) };
-  const name = playerJson(game, playerId)?.name;
+  const name = playerDisplayName(game, playerId);
   for (const teamId of [home, away]) {
     addBreak((stats.teams[teamId] ??= emptyTally()).breaks ??= emptyBreaks(), breakDelta(outcomes, happened, teamId),
       () => ({ seq, label, player: playerId ?? '', playerName: typeof name === 'string' && name ? name : playerId ?? '', ...at }));
@@ -1577,8 +1585,8 @@ function noteCutShortRoll(stats: DiceStats, game: GameJson | null, rollerId: str
   const acting = typeof game.actingPlayer?.playerId === 'string' && playing(team, game.actingPlayer.playerId) ? game.actingPlayer.playerId : rollerId;
   const share = cutShortShare(stats, game, team, acting, clock);
   const at = clockSlot(clock);
-  const name = playerJson(game, rollerId)?.name;
-  stats.tcsLast = { share, measured: pFail != null, label, player: typeof name === 'string' && name ? name : rollerId, teamId: team.teamId, ...at,
+  const name = playerDisplayName(game, rollerId);
+  stats.tcsLast = { share, measured: pFail != null, label, player: rollerId, playerName: name ?? rollerId, teamId: team.teamId, ...at,
     ...playedCol(stats, (game.teamHome as unknown as TeamLike).teamId, at) };
   if (pFail == null) return;
   const c = ((stats.teams[team.teamId] ??= emptyTally()).cutShort ??= emptyCutShort());
@@ -1625,7 +1633,7 @@ function noteCutShortStep(stats: DiceStats, game: GameJson | null, r: Report, id
     const c = ((stats.teams[team.teamId] ??= emptyTally()).cutShort ??= emptyCutShort());
     c.actual += cost;
     const { measured: _m, teamId: _t, ...where } = hit!;
-    c.log.push({ ...where, seq: stats.breakSeq = (stats.breakSeq ?? 0) + 1, playerName: hit!.player, share: hit!.share, cost, firstAction: first, streak });
+    c.log.push({ ...where, seq: stats.breakSeq = (stats.breakSeq ?? 0) + 1, playerName: hit!.playerName ?? hit!.player, share: hit!.share, cost, firstAction: first, streak });
   }
   lastFirst[team.teamId] = first;
   stats.tcsArm = createTurnPresentationContext(); stats.tcsHit = null; stats.tcsLast = null;
@@ -1670,10 +1678,12 @@ function rebuildTurnsBreaks(stats: DiceStats): void {
         { p: o.cas / o.den, favours: credited }, { p: o.crowdStun / o.den, favours: credited },
       ];
       const happened = rec.outcome === rec.idle && pending.has(rec.id) ? null : recordHappened(rec);
-      const label = `${rec.outcome} on ${rec.fall ? `${rec.victimName}'s own ${rec.label}` : `${rec.label} vs ${rec.victimName}`}`;
+      const labelHead = `${rec.outcome} on ${rec.fall ? '' : `${rec.label} vs `}`;
+      const labelTail = rec.fall ? `'s own ${rec.label}` : '';
+      const label = `${labelHead}${rec.victimName}${labelTail}`;
       for (const id of new Set([credited, rec.victimTeamId])) {
         addBreak(fresh[id] ??= emptyBreaks(), breakDelta(outcomes, happened, id),
-          () => ({ seq: rec.seq ?? -rec.id, label, player: rec.attacker, playerName: rec.attackerName ?? rec.attacker, half: rec.half, slot: rec.slot ?? 0, turn: rec.turn, ...(rec.col != null ? { col: rec.col } : {}), ...(rec.after != null ? { after: rec.after } : {}) }));
+          () => ({ seq: rec.seq ?? -rec.id, label, player: rec.attacker, playerName: rec.attackerName ?? rec.attacker, victim: rec.victim, victimName: rec.victimName, labelHead, labelTail, half: rec.half, slot: rec.slot ?? 0, turn: rec.turn, ...(rec.col != null ? { col: rec.col } : {}), ...(rec.after != null ? { after: rec.after } : {}) }));
       }
     }
   }

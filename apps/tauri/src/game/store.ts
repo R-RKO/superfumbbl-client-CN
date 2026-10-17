@@ -3871,9 +3871,10 @@ function clearInjuryTokenHolds(): void {
  *   - STUN: the stunned DECORATION (the STUNNED banner / X + caption and the slate tint) of a player whose state
  *     became STUNNED in a frame that queued his STUNNED injury event. The lying pose is the model's and draws at once.
  *     The renderer reads `stunDecorationHolds` (pull-based, before the frame's setGame) and leaves the decoration off.
- *   - SOUND: the wire's injury-type sound on that frame (upstream UtilServerInjury: 'ko' KO, 'injury' BH / SI, 'rip'
- *     dead) when it matches the queued event's result. The frame's apply-time play skips it and the pill plays it. 'fall' (the knock-down / stun sound, also played for falls whose armour held) and the armour
- *     sounds stay where they are. Classic keeps today's apply-time sound.
+ *   - SOUND: the wire's KO sound on that frame (upstream UtilServerInjury 'ko') when it matches the queued event's
+ *     result. The frame's apply-time play skips it and the pill plays it. 'fall' (the knock-down / stun sound, also played for falls whose armour held), the
+ *     casualty sounds 'injury' / 'rip' (owner 10-17: back with the knockdown, see INJURY_PILL_SOUND_BASES) and the
+ *     armour sounds stay where they are. Classic keeps today's apply-time sound.
  *  OCCURRENCE (Astra 10-12): a beat belongs to ONE injury occurrence - the player + the command that carried it (the
  *  frame's command live, the history event's command on review). Only that occurrence's own pill / slot end resolves it,
  *  so an older, delayed pill of the same player can never release a newer stun. A resolved review occurrence is
@@ -4052,10 +4053,13 @@ watch(() => state.apothecaryChoice, (card) => {
 const apothecaryCardVisible = computed(() => (state.apothecaryChoice && apothecaryCardRevealed.value ? state.apothecaryChoice : apothecaryCardLinger.value));
 /** Astra 10-14: the displayed card is only a lingering copy (pointer-inert in the view). */
 const apothecaryCardLingering = computed(() => !!apothecaryCardLinger.value && apothecaryCardVisible.value === apothecaryCardLinger.value);
+/** Owner 10-17 ("our knockdown sound for hits plays instantly but we're holding casualty sounds until the cas result
+ *  displays ... move the casualty sound back to the moment the knockdown occurs. It should replace the knockdown
+ *  sound"): the casualty sounds ('injury' BH / SI, 'rip' dead) play with their frame again, exactly where 'fall' plays
+ *  for a stun - the wire carries ONE result sound per injury frame, so the casualty sound IS that frame's knockdown
+ *  sound. Only the KO sound still waits for the pill (not raised by the owner; the 10-12 rule stands for it). */
 const INJURY_PILL_SOUND_BASES: Readonly<Record<string, readonly number[]>> = {
   ko: [PlayerStateBase.KNOCKED_OUT],
-  injury: [PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY],
-  rip: [PlayerStateBase.RIP],
 };
 /** @internal Does `sound` announce an injury result of `base` (the sound the pill takes over)? */
 export function injuryPillSoundMatches(sound: unknown, base: number): sound is string {

@@ -38,6 +38,9 @@ export interface BreakEntry {
   lucky: boolean;
   /** What happened ("5+ dodge made", "Armour broken" ...) and who rolled / attacked. */
   label: string; player: string; playerName: string;
+  /** Owner 10-17 (the name popup): an attack's victim, and the label split around his name (`labelHead` + victimName +
+   *  `labelTail` = `label`), so the view can render each name as its own token. Absent on a plain roll. */
+  victim?: string; victimName?: string; labelHead?: string; labelTail?: string;
   /** When: the half, the team turns started in it before this one (`slot`, play order from 0), and the turn number. */
   half: number; slot: number; turn: number;
   /** The chance of what happened. */
