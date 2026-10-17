@@ -17,6 +17,19 @@ export function isDevCut(appVersion: string): boolean {
   return /^\d+\.\d+\.\d+[A-Za-z]/.test(appVersion.trim());
 }
 
+/** Owner 10-17: a REQUIRED update (insistent flow) is marked by a line `[required]` in its notes (the app-patch
+ *  manifest's notes via `publish-app-patch --required`, or the GitHub release body for an installer). The prompt
+ *  then has no Later and no dismiss: the coach must Update now (and Restart) before the console is usable again.
+ *  Downloads still start only on the coach's click (owner 10-17: no downloads without consent). */
+export const REQUIRED_UPDATE_MARKER = '[required]';
+export function isRequiredUpdate(notes: string | undefined | null): boolean {
+  return !!notes && notes.replace(/\r\n?/g, '\n').split('\n').some((line) => line.trim().toLowerCase() === REQUIRED_UPDATE_MARKER);
+}
+/** The notes without the marker line (never shown to the coach as text). */
+export function stripUpdateMarkers(notes: string | undefined | null): string | undefined {
+  if (!notes) return notes ?? undefined;
+  return notes.replace(/\r\n?/g, '\n').split('\n').filter((line) => line.trim().toLowerCase() !== REQUIRED_UPDATE_MARKER).join('\n');
+}
 export function updateAvailable(appVersion: string, latestTag: string): boolean {
   if (isDevCut(appVersion)) return false;
   const cur = parseVersion(appVersion), latest = parseVersion(latestTag);

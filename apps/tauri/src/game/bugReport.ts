@@ -22,6 +22,7 @@
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { configWebUnreachableMessage, stripSecretFields } from './settings';
 import type { BugReportScreenshotAttachment } from './bugReportScreenshot';
+import { lastAppPatchStatus } from './appPatch';
 
 /** Owner cap on the free-text field. The textarea enforces it too; this is the authority. */
 export const BUG_REPORT_DESCRIPTION_MAX = 4000;
@@ -228,6 +229,10 @@ export function buildBugReportPayload(input: BugReportInput): Record<string, unk
     clientVersion: input.clientVersion,
     context: {
       ...(input.context ?? {}),
+      // Owner 10-17 (txuri on 1.0.227 a day after 1.0.232): triage sees the shell, the embedded page and the active patch
+      shellVersion: lastAppPatchStatus.value?.shellVersion ?? null,
+      embeddedVersion: lastAppPatchStatus.value?.embeddedVersion ?? null,
+      activePatchVersion: lastAppPatchStatus.value?.activeVersion ?? null,
       wireLogBytes: input.wireLog?.totalBytes ?? 0,
       wireLogTruncated: Boolean(input.wireLog?.truncated) || wireLogText !== (input.wireLog?.text ?? null),
       submittedAt: new Date().toISOString(),

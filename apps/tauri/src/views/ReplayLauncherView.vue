@@ -277,7 +277,7 @@ async function commitOpenedFile(text: string, byteLength: number): Promise<void>
   const request = await readJnlpFile({ text: async () => text });
   const result = routeJnlpRequest(request, { sourceName: 'Opened replay file' });
   if (result === 'host-rejected') throw new Error(jnlpEntryError.value);
-  if (result === 'invalid') throw new Error(jnlpEntryError.value || 'JNLP could not be used.');
+  if (result === 'invalid' || result === 'blocked') throw new Error(jnlpEntryError.value || 'JNLP could not be used.');
 }
 async function loadFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;

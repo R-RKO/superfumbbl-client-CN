@@ -121,6 +121,15 @@ export function setOfficialCoachLookup(lookup: CoachLookup | undefined): void { 
 function currentOfficialLaunch(): RejoinLaunch | null {
   return activeOfficialLaunch && rejoinFlow.launch === activeOfficialLaunch ? activeOfficialLaunch : null;
 }
+/** Astra 10-17 r6: an official join is PENDING from the moment its window opens (rejoin, password join incl. the coach
+ *  lookup, JNLP) until it hands the socket to the store, fails (launchError / refusal) or is cancelled. The update prompt
+ *  stays withheld meanwhile, whatever the lobby socket's own state says. */
+export function officialJoinPending(): boolean {
+  const launch = currentOfficialLaunch();
+  // Astra r7: once the socket is handed to the store, the store's session state / waitingForMatch guard it, and a close
+  // before the snapshot sets the store's joinError (never launchError), so the window must not count as pending then.
+  return !!launch && !launch.launchError && !launch.refusal && !preparedFumbblHandedOff;
+}
 
 /** A failure before the game arrived that the server did not announce as a refusal: show it in the window too. */
 function surfaceOfficialFailure(message: string): void {
@@ -719,6 +728,7 @@ export function clearFumbblLobby(): void {
 }
 
 export type JnlpRouteResult =
+  | 'blocked' // owner 10-17: refused by the launch gate (a required update is pending)
   | 'fork-player'
   | 'fumbbl-player'
   | 'fumbbl-staged'
@@ -749,10 +759,20 @@ function classifiedRequest(request: JnlpJoinRequest): ClassifiedJnlpJoinRequest 
  * Official player requests always stage on the Play blade. The public REST match feed is
  * spectator presentation only; FUMBBL's socket-side game list is the player authority.
  */
+/** Astra 10-17 r3: the launch gate the shell installs (App.vue: a required update is pending). Inside the shared router so
+ *  every entry that routes a JNLP (native intake, the startup drain, the Play blade's file picker, a replay-blade import)
+ *  is refused the same way, however long its file read took. */
+let jnlpLaunchGate: (() => boolean) | null = null;
+export function setJnlpLaunchGate(gate: (() => boolean) | null): void { jnlpLaunchGate = gate; }
 export function routeJnlpRequest(
   request: JnlpJoinRequest,
   options: JnlpRouteOptions = {},
 ): JnlpRouteResult {
+  if (jnlpLaunchGate?.()) {
+    jnlpEntryError.value = 'Update required: install the update before joining a game.';
+    logJnlp(jnlpEntryError.value);
+    return 'blocked';
+  }
   const classified = classifiedRequest(request);
   if (classified?.validation === 'host-policy') {
     jnlpEntryError.value = 'JNLP rejected by host policy: only app-owned server targets may be used.';

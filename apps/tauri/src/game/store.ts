@@ -11405,8 +11405,11 @@ function touchdownResolutionMustWait(frame: QueuedFrame | undefined): boolean {
     touchdownMovementSeenAt = 0;
     return false;
   }
+  // Owner 10-17: the coach's OWN scoring run is rendered by the renderer's walk (no step waits in the store's presentation
+  // queue; a run that ends without a roll has no roll beat either), so the hold also follows the renderer's probe: the
+  // touchdown frame applied under a three-square free walk and tore the pitch down before the token arrived.
   const decision = touchdownResolutionDecision({
-    movementPending: movementPresentationPending(), now: Date.now(),
+    movementPending: movementPresentationPending() || playersAnimating(), now: Date.now(),
     holdSince: touchdownResolutionHoldSince, movementSeenAt: touchdownMovementSeenAt,
     capMs: presentationMs(TOUCHDOWN_RESOLUTION_HOLD_CAP_MS), arrivalBeatMs: presentationMs(TOUCHDOWN_ARRIVAL_BEAT_MS),
   });
@@ -14088,8 +14091,11 @@ function plannerAdvance() {
   // A Blitz plan that has sent nothing yet is waiting for exactly that selection: it holds here (the frames after
   // targetSelected wake it; the watchdog still bounds it) instead of being flushed as "the turn ended".
   if (plannerBlitzAwaitingTarget(p, g)) return;
-  if (!allowedTurnMode) { plannerFlush(`the turn ended (${turnMode || 'no turn'})`); return; }
-  if (currentTurnKey(g) !== p.turnKey) { plannerFlush('the turn changed'); return; }
+  // Owner 10-17: a turn that ends under a live plan is a server-resolved outcome (a failed pick-up's turnover, a
+  // timeout) that the roll and the turnover splash already show; like a knocked-down mover it retires quietly, never
+  // with the "Plan cancelled" notice (which was surfacing on every failed pick-up).
+  if (!allowedTurnMode) { plannerRetireQuietly(`the turn ended (${turnMode || 'no turn'})`); return; }
+  if (currentTurnKey(g) !== p.turnKey) { plannerRetireQuietly('the turn changed'); return; }
   const base = plannerBase(p.playerId);
   // knocked down / stunned / removed at any point = turnover-ish; never continue a plan past it
   // Owner 10-06: a knocked-down mover is a server-resolved outcome (failed dodge / rush / foul...) — the roll's own

@@ -58,10 +58,11 @@ import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/b
 import { onReportOwnedKey } from './game/reportModalKeys';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchLatestRelease, inAppUpdaterEnabled, MENU_RETURN_UPDATE_CHECK_DELAY_MS, parseVersion, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, updateAvailable } from './game/updateCheck';
+import { newerVersion, setUpdateChecker, updateAvailableVersion, updateHintAfterReport } from './game/updateSignal';
+import { fetchLatestRelease, inAppUpdaterEnabled, isRequiredUpdate, MENU_RETURN_UPDATE_CHECK_DELAY_MS, parseVersion, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, stripUpdateMarkers, updateAvailable } from './game/updateCheck';
 import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
-import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
+import { decideAppPatch, installAppPatch, lastAppPatchStatus, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { CONFIRMATION_SETTING_ROWS } from './game/confirmationSettings';
 import { CONTROL_ACTIONS, activeInput, isPadOnlyAction, connectedPads, padShortName, bodyCursorHider, createInputSwitcher, legacyCollisionNote, mouseButtonInput, actionsForInput, controlAction, controllerInputLabel, createControllerRouter, dispatchControlAction, findBindingConflicts, getBinding, isBindingEditable, nextInCycle, registerActionHandler, resetControlBindings, setBinding, type BindingMethod, type BindingSlot, type ControlActionId } from './game/controls';
@@ -96,7 +97,11 @@ import {
   jnlpEntryError,
   readJnlpFile,
   resolveAmbiguousJnlpEntry,
+  fumbblLobbyListRequested,
+  fumbblLobbyState,
+  officialJoinPending,
   routeJnlpRequest,
+  setJnlpLaunchGate,
   useNativeJnlpIntake,
   type JnlpRouteResult,
 } from './game/jnlpRouting';
@@ -143,7 +148,10 @@ const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in windo
 const isO66Build = appVersion.includes('o66');
 // Owner 09-23: version check — at startup ask GitHub for the latest public release; when it is newer than this
 // build, prompt with a button that opens the release page in the system browser. Dev cuts never prompt.
-const updatePrompt = ref<{ version: string; url: string; inApp: boolean; notes?: string } | null>(null);
+const updatePrompt = ref<{ version: string; url: string; inApp: boolean; notes?: string; required?: boolean } | null>(null);
+const updatePromptRoot = ref<HTMLElement | null>(null);
+// Astra 10-17: a required prompt takes the focus when it opens (a Play button that had it must not keep Enter)
+watch(() => updatePrompt.value?.required === true, (required) => { if (required) void nextTick(() => { const b = updatePromptRoot.value?.querySelector<HTMLElement>('button.primary'); b?.focus(); }); });
 // Owner 09-25: IN-APP updater — the packaged public edition asks tauri-plugin-updater (latest.json on the public
 // release, minisign-verified against the pubkey in tauri.conf.json), downloads with progress, installs and
 // relaunches. Other builds keep the release-page prompt. `pendingUpdate` holds the plugin's Update handle.
@@ -167,15 +175,37 @@ async function loadAppPatchStatus(): Promise<AppPatchStatus | null> {
   try {
     appPatchHost ??= await tauriAppPatchHost();
     appPatchStatus.value = await appPatchHost.status();
+    lastAppPatchStatus.value = appPatchStatus.value; // owner 10-17: bug reports carry the shell / patch state
   } catch (error) { console.warn('[app-patch] status unavailable', error); }
   return appPatchStatus.value;
 }
 // Owner 09-25: the prompt NAGS — every launch and every hourly poll re-offers an available update, "Later" or not.
 let updateCheckInFlight = false;
+/** Astra 10-17 r8: the running check's promise, so an on-demand caller (the post-report hint) awaits it instead of
+ *  returning before it recorded anything. */
+let updateCheckPromise: Promise<void> | null = null;
+setUpdateChecker(() => checkForUpdate()); // owner 10-17: on demand after a bug report (updateSignal)
+/** Astra 10-17 r3: a game is loaded, OR a join is still in flight (connecting / authenticating / joining, or joined and
+ *  waiting for the opponent): the snapshot would then load under the prompt. The next menu return re-checks. */
+function joinOrGameInProgress(): boolean {
+  if (gameStore.game.value || gameStore.state.waitingForMatch) return true;
+  // Astra r4: 'joined' is entered on SERVER_JOIN, before the snapshot (spectate has no waitingForMatch then)
+  if (['connecting', 'versioning', 'authenticating', 'joining', 'joined'].includes(String(gameStore.state.sessionState))) return true;
+  // Astra r4: an official FUMBBL join is prepared on its own lobby socket (fumbblLobbyState) with a named target until
+  // the handoff; a password join's coach lookup sits in that window too. Neither touches the store's session state.
+  // Astra r5: a 'ready' lobby that only LISTED the coach's games (My Active Games) is not a join; the wait target is
+  // never consulted (it can outlive a cancelled join).
+  if (officialJoinPending()) return true; // Astra r6: the tracked official join (its lookup window included)
+  const lobby = String(fumbblLobbyState.value);
+  if (['connecting', 'versioning', 'authenticating', 'joining', 'joined'].includes(lobby)) return true;
+  return lobby === 'ready' && !fumbblLobbyListRequested.value;
+}
 async function checkForUpdate(): Promise<void> {
-  if (updatePrompt.value || updateProgress.value || updateCheckInFlight) return;
+  if (updatePrompt.value || updateProgress.value) return;
+  if (updateCheckInFlight) { await updateCheckPromise; return; } // join the running check (its result is what the caller wants)
   updateCheckInFlight = true;
-  try { await runUpdateCheck(); } finally { updateCheckInFlight = false; }
+  updateCheckPromise = runUpdateCheck();
+  try { await updateCheckPromise; } finally { updateCheckInFlight = false; updateCheckPromise = null; }
 }
 async function runUpdateCheck(): Promise<void> {
   if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
@@ -184,11 +214,12 @@ async function runUpdateCheck(): Promise<void> {
     if (appPatchHost) {
       try {
         const decision = decideAppPatch(await appPatchHost.check());
+        updateAvailableVersion.value = decision.kind === 'offer' ? decision.offer.version : decision.kind === 'shell' ? decision.version : null;
         if (decision.kind === 'offer') {
-          if (gameStore.game.value) return; // never surface the prompt mid-game (the check was awaited)
+          if (joinOrGameInProgress()) return; // never surface the prompt mid-game or mid-join (the check was awaited)
           pendingPatch.value = decision.offer;
           patchReady.value = decision.offer.toFetch.length === 0;
-          updatePrompt.value = { version: decision.offer.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases`, inApp: true, notes: decision.offer.notes };
+          updatePrompt.value = { version: decision.offer.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases`, inApp: true, notes: stripUpdateMarkers(decision.offer.notes), required: isRequiredUpdate(decision.offer.notes) };
           return;
         }
         // 'shell': the patch needs a newer shell - the installer updater below offers it; the patch follows after.
@@ -200,9 +231,10 @@ async function runUpdateCheck(): Promise<void> {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check({ timeout: 15_000 });
       if (update && shellUpdateAvailable(shellVersion, update.version)) {
-        if (gameStore.game.value) return;
+        updateAvailableVersion.value = newerVersion(updateAvailableVersion.value, update.version);
+        if (joinOrGameInProgress()) return;
         pendingUpdate = update as unknown as UpdaterUpdate;
-        updatePrompt.value = { version: update.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases/tag/v${update.version}`, inApp: true, notes: update.body ?? undefined };
+        updatePrompt.value = { version: update.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases/tag/v${update.version}`, inApp: true, notes: stripUpdateMarkers(update.body), required: isRequiredUpdate(update.body) };
       }
       return;
     } catch (error) {
@@ -210,8 +242,9 @@ async function runUpdateCheck(): Promise<void> {
     }
   }
   const latest = await fetchLatestRelease((url, init) => (inTauri ? tauriFetch(url, init) : fetch(url, init)));
-  if (gameStore.game.value) return;
-  if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false };
+  if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updateAvailableVersion.value = newerVersion(updateAvailableVersion.value, latest.version);
+  if (joinOrGameInProgress()) return;
+  if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false }; // the release-page fallback carries no notes: never required
 }
 async function installAppPatchNow(offer: AppPatchOffer, host: AppPatchHost): Promise<void> {
   updateError.value = '';
@@ -257,7 +290,10 @@ async function installUpdateNow(): Promise<void> {
     updateError.value = `The update could not be installed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
-function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; pendingPatch.value = null; patchReady.value = false; }
+function dismissUpdate(): void {
+  if (updatePrompt.value?.required) return; // owner 10-17: a required update cannot be put off (Esc, backdrop, Later)
+  updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; pendingPatch.value = null; patchReady.value = false;
+}
 function updatePercent(): number | null { const p = updateProgress.value; return p && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null; }
 // Owner 09-25: an invisible marker for the first in-app update test (1.0.23 → 1.0.24) — the console shows the build.
 // Owner 09-30 (S51): the packaged public edition logs `app X (shell Y)` once the shell answers.
@@ -323,7 +359,11 @@ onMounted(async () => {
     openSpectateGame(target.gameId);
   });
 });
-function openUpdateRelease(): void { const p = updatePrompt.value; if (!p) return; void openExternal(p.url); updatePrompt.value = null; }
+function openUpdateRelease(): void {
+  const p = updatePrompt.value; if (!p) return;
+  void openExternal(p.url);
+  if (!p.required) updatePrompt.value = null; // Astra 10-17: the external download is no way out of a required update
+}
 
 // Beta launch splash (owner 10-05): FIRST on EVERY launch, both editions, ahead of the intro / legal /
 // contributions cards. Plain in-memory ref — never persisted, so it re-shows on each app start. It is part
@@ -917,11 +957,19 @@ function openTournamentTeamBuilder(rulesetPackName: string): void {
  *  replay route lands on it; the loaded game takes over. (Owner 09-25 had pulled it from the public edition.) */
 const replayHomeView: AppView = 'replay';
 function applyJnlpResultView(result: JnlpRouteResult): void {
-  settleFumbblFloatAfterLaunch(result);
+  settleFumbblFloatAfterLaunch(result === 'blocked' ? 'intake-failed' : result);
   if (result === 'replay') view.value = replayHomeView;
   else if (result === 'spectate') view.value = 'spectate';
   else if (result === 'fork-player' || result === 'fumbbl-player' || result === 'fumbbl-staged') view.value = 'play';
 }
+/** Astra 10-17 r2: under a required update no launch starts (it would run on the old patch beneath the prompt). One
+ *  guard for every entry: immediate JNLP intake, the startup-held JNLP drain, and Discord's Spectate. */
+function launchBlockedByRequiredUpdate(): boolean {
+  if (!updatePrompt.value?.required) return false;
+  showCornerNotice('report', 'Update required: install the update before joining a game.', 6000);
+  return true;
+}
+setJnlpLaunchGate(() => launchBlockedByRequiredUpdate()); // the shared router refuses under a required update
 function routeNativeJnlp(request: JnlpJoinRequest): void {
   cancelLeaveGame(); // a JNLP intake never inherits a Return-to-Menu prompt opened for the previous game
   const result = routeJnlpRequest(request, {
@@ -937,7 +985,7 @@ useNativeJnlpIntake((request) => {
     legalHeldJnlps.push(request);
     return;
   }
-  routeNativeJnlp(request);
+  routeNativeJnlp(request); // (the router refuses under a required update, for the startup drain too)
 }, () => settleFumbblFloatAfterLaunch('intake-failed')); // a launch that could not be read or parsed is over too
 function chooseAmbiguousJnlp(choice: 'replay' | 'live'): void {
   applyJnlpResultView(resolveAmbiguousJnlpEntry(choice));
@@ -1071,7 +1119,7 @@ async function loadReplayFileFromMenu(event: Event): Promise<void> {
       const request = await readJnlpFile({ text: async () => text });
       const routeResult = routeJnlpRequest(request, { sourceName: 'Opened replay file' });
       if (routeResult === 'host-rejected') throw new Error(jnlpEntryError.value);
-      if (routeResult === 'invalid') throw new Error(jnlpEntryError.value || 'JNLP could not be used.');
+      if (routeResult === 'invalid' || routeResult === 'blocked') throw new Error(jnlpEntryError.value || 'JNLP could not be used.');
       applyJnlpResultView(routeResult);
     },
   });
@@ -1570,6 +1618,7 @@ function selectBlade(nextView: AppView) {
 /** Connect through the target selected by the Spectate row action. FUMBBL and Super FUMBBL each apply their
  * target before emitting; overriding it here strands fork game ids on the official server. */
 function openSpectateGame(gameId: number) {
+  if (launchBlockedByRequiredUpdate()) return; // Astra 10-17 r2: Discord Spectate too
   view.value = 'spectate';
   ui.browserOpen = false;
   void gameStore.connect({
@@ -1880,6 +1929,7 @@ function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'):
   // Owner 10-13: nothing on the shell acts under the open Report dialog (Start would open Settings over it, a blade key
   // would switch the blade it is reporting from).
   if (shellReportOpen.value && (id === 'gameMenu' || id === 'bladePrev' || id === 'bladeNext')) return false;
+  if (updatePrompt.value?.required && !gameStore.game.value) return false; // Astra 10-17: nothing on the shell acts under a required update
   if (id === 'gameMenu') {
     if (settingsEscape()) return true; // Settings (or a modal over it) is open: the same Esc step
     if (gameStore.game.value || ui.setupWizardRerunOpen) return false;
@@ -1923,12 +1973,17 @@ function openShellReport(): void {
 }
 function onShellReportSent(info: { wireLogAttached: boolean }): void {
   showCornerNotice('report', `🐞 Report sent, thanks!${info.wireLogAttached ? ' Your most recent game log went with it.' : ''}`, 4000);
+  // Owner 10-17: AFTER the report (never before: the report is wanted), tell the coach when a newer build exists
+  void updateHintAfterReport(appVersion).then((hint) => { if (hint) showCornerNotice('report', hint, 10000); });
 }
 
 function onShellActionKey(event: KeyboardEvent): void {
   // Owner 10-13 (Astra P1): the open Report dialog owns the keyboard. Keys typed inside it never get here (its root
   // stops them); a key whose target is outside it (body, or a blade button tabbed to) gets no native Enter / Space
   // activation (no selectBlade under the dialog), and Tab comes back into the report.
+  // Astra 10-17: a required update prompt owns the keyboard the same way the Report dialog does (no Enter / Space on a
+  // Play button behind it, Tab comes back into the prompt), and FIRST: it renders above an open Report dialog (r2).
+  if (updatePrompt.value?.required) { onReportOwnedKey(event, updatePromptRoot.value); return; }
   if (shellReportOpen.value) { onReportOwnedKey(event, shellReportModal.value?.root ?? null); return; }
   if (gameStore.game.value || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || capturingKey.value || capturingBinding.value) return;
@@ -2297,8 +2352,9 @@ onBeforeUnmount(() => {
     </div>
     <!-- Owner 09-23: a newer public release exists — one button opens its GitHub page. -->
     <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" data-testid="update-prompt" @click.self="!updateProgress && dismissUpdate()">
-      <div class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
-        <h3 id="update-prompt-title">Super FUMBBL {{ updatePrompt.version }} is available</h3>
+      <div ref="updatePromptRoot" class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
+        <h3 id="update-prompt-title">{{ updatePrompt.required ? `Super FUMBBL ${updatePrompt.version} is required` : `Super FUMBBL ${updatePrompt.version} is available` }}</h3>
+        <p v-if="updatePrompt.required" class="hint">This update is required to keep playing. Nothing downloads until you choose Update now.</p>
         <!-- Owner 09-25: the in-app path downloads + installs here and relaunches; the fallback opens the release page. -->
         <div v-if="updateProgress" class="update-progress" role="status" aria-live="polite">
           <div class="update-progress-track"><div class="update-progress-fill" :style="{ width: (updatePercent() ?? 100) + '%' }" :data-indeterminate="updatePercent() === null"></div></div>
@@ -2310,12 +2366,12 @@ onBeforeUnmount(() => {
         <div v-if="patchReady" class="save-prompt-actions">
           <small>Update installed.</small>
           <button class="primary" @click="restartAfterPatch()">Restart</button>
-          <button @click="dismissUpdate()">Later</button>
+          <button v-if="!updatePrompt.required" @click="dismissUpdate()">Later</button>
         </div>
         <div v-else-if="!updateProgress" class="save-prompt-actions">
           <button v-if="updatePrompt.inApp && (!updateError || pendingPatch)" class="primary" @click="installUpdateNow()">Update now</button>
           <button v-else class="primary" @click="openUpdateRelease()">Download now</button>
-          <button @click="dismissUpdate()">{{ updatePrompt.inApp ? 'Later' : 'Download later' }}</button>
+          <button v-if="!updatePrompt.required" @click="dismissUpdate()">{{ updatePrompt.inApp ? 'Later' : 'Download later' }}</button>
         </div>
       </div>
     </div>

@@ -21,6 +21,8 @@ export type AppPatchDecision =
   | { kind: 'shell'; version: string; shellMin: string }
   | { kind: 'offer'; offer: AppPatchOffer };
 
+/** Owner 10-17: the last status the shell reported (App.vue keeps it current), for the bug-report context. */
+export const lastAppPatchStatus: { value: AppPatchStatus | null } = { value: null };
 export function decideAppPatch(check: AppPatchCheck): AppPatchDecision {
   if (check.needsShell) return { kind: 'shell', version: check.version ?? '', shellMin: check.shellMin ?? '' };
   if (check.upToDate || !check.version || !check.manifestSha) return { kind: 'none' };

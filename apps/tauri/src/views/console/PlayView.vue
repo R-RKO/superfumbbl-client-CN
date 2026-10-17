@@ -17,6 +17,7 @@ import {
   fumbblLobbyListRequested,
   fumbblLobbyState,
   fumbblLobbyWaitTarget,
+  jnlpEntryError,
   readJnlpFile,
   routeJnlpRequest,
   stageFumbblPasswordLobby,
@@ -303,6 +304,7 @@ async function openJnlpFile(event: Event): Promise<void> {
     const request = await readJnlpFile(file);
     const result = routeJnlpRequest(request, { deferFumbblPlayer: true, sourceName: file.name });
     if (result === 'invalid') loadError.value = 'This file does not contain a playable FUMBBL request.';
+    else if (result === 'blocked') loadError.value = jnlpEntryError.value; // a required update is pending
   } catch (error) {
     loadError.value = `Could not read the JNLP file: ${error instanceof Error ? error.message : String(error)}`;
   }

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { updateHintAfterReport } from '../game/updateSignal';
+declare const __APP_VERSION__: string;
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 import { installMouseEntropy } from '../game/mouseEntropy';
 import { composeGraphicalJoins } from '../game/reportFormatter';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
@@ -2250,6 +2253,8 @@ function pushReportToast(text: string, ms = 6000) {
 
 function onReportSent() {
   pushReportToast('🐞 Report sent — thanks! The wire log went with it.');
+  // Owner 10-17: after the report, a toast says a newer build exists (the prompt itself never opens mid-game)
+  void updateHintAfterReport(APP_VERSION).then((hint) => { if (hint) pushReportToast(hint); });
 }
 
 /**
