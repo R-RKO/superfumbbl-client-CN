@@ -604,7 +604,9 @@ const legacyState = reactive({
   /** Local visual launch intent for an accepted movement command. Authority remains the model sync: Modern may
    *  begin a bounded first-stride anticipation, then the confirmed presentationStep takes ownership. */
   movementIntent: null as
-    | { playerId: string; from: [number, number]; to: [number, number]; movementUsedBefore: number | null; awaitsRoll: boolean; rollRequirements: PlanResolution[]; failureConfirmed: boolean; latencyObserved: boolean; sentAt: number; expectedRttMs: number; occurrenceId: number; seq: number }
+    | { playerId: string; from: [number, number]; to: [number, number]; movementUsedBefore: number | null; awaitsRoll: boolean; rollRequirements: PlanResolution[]; failureConfirmed: boolean; latencyObserved: boolean; sentAt: number; expectedRttMs: number; occurrenceId: number; seq: number;
+        /** Owner 10-17 (pipelined first step): sent before the server offered the square; awaitsRoll is a stand-in until refreshMovementIntentRolls binds the offer. */
+        rollsUnknown?: boolean }
     | null,
   /** A failed movement roll and its reroll settlement are authoritative presentation fences. The model has
    * already applied `coordinate`; Modern must retire any older cursor/tween for this exact movement occurrence
@@ -7638,7 +7640,10 @@ function settleMovementIntentAfterFrame(
   }
 }
 
-function publishMovementIntent(playerId: string, from: [number, number], to: [number, number]): void {
+/** opts.rollsUnknown (owner 10-17, pipelined first step): the server has not offered the square yet, so its rolls are
+ *  unknown; the intent is published as awaiting a roll (no first-stride anticipation: roll first, then the walk) until
+ *  refreshMovementIntentRolls binds the real requirements from the echo. */
+function publishMovementIntent(playerId: string, from: [number, number], to: [number, number], opts: { rollsUnknown?: boolean } = {}): void {
   if (Math.max(Math.abs(from[0] - to[0]), Math.abs(from[1] - to[1])) !== 1) return;
   const rawCurrentMove = (game.value?.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove;
   const currentMove = typeof rawCurrentMove === 'number' && Number.isFinite(rawCurrentMove)
@@ -7649,8 +7654,9 @@ function publishMovementIntent(playerId: string, from: [number, number], to: [nu
     from: [from[0], from[1]],
     to: [to[0], to[1]],
     movementUsedBefore: currentMove,
-    awaitsRoll: rollRequirements.length > 0,
+    awaitsRoll: opts.rollsUnknown === true || rollRequirements.length > 0,
     rollRequirements,
+    ...(opts.rollsUnknown === true ? { rollsUnknown: true } : {}),
     failureConfirmed: false,
     latencyObserved: false,
     sentAt: Date.now(),
@@ -7658,6 +7664,65 @@ function publishMovementIntent(playerId: string, from: [number, number], to: [nu
     occurrenceId: ++movementIntentOccurrenceSeq,
     seq: ++movementIntentSeq,
   };
+}
+
+/** Owner 10-17 (pipelined first step): the intent was published before the server offered the square, so it carries no
+ *  roll requirements. Once the declaration's echo publishes the offer, bind the Dodge / Rush / Pick-up it owes to the
+ *  still-unechoed intent, so the token's step keeps its roll beat (roll first, then the walk) and the failed-roll fence
+ *  owns the walk exactly as when the step followed the echo. */
+function refreshMovementIntentRolls(playerId: string, to: [number, number]): void {
+  const intent = state.movementIntent;
+  if (!intent || intent.playerId !== playerId || intent.to[0] !== to[0] || intent.to[1] !== to[1] || intent.latencyObserved || intent.failureConfirmed) return;
+  const rollRequirements = game.value ? [...movementRollResolutions(game.value, playerId, to)] : [];
+  const awaitsRoll = rollRequirements.length > 0;
+  // the echo also brings the acting player (currentMove 0 before the first square): the renderer's first-stride
+  // anticipation needs that, and a NEW seq when the square turns out roll-free (its watcher keys on seq; the
+  // occurrence stays, so every fence / reconciliation keyed on it is unaffected)
+  const rawCurrentMove = (game.value?.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove;
+  const movementUsedBefore = intent.movementUsedBefore ?? (typeof rawCurrentMove === 'number' && Number.isFinite(rawCurrentMove) ? Math.max(0, rawCurrentMove) : null);
+  const seq = awaitsRoll === intent.awaitsRoll ? intent.seq : ++movementIntentSeq;
+  const { rollsUnknown: _unknown, ...known } = intent;
+  state.movementIntent = { ...known, rollRequirements, awaitsRoll, movementUsedBefore, seq };
+}
+/** The rolls the server's offer of `to` FROM `from` carried for this player, read from the recorded offer occurrence
+ *  whatever the player's current square (Astra r1 P2: a frame can bring the acting player, the offer AND the coordinate
+ *  arrival at once; currentMoveOffer would then look for an offer from the new square). null = no such offer recorded. */
+/** The Dodge / Rush the applied frame itself offered for `to` BEFORE it moved `playerId` (wire order), for the frame that
+ *  brings the acting player, the offer and the arrival at once: the offer recorder keys origins on the post-frame
+ *  coordinate and a same-frame removal drops the record, so only the wire still has it. Pick-up is not derivable here
+ *  (the ball moved with the frame); its report, when any, is in this frame or the next. null = no such offer. */
+function frameOfferRollsBeforeArrival(cmd: Record<string, unknown> | undefined, playerId: string, to: [number, number]): PlanResolution[] | null {
+  const changes = ((cmd?.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray ?? []) as { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: { coordinate?: unknown; minimumRollDodge?: unknown; minimumRollGfi?: unknown } | null }[];
+  let found: PlanResolution[] | null = null;
+  for (const change of changes) {
+    const id = String(change.modelChangeId ?? '');
+    if (id === 'fieldModelSetPlayerCoordinate' && String(change.modelChangeKey ?? '') === playerId) break;
+    if (id !== 'fieldModelAddMoveSquare') continue;
+    const raw = change.modelChangeValue?.coordinate;
+    if (!Array.isArray(raw) || Number(raw[0]) !== to[0] || Number(raw[1]) !== to[1]) continue;
+    found = [];
+    if ((Number(change.modelChangeValue?.minimumRollGfi) || 0) > 0) found.push('gfi');
+    if ((Number(change.modelChangeValue?.minimumRollDodge) || 0) > 0) found.push('dodge');
+  }
+  return found;
+}
+/** Astra r2: the offer's Dodge / Rush joined with a Pick-up the pre-declaration intent already knew (the ball sat on
+ *  the square); null when no offer is known at all. */
+function pipelinedStepRolls(known: readonly PlanResolution[], offered: PlanResolution[] | null): PlanResolution[] | null {
+  if (!offered) return null;
+  return known.includes('pickup') && !offered.includes('pickup') ? [...offered, 'pickup'] : offered;
+}
+function offeredRollResolutions(playerId: string, from: [number, number], to: [number, number]): PlanResolution[] | null {
+  const occurrence = moveOfferOccurrences.get(moveOfferTargetKey(to));
+  if (!occurrence || occurrence.gameId !== currentGameId() || occurrence.playerId !== playerId
+      || occurrence.origin[0] !== from[0] || occurrence.origin[1] !== from[1]) return null;
+  const resolutions: PlanResolution[] = [];
+  if (occurrence.minimumRollGfi > 0) resolutions.push('gfi');
+  if (occurrence.minimumRollDodge > 0) resolutions.push('dodge');
+  const g = game.value;
+  const ball = g?.fieldModel.ballCoordinate as [number, number] | undefined;
+  if (g && !!g.fieldModel.ballInPlay && g.fieldModel.ballMoving === true && !!ball && ball[0] === to[0] && ball[1] === to[1]) resolutions.push('pickup');
+  return resolutions;
 }
 
 /** Explicit cinematic holds run at full duration for spectator playback, independent of replay speed. */
@@ -8526,7 +8591,10 @@ function applyFrameContents(frame: QueuedFrame) {
           const matchingIntent = movementIntentAtFrameStart?.playerId === d.playerId
             && movementIntentAtFrameStart.to[0] === a[0] && movementIntentAtFrameStart.to[1] === a[1]
             ? movementIntentAtFrameStart : null;
-          const rollRequirements = matchingIntent?.rollRequirements
+          // Owner 10-17: a pipelined intent carries no rolls until the offer is known; take them from the offer this
+          // frame (or an earlier one) recorded for this edge, never from the intent's empty stand-in.
+          const rollRequirements = (matchingIntent && !matchingIntent.rollsUnknown ? matchingIntent.rollRequirements : null)
+            ?? (matchingIntent?.rollsUnknown ? pipelinedStepRolls(matchingIntent.rollRequirements, offeredRollResolutions(d.playerId, [b[0], b[1]], [a[0], a[1]]) ?? frameOfferRollsBeforeArrival(cmd, d.playerId, [a[0], a[1]])) : null)
             ?? preMovementRollRequirements.get(`${a[0]},${a[1]}`) ?? [];
           observeMovementIntentEcho(d.playerId, [a[0], a[1]]);
           enqueueMoveStep(
@@ -11179,6 +11247,12 @@ const TIMEOUT_ELIGIBLE_TURN_MODES = new Set(['regular', 'blitz']);
  *  requires a model actingPlayer; implicit-declare mini-phases (kickoffReturn/passBlock On the Ball,
  *  highKick, quickSnap…) have none on the first clientMove and must stay legacy until modeled. */
 const RAIL_CUTOVER_TURN_MODES = new Set(['regular', 'blitz']);
+/** Owner 10-17 ("let's pipeline the first step"): the plan's first clientMove goes out right behind its declaration,
+ *  before the server's echo (the acting player and the offered squares). Declaring on action (10-15) had put one
+ *  round trip between the destination click and the token setting off. Only this send skips the move rail's
+ *  ownership projection, which can only judge from the echo it is ahead of; the server validates the move itself
+ *  and processes the two commands in order. Set for the duration of that one sendCommand call. */
+let pipelinedFirstStepSend = false;
 
 /** Turn modes that upstream closes with CLIENT_END_TURN. */
 const END_TURN_CLOSABLE_TURN_MODES = new Set([
@@ -13316,6 +13390,12 @@ interface PlannerPlan {
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
    *  server republish of that target, never the surviving entry from the prior roll generation. */
   sentOfferRevisions: number[];
+  /** Owner 10-17: the first square went out behind the declaration, before the server offered it. Its Dodge / Rush /
+   *  Pick-up values are unknown until the echo publishes the offer; plannerAdvance refreshes squareResolutions[0]
+   *  from that offer once (then clears this) so the second square still waits for the first square's rolls. */
+  pipelinedFirst?: boolean;
+  /** The square the pipelined first step left from (its offer, once published, is recorded for that origin). */
+  pipelinedFrom?: [number, number];
   targetCoordinate: [number, number] | null;   // pass target square
   targetPlayerId: string | null;               // foul (defender) / hand-off (catcher)
   blockKind: string | null;                    // #34: a BLITZ's optional special block-kind (stab/chainsaw/vomit/breatheFire/chomp) — rides sendBlock's flavor flags
@@ -13951,8 +14031,40 @@ function plannerStart(input: {
   // S42: a foul plan's own (re)declare must not lose the coach's Foul / Chainsaw row: re-bind it to that declare.
   if (!alreadyDeclared) gameStore.declareAction(playerId, declare, undefined, carriedFoulChoice === undefined ? {} : { foulChainsaw: carriedFoulChoice });
   else if (carriedFoulChoice !== undefined) armFoulChoice(game.value, playerId, carriedFoulChoice, declare);
+  if (!alreadyDeclared) sendPipelinedFirstStep();
   plannerAdvance();
   return true;
+}
+/** Owner 10-17: send the plan's first square right behind its declaration instead of waiting for the echo. Only a
+ *  plain walk (actKind 'move' declared as Move) whose declaration is in flight for this player, with no dialog up, in
+ *  a regular / blitz turn, and only the first (adjacent) square of the planned route: the planner's own pre-declaration
+ *  resolution of that square stands until the echo refreshes it. The server validates the move; a refused declaration
+ *  leaves the move unanswered and the plan's silence watchdog retires it (fail open). Everything after the first
+ *  square is unchanged: one square per server echo. */
+function sendPipelinedFirstStep(): void {
+  const p = plannerPlan;
+  const g = game.value;
+  if (!p || !g || p.phase !== 'declaring' || !p.moving || p.actKind !== 'move' || p.declare !== 'move') return;
+  if (p.onTheBallMode !== null || g.dialogParameter != null) return;
+  if (!(declarationAwaitingEcho && declarationAwaitingEchoFor === p.playerId)) return; // the declaration did not go out
+  if (!RAIL_CUTOVER_TURN_MODES.has(String(g.turnMode ?? ''))) return;
+  if (endTurnInFlight) return; // Astra r1: our End Turn is unanswered; nothing speculative rides behind a declaration the turn change will refuse
+  const from = g.fieldModel.playerDataArray.find((d) => d.playerId === p.playerId)?.playerCoordinate;
+  const first = p.route[0];
+  if (!from || !first || Math.max(Math.abs(first[0] - from[0]), Math.abs(first[1] - from[1])) !== 1) return;
+  pipelinedFirstStepSend = true;
+  let accepted = false;
+  try { accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: [from[0], from[1]], coordinatesTo: [[first[0], first[1]]] }); }
+  finally { pipelinedFirstStepSend = false; }
+  if (!accepted) return; // refused locally: the ordinary echo-driven first step follows as before
+  publishMovementIntent(p.playerId, [from[0], from[1]], first, { rollsUnknown: true });
+  p.phase = 'moving';
+  p.sentIdx = 0;
+  p.sentOfferRevisions[0] = -1; // no offer yet: the echo's refreshed offer is the floor for the next square
+  p.pipelinedFirst = true;
+  p.pipelinedFrom = [from[0], from[1]];
+  plannerSentCommand(p); // the same bookkeeping as the echo-driven first step (silence watchdog, sent marker)
+  log('system', `play: STEP ${playerName(g, p.playerId)} - 1 sq, sent with the declaration (server resolves)`);
 }
 
 /** Owner 10-13: why a walk-then-pass plan must NOT throw from the square it actually reached (null = throw).
@@ -14183,6 +14295,10 @@ function plannerAdvance() {
     }
     case 'moving': {
       if (plannerEndAfterOpponentPrompt(p, g)) return; // owner 10-10 (every wake, not only a frame's own apply)
+      // Owner 10-17 (pipelined first step): the first square went out behind the declaration, so the model may not
+      // show the acting player yet; wait for the echo (the declaration latch's own fail-open release bounds it).
+      if (p.pipelinedFirst && actingId !== p.playerId && declarationAwaitingEcho && declarationAwaitingEchoFor === p.playerId) return;
+      if (p.pipelinedFirst && actingId === p.playerId) return; // the offer is not published yet; plannerBindPipelinedFirst binds it on the frame that brings it
       if (actingId !== p.playerId) {
         if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`); // the fall/turnover tells the story
         else if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
@@ -18318,6 +18434,36 @@ export function installSendOffTestHarness(
   };
 }
 
+/** Owner 10-17 (pipelined first step): the first square left before the server offered it, so its Dodge / Rush / Pick-up
+ *  were unknown (no move squares before the declaration). The frame that brings our acting player and the offer binds
+ *  them exactly as the echo-driven first send always did: squareResolutions[0], the offer revision floor, and the
+ *  still-unechoed intent's roll requirements (the step's roll beat). Astra r1 P2: if that frame ALSO carries the
+ *  coordinate arrival, the offer from the origin is still recorded per target (offeredRollResolutions) and binds the same
+ *  way, so a Dodge reported in this frame or the next settles it before the second square may leave; arrival alone is
+ *  never read as the roll being resolved. */
+function plannerBindPipelinedFirst(p: PlannerPlan, cmd: Record<string, unknown> | undefined): void {
+  if (plannerActingId() !== p.playerId) return;
+  const g = game.value;
+  const first = p.route[0];
+  const at = plannerCoord(p.playerId);
+  if (!g || !first || !at) return;
+  const from = p.pipelinedFrom;
+  const atOrigin = !from || (at[0] === from[0] && at[1] === from[1]);
+  if (atOrigin) {
+    const firstOffer = currentMoveOffer(p.playerId, first);
+    if (!firstOffer) return; // the offers follow in a later frame; the plan waits (plannerAdvance)
+    p.squareResolutions[0] = plannerSquareResolutions(g, first);
+    p.sentOfferRevisions[0] = firstOffer.revision;
+    refreshMovementIntentRolls(p.playerId, first);
+  } else {
+    const offered = (from ? offeredRollResolutions(p.playerId, from, first) : null) ?? frameOfferRollsBeforeArrival(cmd, p.playerId, first);
+    // Astra r2: the offer carries Dodge / Rush only; a Pick-up the plan already knew (the ball sat on the square when
+    // the plan was made) is kept, an empty Dodge / Rush list never says the pick-up is not owed
+    if (offered) p.squareResolutions[0] = new Set([...offered, ...(p.squareResolutions[0]?.has('pickup') ? ['pickup' as PlanResolution] : [])]);
+  }
+  p.pipelinedFirst = false;
+}
+
 /** Hook: called after each server command is fully applied to the model (applyFrame). `cmd` is the frame just
  *  applied — its reportList carries the arrival-square resolution outcomes (leg-2a). */
 function plannerOnModelApplied(cmd?: Record<string, unknown>) {
@@ -18339,6 +18485,7 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
   }
   // Resolve a square's rolls only after arrival and only on success; failures remain pending for reroll/fall.
   if (p.phase === 'moving' && p.sentIdx >= 0) {
+    if (p.pipelinedFirst) plannerBindPipelinedFirst(p, cmd); // owner 10-17: before this frame's reports settle the first square
     const cur = p.squareResolutions[p.sentIdx];
     const target = p.route[p.sentIdx];
     const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown; attackerId?: unknown; defenderId?: unknown }[] } | undefined)?.reports ?? [];
@@ -19076,7 +19223,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     });
     return false;
   }
-  observeOutgoingShadow(cmd, 'emitted');
+  if (!pipelinedFirstStepSend) observeOutgoingShadow(cmd, 'emitted'); // the pipelined first step is ahead of the echo the shadow judges by
   let outgoing = cmd;
   const g = game.value;
   // Respin 7 (owner live false-refusal, 08-12 eve): the Move-rail cutover claims sends ONLY in the turn
@@ -19084,7 +19231,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
   // clientMove arrives with NO model actingPlayer, the transaction reads 'inactive', and ownership
   // projection false-refused every On-the-Ball move. Positive allow-list (owner doctrine); all other
   // modes ride legacy with shadow telemetry still observing. Full modeling = a later slice.
-  if (g && RAIL_CUTOVER_TURN_MODES.has(String(g.turnMode ?? ''))) {
+  if (g && RAIL_CUTOVER_TURN_MODES.has(String(g.turnMode ?? '')) && !pipelinedFirstStepSend) {
     const team = play.active ? myPlayTeam(g) : undefined;
     const audience = state.demoMode ? 'replay' : play.active ? 'player' : 'spectator';
     const myTeamId = (team as { teamId?: string } | undefined)?.teamId ?? null;
