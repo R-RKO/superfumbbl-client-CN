@@ -14,14 +14,19 @@ const laneLimit = (owner: LogLane): number => owner === 'chat' ? CHAT_LANE_LIMIT
 /** Owner 10-15 (Graphical log): keep the newest `limit` ordinary rows; rows only the Graphical style shows (`isExtra`)
  *  ride along without counting against that limit (at most `limit` of them, never older than the oldest kept ordinary
  *  row), so they can never push Text-style history out of a ring. */
-export function trimLogRows<R>(rows: readonly R[], limit: number, isExtra: (row: R) => boolean): R[] {
+/** Owner 10-16: `isExtra` may name the style a row belongs to (a string); each style keeps its own `limit`, so the
+ *  FUMBBL style's rows never push the Graphical style's out (true = one shared "extra" style). */
+export function trimLogRows<R>(rows: readonly R[], limit: number, isExtra: (row: R) => boolean | string): R[] {
   const kept: R[] = [];
   let visible = 0;
-  let extra = 0;
+  const extra = new Map<string, number>();
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]!;
-    if (isExtra(row)) {
-      if (extra < limit) { kept.push(row); extra++; }
+    const style = isExtra(row);
+    if (style) {
+      const key = style === true ? 'extra' : style;
+      const count = extra.get(key) ?? 0;
+      if (count < limit) { kept.push(row); extra.set(key, count + 1); }
     } else {
       if (visible >= limit) break;
       kept.push(row);
@@ -30,7 +35,12 @@ export function trimLogRows<R>(rows: readonly R[], limit: number, isExtra: (row:
   }
   return kept.reverse();
 }
-const graphicalOnlyRow = <T>(row: OrderedLogRow<T>): boolean => !!(row.entry as { graphicalOnly?: unknown } | null)?.graphicalOnly;
+/** Rows one log style shows alone (Graphical block-flow steps, FUMBBL-style upstream reports) ride along without
+ *  counting against the ordinary rows. */
+const graphicalOnlyRow = <T>(row: OrderedLogRow<T>): string | false => {
+  const entry = row.entry as { graphicalOnly?: unknown; upstreamOnly?: unknown } | null;
+  return entry?.graphicalOnly ? 'graphical' : entry?.upstreamOnly ? 'upstream' : false;
+};
 
 /** Every owner is bounded independently; replacing the cursor must never erase live chat/notices. */
 export function appendLogLane<T>(lanes: LogLanes<T>, owner: LogLane, row: OrderedLogRow<T>, limit = laneLimit(owner)): void {

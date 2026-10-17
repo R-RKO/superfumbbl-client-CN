@@ -21,11 +21,14 @@ import {
   type ArmourRollInput, type BlockMatchup, type DiceLuck, type InjuryLevel, type Likelihood, type LuckBucket, type LuckRow,
 } from './diceLuck';
 import {
-  attackOutcomes, blockArmourTiers, blockOutcomeChance, bookedTurns, crowdPushForced, expectedTurns, freeSquareAround, koRecoveryFail6, onPitch, outcomeKey,
-  reportArmourTiers, turnIndex, turnsLeftInHalf, turnsScore, varianceTurns, TURNS_PER_HALF,
-  type AttackOutcomes, type ArmourTier, type TurnClock,
+  attackOutcomes, attackerDownOn, blockArmourTiers, blockOutcomeChance, bookedTurns, chainPushOutcome, defenderDownOn, crowdPushForced, expectedTurns, freeSquareAround, koRecoveryFail6, onPitch, outcomeKey,
+  reportArmourTiers, turnIndex, turnsLeftInHalf, turnsScore, varianceTurns, STEADY_FOOTING_FAIL6, TURNS_PER_HALF,
+  type AttackOutcomes, type ArmourTier, type ChainPlayer, type ChainResult, type TurnClock,
 } from './turnsLost';
 import { prayerForWireValue } from './prayerCatalog';
+import { createTurnPresentationContext, turnEndIsTurnover, turnoverArmStep, type TurnPresentationContext } from './turnPresentation';
+import { cutCost, emptyCutShort, turnShare, FIRST_ACTION_SHARE, type CutShort } from './turnsCutShort';
+import { breakDelta, emptyBreaks, injuryRollOutcomes, rollOutcomes, type BreakOutcome, type LuckBreaks } from './luckBreaks';
 
 export { normalCdf, oneInOdds, type DiceLuck, type Likelihood } from './diceLuck';
 
@@ -87,6 +90,14 @@ export interface DiceTally {
   /** Owner 10-15 (turns lost by drive, the Luck story): every trial of the Turns lost row this TEAM booked, in order,
    *  with its expected value (provisional until its drive ends) and the turns it actually cost. Team tallies only. */
   turnsLog?: TurnsAttackRecord[];
+  /** Owner 10-16 (the Luck row): the team's lucky and bad breaks from every roll scored (luckBreaks.ts), and those from
+   *  the Turns lost trials' outcomes (`breaksTurns`, rebuilt from both teams' turnsLog after every frame). Team tallies
+   *  only; absent on tallies kept before them (the row reads "not measured"). */
+  breaks?: LuckBreaks;
+  breaksTurns?: LuckBreaks;
+  /** Owner 10-16: the "Turns cut short" line (turnsCutShort.ts): the acting team's turnovers weighted by the share of
+   *  the turn left. Team tallies only; absent on tallies kept before it (the row reads "not measured"). */
+  cutShort?: CutShort;
 }
 
 /** One trial of the Turns lost row: an attack, or a KO recovery roll credited to the attacker who caused the KO. */
@@ -116,6 +127,19 @@ export interface TurnsAttackRecord {
   recovery?: boolean;
   /** Owner 10-15: the blocker's own fall on his block, credited to the defender (`victim` = the blocker). */
   fall?: boolean;
+  /** Owner 10-16 (the Luck chart): the team turns started in the half before the attack's (play order from 0). */
+  slot?: number;
+  /** Owner 10-16 (the Luck story): the credited player's name. */
+  attackerName?: string;
+  /** Owner 10-16 (Astra chart r3): the played-turn column of the attack (LuckBreaks.played index), or how many turns had
+   *  been played when it fell outside them (BreakEntry.after). */
+  col?: number; after?: number;
+  /** Owner 10-16 (Astra chart r6): its place in the one order of Luck events (DiceStats.breakSeq), for the chart. */
+  seq?: number;
+  /** Owner 10-16: the crowd surf of a chain-pushed player on a block (`victim` = the player the chain was read to end
+   *  with); credited to the blocker, or to the defender when the victim is the blocker's own team-mate. No attack of
+   *  its own (the `attacks` counter skips it: the block is the attack). */
+  chain?: boolean;
 }
 
 export interface DiceStats {
@@ -192,6 +216,37 @@ export interface DiceStats {
   koChains?: Record<string, { teamId: string; attacker: string; drive: string | null; recId?: number; entry?: number }>;
   /** Numbers the Turns lost trials (TurnsAttackRecord.id). */
   turnsAttackSeq?: number;
+  /** Owner 10-16: numbers the Luck events (BreakEntry.seq). */
+  breakSeq?: number;
+  /** Owner 10-16 (Astra luck r2): the trials of the last attack that still wait for their result (an injury report, a
+   *  crowd injury, a Steady Footing roll): they count no outcome yet. From the face picked; dropped at the next roll,
+   *  block or turn end. */
+  turnsPending?: number[];
+  /** Owner 10-16 (Turns cut short): the acting team's players on the pitch at the start of its turn (`key` =
+   *  half|team|turnNr), the last turnover-capable roll or block (its share, whether its chance was measured), the
+   *  client's own turnover heuristic and the roll that armed it, and whether each team's previous turn ended in a
+   *  first-action turnover (streaks). */
+  tcsStart?: { key: string; n: number } | null;
+  tcsLast?: TcsHit | null;
+  tcsArm?: TurnPresentationContext;
+  tcsHit?: TcsHit | null;
+  tcsLastFirst?: Record<string, boolean>;
+  /** Owner 10-16 (chain pushes): the last block whose expectation carries a chain-push surf - a crowd injury of a player
+   *  on `victimTeamId` other than the block's defender is booked against its trial. Dropped at the next block and at
+   *  every turn end. */
+  turnsChain?: TurnsChain | null;
+  /** Owner 10-16 (Steady Footing): the players knocked down by the last block whose trial a successful Steady Footing
+   *  roll names as its outcome (player -> TurnsAttackRecord.id and its team). Dropped at the next roll of any other kind. */
+  turnsFooting?: Record<string, { teamId: string; attackId: number }> | null;
+}
+/** Owner 10-16 (Turns cut short): a turnover-capable roll or block of the acting team. */
+export interface TcsHit { share: number; measured: boolean; label: string; player: string; teamId: string; half: number; slot: number; turn: number; col?: number; after?: number }
+/** Owner 10-16: the chain-push surf trial of a block (see DiceStats.turnsChain). */
+export interface TurnsChain {
+  blockDefender: string;
+  /** The team and player credited, and the trial. */
+  teamId: string; attacker: string; attackId: number;
+  victimTeamId: string;
 }
 /** What one attack's result booked, so a Piling On reroll of it can take it back. */
 export interface TurnsBooking { value: number; level: InjuryLevel | null; entry: number | null; attackId?: number | null; crowd?: boolean }
@@ -269,7 +324,7 @@ export function emptyTally(): DiceTally {
   return { d6: [0, 0, 0, 0, 0, 0, 0], block: [0, 0, 0, 0, 0, 0, 0], armour: [], injury: [],
     dodgeFaces: [0, 0, 0, 0, 0, 0, 0], armourFaces: [0, 0, 0, 0, 0, 0, 0], injuryFaces: [0, 0, 0, 0, 0, 0, 0], oneNinth: 0, oneThirtySixth: 0,
     blocks: 0, failedBlocks: 0, dodges: 0, failedDodges: 0, pickups: 0, failedPickups: 0, rushes: 0, failedRushes: 0, d6Seq: [], blockSeq: [], tests: [], turns: [],
-    luck: emptyLuck() };
+    luck: emptyLuck(), breaks: emptyBreaks(), cutShort: emptyCutShort() };
 }
 
 export function emptyDiceStats(gameId: string | null = null): DiceStats {
@@ -595,6 +650,8 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       if (threshold == null) { for (const t of theirs) luckOf(t, 'armour').unmeasured += 1; }
       else {
         const breaks = twoD6AtLeast(threshold); // of 36
+        // owner 10-16 (Luck): broken favours the attacker's team, held the victim's
+        noteBreakEvent(stats, game, rollOutcomes(breaks / 36, them.teamId, own.teamId), r.armorBroken ? 0 : 1, `Armour ${r.armorBroken ? 'broken' : 'held'} (${threshold}+)`, attackerId, stats.turnClock ?? readTurnClock(game));
         for (const t of theirs) {
           const b = luckOf(t, 'armour');
           addTrial(b, binaryKey(breaks, 36), r.armorBroken ? 6 : 0);
@@ -612,6 +669,9 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       // UNMEASURED: an unvalued modifier, or a stated result that is not this table's for the roll
       if (!trial) { for (const t of theirs) luckOf(t, 'injury').unmeasured += 1; }
       else {
+        // owner 10-16 (Luck): a KO or a casualty favours the attacker's team, a stun the victim's only when removal was likelier
+        noteBreakEvent(stats, game, injuryRollOutcomes(trial.counts, own.teamId, them.teamId),
+          trial.level, `Injury roll: ${['stun', 'KO', 'casualty'][trial.level]}`, attackerId, stats.turnClock ?? readTurnClock(game));
         const ko6 = koWeightFor(game, own); // the VICTIM's team's kegs
         const expected6 = parseDist(injuryKey(trial.counts, ko6, false)).mean6;
         for (const [list, mine, side] of [[theirs, false, 'their']] as const) {
@@ -654,6 +714,17 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
 //                    Grab is the attacker's to decline, so it leaves the crowd in. The crowd injury is booked against
 //                    the block (crowdpush reports state no attacker: the link supplies the blocker); for these turns
 //                    only - the Armour / Injury rows still count a crowd push for nobody.
+//   chain surf       (owner 10-16) when the push-back of this block is a chain push (all three squares on the pitch and
+//                    taken) that ends in the crowd, resolved from the same pre-block pitch (turnsLost.chainPushOutcome:
+//                    the attacker picks the squares, Stand Firm / Side Step in the chain are their coaches' calls, each
+//                    side takes its best), the block carries a second trial: P(the picked face pushes) x the crowd
+//                    injury on THAT player's table x his team's turns. Credited to the blocker, or to the defender when
+//                    the surfed player is the blocker's own team-mate; booked against the chain-pushed player's crowd
+//                    injury report (stats.turnsChain). A chain too long to read leaves the whole block unmeasured.
+//   Steady Footing   (owner 10-16) the defender's knock-down and the blocker's own fall each times 5/6 for a player who
+//                    has the skill and can use it (not confused or hypnotized): on a 6 he stays up, no armour roll and no
+//                    injury report follow, the trial books 0 (turnsLost.STEADY_FOOTING_FAIL6). Not for a crowd push, not
+//                    for the Chainsaw hit (the server rolls neither through it).
 //   Chainsaw attack  the Chainsaw roll's own chance, (7 - minimum) / 6 (a 2+: 5/6), then armour +3 (none through Iron
 //                    Hard Skin), no injury modifier (InjuryTypeChainsaw) - booked at its first `chainsawRoll`.
 //   everything else  1 at the armour roll, read from the attack's own report (diceLuck.armourBreakThreshold and the
@@ -672,8 +743,9 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
 // the team tally's turnsLog (expected, variance, actual, outcome) for the Luck row's story.
 // A sent-off fouler costs his own team, not the opponent: nothing here. An attack whose chance cannot be read soundly
 // (an unvalued modifier on an attack booked at its own report, a Multiple Block, a block whose `blockChoice` was not seen) is UNMEASURED for both figures.
-// A crowd push the expectation did not carry (no pitch read for the block, a chain push, a push the model judged
-// stoppable) books nothing: the attack stays measured on the expectation it was booked with, whatever the dice did.
+// A crowd push the expectation did not carry (no pitch read for the block, a chain push read to end on the pitch, a push
+// the model judged stoppable) books nothing: the attack stays measured on the expectation it was booked with, whatever
+// the dice did.
 
 /** The turn state of a model: null when it carries no half / turn data (the turns row then goes unmeasured). */
 export function readTurnClock(game: GameJson | null): TurnClock | null {
@@ -684,7 +756,7 @@ export function readTurnClock(game: GameJson | null): TurnClock | null {
   if (!Number.isInteger(half) || half < 1 || half > 3 || !Number.isFinite(home) || !Number.isFinite(away)) return null;
   const result = game.gameResult as { teamResultHome?: { score?: unknown }; teamResultAway?: { score?: unknown } } | undefined;
   const score = (Number(result?.teamResultHome?.score) || 0) + (Number(result?.teamResultAway?.score) || 0);
-  return { half, turnHome: home, turnAway: away, drive: `${half}|${score}` };
+  return { half, turnHome: home, turnAway: away, drive: `${half}|${score}`, homePlaying: (game as { homePlaying?: unknown }).homePlaying === true, regular: String(game.turnMode ?? '') === 'regular' };
 }
 function clockTurnOf(game: GameJson, clock: TurnClock, teamId: string): number {
   return (game.teamHome as unknown as TeamLike).teamId === teamId ? clock.turnHome : clock.turnAway;
@@ -711,8 +783,15 @@ function noteApothecaryChoice(stats: DiceStats, game: GameJson | null, r: Report
   const stun = Math.min(1, turnsLeftInHalf(clockTurnOf(game, clock, e.victimTeamId)));
   e.added = stun;
   if (stun > 0) addLostTurns(stats, e.teamId, e.attacker, stun, null, 1, e.attackId);
+  resolveOutcome(stats, e, 'Stun (apothecary)');
   const chain = stats.koChains?.[playerId];
   if (chain && chain.entry === e.id) delete stats.koChains![playerId];
+}
+/** Astra luck r1 #3: an apothecary (or a casualty saved to the reserves) changes what an attack came to - its trial's
+ *  outcome follows, so the Luck event reads the resolved result. */
+function resolveOutcome(stats: DiceStats, e: TurnsEntry, outcome: string): void {
+  const rec = e.attackId == null ? null : attackRecord(stats, e.teamId, e.attackId);
+  if (rec && !rec.recovery) rec.outcome = outcome;
 }
 function turnsUnmeasured(tallies: DiceTally[]): void { for (const t of tallies) turnsOf(t).unmeasured += 1; }
 function addTurnsTrial(tallies: DiceTally[], key: string, sign: 1 | -1 = 1, attack = true): void {
@@ -793,22 +872,26 @@ function recordKey(rec: TurnsAttackRecord, drive: number): string { return outco
  * (the rest of the half), counted as the victim team starts its turns in the drive (advanceTurnAttacks). Returns its id.
  */
 function openAttack(stats: DiceStats, game: GameJson, clock: TurnClock, teamId: string, attacker: string, victim: string, outcomes: AttackOutcomes,
-  label: string, outcome: string, opts: { recovery?: boolean; fromDrive?: string; fall?: boolean } = {}): number {
+  label: string, outcome: string, opts: { recovery?: boolean; fromDrive?: string; fall?: boolean; chain?: boolean; turnTeam?: string } = {}): number {
   const victimTeam = teamOf(game, victim)!;
   const turnNr = clockTurnOf(game, clock, victimTeam.teamId);
   const score = turnsScore(clock.half, turnNr, 0);
   const id = stats.turnsAttackSeq = (stats.turnsAttackSeq ?? 0) + 1;
+  const eventSeq = stats.breakSeq = (stats.breakSeq ?? 0) + 1;
   const name = playerJson(game, victim)?.name;
   const rec: TurnsAttackRecord = {
     id, attacker, victimTeamId: victimTeam.teamId, victim, victimName: typeof name === 'string' && name ? name : victim,
-    label, half: clock.half, turn: clockTurnOf(game, clock, opts.fall || opts.recovery ? victimTeam.teamId : teamId), outcomes,
+    // the credited team's turn; the victim's for a fall or a recovery; `turnTeam` (the blocking team) for a chain surf
+    label, half: clock.half, turn: clockTurnOf(game, clock, opts.turnTeam ?? (opts.fall || opts.recovery ? victimTeam.teamId : teamId)), outcomes,
     stun: opts.recovery ? 0 : score.stun, cas: opts.recovery ? 0 : score.cas,
     drive: opts.recovery ? null : clock.drive, fromDrive: opts.fromDrive, idx: turnIndex(clock.half, turnNr), d: 0,
     open: true, provisional: turnsLeftInHalf(turnNr), key: '', expected: 0, variance: 0, actual: 0, outcome, idle: outcome, recovery: opts.recovery, fall: opts.fall,
+    seq: eventSeq, slot: clockSlot(clock).slot, ...playedCol(stats, (game.teamHome as unknown as TeamLike).teamId, clockSlot(clock)), attackerName: (() => { const n = playerJson(game, attacker)?.name; return typeof n === 'string' && n ? n : attacker; })(),
+    ...(opts.chain ? { chain: true } : {}),
   };
   rec.key = recordKey(rec, rec.provisional); rec.expected = expectedTurns(rec.key); rec.variance = varianceTurns(rec.key);
   ((stats.teams[teamId] ??= emptyTally()).turnsLog ??= []).push(rec);
-  addTurnsTrial(tallyFor(stats, teamId, attacker), rec.key, 1, !opts.recovery);
+  addTurnsTrial(tallyFor(stats, teamId, attacker), rec.key, 1, !opts.recovery && !opts.chain);
   return id;
 }
 const gameOver = (game: GameJson) => !!(game as { finished?: unknown }).finished || String(game.turnMode ?? '') === 'endGame';
@@ -845,6 +928,15 @@ function noteKoRecoveries(stats: DiceStats, game: GameJson | null, r: Report, cl
   if (!game || !clock || !list.length) return;
   for (const roll of list) {
     const playerId = typeof roll.playerId === 'string' ? roll.playerId : null;
+    // owner 10-16 (Luck): every recovery roll, credited or not - recovered favours the player's team, failed the other
+    {
+      const own = teamOf(game, playerId), other = otherTeam(game, own);
+      const mod = (Number(roll.bloodweiserBabes ?? roll.bloodweiserKegs) || 0) + (Number(roll.bugmansXXXXXXModifier) || 0);
+      if (own && other && typeof roll.recovering === 'boolean') {
+        const fail6 = koRecoveryFail6(mod);
+        noteBreakEvent(stats, game, rollOutcomes((6 - fail6) / 6, own.teamId, other.teamId), roll.recovering ? 0 : 1, `KO recovery ${roll.recovering ? 'passed' : 'failed'}`, playerId, clock);
+      }
+    }
     const chain = playerId ? stats.koChains?.[playerId] : undefined;
     if (!playerId || !chain || !teamOf(game, chain.attacker) || !teamOf(game, playerId)) continue;
     // Astra follow r1 #1: the kegs travel as `bloodweiserBabes` (IJsonOption.BLOODWEISER_KEGS keeps the old key)
@@ -899,6 +991,7 @@ export function advanceTurnsLost(stats: DiceStats, game: GameJson | null): void 
     if (e.kind === 'cas' && state === RESERVE) {
       addLostTurns(stats, e.teamId, e.attacker, e.booked + e.added, null, -1, e.attackId);
       Object.assign(e, { kind: 'ko', idx: e.start, floor: 0, booked: 0, added: 0 });
+      resolveOutcome(stats, e, 'KO (saved to the reserves)');
     }
     const cur = turnIndex(clock.half, clockTurnOf(game, clock, e.victimTeamId));
     // owner 10-15: a failed recovery roll counts the NEXT drive: it starts when the drive after `fromDrive` does
@@ -924,6 +1017,7 @@ export function advanceTurnsLost(stats: DiceStats, game: GameJson | null): void 
     if (e.kind === 'ko' && state != null && state !== KNOCKED_OUT && state !== RESERVE) {
       e.done = true;
       if (e.added === 0) { e.added = 1; addLostTurns(stats, e.teamId, e.attacker, 1, null, 1, e.attackId); }
+      resolveOutcome(stats, e, 'Stun (apothecary)');
       const chain = stats.koChains?.[e.playerId];
       if (chain && chain.entry === e.id) delete stats.koChains![e.playerId]; // back on the pitch: no recovery roll follows
       continue;
@@ -939,11 +1033,13 @@ function turnsScoreFor(game: GameJson, clock: TurnClock, victim: TeamLike) {
 
 /** A `blockChoice`: one block thrown. Books its expected turns (see the chain above) and links the victim to it. */
 function noteBlockTurns(stats: DiceStats, game: GameJson | null, attacker: string | null, nrOfDice: number | null, defender: string | null, multi: boolean, clock: TurnClock | null,
-  atRoll: { defenderTacklezones: boolean; blitz: boolean; sameFrame: boolean } | null, pitch: DiceStats['turnField'] = null, crowdReadable = true): void {
+  atRoll: { defenderTacklezones: boolean; blitz: boolean; sameFrame: boolean } | null, pitch: DiceStats['turnField'] = null, crowdReadable = true, chosenFace: number | null = null): void {
   const a = teamOf(game, attacker), d = teamOf(game, defender);
+  stats.turnsPending = [];
+  stats.tcsLast = null;
   if (!game || !attacker || !defender || !a || !d || a.teamId === d.teamId) return;
   const links = (stats.turnsLinks ??= {});
-  stats.turnsCrowd = null;
+  stats.turnsCrowd = null; stats.turnsChain = null; stats.turnsFooting = null;
   const tallies = tallyFor(stats, a.teamId, attacker);
   // owner 10-15: the blocker's own fall is a trial for the DEFENDER's team, measured exactly when the block is
   const fallTallies = tallyFor(stats, d.teamId, defender);
@@ -957,22 +1053,24 @@ function noteBlockTurns(stats: DiceStats, game: GameJson | null, attacker: strin
   // UNMEASURED: a Multiple Block (who picks cannot be read), no dice count, no turn data, a Chainsaw block under
   // mbStacksAgainstChainsaw (see diceLuck.armourBreakThreshold), or a Ball & Chain victim (Astra r4 #4: knocked down
   // with no armour roll and a stun read as a KO, UtilServerInjury + BallAndChain.java - not modelled here)
-  if (multi || !clock || !Number.isInteger(dice) || dice < 1 || dice > 3 || !defenderJson || has(game, defender, 'Ball & Chain') || has(game, defender, 'Ball and Chain')
-    || (chainsaw && !ironHardSkin && gameOption(game, 'mbStacksAgainstChainsaw') === 'true')) {
+  if (multi || !clock || !Number.isInteger(dice) || dice < 1 || dice > 3 || !defenderJson) {
     turnsUnmeasured(tallies);
     links[defender] = { attacker, measured: false };
     fallUnmeasured();
     return;
   }
+  // (Astra cut r1 #4: these leave the attack and the fall unmeasured below, after the blocker's turnover chance is read)
+  const attackUnread = has(game, defender, 'Ball & Chain') || has(game, defender, 'Ball and Chain') || (chainsaw && !ironHardSkin && gameOption(game, 'mbStacksAgainstChainsaw') === 'true');
   // Astra r1 #1 / crowd r1 #2 / crowd r2 #2: the defender's tackle zones as he stood when the dice were ROLLED. The
   // model handed in with the block already shows its result (falling, down, removed, in the reserves - and the server
   // clears confused / hypnotized when it changes the base state), so it is never read for this. In order: his state on
   // the pitch the last frame left (stats.turnField), else the state latched at a blockRoll made in an EARLIER frame;
-  // neither = his tackle zones cannot be read, which matters only for his Block or Wrestle: such a block is UNMEASURED
-  // (whatever the dice did - the reading does not depend on them)
+  // neither = his tackle zones cannot be read, which matters only for his Block or Wrestle (owner 10-16: and his Steady
+  // Footing, which a confused or hypnotized player cannot use): such a block is UNMEASURED (whatever the dice did - the
+  // reading does not depend on them)
   const before = pitch?.[defender];
   const tzKnown = before ? stateHasTacklezones(before[2]) : atRoll && !atRoll.sameFrame ? atRoll.defenderTacklezones : null;
-  if (tzKnown == null && (has(game, defender, 'Block') || has(game, defender, 'Wrestle'))) {
+  if (tzKnown == null && (has(game, defender, 'Block') || has(game, defender, 'Wrestle') || has(game, defender, STEADY_FOOTING))) {
     turnsUnmeasured(tallies);
     links[defender] = { attacker, measured: false };
     fallUnmeasured();
@@ -987,17 +1085,67 @@ function noteBlockTurns(stats: DiceStats, game: GameJson | null, attacker: strin
   };
   const blitz = !!atRoll?.blitz || actingAction(game) === 'blitz';
   const crowd = crowdReadable ? crowdPushOf(pitch, game, attacker, defender, tacklezones, blitz, a) : null;
-  const outcome = blockOutcomeChance(dice, nrOfDice! > 0, blockFaceScores(matchup), matchup.defenderBlock, crowd);
+  // owner 10-16: a chain push that ends in the crowd, resolved from the pre-block board (chainPushOf); one that cannot be
+  // read (too long, or coming back on itself) leaves the whole block unmeasured, whatever the dice did
+  const chain = crowdReadable && !crowd ? chainPushOf(pitch, game, attacker, defender, tacklezones, blitz, a, clock) : null;
+  if (chain === 'capped') {
+    turnsUnmeasured(tallies);
+    links[defender] = { attacker, measured: false };
+    fallUnmeasured();
+    return;
+  }
+  // Astra footing r2 #1: facing a surf of his own team-mate the blocker declines Juggernaut's push (JuggernautBehaviour:
+  // declined, the both down stands), so the faces are read without it
+  // (Astra footing r3 #1: Juggernaut on a Blitz still cancels the defender's Wrestle - WrestleBehaviour - declined or not)
+  const faceScores = blockFaceScores(chain?.own ? { ...matchup, attackerJuggernautBlitz: false, defenderWrestle: matchup.attackerJuggernautBlitz ? false : matchup.defenderWrestle } : matchup);
+  const outcome = blockOutcomeChance(dice, nrOfDice! > 0, faceScores, matchup.defenderBlock,
+    crowd ?? (chain ? { bothDownPushes: !chain.own && blitz && has(game, attacker, 'Juggernaut'), chain: { attackerWants: !chain.own } } : null));
+  // owner 10-16 (Steady Footing): a knocked-down player who has it stays up on a 6 (STEADY_FOOTING_FAIL6 of 6 fail), and
+  // no armour roll follows; a confused or hypnotized one cannot use it (StepSteadyFooting.java:181). The defender as he
+  // stood at the roll (`tacklezones`); the blocker as the pitch before the frame shows him (an acting blocker otherwise)
+  const defenderFooting = has(game, defender, STEADY_FOOTING) && tacklezones ? STEADY_FOOTING_FAIL6 : 6;
+  const attackerBefore = pitch?.[attacker];
+  const attackerFooting = has(game, attacker, STEADY_FOOTING) && (!attackerBefore || (attackerBefore[2] & DISTRACTED_BITS) === 0) ? STEADY_FOOTING_FAIL6 : 6;
+  // owner 10-16 (Turns cut short): the blocker's fall turns the turn over - P(he falls) x the share of the turn left
+  noteCutShortRoll(stats, game, attacker, outcome.attackerDown * attackerFooting / (outcome.den * 6), `${blockLabel(nrOfDice!)}: own fall`, clock);
+  if (attackUnread) {
+    turnsUnmeasured(tallies);
+    links[defender] = { attacker, measured: false };
+    fallUnmeasured();
+    return;
+  }
   const tiers = blockArmourTiers({
     av: effectiveArmour(defenderJson as never), mightyBlow: has(game, attacker, 'Mighty Blow') ? mightyBlowValue(game, attacker) : 0,
     claws: has(game, attacker, 'Claws') || has(game, attacker, 'Claw'), chainsaw, ironHardSkin,
     clawDoesNotStack: gameOption(game, 'clawDoesNotStack') !== 'false',
   });
-  const outcomes = attackOutcomes({ num: outcome.down, den: outcome.den }, tiers, { stunty: has(game, defender, 'Stunty'), thickSkull: has(game, defender, 'Thick Skull') },
-    crowd ? { num: outcome.surf, injuryShift: crowd.injuryShift } : null);
+  const outcomes = attackOutcomes({ num: outcome.down * defenderFooting, den: outcome.den * 6 }, tiers, { stunty: has(game, defender, 'Stunty'), thickSkull: has(game, defender, 'Thick Skull') },
+    crowd ? { num: outcome.surf * 6, injuryShift: crowd.injuryShift } : null);
   const attackId = openAttack(stats, game, clock, a.teamId, attacker, defender, outcomes, blockLabel(nrOfDice!), 'Nothing (no knock-down)');
+  // Astra luck r2: which of this block's trials still wait for a result, from the face picked (no face read: all of them)
+  const juggernautBlitz = blitz && has(game, attacker, 'Juggernaut');
+  const pushFace = (f: number) => f >= 3 || (f === 2 && juggernautBlitz);
+  const waits = (down: boolean, push: boolean) => chosenFace == null || down || push;
+  // (Astra chart r1 A1: a Juggernaut both down may still be declined and knock the defender down)
+  // (Astra chart r2: a both down always waits - Wrestle, Juggernaut and Block decisions may still put either player down)
+  // (Astra chart r3: a stumble waits too - the defender's Dodge is his coach's choice)
+  if (waits(defenderDownOn(chosenFace ?? 0, faceScores, matchup.defenderBlock) || chosenFace === 2 || chosenFace === 5, !!crowd && pushFace(chosenFace ?? 0))) stats.turnsPending.push(attackId);
   links[defender] = { attacker, measured: true, attackId, crowd: crowd ? { injuryShift: crowd.injuryShift } : null };
   if (crowd) stats.turnsCrowd = defender;
+  if (defenderFooting !== 6) (stats.turnsFooting ??= {})[defender] = { teamId: a.teamId, attackId };
+  // OWNER 10-16 - the chain surf: P(the picked face pushes) x the crowd injury on the chained victim's table (no armour
+  // roll; Mighty Blow only under Fan Interaction on an opposing victim) x turns(result, now, his team). Credited to the
+  // blocker, or to the defender when the victim is the blocker's own team-mate. Its own trial (the defender may fall on
+  // the same face: a pow pushes and knocks down), opened whether or not the dice push.
+  if (chain) {
+    const victimTeam = teamOf(game, chain.victim)!;
+    const credited = chain.own ? { team: d.teamId, player: defender } : { team: a.teamId, player: attacker };
+    const chainOutcomes = attackOutcomes({ num: 0, den: outcome.den }, [], chain.table, { num: outcome.surf, injuryShift: chain.injuryShift });
+    const chainId = openAttack(stats, game, clock, credited.team, credited.player, chain.victim, chainOutcomes, `${blockLabel(nrOfDice!)} (chain push)`, 'Nothing (no surf)',
+      { chain: true, turnTeam: a.teamId });
+    if (waits(false, pushFace(chosenFace ?? 0))) stats.turnsPending.push(chainId);
+    stats.turnsChain = { blockDefender: defender, teamId: credited.team, attacker: credited.player, attackId: chainId, victimTeamId: victimTeam.teamId };
+  }
   // OWNER 10-15 - the blocker's own fall counts FOR THE OPPONENT: P(the picked face knocks the attacker down: a skull,
   // a both down he falls on) x his armour chain x his injury table x turns(result, now, his team). The server rolls it
   // as an ordinary block injury with the DEFENDER as its "attacker" (bb2025 StepDropFallingPlayers.java:199-207,
@@ -1017,11 +1165,18 @@ function noteBlockTurns(stats: DiceStats, game: GameJson | null, attacker: strin
     claws: has(game, defender, 'Claws') || has(game, defender, 'Claw'), chainsaw: fallChainsaw, ironHardSkin: attackerIhs,
     clawDoesNotStack: gameOption(game, 'clawDoesNotStack') !== 'false',
   });
-  const fallOutcomes = attackOutcomes({ num: outcome.attackerDown, den: outcome.den }, fallTiers, { stunty: has(game, attacker, 'Stunty'), thickSkull: has(game, attacker, 'Thick Skull') });
+  const fallOutcomes = attackOutcomes({ num: outcome.attackerDown * attackerFooting, den: outcome.den * 6 }, fallTiers, { stunty: has(game, attacker, 'Stunty'), thickSkull: has(game, attacker, 'Thick Skull') });
   const fallId = openAttack(stats, game, clock, d.teamId, defender, attacker, fallOutcomes, blockLabel(nrOfDice!), 'Nothing (no knock-down)', { fall: true });
+  if (waits(attackerDownOn(chosenFace ?? 0, faceScores) || chosenFace === 2, false)) stats.turnsPending.push(fallId);
   links[attacker] = { attacker: defender, measured: true, attackId: fallId, fall: true };
+  if (attackerFooting !== 6) (stats.turnsFooting ??= {})[attacker] = { teamId: d.teamId, attackId: fallId };
 }
 const ROOTED_BIT = 0x400;
+/** PlayerState chomped (0x40000): MonstrousMouthBehaviour cancels any push of him. */
+const CHOMPED_BIT = 0x40000;
+/** PlayerState confused (0x200) and hypnotized (0x800): Steady Footing cannot be used (StepSteadyFooting.java:181). */
+const DISTRACTED_BITS = 0x200 | 0x800;
+const STEADY_FOOTING = 'Steady Footing';
 /** The Luck story's name of a block: "2-die block", the defender picking "2-die uphill block (−2)". */
 function blockLabel(nrOfDice: number): string {
   const n = Math.abs(nrOfDice);
@@ -1048,7 +1203,7 @@ function crowdPushOf(field: DiceStats['turnField'], game: GameJson, attacker: st
   if (crowdPushForced([at[0], at[1]], [df[0], df[1]], occupied) !== true) return null;
   const juggernaut = blitz && has(game, attacker, 'Juggernaut');
   // TakeRootBehaviour (bb2025, Astra crowd r1 #3): a Rooted defender is never pushed, whatever his skills
-  if ((df[2] & ROOTED_BIT) !== 0) return null;
+  if ((df[2] & (ROOTED_BIT | CHOMPED_BIT)) !== 0) return null;
   // StandFirmBehaviour (bb2025): it needs tackle zones and is cancelled by Juggernaut on a Blitz
   if (has(game, defender, 'Stand Firm') && tacklezones && !juggernaut) return null;
   // SidestepBehaviour (bb2025): tackle zones, a free square next to him, and no cancelling Grab
@@ -1056,6 +1211,66 @@ function crowdPushOf(field: DiceStats['turnField'], game: GameJson, attacker: st
   if ((has(game, defender, 'Sidestep') || has(game, defender, 'Side Step')) && tacklezones && !grabCancels && freeSquareAround([df[0], df[1]], occupied)) return null;
   const injuryShift = fanInteraction(game, attackerTeam) && has(game, attacker, 'Mighty Blow') ? mightyBlowValue(game, attacker) : 0;
   return { bothDownPushes: juggernaut, injuryShift };
+}
+/**
+ * Owner 10-16: the crowd surf a chain push of this block ends in, read from the pitch as the last frame left it
+ * (turnsLost.chainPushOutcome; see the chain above): null = none (no pitch read, not a chain push, a defender who stops
+ * the push - Rooted, Stand Firm, Side Step with a free square, as crowdPushOf reads them - or a chain that ends on the
+ * pitch); 'capped' = a chain too long to read. `table` and `injuryShift` are the surfed player's crowd injury roll.
+ */
+function chainPushOf(field: DiceStats['turnField'], game: GameJson, attacker: string, defender: string, tacklezones: boolean, blitz: boolean, attackerTeam: TeamLike, clock: TurnClock):
+  { victim: string; own: boolean; table: { stunty: boolean; thickSkull: boolean }; injuryShift: number } | 'capped' | null {
+  const at = field?.[attacker], df = field?.[defender];
+  if (!field || !at || !df || !onPitch(at[0], at[1]) || !onPitch(df[0], df[1])) return null;
+  const bySquare = new Map<string, string>();
+  for (const [id, [x, y]] of Object.entries(field)) if (onPitch(x, y)) bySquare.set(`${x},${y}`, id);
+  const occupied = (x: number, y: number) => bySquare.has(`${x},${y}`);
+  const juggernaut = blitz && has(game, attacker, 'Juggernaut');
+  // the defender himself: never pushed when Rooted; Stand Firm, or Side Step with a free square, is his coach's call
+  // (Astra footing r1 #4: declined when the chain would surf one of the attacker's team-mates)
+  if ((df[2] & (ROOTED_BIT | CHOMPED_BIT)) !== 0) return null;
+  const grabCancels = has(game, attacker, 'Grab') && (!blitz || gameOption(game, 'grabCancelsSidestepDuringBlitz') === 'true');
+  const defenderStops = (has(game, defender, 'Stand Firm') && tacklezones && !juggernaut)
+    || ((has(game, defender, 'Sidestep') || has(game, defender, 'Side Step')) && tacklezones && !grabCancels && freeSquareAround([df[0], df[1]], occupied));
+  const fan = fanInteraction(game, attackerTeam) && has(game, attacker, 'Mighty Blow') ? mightyBlowValue(game, attacker) : 0;
+  const crowdOf = (id: string, own: boolean) => ({
+    table: { stunty: has(game, id, 'Stunty'), thickSkull: has(game, id, 'Thick Skull') },
+    // bb2025 StepPushback.java:179-187: Fan Interaction names the blocker only for a victim not on the acting team
+    injuryShift: own ? 0 : fan,
+  });
+  const playerAt = (x: number, y: number): ChainPlayer | null => {
+    const id = bySquare.get(`${x},${y}`);
+    if (!id) return null;
+    const state = field[id]![2];
+    const own = teamOf(game, id)?.teamId === attackerTeam.teamId;
+    const tz = stateHasTacklezones(state);
+    return {
+      // Astra footing r2 #3: a Chomped player is never moved either (MonstrousMouthBehaviour clears the push)
+      id, own, rooted: (state & (ROOTED_BIT | CHOMPED_BIT)) !== 0,
+      // StandFirmBehaviour: tackle zones; Juggernaut on a Blitz cancels it only for a player of the other team
+      standFirm: has(game, id, 'Stand Firm') && tz && !(juggernaut && !own),
+      // SidestepBehaviour: tackle zones (Grab cancels it only for the block's defender)
+      sideStep: (has(game, id, 'Sidestep') || has(game, id, 'Side Step')) && tz,
+    };
+  };
+  // the expected turns a crowd injury costs the player's team now (the KO term provisional, as every trial's is)
+  const value = (id: string, own: boolean): number => {
+    const team = teamOf(game, id);
+    if (!team) return 0;
+    const { table, injuryShift } = crowdOf(id, own);
+    const o = attackOutcomes({ num: 0, den: 1 }, [], table, { num: 1, injuryShift });
+    const sc = turnsScore(clock.half, clockTurnOf(game, clock, team.teamId), 0);
+    return expectedTurns(outcomeKey(o, { stun: sc.stun, drive: sc.ko, cas: sc.cas }));
+  };
+  const result: ChainResult | null = chainPushOutcome([at[0], at[1]], [df[0], df[1]], playerAt, value, undefined, defenderStops);
+  if (!result || result.kind === 'none') return null;
+  if (result.kind === 'capped') return 'capped';
+  // Astra footing r2 #2: facing a surf of his own team-mate, a blocker with Grab (a block, or a Blitz under
+  // grabCancelsSidestepDuringBlitz: GrabBehaviour) pushes the defender into a free square next to him instead
+  if (result.own && has(game, attacker, 'Grab') && (!blitz || gameOption(game, 'grabCancelsSidestepDuringBlitz') === 'true') && freeSquareAround([df[0], df[1]], occupied)) return null;
+  // a player this model cannot place on a team: not read
+  if (!teamOf(game, result.victim)) return 'capped';
+  return { victim: result.victim, own: result.own, ...crowdOf(result.victim, result.own) };
 }
 /** The players of a model as [x, y, playerState], x = y = -1 for a player off the pitch (null when the model carries no field). */
 function fieldSnapshot(game: GameJson | null): Record<string, [number, number, number]> | null {
@@ -1071,12 +1286,19 @@ function fieldSnapshot(game: GameJson | null): Record<string, [number, number, n
   }
   return out;
 }
+/** The level of a crowd injury's stated result (InjuryTypeCrowd.java): a stun becomes RESERVE, a KO and a casualty stand. */
+function crowdLevel(r: Report): InjuryLevel | null {
+  const base = Number(r.injury) & 0xff;
+  return base === RESERVE || base === 4 ? 0 : base === KNOCKED_OUT ? 1 : base >= 6 && base <= 8 ? 2 : null;
+}
 /** A `crowdpush` injury report: the defender of the block whose expectation carried the crowd push, booked against
- *  that block's attacker. Anything else (no such block, a chain-pushed player, a crowd push the expectation did not
- *  carry) books nothing - see the chain above. */
+ *  that block's attacker; owner 10-16: a chain-pushed player of the team the block's chain surf was read for, booked
+ *  against that trial. Anything else (no such block, a crowd push the expectation did not carry) books nothing - see
+ *  the chain above. */
 function noteCrowdTurns(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, injury: [number, number] | null, clock: TurnClock | null): void {
   const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
-  if (!game || !defenderId || !injury || stats.turnsCrowd !== defenderId) return;
+  if (!game || !defenderId || !injury) return;
+  if (stats.turnsCrowd !== defenderId) { noteChainCrowdTurns(stats, game, commandNr, r, defenderId, injury, clock); return; }
   const link = stats.turnsLinks?.[defenderId];
   if (!link || !link.measured || !link.crowd || !clock) return;
   const own = teamOf(game, defenderId), attackerTeam = teamOf(game, link.attacker);
@@ -1087,15 +1309,46 @@ function noteCrowdTurns(stats: DiceStats, game: GameJson | null, commandNr: numb
   // Astra crowd r1 #1: the measured status is settled at the block and never changed by what the crowd report states
   // (taking the attack out only when it surfs would select on the result): a stated injury modifier the expectation
   // did not carry is not checked here; the result is booked as it fell
-  // the crowd result (InjuryTypeCrowd.java): a stun becomes RESERVE, a KO and a casualty stand
-  const base = Number(r.injury) & 0xff;
-  const level: InjuryLevel | null = base === RESERVE || base === 4 ? 0 : base === KNOCKED_OUT ? 1 : base >= 6 && base <= 8 ? 2 : null;
   unbookTurns(stats, attackerTeam.teamId, link.attacker, link.booked);
-  link.booked = bookTurns(stats, game, clock, attackerTeam.teamId, link.attacker, own.teamId, defenderId, level, true, link.attackId ?? null);
+  link.booked = bookTurns(stats, game, clock, attackerTeam.teamId, link.attacker, own.teamId, defenderId, crowdLevel(r), true, link.attackId ?? null);
+}
+/**
+ * Owner 10-16: a chain-pushed player's crowd injury. The block whose expectation carried a chain surf (stats.turnsChain)
+ * books it against that trial when the surfed player is on the team the surf was read for and is not the block's
+ * defender (the player may differ from the one the chain was read to end with: the coaches may choose otherwise; the
+ * result is booked as it fell, as for the defender). Its measured status was settled at the block.
+ */
+function noteChainCrowdTurns(stats: DiceStats, game: GameJson, commandNr: number | null, r: Report, playerId: string, injury: [number, number], clock: TurnClock | null): void {
+  const chain = stats.turnsChain;
+  if (!chain || !clock || playerId === chain.blockDefender || teamOf(game, playerId)?.teamId !== chain.victimTeamId) return;
+  if (!teamOf(game, chain.attacker)) return;
+  const key = `${commandNr}|${playerId}||${injury}`;
+  if (commandNr != null && key === stats.lastTurnsTrial) return;
+  stats.lastTurnsTrial = key;
+  // Astra footing r1 #1: one push surfs one player - the trial is spent (a later crowd injury, such as a thrown
+  // team-mate landing in the crowd, is never this block's)
+  stats.turnsChain = null;
+  bookTurns(stats, game, clock, chain.teamId, chain.attacker, chain.victimTeamId, playerId, crowdLevel(r), true, chain.attackId);
+}
+/** Owner 10-16: a successful Steady Footing roll of a player the last block knocked down: no armour roll follows and
+ *  the trial books nothing (its expectation already carried the roll); it only names the outcome. */
+function noteSteadyFootingTurns(stats: DiceStats, playerId: string | null, r: Report): void {
+  const hit = playerId ? stats.turnsFooting?.[playerId] : undefined;
+  if (!hit || r.successful !== true) return;
+  delete stats.turnsFooting![playerId!];
+  const rec = attackRecord(stats, hit.teamId, hit.attackId);
+  if (rec && rec.outcome === rec.idle) rec.outcome = 'Steady Footing';
 }
 /** The first roll of a Chainsaw attack (a block made with the chainsaw): its chance to hit, then armour +3. */
 function noteChainsawTurns(stats: DiceStats, game: GameJson | null, attacker: string | null, r: Report, clock: TurnClock | null): void {
-  if (r.reRolled === true || actingAction(game) === 'foul') return; // a Chainsaw foul is counted at its armour roll
+  if (actingAction(game) === 'foul') return; // a Chainsaw foul is counted at its armour roll
+  if (r.reRolled === true) {
+    // Astra chart r1 A2: a reroll that hits sends the attack (opened at the first roll) to its armour roll after all
+    const target = (game as { defenderId?: unknown } | null)?.defenderId ?? stats.turnDefender;
+    const link = typeof target === 'string' ? stats.turnsLinks?.[target] : undefined;
+    stats.turnsPending = r.successful === true && link?.measured && link.attackId != null ? [link.attackId] : [];
+    return;
+  }
   // Astra r3 #1: a Chainsaw attack that resolves inside this frame has already cleared the defender
   // (StepEndBlocking.java:422): the one the last frame left is the target
   const defender = (game as { defenderId?: unknown } | null)?.defenderId ?? stats.turnDefender;
@@ -1113,6 +1366,8 @@ function noteChainsawTurns(stats: DiceStats, game: GameJson | null, attacker: st
   const outcomes = attackOutcomes({ num: 7 - target, den: 6 }, tiers, { stunty: has(game, victim, 'Stunty'), thickSkull: has(game, victim, 'Thick Skull') });
   const attackId = openAttack(stats, game, clock, a.teamId, attacker, victim, outcomes, 'chainsaw', 'Nothing (no knock-down)');
   links[victim] = { attacker, measured: true, attackId };
+  // Astra luck r2: a hit waits for its armour roll; a miss is resolved now
+  stats.turnsPending = r.successful === true ? [attackId] : [];
 }
 /** Injury types whose injury roll never takes Mighty Blow (MightyBlow.java: foul, stab, vomit-like, Chainsaw); a thrown
  *  player landing on an opponent takes Lethal Flight instead (InjuryTypeTTMHitPlayerForSpp.java:33-58, Astra r4 #2). */
@@ -1222,6 +1477,209 @@ function blockerFallCredit(stats: DiceStats, r: Report): string | null {
 function blockTallies(stats: DiceStats, game: GameJson | null, attacker: string | null): DiceTally[] {
   return tallyFor(stats, teamOf(game, attacker)?.teamId ?? null, attacker);
 }
+// ---- the Luck row: lucky and bad breaks (owner 10-16; the definitions live in luckBreaks.ts) ----
+/** Where a roll falls in the game: the half, its slot (team turns started in the half before the one in progress, play
+ *  order from 0) and the turn number. */
+function clockSlot(clock: TurnClock | null): { half: number; slot: number; turn: number } {
+  if (!clock) return { half: 0, slot: 0, turn: 0 };
+  const slot = Math.max(0, clock.turnHome + clock.turnAway - 1);
+  const acting = clock.homePlaying == null ? null : clock.homePlaying ? clock.turnHome : clock.turnAway;
+  return { half: clock.half, slot, turn: acting != null && acting >= 1 ? acting : Math.floor(slot / 2) + 1 };
+}
+function addBreak(b: LuckBreaks, d: ReturnType<typeof breakDelta>, entry: () => Omit<LuckBreaks['log'][number], 'lucky' | 'p'>): void {
+  b.events += 1;
+  b.luckyExpected += d.luckyExpected; b.luckyVar += d.luckyVar; b.badExpected += d.badExpected; b.badVar += d.badVar;
+  if (d.happened === 0 || d.p == null) return;
+  if (d.happened > 0) b.lucky += 1; else b.bad += 1;
+  b.log.push({ ...entry(), lucky: d.happened > 0, p: d.p });
+}
+/** One event, scored for both teams (see luckBreaks.ts): its expectation from `outcomes`, its break from `happened`. */
+function noteBreakEvent(stats: DiceStats, game: GameJson | null, outcomes: readonly BreakOutcome[], happened: number, label: string, playerId: string | null, clock: TurnClock | null): void {
+  if (!game) return;
+  const home = (game.teamHome as unknown as TeamLike).teamId, away = (game.teamAway as unknown as TeamLike).teamId;
+  if (!home || !away) return;
+  const seq = stats.breakSeq = (stats.breakSeq ?? 0) + 1;
+  const at = { ...clockSlot(clock), ...playedCol(stats, home, clockSlot(clock)) };
+  const name = playerJson(game, playerId)?.name;
+  for (const teamId of [home, away]) {
+    addBreak((stats.teams[teamId] ??= emptyTally()).breaks ??= emptyBreaks(), breakDelta(outcomes, happened, teamId),
+      () => ({ seq, label, player: playerId ?? '', playerName: typeof name === 'string' && name ? name : playerId ?? '', ...at }));
+  }
+}
+const ROLL_NAMES: Record<string, string> = { dodgeRoll: 'dodge', goForItRoll: 'rush', pickUpRoll: 'pick-up', catchRoll: 'catch', passRoll: 'pass', interceptionRoll: 'interception',
+  jumpRoll: 'jump', leapRoll: 'leap', standUpRoll: 'stand-up', throwTeamMateRoll: 'team-mate throw', rightStuffRoll: 'landing', breatheFire: 'Breathe Fire', chainsawRoll: 'Chainsaw' };
+/** An action roll the Action dice row scores (pushActionLuck's own rule): success favours the roller's team. */
+function noteActionBreak(stats: DiceStats, game: GameJson | null, id: string, r: Report, rollerId: string | null, ruleUnknown: boolean, clock: TurnClock | null): void {
+  const minimum = Number(r.minimumRoll);
+  if (ruleUnknown || !isD6(r.roll) || r.minimumRoll == null || !Number.isInteger(minimum) || minimum < 1 || typeof r.successful !== 'boolean') return;
+  const trial = actionTrial(minimum, r.roll, r.successful);
+  const own = teamOf(game, rollerId), other = otherTeam(game, own);
+  if (!trial || !own || !other) return;
+  const kind = ROLL_NAMES[id] ?? id.replace(/Roll$/, '').replace(/([A-Z])/g, ' $1').toLowerCase();
+  noteBreakEvent(stats, game, rollOutcomes(trial.p, own.teamId, other.teamId), r.successful ? 0 : 1,
+    `${Math.min(6, Math.max(2, Math.round(minimum)))}+ ${kind} ${r.successful ? 'made' : 'failed'}`, rollerId, clock);
+}
+/** Owner 10-16 (Astra chart r1): the team turn in progress at the end of a frame in regular play is a turn played -
+ *  kept on both teams' breaks (the chart's axis). Idempotent: one entry per half and slot. */
+function notePlayedTurn(stats: DiceStats, game: GameJson | null): void {
+  const clock = readTurnClock(game);
+  if (!game || !clock || !clock.regular || clock.turnHome + clock.turnAway < 1) return;
+  const at = clockSlot(clock);
+  const home = (game.teamHome as unknown as TeamLike).teamId, away = (game.teamAway as unknown as TeamLike).teamId;
+  for (const teamId of [home, away]) {
+    if (!teamId) continue;
+    const b = (stats.teams[teamId] ??= emptyTally()).breaks ??= emptyBreaks();
+    const played = (b.played ??= []);
+    // Astra chart r3: a new entry whenever the turn in progress changes (a backward Time-out can repeat a slot)
+    const last = played[played.length - 1];
+    if (!last || last.half !== at.half || last.slot !== at.slot) played.push(at);
+  }
+}
+/** The played-turn column a roll made now falls in: the last turn recorded as played, when it is this one. */
+function playedCol(stats: DiceStats, teamId: string, at: { half: number; slot: number }): { col?: number; after?: number } {
+  const played = stats.teams[teamId]?.breaks?.played ?? [];
+  const last = played[played.length - 1];
+  return last && last.half === at.half && last.slot === at.slot ? { col: played.length - 1 } : { after: played.length };
+}
+// ---- Turns cut short (owner 10-16; the definitions live in turnsCutShort.ts) ----
+/** What the client treats as a turnover-capable failure (turnPresentation.ts TURNOVER_FAIL_IDS). */
+const TCS_ROLL_IDS = new Set(['dodgeRoll', 'goForItRoll', 'pickUpRoll', 'passRoll', 'catchRoll', 'leapRoll',
+  // Astra cut r1 #3 (the owner lists jumps): a failed jump's knock-down arms the turnover
+  'jumpRoll']);
+const playing = (team: TeamLike, id: string) => team.playerArray.some((p) => p.playerId === id);
+function actingTeamOf(game: GameJson, clock: TurnClock | null): TeamLike {
+  const home = clock?.homePlaying ?? (game as { homePlaying?: unknown }).homePlaying === true;
+  return (home ? game.teamHome : game.teamAway) as unknown as TeamLike;
+}
+/** The share of the acting team's turn left at a roll by `actingId`, read from the pitch before the frame. */
+function cutShortShare(stats: DiceStats, game: GameJson, team: TeamLike, actingId: string | null, clock: TurnClock | null): number {
+  const ids = new Set(team.playerArray.map((p) => p.playerId));
+  const onPitch = Object.entries(stats.turnField ?? {}).filter(([id, [x]]) => ids.has(id) && x >= 0).map(([id]) => id);
+  const turnNr = clock ? clockTurnOf(game, clock, team.teamId) : 0;
+  const act = stats.activeTurn?.[team.teamId];
+  const activated = act && clock && act.half === clock.half && act.turn === turnNr ? act.players : new Set<string>();
+  let unused = onPitch.filter((id) => !activated.has(id)).length;
+  // the acting player's own activation is not complete: it counts as unused
+  if (actingId && activated.has(actingId) && onPitch.includes(actingId)) unused += 1;
+  const key = `${clock?.half}|${team.teamId}|${turnNr}`;
+  return turnShare(unused, stats.tcsStart?.key === key ? stats.tcsStart.n : onPitch.length);
+}
+/** A turnover-capable roll (or block) of the acting team: P(failure) x the share, booked now; remembered as the roll a
+ *  turnover would be charged to. `pFail` null = its chance cannot be read (nothing booked, and no turnover charged). */
+function noteCutShortRoll(stats: DiceStats, game: GameJson | null, rollerId: string | null, pFail: number | null, label: string, clock: TurnClock | null): void {
+  if (!game || !rollerId) return;
+  // Astra cut r3: only a roll made in regular play can end a team turn (a kick-off Blitz! is not one) - read from the
+  // turn state before the frame, never from a mode its own result changed
+  if (clock?.regular === false) { stats.tcsLast = null; return; }
+  const team = actingTeamOf(game, clock);
+  if (!team.playerArray.some((p) => p.playerId === rollerId)) { stats.tcsLast = null; return; }
+  // (Astra cut r1 #1: the unfinished activation is the acting player's - a catcher's roll is inside the passer's)
+  const acting = typeof game.actingPlayer?.playerId === 'string' && playing(team, game.actingPlayer.playerId) ? game.actingPlayer.playerId : rollerId;
+  const share = cutShortShare(stats, game, team, acting, clock);
+  const at = clockSlot(clock);
+  const name = playerJson(game, rollerId)?.name;
+  stats.tcsLast = { share, measured: pFail != null, label, player: typeof name === 'string' && name ? name : rollerId, teamId: team.teamId, ...at,
+    ...playedCol(stats, (game.teamHome as unknown as TeamLike).teamId, at) };
+  if (pFail == null) return;
+  const c = ((stats.teams[team.teamId] ??= emptyTally()).cutShort ??= emptyCutShort());
+  c.rolls += 1; c.expected += pFail * share; c.variance += share * share * pFail * (1 - pFail);
+}
+/** One report through Turns cut short: the expectation of a turnover-capable roll, the client's own turnover heuristic
+ *  (turnPresentation.ts) and, at the turnEnd, the actual share of a turnover. */
+function noteCutShortStep(stats: DiceStats, game: GameJson | null, r: Report, id: string, clock: TurnClock | null): void {
+  if (!game || !clock) return;
+  const team = actingTeamOf(game, clock);
+  const playing = new Set(team.playerArray.map((p) => p.playerId));
+  const roller = typeof r.playerId === 'string' ? r.playerId : null;
+  // (Astra cut r2 #2: a bomb throw's failure does not end the turn - turnoverArmStep disarms it in bombAway)
+  const bomb = id === 'passRoll' && (r.bomb === true || /bomb/i.test(actingAction(game)) || /bomb/i.test(String(game.turnMode ?? '')));
+  if (TCS_ROLL_IDS.has(id) && !bomb && roller && playing.has(roller) && r.reRolled !== true && (id !== 'catchRoll' || /pass|hand/i.test(actingAction(game)))) {
+    const minimum = Number(r.minimumRoll);
+    const trial = isD6(r.roll) && Number.isInteger(minimum) && minimum >= 1 && typeof r.successful === 'boolean' && !passingRuleUnknown(game, id, roller)
+      ? actionTrial(minimum, r.roll, r.successful) : null;
+    const kind = ROLL_NAMES[id] ?? id;
+    noteCutShortRoll(stats, game, roller, trial ? 1 - trial.p : null, `${Math.min(6, Math.max(2, Math.round(minimum) || 2))}+ ${kind} failed`, clock);
+  } else if ((D6_ROLL_FIELDS[id] && id !== 'steadyFootingRoll' && !TCS_ROLL_IDS.has(id)) || ((id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll') && !(roller && playing.has(roller)))) {
+    stats.tcsLast = null; // another roll: a later knock-down is not charged to an earlier roll
+  }
+  const ctx = stats.tcsArm ?? createTurnPresentationContext();
+  const before = ctx.turnoverArmed;
+  const next = turnoverArmStep(ctx, playing, [r], game.turnMode).context;
+  if (!before && next.turnoverArmed) stats.tcsHit = stats.tcsLast ?? null;
+  // Astra cut r1 #2: a later failure while armed (a failed catch after an inaccurate pass) is the one charged
+  else if (next.turnoverArmed && TCS_ROLL_IDS.has(id) && r.successful === false && roller && playing.has(roller) && stats.tcsLast) stats.tcsHit = stats.tcsLast;
+  if (!next.turnoverArmed) stats.tcsHit = null;
+  // Astra cut r2 #1: an interception is no failure of a turnover-capable roll of the acting team - nothing is charged
+  if (id === 'interceptionRoll' && r.successful === true) stats.tcsHit = null;
+  stats.tcsArm = next;
+  // a successful roll arms nothing: it is no longer the roll a turnover would be charged to
+  if (TCS_ROLL_IDS.has(id) && r.successful === true && roller && playing.has(roller)) stats.tcsLast = null;
+  if (id !== 'turnEnd') return;
+  const hit = turnEndIsTurnover(next, r, game.turnMode) ? stats.tcsHit : null;
+  const counted = !!hit && hit.measured && hit.teamId === team.teamId;
+  const first = counted && hit!.share >= FIRST_ACTION_SHARE;
+  const lastFirst = (stats.tcsLastFirst ??= {});
+  if (counted) {
+    const streak = first && lastFirst[team.teamId] === true;
+    const cost = cutCost(hit!.share, streak);
+    const c = ((stats.teams[team.teamId] ??= emptyTally()).cutShort ??= emptyCutShort());
+    c.actual += cost;
+    const { measured: _m, teamId: _t, ...where } = hit!;
+    c.log.push({ ...where, seq: stats.breakSeq = (stats.breakSeq ?? 0) + 1, playerName: hit!.player, share: hit!.share, cost, firstAction: first, streak });
+  }
+  lastFirst[team.teamId] = first;
+  stats.tcsArm = createTurnPresentationContext(); stats.tcsHit = null; stats.tcsLast = null;
+}
+/** The acting team's players on the pitch when its turn starts (the first frame of the turn in regular play). */
+function noteCutShortTurnStart(stats: DiceStats, game: GameJson | null): void {
+  const clock = readTurnClock(game);
+  if (!game || !clock || !clock.regular) return;
+  const team = actingTeamOf(game, clock);
+  const key = `${clock.half}|${team.teamId}|${clockTurnOf(game, clock, team.teamId)}`;
+  if (stats.tcsStart?.key === key) return;
+  const field = fieldSnapshot(game) ?? {};
+  const ids = new Set(team.playerArray.map((p) => p.playerId));
+  stats.tcsStart = { key, n: Object.entries(field).filter(([id, [x]]) => ids.has(id) && x >= 0).length };
+}
+/** The outcome a Turns lost trial came to: 0 nothing, 1 stun, 2 KO, 3 casualty, 4 crowd stun (its outcomes' order). */
+function recordHappened(rec: TurnsAttackRecord): number {
+  const o = rec.outcome.toLowerCase();
+  if (/casualty/.test(o)) return 3;
+  if (/\bko\b/.test(o)) return 2;
+  if (/crowd surf stun/.test(o)) return 4;
+  if (/^stun/.test(o)) return 1; // a stun, or a KO an apothecary turned into one
+  return 0;
+}
+/**
+ * Owner 10-16: the Turns lost trials' outcomes as Luck events (KO recovery trials are scored from their rolls instead):
+ * nothing favours the victim's team, a stun / KO / casualty / crowd stun the credited team. Rebuilt from both teams'
+ * logs after every frame, so a result taken back (Piling On, an apothecary) or booked later reads as it now stands.
+ */
+function rebuildTurnsBreaks(stats: DiceStats): void {
+  const fresh: Record<string, LuckBreaks> = {};
+  // Astra luck r1 #2: an attack whose result has not come in yet (its link still waiting: no injury booked, the turn not
+  // over) has no outcome - only its expectation counts until it resolves
+  // (Astra luck r2: only the last attack's trials can wait - see DiceStats.turnsPending)
+  const pending = new Set<number>(stats.turnsPending ?? []);
+  for (const [credited, tally] of Object.entries(stats.teams)) {
+    for (const rec of tally.turnsLog ?? []) {
+      if (rec.recovery) continue;
+      const o = rec.outcomes;
+      const outcomes: BreakOutcome[] = [
+        { p: o.nothing / o.den, favours: rec.victimTeamId }, { p: o.stun / o.den, favours: credited }, { p: o.ko / o.den, favours: credited },
+        { p: o.cas / o.den, favours: credited }, { p: o.crowdStun / o.den, favours: credited },
+      ];
+      const happened = rec.outcome === rec.idle && pending.has(rec.id) ? null : recordHappened(rec);
+      const label = `${rec.outcome} on ${rec.fall ? `${rec.victimName}'s own ${rec.label}` : `${rec.label} vs ${rec.victimName}`}`;
+      for (const id of new Set([credited, rec.victimTeamId])) {
+        addBreak(fresh[id] ??= emptyBreaks(), breakDelta(outcomes, happened, id),
+          () => ({ seq: rec.seq ?? -rec.id, label, player: rec.attacker, playerName: rec.attackerName ?? rec.attacker, half: rec.half, slot: rec.slot ?? 0, turn: rec.turn, ...(rec.col != null ? { col: rec.col } : {}), ...(rec.after != null ? { after: rec.after } : {}) }));
+      }
+    }
+  }
+  for (const [id, b] of Object.entries(fresh)) (stats.teams[id] ??= emptyTally()).breaksTurns = b;
+}
+
 /** Rolls still waiting for a `blockChoice` when the block moves on were never resolved: UNMEASURED (who picked is unknown). */
 function dropPendingBlockRolls(stats: DiceStats, game: GameJson | null): void {
   for (const p of stats.pendingBlockRolls ?? []) for (const t of blockTallies(stats, game, p.attacker)) luckOf(t, 'block').unmeasured += 1;
@@ -1313,6 +1771,9 @@ function settleBlockRollLuck(stats: DiceStats, game: GameJson | null, attacker: 
     const score = blockRollScore(p.faces, attackerChooses, scores);
     const dist = parseDist(key);
     const chance = (s6: number) => dist.points.find((pt) => pt.s6 === s6)?.p ?? 0;
+    // owner 10-16 (Luck): a good result favours the blocking team, a bad one the defending team
+    noteBreakEvent(stats, game, [{ p: chance(6), favours: attackerTeam.teamId }, { p: chance(-6), favours: defenderTeam.teamId }, { p: chance(0), favours: null }],
+      score > 0 ? 0 : score < 0 ? 1 : 2, `${dice}-die ${attackerChooses ? '' : 'uphill '}block: ${score > 0 ? 'defender down available' : score < 0 ? 'attacker down forced' : 'neither'}`, p.attacker, stats.turnClock ?? readTurnClock(game));
     for (const t of tallies) {
       const b = luckOf(t, 'block');
       addTrial(b, key, score * 6);
@@ -1343,7 +1804,8 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     stats.lastBlockActing = null; stats.rerollGateFailed = false;
     stats.lastArmourTrial = null; stats.lastInjuryTrial = null;
     stats.turnClock = null; stats.turnDefender = null; stats.turnsLinks = {}; stats.turnsOpen = []; stats.turnsSeq = 0; stats.lastTurnsTrial = null;
-    stats.turnField = null; stats.turnsCrowd = null; stats.koChains = {}; stats.turnsAttackSeq = 0;
+    stats.turnField = null; stats.turnsCrowd = null; stats.koChains = {}; stats.turnsAttackSeq = 0; stats.turnsChain = null; stats.turnsFooting = null; stats.breakSeq = 0; stats.turnsPending = [];
+    stats.tcsStart = null; stats.tcsLast = null; stats.tcsArm = createTurnPresentationContext(); stats.tcsHit = null; stats.tcsLastFirst = {};
     delete stats.coverage; delete stats.turnover; delete stats.revision;
   }
   if (commandNr != null) {
@@ -1362,7 +1824,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
   let pitchStale = false;
   const rollClock = (): TurnClock | null => (turnEnded || !stats.turnClock ? readTurnClock(game) : stats.turnClock);
   for (const r of reports) {
-    if (String(r.reportId ?? '') === 'turnEnd') { turnEnded = true; stats.turnsLinks = {}; noteKoRecoveries(stats, game, r, rollClock()); }
+    if (String(r.reportId ?? '') === 'turnEnd') { turnEnded = true; stats.turnsLinks = {}; stats.turnsChain = null; stats.turnsFooting = null; noteKoRecoveries(stats, game, r, rollClock()); }
     if (String(r.reportId ?? '') === 'apothecaryChoice') noteApothecaryChoice(stats, game, r, rollClock());
     // r4: remember who paid for a re-roll; the re-rolled roll that follows reads it (falls through: nothing else consumes it)
     if (String(r.reportId ?? '') === 'reRoll' && typeof r.playerId === 'string') stats.lastRerollSource = { playerId: r.playerId, source: String(r.reRollSource ?? '') };
@@ -1381,6 +1843,23 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     }
     const id = String(r.reportId ?? '');
     const playerId = typeof r.playerId === 'string' ? r.playerId : null;
+    noteCutShortStep(stats, game, r, id, id === 'turnEnd' ? stats.turnClock ?? rollClock() : rollClock()); // (a turnEnd: the turn it ends)
+    // owner 10-16: a block's Steady Footing roll comes before any other roll; a successful one names its trial's outcome
+    const actionRoll = id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll' || !!D6_ROLL_FIELDS[id];
+    if (stats.turnsFooting && actionRoll && id !== 'steadyFootingRoll') stats.turnsFooting = null;
+    // Astra footing r1 #1: a block's push (and its crowd injury) comes before any other roll; a later action (a team-mate
+    // thrown into the crowd ...) is not the block's
+    if (actionRoll) stats.turnsChain = null;
+    // Astra luck r2: the last attack is over once anything else is rolled or announced (its own Steady Footing roll aside)
+    if ((actionRoll && id !== 'steadyFootingRoll') || id === 'block' || id === 'turnEnd') stats.turnsPending = [];
+    // Astra chart r3: a Wrestle used on the both down puts both players down with no armour roll - resolved
+    // (Astra chart r4: so does the defender's Dodge used on a stumble - a push, nobody down)
+    // (Astra chart r5: unless the push it leaves may still go into the crowd)
+    if (id === 'skillUse' && r.used === true) {
+      const skill = String(r.skill ?? '').toLowerCase();
+      if (skill === 'wrestle' || (skill === 'dodge' && !stats.turnsCrowd && !stats.turnsChain)) stats.turnsPending = [];
+    }
+    if (id === 'steadyFootingRoll') noteSteadyFootingTurns(stats, playerId, r);
 
     if (id === 'block') {
       const attacker = typeof r.attackerId === 'string' ? r.attackerId : playerId ?? actingId;
@@ -1420,7 +1899,8 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         const multi = actingAction(game) === 'multipleBlock' || (typeof r.defenderId === 'string' && r.defenderId in (stats.multiBlockCounted ?? {}));
         const rolled = [...(stats.pendingBlockRolls ?? [])].reverse().find((p) => p.attacker === attacker && (p.defender == null || p.defender === choiceDefender));
         noteBlockTurns(stats, game, attacker, typeof r.nrOfDice === 'number' ? r.nrOfDice : null, choiceDefender, multi, rollClock(),
-          rolled ? { defenderTacklezones: rolled.defenderTacklezones, blitz: rolled.blitz, sameFrame: rolled.frame === (stats.frameSeq ?? 0) } : null, stats.turnField ?? null, !pitchStale);
+          rolled ? { defenderTacklezones: rolled.defenderTacklezones, blitz: rolled.blitz, sameFrame: rolled.frame === (stats.frameSeq ?? 0) } : null, stats.turnField ?? null, !pitchStale,
+          isD6(chosen) ? chosen : null);
         pitchStale = true;
       }
       settleBlockRollLuck(stats, game, attacker, typeof r.nrOfDice === 'number' ? r.nrOfDice : null, typeof r.defenderId === 'string' ? r.defenderId : null);
@@ -1465,7 +1945,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       const team = teamOf(game, playerId);
       const tallies = tallyFor(stats, team?.teamId ?? null, playerId);
       pushD6(tallies, r.roll, 'dodgeFaces');
-      pushTest(tallies, r); pushActionLuck(tallies, r);
+      pushTest(tallies, r); pushActionLuck(tallies, r); noteActionBreak(stats, game, id, r, playerId, false, rollClock());
       const reRolled = r.reRolled === true;
       const successful = r.successful === true;
       const need = Number(r.minimumRoll);
@@ -1519,7 +1999,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       const team = teamOf(game, playerId);
       const tallies = tallyFor(stats, team?.teamId ?? null, playerId);
       pushD6(tallies, r.roll);
-      pushTest(tallies, r); pushActionLuck(tallies, r);
+      pushTest(tallies, r); pushActionLuck(tallies, r); noteActionBreak(stats, game, id, r, playerId, false, rollClock());
       const reRolled = r.reRolled === true;
       const successful = r.successful === true;
       if (!reRolled) {
@@ -1536,7 +2016,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       const team = teamOf(game, playerId);
       const tallies = tallyFor(stats, team?.teamId ?? null, playerId);
       pushD6(tallies, r.roll);
-      pushTest(tallies, r); pushActionLuck(tallies, r);
+      pushTest(tallies, r); pushActionLuck(tallies, r); noteActionBreak(stats, game, id, r, playerId, false, rollClock());
       const reRolled = r.reRolled === true;
       const successful = r.successful === true;
       if (!reRolled) {
@@ -1563,13 +2043,21 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         const bf = id === 'breatheFire' ? breatheFirePassed(r) : null;
         const tested = bf === null ? r : { ...r, successful: bf };
         pushTest(tallies, tested);
-        pushActionLuck(tallies, tested, passingRuleUnknown(game, id, playerId ?? actingId));
+        const ruleUnknown = passingRuleUnknown(game, id, playerId ?? actingId);
+        pushActionLuck(tallies, tested, ruleUnknown);
+        noteActionBreak(stats, game, id, tested, playerId ?? actingId, ruleUnknown, rollClock());
       }
       if (id === 'chainsawRoll') noteChainsawTurns(stats, game, playerId ?? actingId, r, rollClock());
     }
   }
   // turns lost: knock-outs missing the turns that started in this frame; then this frame's state is the next one's
   advanceTurnsLost(stats, game);
+  rebuildTurnsBreaks(stats);
+  noteCutShortTurnStart(stats, game);
+  // Astra cut r2 #1: the heuristic's drive-boundary disarm (turnoverArmStep) also for a frame with no reports
+  const modeNow = String(game?.turnMode ?? '');
+  if (game && modeNow !== 'regular' && modeNow !== 'betweenTurns') { stats.tcsArm = createTurnPresentationContext(); stats.tcsHit = null; }
+  notePlayedTurn(stats, game);
   const end = readTurnClock(game);
   if (end) stats.turnClock = end;
   const field = fieldSnapshot(game);

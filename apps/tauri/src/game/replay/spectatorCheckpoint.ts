@@ -25,6 +25,7 @@ import { reduceBlitzProjection, type BlitzProjection } from '../blitzProjection'
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers, type HeldTeamMate, type FumblerooskieMarker } from '../persistentPlayerMarkers';
 import { NetCommandId, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { applyLogEasterEgg, logEventKey, createReportLogContext, formatReportLines, injuryReportDedupeKey, setBlockDefenderHint, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, type ReportDisplay, type ReportLogContext } from '../reportFormatter';
+import { createUpstreamLogState, renderUpstreamReport, upstreamLinesText, validUpstreamLogLines, validUpstreamLogState, type UpstreamLogLine, type UpstreamLogState } from '../upstreamLog';
 import { reportCarriesDisplayedDice } from '../d6Log';
 import { EMPTY_END_GAME, reduceEndGame, type EndGameState } from '../endGameHandler';
 import { endGameFrameFromServer } from '../endGameFrame';
@@ -71,6 +72,10 @@ export interface SpectatorDecision {
 export interface SpectatorLogEntry extends ReportDisplay {
   /** Owner 10-15: a row only the Graphical log style shows (block flow push / skill use). */
   graphicalOnly?: true;
+  /** Owner 10-16 (FUMBBL log style): the report's upstream lines on its first row ([] on the others). */
+  u?: UpstreamLogLine[];
+  /** Owner 10-16: a row only the FUMBBL log style shows (a report upstream prints that the Text log does not list). */
+  upstreamOnly?: true;
   ingressOrder: number;
   receivedWallAt: number;
   source: SpectatorCursor;
@@ -90,6 +95,8 @@ export interface DurableProjection {
   provenance: ReportProvenance;
   reportDedupe: { signature: string | null; commandNr: number | null; sourceSequence: number };
   logContext: ReportLogContext;
+  /** Owner 10-16 (FUMBBL log style): upstream's StatusReport bookkeeping (the indent carried from report to report). */
+  upstreamLog: UpstreamLogState;
   log: SpectatorLogEntry[];
   followup: FollowupProjection;
   pendingPushes: { playerId: string; from: [number, number]; age: number }[];
@@ -188,7 +195,7 @@ export function seedSpectatorCheckpoint(snapshot: GameJson, cursor: SpectatorCur
     model, cursor: { ...cursor }, segmentId: cursor.segmentId, clock: clock && { ...clock },
     durableProjection: {
       version: 1, provenance: unknownReportProvenance(),
-      reportDedupe: { signature: null, commandNr: null, sourceSequence: cursor.sequence }, logContext: createReportLogContext(), log: [],
+      reportDedupe: { signature: null, commandNr: null, sourceSequence: cursor.sequence }, logContext: createReportLogContext(), upstreamLog: createUpstreamLogState(), log: [],
       injuryOutcomes: createInjuryOutcomeProjection(),
       casualtyRolls: createCasualtyRollProjection(),
       apothecaryResult: model.dialogParameter?.dialogId === 'apothecaryChoice' ? buildApothecaryResult(model, model.dialogParameter, createCasualtyRollProjection()) : null,
@@ -299,8 +306,16 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
       || event.cursor.sequence === projection.reportDedupe.sourceSequence;
     if (signature === projection.reportDedupe.signature && sameCommand) continue;
     projection.reportDedupe = { signature, commandNr: command.commandNr ?? null, sourceSequence: event.cursor.sequence };
+    // Owner 10-16 (FUMBBL log style): upstream's lines for every report in server order (its indent carries over)
+    const upstream = renderUpstreamReport(report, next.model, projection.upstreamLog);
+    const upstreamOnly = () => {
+      if (upstream.length) {
+        projection.log.push({ text: upstreamLinesText(upstream), d6: [], blockDice: [], names: [], tags: [], u: upstream, upstreamOnly: true,
+          receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } });
+      }
+    };
     const injury = injuryReportDedupeKey(report);
-    if (injury && injuries.has(injury)) continue;
+    if (injury && injuries.has(injury)) { upstreamOnly(); continue; }
     if (injury) injuries.add(injury);
     // Always advance formatter context, even when the normal log filters this report.
     const activationOfRows = openActivationBefore(projection.logContext, report); // owner 10-16: before the formatter opens a new one
@@ -310,11 +325,15 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver'].includes(id)
       || (id === 'playerAction' && !!playerActionDescription(report.playerAction)) // Astra 10-16: the declaration shows in replays too
       || (id === 'playerEvent' && typeof report.message === 'string' && report.message.trim())) {
-      projection.log.push(...lines.map((line) => ({ ...line, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+      projection.log.push(...lines.map((line, index) => ({ ...line, u: index === 0 ? upstream : [], receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
       noteActivationLogged(activationOfRows, lines.length); // owner 10-16: the same count the live log keeps (never the declaration's own row)
+      if (!lines.length) upstreamOnly(); // FUMBBL-only rows never count as displayed rows of the activation
     } else if (['pushback', 'skillUse', 'skillUseOtherPlayer'].includes(id)) {
       // Owner 10-15 (Graphical block flow): steps only the Graphical style shows
       projection.log.push(...lines.filter((line) => line.g).map((line) => ({ ...line, graphicalOnly: true as const, receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+      upstreamOnly();
+    } else {
+      upstreamOnly();
     }
   }
   // Owner 10-13 (reroll re-tumble, Astra): the card before this frame and its roll occurrence, for rerolledDice below.
@@ -331,7 +350,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     }
   }
   // owner 10-15: Graphical-only rows ride along without counting against the 500 ordinary rows (logLanes.trimLogRows)
-  projection.log = trimLogRows(projection.log, 500, (row) => row.graphicalOnly === true);
+  projection.log = trimLogRows(projection.log, 500, (row) => (row.graphicalOnly === true ? 'graphical' : row.upstreamOnly === true ? 'upstream' : false));
   projection.drive = reduceDriveProjection(projection.drive, reports, next.model);
   projection.heldTeamMate = reduceHeldTeamMate(projection.heldTeamMate, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])), next.model);
   projection.fumblerooskie = reduceFumblerooskie(projection.fumblerooskie, reports, next.model);
@@ -463,7 +482,7 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     || !Array.isArray(model.teamHome.playerArray) || !Array.isArray(model.teamAway.playerArray)
     || !Array.isArray(model.fieldModel.playerDataArray)) fail(2);
   const p = value.durableProjection;
-  if (!keys(p, ['version', 'provenance', 'followup', 'pendingPushes', 'movementOccurrence', 'kickoffWeather', 'turnPresentation', 'ballProjectile', 'reportDedupe', 'logContext', 'log', 'pendingDecision', 'reRollCard', 'blockCard', 'apothecaryCard', 'casualtyRolls', 'injuryOutcomes', 'apothecaryResult', 'gazeVictimIds', 'recoveringIds', 'blitz', 'block', 'endGame', 'endGameHud', 'actionRolls', 'skillDecision', 'board', 'heldTeamMate', 'fumblerooskie', 'dodgySnackPlayers', 'drive'])) fail(3);
+  if (!keys(p, ['version', 'provenance', 'followup', 'pendingPushes', 'movementOccurrence', 'kickoffWeather', 'turnPresentation', 'ballProjectile', 'reportDedupe', 'logContext', 'upstreamLog', 'log', 'pendingDecision', 'reRollCard', 'blockCard', 'apothecaryCard', 'casualtyRolls', 'injuryOutcomes', 'apothecaryResult', 'gazeVictimIds', 'recoveringIds', 'blitz', 'block', 'endGame', 'endGameHud', 'actionRolls', 'skillDecision', 'board', 'heldTeamMate', 'fumblerooskie', 'dodgySnackPlayers', 'drive'])) fail(3);
   if (!object(p.drive) || !keys(p.drive, ['offenseIsHome', 'provenance']) || typeof p.drive.offenseIsHome !== 'boolean' || !oneOf(DRIVE_PROVENANCES, p.drive.provenance)) fail(4);
   if (!strings(p.dodgySnackPlayers)) fail(5);
   const held = p.heldTeamMate;
@@ -492,8 +511,11 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     || !contextKeys.every((k) => requiredContextKeys.includes(k) || optionalContextKeys.includes(k))
     || !Object.entries(p.logContext).every(([k, v]) => k === 'activation' || nullableString(v)) || !activationOk || !strings(p.gazeVictimIds) || !strings(p.recoveringIds)) fail(11);
   if (value.clock !== null && (!object(value.clock) || !keys(value.clock, ['gameTime', 'turnTime', 'receivedMonotonicAt']) || !Object.values(value.clock).every(finite))) fail(12);
-  if (!Array.isArray(p.log) || p.log.filter((row) => !(row as { graphicalOnly?: unknown }).graphicalOnly).length > 500
-    || p.log.filter((row) => (row as { graphicalOnly?: unknown }).graphicalOnly).length > 500) fail(13);
+  if (!validUpstreamLogState(p.upstreamLog)) fail(11);
+  const graphicalRow = (row: unknown) => !!(row as { graphicalOnly?: unknown }).graphicalOnly;
+  const upstreamRow = (row: unknown) => !!(row as { upstreamOnly?: unknown }).upstreamOnly;
+  if (!Array.isArray(p.log) || p.log.filter((row) => !graphicalRow(row) && !upstreamRow(row)).length > 500
+    || p.log.filter(graphicalRow).length > 500 || p.log.filter(upstreamRow).length > 500) fail(13);
   for (const entry of p.log) {
     if (!object(entry) || !source(entry.source as SpectatorCursor)) fail(14);
     if (validatedLogRows.has(entry)) continue;
@@ -501,7 +523,9 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     // `g` (null = left out in the Graphical style) ride a report's lines.
     const rowKeys = ['text', 'd6', 'blockDice', 'names', 'tags', 'receivedWallAt', 'ingressOrder', 'source'];
     const extraKeys = Object.keys(entry).filter((k) => !rowKeys.includes(k));
-    if (!rowKeys.every((k) => k in entry) || !extraKeys.every((k) => k === 'action' || k === 'g' || k === 'graphicalOnly' || k === 'alt')
+    if (!rowKeys.every((k) => k in entry) || !extraKeys.every((k) => k === 'action' || k === 'g' || k === 'graphicalOnly' || k === 'alt' || k === 'u' || k === 'upstreamOnly')
+      || ('u' in entry && !validUpstreamLogLines(entry.u))
+      || ('upstreamOnly' in entry && (entry as { upstreamOnly?: unknown }).upstreamOnly !== true)
       || ('alt' in entry && !(object(entry.alt) && keys(entry.alt as object, ['text', 'd6', 'blockDice', 'names', 'tags'])
         && typeof (entry.alt as { text?: unknown }).text === 'string'
         && [(entry.alt as { d6?: unknown }).d6, (entry.alt as { blockDice?: unknown }).blockDice, (entry.alt as { names?: unknown }).names, (entry.alt as { tags?: unknown }).tags].every(Array.isArray)
@@ -517,7 +541,10 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
         if (!object(line)) return false;
         const base = ['text', 'd6', 'blockDice', 'names', 'tags', 'indent'];
         const hasMore = 'more' in line;
-        if (!(keys(line, base) || (allowMore && hasMore && keys(line, [...base, 'more'])))) return false;
+        const extras = ['join', 'joinPrevious'].filter((k) => k in line); // owner 10-16: the block-row join marks
+        if (!(keys(line, [...base, ...extras]) || (allowMore && hasMore && keys(line, [...base, ...extras, 'more'])))) return false;
+        const j = line as { join?: unknown; joinPrevious?: unknown };
+        if ((j.join !== undefined && j.join !== 'block') || (j.joinPrevious !== undefined && j.joinPrevious !== 'block')) return false;
         const l = line as { text?: unknown; indent?: unknown; d6?: unknown; blockDice?: unknown; names?: unknown; tags?: unknown; more?: unknown };
         if (typeof l.text !== 'string' || ![0, 1, 2, 3].includes(l.indent as number) || ![l.d6, l.blockDice, l.names, l.tags].every(Array.isArray)) return false;
         if (!validLogLineTokens(line as unknown as SpectatorLogEntry)) return false;

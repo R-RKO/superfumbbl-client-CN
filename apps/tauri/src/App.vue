@@ -58,7 +58,7 @@ import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/b
 import { onReportOwnedKey } from './game/reportModalKeys';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchLatestRelease, inAppUpdaterEnabled, MENU_RETURN_UPDATE_CHECK_DELAY_MS, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, updateAvailable } from './game/updateCheck';
+import { fetchLatestRelease, inAppUpdaterEnabled, MENU_RETURN_UPDATE_CHECK_DELAY_MS, parseVersion, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, updateAvailable } from './game/updateCheck';
 import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
@@ -1638,6 +1638,25 @@ watch(() => gameStore.game.value, (game) => {
   const now = currentGameIdentity();
   if (now && !sameGame(now, leaveGamePromptFor)) cancelLeaveGame();
 });
+/** Owner 10-16: Esc menu > Exit game (shown only with no game loaded). The process plugin's exit, else closing the
+ *  window; a shell whose capabilities allow neither (installers before the one that adds process:allow-exit and
+ *  core:window:allow-close) says so instead of failing silently. */
+const exitAppHint = ref('');
+/** The first installer whose capability file grants process:allow-exit / core:window:allow-close. */
+const EXIT_APP_SHELL_MIN = '1.0.231'; // (no export: a <script setup> cannot export)
+const exitAppAvailable = computed(() => {
+  const shell = parseVersion(appPatchStatus.value?.shellVersion ?? '');
+  const min = parseVersion(EXIT_APP_SHELL_MIN)!;
+  if (!shell) return false;
+  for (let i = 0; i < 3; i++) { if (shell[i]! !== min[i]!) return shell[i]! > min[i]!; }
+  return true;
+});
+async function exitApp(): Promise<void> {
+  exitAppHint.value = '';
+  try { const { exit } = await import('@tauri-apps/plugin-process'); await exit(0); return; } catch { /* not permitted or not packaged */ }
+  try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().close(); return; } catch { /* not permitted or not packaged */ }
+  exitAppHint.value = 'This installer cannot quit from here yet. Close the window to exit.';
+}
 function requestLeaveGame() {
   // Registry-owned as a client-local dialog: opening this gate never resolves or
   // synthesizes a server dialog/wire command.
@@ -2234,9 +2253,12 @@ onBeforeUnmount(() => {
           <!-- Owner 09-10: Help moved here from the retired hamburger; the Protocol console is a fork-edition dev tool. -->
           <button @click="ui.gameMenuOpen = false; guideOpen = true"><DisplayCaps text="Help / Field Manual" /></button>
           <button v-if="FORK_EDITION" @click="openConsole()"><DisplayCaps text="Protocol console" /></button>
-          <button :disabled="!gameStore.game.value"
-            :title="gameStore.game.value ? '' : 'No game loaded'"
-            @click="requestLeaveGame()"><DisplayCaps text="Return to Menu" /></button>
+          <button v-if="gameStore.game.value" @click="requestLeaveGame()"><DisplayCaps text="Return to Menu" /></button>
+          <!-- Owner 10-16: with no game loaded the row is Exit game (quits the application) - only on a shell whose
+               capabilities allow it (installer 1.0.231+); an older shell keeps the inert Return to Menu row. -->
+          <button v-else-if="exitAppAvailable" @click="exitApp()"><DisplayCaps text="Exit game" /></button>
+          <button v-else disabled title="No game loaded"><DisplayCaps text="Return to Menu" /></button>
+          <p v-if="exitAppHint" class="hint">{{ exitAppHint }}</p>
           <!-- Owner 2026-07-06 (note 5): request to concede (play mode only). The
                server confirms via the concedeGame dialog if concession is legal. -->
           <button :disabled="!gameStore.canConcedeGame"
@@ -3027,9 +3049,11 @@ onBeforeUnmount(() => {
               <select v-model="settings.logStyle">
                 <option value="text">Text</option>
                 <option value="graphical">Graphical</option>
+                <option value="fumbbl">FUMBBL</option>
               </select>
             </label>
-            <p class="hint">Graphical: each line is a row in the acting team's colour, with the action's icon (and a reroll's source) on the left.</p>
+            <p v-if="settings.logStyle === 'fumbbl'" class="hint">The FUMBBL client's own log wording and layout.</p>
+            <p v-else class="hint">Graphical: each line is a row in the acting team's colour, with the action's icon (and a reroll's source) on the left.</p>
             <label class="row">
               <span>Chat style</span>
               <select v-model="settings.chatStyle" data-testid="chat-style">

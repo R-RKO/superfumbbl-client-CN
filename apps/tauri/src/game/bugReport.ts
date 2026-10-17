@@ -88,6 +88,8 @@ export interface BugReportLogEntry {
   time: string;
   kind: string;
   text: string;
+  /** Owner 10-16: a FUMBBL-log-style-only row; the bug report's text log keeps the Text style and leaves it out. */
+  upstreamOnly?: true;
 }
 
 /** One entry of the Developer-panel stream (store `state.devLog`). Empty unless dev mode is on. */
@@ -175,9 +177,10 @@ export function formatAppLog(
   limit = BUG_REPORT_APP_LOG_ENTRIES,
 ): string | null {
   const sections: string[] = [];
-  const tail = entries.slice(-limit);
+  const textEntries = entries.filter((e) => !e.upstreamOnly);
+  const tail = textEntries.slice(-limit);
   if (tail.length) {
-    sections.push(`--- client log (last ${tail.length} of ${entries.length}) ---`);
+    sections.push(`--- client log (last ${tail.length} of ${textEntries.length}) ---`);
     for (const e of tail) sections.push(`${e.time} [${e.kind}] ${e.text}`);
   }
   // Dev-panel stream: populated only when the tester has dev mode on, so usually absent. When it IS

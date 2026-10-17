@@ -17,7 +17,15 @@ export function createBoardProjection(): BoardProjection {
  *  reports) could not End a blitz after its block because the flip back to regular had nulled the receive-time
  *  acting mirror and marked the actor cleared (the P0 #2 boundary reset), so the cancel was refused as "nothing
  *  declared"; a Jump toggle (a fresh declaration echo) un-wedged it. */
-const MID_ACTIVATION_SUB_MODES: Record<string, string> = { selectBlitzTarget: 'regular' };
+/** Owner 10-16 (regression sweep): every mode the fork server enters INSIDE a coach's turn and leaves again
+ *  (setTurnMode(getLastTurnMode()) in StepSelectBlitzTarget / StepSelectGazeTarget / StepLookIntoMyEyes /
+ *  StepInitBlocking (selectBlockKind) / StepRaidingParty / StepHitAndRun / StepThenIStartedBlastin / StepPlaceBall
+ *  (safePairOfHands), and the passing / bomb / wizard / trickster / illegal-substitution sub-modes the behaviours set
+ *  and their end steps restore). None of them is a team turn; the side / turn numbers in the key still are. */
+const MID_ACTIVATION_SUB_MODES: Record<string, string> = Object.fromEntries(['selectBlitzTarget', 'selectGazeTarget', 'selectBlockKind',
+  'raidingParty', 'hitAndRun', 'thenIStartedBlastin', 'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway',
+  'bombHomeBlitz', 'bombAwayBlitz', 'wizard', 'illegalSubstitution'].map((mode) => [mode, 'regular']));
+export const MID_ACTIVATION_TURN_MODES: ReadonlySet<string> = new Set(Object.keys(MID_ACTIVATION_SUB_MODES));
 export function boardTurnKey(g: GameJson): string {
   const mode = MID_ACTIVATION_SUB_MODES[String(g.turnMode)] ?? g.turnMode;
   return `${mode}:${turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change

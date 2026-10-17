@@ -64,6 +64,7 @@ import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptor
 import { withEntropy } from './mouseEntropy';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
+import { upstreamLinesText, upstreamLogLines, type UpstreamLogLine } from './upstreamLog';
 import type { GraphicalLine, LogLineTokens } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
@@ -341,6 +342,11 @@ export interface LogEntry {
   graphicalOnly?: true;
   /** Owner 10-15: the rare easter-egg wording both styles show instead of `text` (bug-report logs keep `text`). */
   alt?: LogLineTokens;
+  /** Owner 10-16 (FUMBBL log style): the report's lines as the upstream Java client prints them, on its first entry
+   *  ([] on the others). The Text / Graphical styles and the bug report text never read it. */
+  u?: UpstreamLogLine[];
+  /** Owner 10-16: a report only the FUMBBL style shows (upstream prints it, the Text log does not list it). */
+  upstreamOnly?: true;
   /** Server-authoritative talk author classification; missing team/coach truth stays neutral. */
   side?: ChatAuthorSide;
 }
@@ -5945,10 +5951,10 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens) {
+function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens, upstream?: UpstreamLogExtra) {
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
   const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
-  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}), ...(g !== undefined ? { g } : {}), ...(graphicalOnly ? { graphicalOnly: true as const } : {}), ...(alt ? { alt } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
+  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}), ...(g !== undefined ? { g } : {}), ...(graphicalOnly ? { graphicalOnly: true as const } : {}), ...(alt ? { alt } : {}), ...(upstream?.u ? { u: upstream.u } : {}), ...(upstream?.upstreamOnly ? { upstreamOnly: true as const } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
 }
 /** Owner 10-10: my own follow-up answer as a match log line ("<Player> does not follow the block"), the name tagged
@@ -5967,8 +5973,14 @@ function logFollowUpChoice(playerId: string | null | undefined, follow: boolean)
   const graphical: GraphicalLine = { text, d6: [], blockDice: [], names: names ?? [], tags: [], indent: 1 };
   log('report', text, undefined, undefined, undefined, names, undefined, undefined, action, graphical);
 }
-function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens): void {
-  log(kind, text, side, d6, blockDice, names, tags, 'match', action, g, graphicalOnly, alt);
+function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens, upstream?: UpstreamLogExtra): void {
+  log(kind, text, side, d6, blockDice, names, tags, 'match', action, g, graphicalOnly, alt, upstream);
+}
+/** Owner 10-16 (FUMBBL log style): the upstream lines riding a log entry. */
+type UpstreamLogExtra = { u?: UpstreamLogLine[]; upstreamOnly?: true };
+/** A report the Text log does not list but upstream prints: one entry only the FUMBBL style shows. */
+function logUpstreamOnly(lines: UpstreamLogLine[]): void {
+  if (lines.length) logMatch('report', upstreamLinesText(lines), undefined, [], [], [], [], undefined, undefined, false, undefined, { u: lines, upstreamOnly: true });
 }
 const railDiagnostic: RailDiagnosticSink = (diagnostic) => {
   log('system', `⚠ rail: ${diagnostic.message}`);
@@ -6374,6 +6386,20 @@ function queueOrStartPassPacingEvent(event: PassPacingEvent): boolean {
 }
 const FIREBALL_ANIMATION_MS = 1300;
 let pendingFireballBeats = 0;
+/** Owner 10-16 (FUMBBL log style): some report's upstream lines wait behind the pending fireball beats (any frame). */
+let upstreamLogBehindFireball = false;
+let upstreamLogKeySeq = 0;
+/** Owner 10-16 (Astra): the CONTENT of FUMBBL-only rows waiting behind a fireball beat, kept outside the queued callback
+ *  so a reset that drops the queue (reconnect snapshot, seek) still logs them: only their surfacing waits. */
+const pendingUpstreamLogs = new Map<string, { lines: UpstreamLogLine[]; gameId: unknown }>();
+/** Surface every waiting FUMBBL-only row of the current game now (resetPresentation, before the queue is dropped). */
+function flushPendingUpstreamLogs(): void {
+  const gameId = (game.value as { gameId?: unknown } | null)?.gameId;
+  const waiting = [...pendingUpstreamLogs.values()];
+  pendingUpstreamLogs.clear();
+  upstreamLogBehindFireball = false;
+  for (const entry of waiting) if (entry.gameId === gameId) logUpstreamOnly(entry.lines);
+}
 // #67 D2 §4 backpressure: out-pacing the drain past this depth COLLAPSES to the model — but HALTS at the first RESULT prompt (a decision can't be out-paced) and still fires terminal cues.
 const PRESENTATION_COLLAPSE_DEPTH = 12;
 // #92 (Increment 1): true once the view has wired the renderer's `onCue` sink (via bindSoundCue). Gates the
@@ -7272,6 +7298,7 @@ function syncHmpScatterMarks(): void {
 
 /** #67: reset the drain on game teardown — drop the queue, release any open gate, clear the surface. */
 function resetPresentation(): void {
+  flushPendingUpstreamLogs(); // FUMBBL-only rows waiting behind a fireball beat keep their content
   presentation.queue.length = 0;
   if (presentation.presenting) {
     presentation.presenting.release(presentation.presenting.kind === 'rollBeat');
@@ -8837,10 +8864,28 @@ function applyFrameContents(frame: QueuedFrame) {
     visibleReportLogContext.turnEndSide = wasHomePlaying ? 'home' : 'away';
     visibleReportLogContext.turnEndTurnover = !ownRegularEndTurnAcked && preview.context.turnoverArmed && !scored && String(game.value.turnMode ?? '') === 'regular';
   }
+  // Owner 10-16 (FUMBBL log style): once a report waits behind the fireball beat (this frame or an earlier one still
+  // pending), every later report's upstream lines queue behind it too, so the FUMBBL log keeps the server's order
+  let upstreamQueued = upstreamLogBehindFireball && pendingFireballBeats > 0;
+  const upstreamOnlyInOrder = (lines: UpstreamLogLine[], key: string) => {
+    if (!lines.length) return;
+    if (!upstreamQueued) { logUpstreamOnly(lines); return; }
+    pendingUpstreamLogs.set(key, { lines, gameId: (game.value as { gameId?: unknown } | null)?.gameId });
+    const surface = () => {
+      const waiting = pendingUpstreamLogs.get(key);
+      if (!waiting) return;
+      pendingUpstreamLogs.delete(key);
+      logUpstreamOnly(waiting.lines);
+    };
+    if (!enqueueBehindFireball(key, surface)) surface();
+  };
   for (const [reportIndex, report] of reports.entries()) {
     // Owner 10-15 (Graphical log): an undisplayed handOver report still marks the next catch as the Hand-off's, and a
     // reroll grant the source of the rerolled roll line it leads to.
     noteReportLogContext(report, visibleReportLogContext, game.value);
+    // Owner 10-16 (FUMBBL log style): upstream's lines for EVERY report in server order (its indent carries over)
+    const upstreamLines = upstreamLogLines(report, game.value, visibleReportLogContext);
+    const upstreamKey = `upstreamLog:${++upstreamLogKeySeq}:${String((cmd as { commandNr?: unknown }).commandNr)}:${reportIndex}`;
     if (String(report.reportId) === 'dwarfenWisdomRoll') {
       const roll = Number(report.roll);
       const teamId = String(report.teamId ?? '');
@@ -8871,7 +8916,11 @@ function applyFrameContents(frame: QueuedFrame) {
       const armorRoll = (report as { armorRoll?: unknown }).armorRoll;
       const key = injuryReportDedupeKey(report);
       if (!key) continue;
-      if (seenInjuryKeys.has(key)) continue; // the twin — skip both the log AND the dice
+      if (seenInjuryKeys.has(key)) {
+        // the twin — skip both the log AND the dice; upstream prints its parts (in order behind a pending fireball beat)
+        upstreamOnlyInOrder(upstreamLines, upstreamKey);
+        continue;
+      }
       seenInjuryKeys.add(key);
       if (Array.isArray(armorRoll) && armorRoll.length === 2 && def) {
         // the fallen player may relocate to the dugout THIS frame — aim at the square the armour actually broke on (preCoords), else the live square.
@@ -8901,18 +8950,36 @@ function applyFrameContents(frame: QueuedFrame) {
         logEventKey(game.value, report));
       // Astra r3 10-16: count at FORMAT time, not when the rows surface: a fireball-deferred row still belongs to its
       // activation, and the acting-player clear (which decides a cancel) can arrive before the deferred rows surface.
+      // FUMBBL-only rows (entry.u / upstreamOnly) never count: only the Text lines of the report.
       noteActivationLogged(activationOfRows, lines.length); // owner 10-16: displayed rows of THEIR activation (never the declaration's own)
-      const surfaceLog = () => {
-        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt);
-      };
       const fireballReport = (String(report.reportId) === 'spellEffectRoll' && String(report.specialEffect) === 'fireball')
         || (String(report.reportId) === 'injury' && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
+      // a later report of a frame whose fireball lines wait: its Text line keeps its place, its upstream lines queue
+      const upstreamHere = !upstreamQueued || fireballReport;
+      // a fireball report's own upstream lines wait with its Text lines, but their content is kept outside the callback
+      // (pendingUpstreamLogs): a reset that drops the queue still logs them (resetPresentation)
+      if (fireballReport && upstreamLines.length) pendingUpstreamLogs.set(upstreamKey, { lines: upstreamLines, gameId: (game.value as { gameId?: unknown } | null)?.gameId });
+      const surfaceLog = () => {
+        let own = upstreamHere ? upstreamLines : [];
+        if (fireballReport && upstreamLines.length) {
+          if (pendingUpstreamLogs.has(upstreamKey)) pendingUpstreamLogs.delete(upstreamKey);
+          else own = []; // already surfaced by a reset
+        }
+        lines.forEach((formatted, index) => logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt, { u: index === 0 ? own : [] }));
+        if (!lines.length) logUpstreamOnly(own);
+      };
       if (!fireballReport || !enqueueBehindFireball(`fireballLog:${String((cmd as { commandNr?: unknown }).commandNr)}:${reportIndex}`, surfaceLog)) surfaceLog();
+      else upstreamQueued = upstreamLogBehindFireball = true;
+      if (!upstreamHere) upstreamOnlyInOrder(upstreamLines, upstreamKey);
     } else if (GRAPHICAL_ONLY_REPORTS.has(String(report.reportId))) {
       // Owner 10-15 (Graphical block flow): steps the Text log never listed; only their Graphical rows are logged
       for (const formatted of formatReportLines(report, game.value, visibleReportLogContext)) {
         if (formatted.g) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, true);
       }
+      upstreamOnlyInOrder(upstreamLines, upstreamKey);
+    } else if (!deferCoinReportLogUntilCine(report.reportId, playback.catchingUp)) {
+      // a live coin result keeps its post-cinematic line (no spoiler before the reveal) in every style
+      upstreamOnlyInOrder(upstreamLines, upstreamKey);
     }
   }
   if (reports.some((report) => String(report.reportId) === 'foulAppearanceRoll'
@@ -17553,6 +17620,8 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   armour(): typeof state.armorDice;
   reportLog(): LogEntry[];
   pendingBeatCount(): number;
+  /** The reset a reconnect snapshot / seek runs (drops the presentation queue). */
+  resetPlayback(): void;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -17597,6 +17666,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
     armour: () => state.armorDice,
     reportLog: () => state.log.slice(priorLogLength).filter((entry) => entry.kind === 'report'),
     pendingBeatCount: () => pendingFireballBeats,
+    resetPlayback: () => resetPlayback(),
     dispose() {
       resetPresentation();
       clearAllGameTimeouts();
@@ -29562,10 +29632,14 @@ export const gameStore = {
       { reportId: 'turnEnd', playerIdTouchdown: homeP1 },
     ];
     for (const report of sampleReports) {
+      // Owner 10-16 (FUMBBL log style): the demo carries upstream's lines too, so every log style can be previewed
+      const upstreamLines = upstreamLogLines(report, g, visibleReportLogContext);
       if (settings.debugLog || isDiceRoll(report) || isAlwaysVisibleEffectReport(report)) {
-        for (const formatted of formatReportLines(report, g, visibleReportLogContext)) {
-          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, undefined, formatted.action, formatted.g);
-        }
+        formatReportLines(report, g, visibleReportLogContext).forEach((formatted, index) => {
+          log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, undefined, formatted.action, formatted.g, false, undefined, { u: index === 0 ? upstreamLines : [] });
+        });
+      } else {
+        logUpstreamOnly(upstreamLines);
       }
     }
 

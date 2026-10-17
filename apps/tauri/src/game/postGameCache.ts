@@ -120,7 +120,7 @@ export async function loadPostGameSnapshot(key: string): Promise<PostGameSnapsho
   try {
     const row = await store().get(key);
     if (!row) return null;
-    if ((row as { version?: number }).version !== 4) { await store().delete(key); return null; } // owner 10-13 (v2), 10-15 (v3, turns lost; v4, KO by drive): re-tallied, never shown under the new labels
+    if ((row as { version?: number }).version !== 7) { await store().delete(key); return null; } // owner 10-13 (v2), 10-15 (v3, turns lost; v4, KO by drive), 10-16 (v5, Steady Footing and chain-push surfs; v6, Luck breaks; v7, Turns cut short): re-tallied, never shown under the new labels
     if (!(row.savedAt > Date.now() - POST_GAME_MAX_AGE_MS)) { await store().delete(key); return null; }
     return row;
   } catch { return null; }

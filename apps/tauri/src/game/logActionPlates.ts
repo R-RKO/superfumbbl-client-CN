@@ -1,5 +1,14 @@
-import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { playerHasSkill, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { playerServerSide, teamServerSide, type ServerSide } from '@fumbbl40k/ffb-pitch';
+/** Owner 10-16: the jump of a Pogo player is a 'pogo', of a Leap player a 'leap', else a 'jump'. */
+export function jumpKindFor(game: GameJson | null, playerId: unknown): 'jump' | 'leap' | 'pogo' {
+  const id = String(playerId ?? '');
+  const player = game && id ? [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => String(p.playerId) === id) : null;
+  if (!player) return 'jump';
+  if (playerHasSkill(player, 'Pogo')) return 'pogo';
+  if (playerHasSkill(player, 'Leap')) return 'leap';
+  return 'jump';
+}
 
 /**
  * Owner 10-15 (Settings > Display > Log > Log style "Graphical"): each match-log line is a row whose left cell shows the
@@ -68,6 +77,9 @@ export const LOG_ACTION_ICONS = {
   ballAndChain: { icon: { type: 'emoji', emoji: '\u{26D3}\u{FE0F}' }, label: 'Ball & Chain' },
   standUp: { icon: { type: 'emoji', emoji: '\u{1F9CD}' }, label: 'Stand up' },
   jump: { icon: { type: 'emoji', emoji: '\u{1F998}' }, label: 'Jump' },
+  // owner 10-16: a jump by a Leap / Pogo player is named for the skill (the pitch plate reads LEAP / POGO too)
+  leap: { icon: { type: 'skill', skill: 'Leap' }, label: 'Leap' },
+  pogo: { icon: { type: 'skill', skill: 'Pogo' }, label: 'Pogo' },
   throwTeamMate: { icon: { type: 'emoji', emoji: '\u{1F93E}' }, label: 'Throw Team-Mate' },
   landing: { icon: { type: 'emoji', emoji: '\u{1FA82}' }, label: 'Landing' },
   bomb: { icon: { type: 'emoji', emoji: '\u{1F4A3}' }, label: 'Bomb' },
@@ -283,7 +295,7 @@ function providedSource(report: Report, context: LogActionContext | null): strin
     const gated = isGateRerollSource(named) && Number.isInteger(roll) && roll > 0;
     if (gated && report.successful === false) return null;
     if (named && GATE_SOURCES.has(named.toLowerCase().replace(/[^a-z]/g, ''))) return context?.lastRerollSource ?? null;
-    // A reRoll without a source reads "rerolls (team reroll)" in the log (the formatter's own default); a blockReRoll
+    // A reRoll without a source reads "uses a team reroll to reroll" in the log (the formatter's own default); a blockReRoll
     // without one names none.
     return named ?? (id === 'reRoll' ? 'Team ReRoll' : null);
   }
@@ -550,6 +562,7 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       // owner 10-15: every other report type takes its icon from REPORT_ACTION_KIND (null = no icon). Astra 10-15: the
       // icon never changes the row's tint - side null keeps the report's dice owner (fallbackSide, reportDiceOwner)
       const kind = REPORT_ACTION_KIND[id];
+      if (kind === 'jump') return plate(jumpKindFor(game, report.playerId), null); // owner 10-16: Leap / Pogo by the mover's skill
       return kind ? plate(kind, null) : null;
     }
   }

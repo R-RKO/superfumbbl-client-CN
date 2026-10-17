@@ -14,8 +14,8 @@ export const DICE_EXPECTED_HELP: readonly { key: 'rolls' | 'armour' | 'turns' | 
   // Owner 10-15, turnsLost.ts / diceStats noteBlockTurns: every block thrown adds P(knock-down) x P(armour breaks) x the
   // turns each injury result costs now - a stun 1, a KO the victim team's turns of the drive (owner 10-15: KO recovery
   // by drive), a casualty the turns left in the game. (The blocker's own fall counting for the defender does not fit
-  // the 60-word cap, so the note leaves it out.)
-  { key: 'turns', text: 'Turns lost: per block thrown, turns the victim misses. Stun 1, KO rest of drive, casualty rest of game.' },
+  // the 60-word cap, so the note leaves it out; so do Steady Footing's 5/6 and the chain-push surfs, owner 10-16.)
+  { key: 'turns', text: 'Injury dice: per block thrown, turns the victim misses. Stun 1, KO rest of drive, casualty rest of game.' },
   // diceStats settleBlockRollLuck: the chance of a good (or bad) result given the dice count and who picks
   { key: 'block', text: 'Block: the chance of a good or bad result, given the dice and who picks.' },
 ];

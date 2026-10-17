@@ -9,7 +9,7 @@ import { prayerForRoll } from './prayerCatalog';
 import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import { FIELD_DIRECTION_ABBR, isFieldDirection } from './logDirection';
-import { isGateRerollSource, isHandoffCatch, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
+import { isGateRerollSource, isHandoffCatch, jumpKindFor, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
 
 /**
  * First-pass port of the FFB report texts (upstream: ffb-client-logic
@@ -149,6 +149,35 @@ export interface GraphicalLine {
   /** Further Graphical rows this line expands into, right after it (each with its own indent; never nested deeper).
    *  E.g. "<P> vomits all over themselves!" then its armour / injury row and casualty row. */
   more?: GraphicalLine[];
+  /** Owner 10-16: this row may take a later row onto its own line (a block's dice row takes the coach's choice). */
+  join?: 'block';
+  /** Owner 10-16: this row joins the previous logged Graphical row when that row offers the same `join`; the sinks
+   *  (live log, spectator checkpoint) merge it with joinGraphicalRows and leave this entry out of the Graphical style. */
+  joinPrevious?: 'block';
+}
+/** Owner 10-16: `next` appended to `previous` on one line (" | " between), tokens shifted; the join offer is consumed. */
+export function joinGraphicalRows(previous: GraphicalLine, next: GraphicalLine): GraphicalLine {
+  const sep = ' | ';
+  const shift = previous.text.length + sep.length;
+  const moved = <T extends { index: number }>(tokens: readonly T[]): T[] => tokens.map((t) => ({ ...t, index: t.index + shift }));
+  const { join: _join, joinPrevious: _prev, more: _more, ...rest } = previous;
+  return { ...rest, text: `${previous.text}${sep}${next.text}`, d6: [...previous.d6, ...moved(next.d6)], blockDice: [...previous.blockDice, ...moved(next.blockDice)],
+    names: [...previous.names, ...moved(next.names)], tags: [...previous.tags, ...moved(next.tags)], ...(previous.more ? { more: previous.more } : {}) };
+}
+/** Owner 10-16: the Graphical rows as displayed - an entry whose row joins the previous entry's row (the coach's
+ *  block-die choice onto the dice row) is folded into a copy of that entry and dropped. Entries are never mutated
+ *  (consumers track rows by identity); the Text style, which never calls this, keeps every entry. */
+export function composeGraphicalJoins<T extends { g?: GraphicalLine | null }>(entries: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const entry of entries) {
+    const last = out[out.length - 1];
+    if (entry.g?.joinPrevious && last?.g && last.g.join === entry.g.joinPrevious) {
+      out[out.length - 1] = { ...last, g: joinGraphicalRows(last.g, entry.g) };
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
 }
 
 /** `owner` = the report-level dice owner (reportDiceOwner); a die marked H / A / N overrides it for that die alone. */
@@ -465,6 +494,52 @@ function playerOnSquare(game: GameJson | null, square: unknown): string | null {
   return hit ? hit.playerId : null;
 }
 
+/** Owner 10-16: "<Player> regenerates and returns to the reserves." / "<Player> fails to regenerate." then the dice (both
+ *  styles; the Graphical row keeps the place the sequence gives it, e.g. under the casualty). Null for a partial report. */
+function regenerationRow(r: Report, g: GameJson | null): { head: string; dice: string } | null {
+  if (r.successful === true) return { head: `${pn(g, r.playerId)} regenerates and returns to the reserves.`, dice: rollWithTarget(r) };
+  if (r.successful === false) return { head: `${pn(g, r.playerId)} ${FAILS} to regenerate.`, dice: rollWithTarget(r) };
+  return null;
+}
+/** A player whose field coordinate is a dugout box (upstream FieldCoordinate.isBoxCoordinate: x outside 0..25), or who
+ *  has no coordinate in the model. */
+function playerInDugout(game: GameJson | null, playerId: unknown): boolean {
+  const data = game?.fieldModel?.playerDataArray?.find((p) => p.playerId === playerId);
+  const c = data?.playerCoordinate;
+  if (!Array.isArray(c) || typeof c[0] !== 'number') return true;
+  return c[0] < 0 || c[0] > 25;
+}
+/** Owner 10-16: the Argue the Call line, split for the Graphical style: the coach's sentence (head), the outcome
+ *  sentences (child rows), the dice with their target. */
+function argueTheCallRows(r: Report, g: GameJson | null): { head: string; children: string[]; dice: string } {
+  const side = playerTeam(g, r.playerId);
+  const team = teamName(g, side === 'home' ? g?.teamHome.teamId : side === 'away' ? g?.teamAway.teamId : undefined);
+  const player = pn(g, r.playerId);
+  const biased = Number(r.biasedRefs ?? 0) || 0;
+  const target = Math.max(1, (r.friendsWithRef === true ? 5 : 6) - biased);
+  const dice = rollWithTarget({ ...r, minimumRoll: target });
+  if (r.successful === true) {
+    // Astra 10-16: upstream (ArgueTheCallMessage) adds the stays / reserves clause only for a player ON THE PITCH; a
+    // player already in a dugout box (KO'd before the drive ended) is simply not sent off.
+    const outcome = playerInDugout(g, r.playerId) ? `The referee refrains from sending ${player} off.`
+      : r.staysOnPitch === false ? `${player} is sent to the reserves instead.` : `${player} stays on the pitch.`;
+    return { head: `${team}'s coach argues the referee's call and succeeds. The call is overturned.`, children: [outcome], dice };
+  }
+  if (r.coachBanned === true) {
+    return { head: `${team}'s coach argues the referee's call and is thrown out!`, children: [`${player} is sent off.`, `${team}'s coach is ejected from the game!`], dice };
+  }
+  return { head: `${team}'s coach argues the referee's call and ${FAILS}.`, children: [`${player} is sent off.`], dice };
+}
+/** Owner 10-16: the reroll source as the object of "<Player> uses ..." (upstream ReRollSources names: "Team ReRoll",
+ *  "Brilliant Coaching ReRoll", "Leader", "Pro", "Loner", "Pro TRR", ...). */
+function rerollSourcePhrase(source: unknown): string {
+  const raw = typeof source === 'string' && source.trim() ? source.trim() : 'Team ReRoll';
+  const key = raw.replace(/[^a-z]/gi, '').toLowerCase();
+  if (key === 'teamreroll' || key === 'protrr' || key === 'promascottrr') return 'a team reroll';
+  if (key === 'brilliantcoachingreroll') return 'a Brilliant Coaching team reroll';
+  if (key === 'leader') return 'the Leader reroll';
+  return titleCase(humanize(raw)).replace(/\bRe ?Roll\b/gi, 'reroll');
+}
 /** The roll die and its "(n+)" target, the dice part every reworded skill line ends with. */
 function rollWithTarget(r: Report): string {
   const roll = r.roll != null ? `${hiddenTag('rolls ')}${d6(r.roll)}` : '?';
@@ -664,7 +739,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   catchRoll: skillRoll('catches'),
   passRoll: skillRoll('passes'),
   pickUpRoll: skillRoll('picks up the ball'),
-  leapRoll: skillRoll('jumps'),
+  // owner 10-16: the jump is named for the skill the mover jumps with
+  leapRoll: (r, g) => { const k = jumpKindFor(g, r.playerId); return skillRoll(k === 'leap' ? 'leaps' : k === 'pogo' ? 'jumps (Pogo)' : 'jumps')(r, g); },
   interceptionRoll: skillRoll('intercepts'),
   scatterPlayer: (r, g) => {
     const playerId = actingPlayerHasBallAndChain(g);
@@ -737,7 +813,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     return namedSkillRoll('Steady Footing')(r, g);
   },
   dauntlessRoll: skillRoll('uses Dauntless'),
-  regenerationRoll: skillRoll('regenerates'),
+  // Owner 10-16 (both styles): "<Player> regenerates and returns to the reserves." / "<Player> fails to regenerate."
+  regenerationRoll: (r, g) => { const row = regenerationRow(r, g); return row ? `${row.head} | ${row.dice}` : skillRoll('regenerates')(r, g); },
   // Owner 10-15 (both styles). Upstream StepFoulAppearance: the ACTING player (playerId) rolls against the Foul
   // Appearance player (the defender: the report's defenderId when sent, else the game's current defender).
   foulAppearanceRoll: (r, g) => {
@@ -1079,7 +1156,15 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   weatherMageResult: () => 'Weather Mage alters the weather',
   pumpUpTheCrowdReRoll: (r, g) => `${pn(g, r.playerId)} earns a Pump Up The Crowd reroll`,
   showStarReRoll: (r, g) => `${pn(g, r.playerId)} earns a Show Star reroll`,
-  briberyAndCorruptionReRoll: (r, g) => `${teamName(g, r.teamId)} | Bribery & Corruption reroll`,
+  // Owner 10-16: ReportBriberyAndCorruptionReRoll {teamId, briberyAncCorruptionAction: USED | ADDED | WASTED} (upstream's
+  // misspelt key). USED is the reroll of a failed Argue the Call; the other two are upstream's own notices.
+  briberyAndCorruptionReRoll: (r, g) => {
+    const action = String((r as { briberyAncCorruptionAction?: unknown }).briberyAncCorruptionAction ?? (r as { briberyAndCorruptionAction?: unknown }).briberyAndCorruptionAction ?? 'USED').toUpperCase();
+    const team = teamName(g, r.teamId);
+    if (action === 'ADDED') return `${team} may reroll a natural 1 on an Argue the Call roll once this game (Bribery & Corruption).`;
+    if (action === 'WASTED') return `${team} have no use for their Bribery & Corruption: the coach was banned for more than one argue.`;
+    return `${team} use their Bribery & Corruption reroll to reroll the failed call.`;
+  },
   biasedRef: (r) => `Biased Ref: ${hiddenTag('rolls ')}${d6(r.roll)} | ${r.foulSpotted ? 'foul spotted' : 'foul not spotted'}`,
   // Prayer handlers use playerEvent for their authoritative per-player effect copy (for example
   // Bad Habits: " gains Loner (2+)"). Keep the server wording and add the structured player name.
@@ -1150,6 +1235,12 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // that says he wasn't — read in isolation that looks like Secret Weapon silently failed to
   // send him off. Wording now describes the flag, not a verdict; the resolution reports (already
   // rendered via the generic argueTheCall/bribesRoll/skillUse formatters) carry the outcome.
+  // Owner 10-16: ReportArgueTheCallRoll {playerId, successful, coachBanned, roll, staysOnPitch, friendsWithRef, biasedRefs}.
+  // Target 6+ (5+ with Friends with the Ref), less one per Biased Referee (upstream ArgueTheCallMessage).
+  argueTheCall: (r, g) => {
+    const a = argueTheCallRows(r, g);
+    return `${a.head} ${a.children.join(' ')} | ${a.dice}`;
+  },
   secretWeaponBan: (r, g) => {
     const ids = Array.isArray(r.playerIds) ? (r.playerIds as string[]) : [];
     const bans = Array.isArray(r.banArray) ? (r.banArray as unknown[]) : [];
@@ -1199,17 +1290,19 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // so a failed Loner/Pro vanished from the log (the reported "Loner roll missing"). Surface roll + outcome whenever
   // the wire carries a gating roll (roll>0). Plain team/skill rerolls carry no gate (roll 0, always successful) →
   // byte-unchanged. ⚖: displays sent data only (no target derivation — ReportReRoll carries no minimumRoll).
+  // Owner 10-16: "<Player> uses <reroll source> to reroll" ("uses a team reroll to reroll", "uses Pro to reroll",
+  // "uses the Leader reroll to reroll"); a gated source adds its roll and outcome.
   reRoll: (r, g) => {
-    const src = humanize(String(r.reRollSource ?? 'team reroll'));
+    const src = rerollSourcePhrase(r.reRollSource);
     const roll = r.roll;
     // Owner 10-15 (Astra pass 8): only a gate source's roll grants or denies (Pro, Loner, team reroll); another
     // source's roll is the replacement's own (Blind Rage: successful false roll 3, then the rerolled Dauntless), so it
     // never reads "FAILED | no reroll".
     if (typeof roll === 'number' && Number.isInteger(roll) && roll > 0 && isGateRerollSource(typeof r.reRollSource === 'string' ? r.reRollSource : null)) {
       const outcome = r.successful === false ? 'FAILED | no reroll' : 'passed';
-      return `${pn(g, r.playerId)} rerolls (${src}) | rolled ${d6(roll)}, ${outcome}`;
+      return `${pn(g, r.playerId)} uses ${src} to reroll | rolled ${d6(roll)}, ${outcome}`;
     }
-    return `${pn(g, r.playerId)} rerolls (${src})`;
+    return `${pn(g, r.playerId)} uses ${src} to reroll`;
   },
   cardEffectRoll: (r) => `${humanize(String((r.card as { name?: unknown } | null)?.name ?? r.card ?? 'card'))}: ${hiddenTag('rolls ')}${d6(r.roll)}${r.cardEffect ? ` | ${humanize(String(r.cardEffect))}` : ''}`,
   foul: (r, g) => `${pn(g, r.playerId ?? r.attackerId)} fouls ${pn(g, r.defenderId)}`,
@@ -2107,14 +2200,21 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
       const attackerTeamId = playerTeam(game, a) === 'home' ? game?.teamHome.teamId : game?.teamAway.teamId;
       const uphill = !!report.choosingTeamId && !!attackerTeamId && report.choosingTeamId !== attackerTeamId;
       // "Block" is the row's icon and "Rerolled" its reroll source icon: the line names who blocks whom.
-      return [graphicalOf(`${keptLead()}${pn(game, a)} blocks ${pn(game, d)}${uphill ? ' (uphill)' : ''}: ${blockDieList(report.blockRoll)}`, 0, owner)];
+      // owner 10-16: the coach's choice joins this row (join: 'block')
+      return [{ ...graphicalOf(`${keptLead()}${pn(game, a)} blocks ${pn(game, d)}${uphill ? ' (uphill)' : ''}: ${blockDieList(report.blockRoll)}`, 0, owner), join: 'block' }];
     }
     case 'blockChoice': {
       if (!(open && (typeof report.defenderId !== 'string' || !report.defenderId || report.defenderId === defender))) return leadOnly();
       // owner 10-16: an uphill choice (the defender's coach picks) says so at the end of its row; its tint is the
       // chooser's seat (formatReportLines exempts it from the blocker's flow tint)
       const uphill = isUphillChoice(report, game, attacker);
-      return lines.map((line) => { const g = graphicalFromLine(line, 1); return uphill ? { ...g, text: `${g.text} (Uphill)` } : g; });
+      // owner 10-16 (evening): the choice joins the block's dice row ("<A> blocks <D>: [dice] | <Coach> chooses <Result>")
+      return lines.map((line) => { const g = graphicalFromLine(line, 1); return { ...(uphill ? { ...g, text: `${g.text} (Uphill)` } : g), joinPrevious: 'block' as const }; });
+    }
+    case 'argueTheCall': {
+      // owner 10-16: the coach's sentence with the dice under it; each outcome sentence one step in
+      const a = argueTheCallRows(report, game);
+      return [{ ...graphicalOf(twoLineHead(a.head, [a.head, a.dice]), 0, owner), more: a.children.map((child) => graphicalOf(child, 1, owner)) }];
     }
     case 'steadyFootingRoll':
       // a failed Steady Footing resumes the deferred fall of the block: a step of it for the sequence's players
@@ -2125,7 +2225,7 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
       const dice = Array.isArray(report.blockRoll) ? blockDieList(report.blockRoll) : '?';
       // the source is the reroll source icon; with none, keep the named source
       const src = lines[0]?.action?.source ? '' : report.reRollSource ? ` (${humanize(String(report.reRollSource))})` : '';
-      return [graphicalOf(`${keptLead()}${who} rerolls block dice${src}: ${dice}`, 1, owner)];
+      return [{ ...graphicalOf(`${keptLead()}${who} rerolls block dice${src}: ${dice}`, 1, owner), join: 'block' }]; // the choice joins the rerolled dice
     }
     case 'pushback': {
       // Every push is shown: a step in an open sequence (a chain push of a third player included), else a flat row.

@@ -14,10 +14,11 @@ import RosterBadge from './RosterBadge.vue';
 import { formatPlayerValue } from '../game/playerValue';
 import { settings } from '../game/settings';
 import { DICE_EXPECTED_HELP, DICE_EXPECTED_HELP_LABEL } from '../game/diceExpectedHelp';
+import { luckChart } from '../game/luckChart';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence, pgTeamBreaks,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 
@@ -155,11 +156,39 @@ function onDiceInfoEnter(key: PgLikelihoodKey, event: Event): void {
   openDiceTip(key, event.currentTarget as HTMLElement, false);
 }
 function onDiceInfoLeave(key: PgLikelihoodKey): void { if (diceTip.key === key && !diceTip.pinned) closeDiceTip(); }
+let diceTipRefocus = false;
 function onDiceInfoFocus(key: PgLikelihoodKey, event: Event): void {
-  if (diceTip.key === key) return;
+  if (diceTip.key === key || diceTipRefocus) return; // (Astra chart r3: focus handed back by Escape does not reopen it)
   openDiceTip(key, event.currentTarget as HTMLElement, false); // keyboard focus moving to another row's icon replaces a pinned one
 }
-function onDiceInfoBlur(key: PgLikelihoodKey): void { if (diceTip.key === key) closeDiceTip(); }
+function onDiceInfoBlur(key: PgLikelihoodKey, event?: FocusEvent): void {
+  if (diceTip.key !== key) return;
+  // owner 10-16: focus moving INTO the popover (its "By turn" button) keeps it open, pinned
+  const next = event?.relatedTarget as Node | null | undefined;
+  if (next && diceTipEl.value?.contains(next)) { diceTip.pinned = true; return; }
+  closeDiceTip();
+}
+/** Owner 10-16 (Astra chart r1 B1): Tab from the Luck "i" goes into its popover's "By turn" button (the popover is
+ *  teleported after the pane, so the natural Tab order would skip it and close it). */
+function onDiceInfoKeydown(key: PgLikelihoodKey, event: KeyboardEvent): void {
+  if (event.key !== 'Tab' || event.shiftKey || diceTip.key !== key) return;
+  const btn = diceTipEl.value?.querySelector<HTMLElement>('.pg-luck-chart-btn');
+  if (!btn) return;
+  event.preventDefault();
+  diceTip.pinned = true;
+  btn.focus();
+}
+/** From "By turn": Shift+Tab back to the Luck "i"; Tab on to the next row's "i" (closing the popover). */
+function onLuckChartBtnKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return;
+  const icons = Array.from(document.querySelectorAll<HTMLElement>('.pg-dice-gauge-row .pg-dice-info'));
+  const luck = icons.findIndex((el) => el.closest('[data-row="luck"]'));
+  if (luck < 0) return;
+  event.preventDefault();
+  if (event.shiftKey) { icons[luck]!.focus(); return; }
+  closeDiceTip();
+  icons[luck + 1]?.focus();
+}
 function onDiceInfoClick(key: PgLikelihoodKey, event: Event): void {
   if (diceTip.key === key && diceTip.pinned) { closeDiceTip(); return; }
   openDiceTip(key, event.currentTarget as HTMLElement, true);
@@ -173,7 +202,11 @@ function onDiceTipKeyDown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
   event.stopPropagation(); // Escape closes the popover only, not whatever is behind it
   event.preventDefault();
+  // Astra chart r2: focus inside the popover (its "By turn" button) goes back to the "i" it belongs to
+  const anchor = diceTipAnchor;
+  const inside = !!diceTipEl.value && diceTipEl.value.contains(document.activeElement);
   closeDiceTip();
+  if (inside && anchor) { diceTipRefocus = true; try { anchor.focus(); } finally { diceTipRefocus = false; } }
 }
 // The document listeners live only while a popover is open.
 function listenForDiceTipDismiss(on: boolean): void {
@@ -192,6 +225,51 @@ function listenForDiceTipDismiss(on: boolean): void {
 }
 watch(() => diceTip.key !== null, listenForDiceTipDismiss, { flush: 'sync' });
 watch([diceModalOpen, diceSide, () => props.showStats], closeDiceTip);
+
+// Owner 10-16: the LUCK CHART - a "By turn" button in the Luck popover opens a subpane inside the dice pane plotting
+// each team's net luck per team turn (dashed) and its running average (solid) - game/luckChart.ts. Escape or its close
+// button returns to the popover; Tab stays inside it while it is open.
+const luckChartOpen = ref(false);
+const luckPaneEl = ref<HTMLElement | null>(null);
+const luckHover = ref<number | null>(null);
+const luckChartData = computed(() => {
+  const td = (side: 'home' | 'away') => Number((side === 'home' ? game.value.turnDataHome : game.value.turnDataAway)?.turnNr) || 0;
+  const half = Number(game.value.half) || 0;
+  return luckChart(props.snapshot.tallies.home ? pgTeamBreaks(props.snapshot.tallies.home) : null, props.snapshot.tallies.away ? pgTeamBreaks(props.snapshot.tallies.away) : null,
+    half >= 1 ? { half, turnHome: td('home'), turnAway: td('away') } : null,
+    { home: pg.value.home.coach || game.value.teamHome.teamName, away: pg.value.away.coach || game.value.teamAway.teamName },
+    { home: props.snapshot.tallies.home?.cutShort?.log ?? [], away: props.snapshot.tallies.away?.cutShort?.log ?? [] });
+});
+const luckHoverSlot = computed(() => (luckHover.value == null ? null : luckChartData.value.slots[luckHover.value] ?? null));
+function openLuckChart(): void {
+  closeDiceTip();
+  luckHover.value = null;
+  luckChartOpen.value = true;
+  void nextTick(() => luckPaneEl.value?.querySelector<HTMLElement>('.pg-luck-close')?.focus());
+}
+function closeLuckChart(back = true): void {
+  if (!luckChartOpen.value) return;
+  luckChartOpen.value = false;
+  luckHover.value = null;
+  if (!back) return;
+  void nextTick(() => {
+    const icon = document.querySelector<HTMLElement>('.pg-dice-gauge-row[data-row="luck"] .pg-dice-info');
+    if (!icon) return;
+    openDiceTip('luck', icon, true);
+    icon.focus();
+  });
+}
+function onLuckPaneKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); closeLuckChart(); return; }
+  if (event.key !== 'Tab' || !luckPaneEl.value) return;
+  const stops = Array.from(luckPaneEl.value.querySelectorAll<HTMLElement>('button, [tabindex="0"]'));
+  if (stops.length === 0) return;
+  const first = stops[0]!, last = stops[stops.length - 1]!;
+  const at = document.activeElement;
+  if (event.shiftKey && (at === first || !luckPaneEl.value.contains(at))) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && (at === last || !luckPaneEl.value.contains(at))) { event.preventDefault(); first.focus(); }
+}
+watch([diceModalOpen, diceSide, () => props.showStats], () => closeLuckChart(false));
 onBeforeUnmount(() => { closeDiceTip(); listenForDiceTipDismiss(false); });
 
 // Owner 10-15: the "i" in the header toggles a short note on how the expected figures are worked out. Escape (which
@@ -396,6 +474,37 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
               <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
             </span>
           </header>
+          <!-- Owner 10-16: the Luck chart subpane (game/luckChart.ts). -->
+          <div v-if="luckChartOpen" ref="luckPaneEl" class="pg-luck-pane" role="dialog" aria-modal="true" aria-label="Luck by turn" @keydown="onLuckPaneKeydown">
+            <header class="pg-luck-head">
+              <b class="pg-luck-title">Luck by turn</b>
+              <span class="pg-luck-legend">
+                <span v-for="line in luckChartData.series" :key="line.side + line.kind" class="pg-luck-key" :data-side="line.side" :data-kind="line.kind">
+                  <svg viewBox="0 0 24 8" aria-hidden="true"><line x1="1" y1="4" x2="23" y2="4" /></svg>{{ line.label }}
+                </span>
+              </span>
+              <button type="button" class="pg-luck-close" aria-label="Close the luck chart" @click="closeLuckChart()">✕</button>
+            </header>
+            <div class="pg-luck-body">
+              <svg class="pg-luck-svg" :viewBox="`0 0 ${luckChartData.width} ${luckChartData.height}`" role="img" aria-label="Net luck per team turn and its running average">
+                <line class="pg-luck-zero" :x1="luckChartData.plot.left" :x2="luckChartData.plot.right" :y1="luckChartData.plot.zero" :y2="luckChartData.plot.zero" />
+                <text v-for="t in luckChartData.yTicks" :key="t.label" class="pg-luck-ytick" :x="luckChartData.plot.left - 5" :y="t.y + 4" text-anchor="end">{{ t.label }}</text>
+                <line v-for="x in luckChartData.dividers" :key="x" class="pg-luck-divider" :x1="x" :x2="x" :y1="luckChartData.plot.top" :y2="luckChartData.plot.bottom" />
+                <text v-for="slot in luckChartData.slots" :key="`${slot.half}-${slot.slot}`" class="pg-luck-xtick" :x="slot.x" :y="luckChartData.height - 8" text-anchor="middle">{{ slot.label }}</text>
+                <polyline v-for="line in luckChartData.series" :key="line.side + line.kind" class="pg-luck-line" :data-side="line.side" :data-kind="line.kind" :points="line.points" fill="none" />
+                <rect v-for="(slot, i) in luckChartData.slots" :key="`col-${slot.half}-${slot.slot}`" class="pg-luck-col" :data-hover="luckHover === i" tabindex="0"
+                  :x="slot.left" :y="luckChartData.plot.top" :width="slot.width" :height="luckChartData.plot.bottom - luckChartData.plot.top"
+                  :aria-label="`${slot.half === 3 ? 'Overtime' : `Half ${slot.half}`}, turn ${slot.label}: ${slot.lines.length} ${slot.lines.length === 1 ? 'break' : 'breaks'}`"
+                  @mouseenter="luckHover = i" @mouseleave="luckHover = null" @focus="luckHover = i" @blur="luckHover = null" />
+              </svg>
+              <p v-if="luckChartData.empty" class="pg-luck-empty">No breaks yet</p>
+              <div v-if="luckHoverSlot" class="pg-luck-tip" role="tooltip">
+                <b>{{ luckHoverSlot.half === 3 ? 'Overtime' : `Half ${luckHoverSlot.half}` }}, turn {{ luckHoverSlot.label }}</b>
+                <span v-for="(line, i) in luckHoverSlot.lines" :key="i" class="pg-luck-tip-line" :data-side="line.side">{{ line.text }}</span>
+                <span v-if="luckHoverSlot.lines.length === 0" class="pg-luck-tip-line">No breaks this turn</span>
+              </div>
+            </div>
+          </div>
           <div class="pg-dice-grid">
             <section class="pg-dice-left">
               <h3>Dice distribution</h3>
@@ -462,15 +571,15 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                             :aria-expanded="diceTip.key === row.key" :aria-describedby="diceTip.key === row.key ? diceTipId(row.key) : undefined"
                             :data-open="diceTip.key === row.key" :data-pinned="diceTip.key === row.key && diceTip.pinned"
                             @pointerenter="onDiceInfoEnter(row.key, $event)" @pointerleave="onDiceInfoLeave(row.key)"
-                            @focus="onDiceInfoFocus(row.key, $event)" @blur="onDiceInfoBlur(row.key)"
+                            @focus="onDiceInfoFocus(row.key, $event)" @blur="onDiceInfoBlur(row.key, $event)" @keydown="onDiceInfoKeydown(row.key, $event)"
                             @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
                         </span>
-                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${pgOddsSentence(row.like)}`">
+                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${row.sentence ?? pgOddsSentence(row.like)}`">
                           <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
                           <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
                           <line v-if="pgHasMarker(row.like)" :x1="pgGaugeX(row.like.zShown)" y1="4" :x2="pgGaugeX(row.like.zShown)" y2="42" class="pg-dice-marker" />
                         </svg>
-                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && (row.value ? row.value.startsWith('0.0') : row.like.average)" :title="row.valueTitle ?? row.detail"><b>{{ row.value ?? pgOdds(row.like) }}</b></span>
+                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && (row.valueAverage ?? (row.value ? row.value.startsWith('0.0') : row.like.average))" :title="row.valueTitle ?? row.detail"><b>{{ row.value ?? pgOdds(row.like) }}</b></span>
                       </div>
                     </div>
                   </div>
@@ -500,6 +609,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
         :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px' }">
         <b class="skill-tip-name">{{ diceTipRow.label }}</b>
         <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span class="pg-dice-tip-value">{{ stat.value }}</span></span>
+        <!-- Owner 10-16: the Luck popover opens the chart of the breaks turn by turn. -->
+        <button v-if="diceTipRow.key === 'luck' && diceTipRow.like.measured" type="button" class="pg-luck-chart-btn" @click="openLuckChart" @keydown="onLuckChartBtnKeydown">By turn</button>
       </div>
     </Teleport>
   </div>
@@ -890,7 +1001,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 /* Owner 09-17: the DICE tab */
 .pg-dice-modal { position: fixed; inset: 0; z-index: 210; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
 /* Owner 09-19: the pane fills ~94% x 91% of the viewport and its type scales with it — every size inside is in em off the card's viewport-driven font-size. */
-.pg-dice-card { width: 94vw; height: 91vh; font-size: clamp(14px, 0.95vw, 24px); display: flex; flex-direction: column; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 20px 60px #000c; color: var(--ui-text); overflow: hidden; }
+.pg-dice-card { position: relative; width: 94vw; height: 91vh; font-size: clamp(14px, 0.95vw, 24px); display: flex; flex-direction: column; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 20px 60px #000c; color: var(--ui-text); overflow: hidden; }
 .pg-dice-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--ui-border); }
 .pg-dice-close { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); border-radius: 6px; width: 1.8em; height: 1.8em; font-size: 1em; cursor: pointer; }
 .pg-dice-head .pg-title { font-size: 1.5em; } /* the header scales with the card too */
@@ -1010,6 +1121,31 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .skill-tip.pg-dice-tip { z-index: 220; transform: none; align-items: flex-start; text-align: left; gap: 0.2rem; max-width: min(26rem, calc(100vw - 16px)); pointer-events: auto; font-variant-numeric: tabular-nums; }
 .pg-dice-tip-line { overflow-wrap: anywhere; }
 .pg-dice-tip-label { color: var(--ui-muted); }
+/* Owner 10-16: the Luck chart button and subpane. Home blue, away red (the seat tints of the pane). */
+.pg-luck-chart-btn { margin-top: 0.3rem; padding: 0.15rem 0.6rem; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface-2); color: var(--ui-text); font: inherit; cursor: pointer; }
+.pg-luck-chart-btn:hover, .pg-luck-chart-btn:focus-visible { border-color: var(--ui-accent, #6d9bff); outline: none; }
+.pg-luck-pane { position: absolute; inset: 8px; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 12px 40px #000c; }
+.pg-luck-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.pg-luck-title { font-size: 1.1em; }
+.pg-luck-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; flex: 1; font-size: 0.85em; color: var(--ui-muted); }
+.pg-luck-key { display: inline-flex; align-items: center; gap: 5px; }
+.pg-luck-key svg { width: 24px; height: 8px; }
+.pg-luck-key line, .pg-luck-line { stroke-width: 2; }
+.pg-luck-key[data-side='home'] line, .pg-luck-line[data-side='home'] { stroke: #3d7cff; }
+.pg-luck-key[data-side='away'] line, .pg-luck-line[data-side='away'] { stroke: #f2363c; }
+.pg-luck-key[data-kind='turn'] line, .pg-luck-line[data-kind='turn'] { stroke-dasharray: 5 4; stroke-width: 1.5; }
+.pg-luck-close { margin-left: auto; border: 1px solid var(--ui-border); border-radius: 6px; background: transparent; color: var(--ui-text); font: inherit; cursor: pointer; padding: 0.1rem 0.5rem; }
+.pg-luck-body { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.pg-luck-svg { width: 100%; max-height: 100%; }
+.pg-luck-zero { stroke: var(--ui-muted); stroke-width: 1; }
+.pg-luck-divider { stroke: var(--ui-border); stroke-width: 1; stroke-dasharray: 2 3; }
+.pg-luck-ytick, .pg-luck-xtick { fill: var(--ui-muted); font-size: 11px; }
+.pg-luck-col { fill: transparent; outline: none; }
+.pg-luck-col[data-hover='true'] { fill: #ffffff10; }
+.pg-luck-empty { position: absolute; margin: 0; color: var(--ui-muted); }
+.pg-luck-tip { position: absolute; top: 4px; right: 4px; display: flex; flex-direction: column; gap: 2px; max-width: min(26rem, 90%); padding: 6px 9px; background: var(--ui-surface-1, #0b0f18); border: 1px solid var(--ui-border); border-radius: 6px; font-size: 0.85em; pointer-events: none; }
+.pg-luck-tip-line[data-side='home'] { color: #6d9bff; }
+.pg-luck-tip-line[data-side='away'] { color: #ff7a7e; }
 .pg-dice-gauge-row + .pg-dice-gauge-row { border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
 .pg-dice-gauge-row[data-measured='false'] .pg-dice-curve, .pg-dice-gauge-row[data-measured='false'] .pg-dice-mean { opacity: 0.4; }
 .pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: 0.9rem; }

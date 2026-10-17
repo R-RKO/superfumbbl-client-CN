@@ -39,15 +39,34 @@
 // live like a KO (the drive in progress, approximated by the rest of the half - the same "one drive per half" estimate).
 // Whether a push goes into the crowd is the server's call, not the attacker's: UtilServerPushback.findPushbackSquares
 // offers the free pitch squares of the three away from the attacker, and pushes into the crowd only when none of them
-// is free and at least one is off the pitch (crowdPushForced). A chain push (all three on the pitch and occupied) is
-// not treated as crowd-able: the player at the end of the chain is not the block's defender.
+// is free and at least one is off the pitch (crowdPushForced).
+// CHAIN PUSHES (owner 10-16: "surfs from chain pushes"). All three squares on the pitch and taken: the pushing coach
+// (the acting team: UtilServerPushback.findPushbackSquares homeChoice = isHomePlaying) picks one of them, its player is
+// pushed on in that square's direction (StepPushback: the picked square becomes the next starting square), to the first
+// free square, off the pitch (a crowd injury for THAT player), or on through another full row (chainPushOutcome). A
+// chained player with Stand Firm (bb2025 StandFirmBehaviour: tackle zones, cancelled by Juggernaut on a Blitz only for
+// an opposing player, automatic when Rooted) cancels the WHOLE push (the stack is cleared); a chained player with Side
+// Step (tackle zones and a free square next to him; the attacker's Grab cancels it only for the block's defender) steps
+// to a free square. Both are that player's coach's call. The chain is resolved from the pre-block board as a game:
+// the attacker takes the result that is best for his team, each skill owner's coach the best for his (a surf of an
+// opposing player > no surf > a surf of the attacker's own team-mate; between two surfs, the larger expected cost). A
+// surf of the attacker's own team-mate is a trial for the DEFENDING team (as the blocker's own fall is).
+// STEADY FOOTING (bb2025 StepSteadyFooting.java: MINMUM_ROLL 6, isSkillRollSuccessful): a player knocked down by the
+// block (the defender, or the blocker on his own skull / both down - StepDropFallingPlayers.java:176, :213) rolls a D6
+// BEFORE the injury is reported; a 6 keeps him standing and nothing is rolled against him. No once-per-turn limit; a
+// confused or hypnotized player cannot use it. A crowd push never goes through it (StepPushback hands the crowd injury
+// straight to the apothecary step), nor does the Chainsaw hit (StepBlockChainsaw.java:162-166 publishes no Steady
+// Footing context). So P(the armour roll) = P(knock-down) x 5/6 for a player who has it (STEADY_FOOTING_FAIL6). A team
+// reroll of the Steady Footing roll is not modelled, as rerolls of the block dice are not.
 
 import { distKey, injuryLevelFor, parseDist, type InjuryLevel } from './diceLuck';
 
 export const TURNS_PER_HALF = 8;
 
 /** The turn state the scores are read from: the half, each team's started turns, and the drive in progress. */
-export interface TurnClock { half: number; turnHome: number; turnAway: number; /** `${half}|${home score + away score}`: a touchdown or a new half starts a new drive. */ drive: string }
+export interface TurnClock { half: number; turnHome: number; turnAway: number; /** `${half}|${home score + away score}`: a touchdown or a new half starts a new drive. */ drive: string;
+  /** Owner 10-16 (the Luck chart): the home team is the acting team. */
+  homePlaying?: boolean; regular?: boolean }
 
 /** Team turns the victim's team has not started yet this half. */
 export function turnsLeftInHalf(turnNr: number): number { return Math.max(0, TURNS_PER_HALF - Math.max(0, Math.floor(turnNr))); }
@@ -259,7 +278,7 @@ export function attackerDownOn(face: number, scores: readonly number[]): boolean
  * blockKnockdownChance.
  */
 export function blockOutcomeChance(dice: number, attackerChooses: boolean, scores: readonly number[], defenderBlock: boolean,
-  crowd: { bothDownPushes: boolean } | null): { down: number; surf: number; attackerDown: number; den: number } {
+  crowd: { bothDownPushes: boolean; chain?: { attackerWants: boolean } } | null): { down: number; surf: number; attackerDown: number; den: number } {
   const den = 6 ** dice;
   let down = 0, surf = 0, attackerDown = 0;
   const pushes = (face: number) => !!crowd && (face >= 3 || (face === 2 && crowd.bothDownPushes));
@@ -267,6 +286,25 @@ export function blockOutcomeChance(dice: number, attackerChooses: boolean, score
     const faces: number[] = [];
     for (let k = 0, c = combo; k < dice; k++, c = Math.floor(c / 6)) faces.push((c % 6) + 1);
     const still = faces.filter((f) => !pushes(f));
+    if (crowd?.chain) {
+      // owner 10-16 (chain push): a face that pushes surfs the player at the end of the chain, and the defender still
+      // falls on it as usual (a pow, a stumble without Dodge). The picker ranks that surf above every other result when
+      // it is good for his side (an opposing player for the attacker; the attacker's own team-mate for the defender),
+      // below every other result when it is not.
+      const pushing = faces.filter((f) => pushes(f));
+      const wants = attackerChooses ? crowd.chain.attackerWants : !crowd.chain.attackerWants;
+      const pool = pushing.length > 0 && (wants || still.length === 0) ? pushing : still;
+      // Astra footing r3 #2: faces are ranked by what they do here - a both down Juggernaut turns into a push is a push
+      const ranked = crowd.bothDownPushes ? scores.map((v, f) => (f === 2 ? 0 : v)) : scores;
+      const face = pickFace(pool, attackerChooses, ranked, defenderBlock);
+      if (pushes(face)) surf += 1;
+      // Astra footing r1 #3: a both down Juggernaut turns into a push knocks nobody down (JuggernautBehaviour: the
+      // result becomes a push-back, the defender's state restored)
+      const converted = face === 2 && pushes(face);
+      if (!converted && defenderDownOn(face, scores, defenderBlock)) down += 1;
+      if (!converted && attackerDownOn(face, scores)) attackerDown += 1;
+      continue;
+    }
     if (still.length < faces.length && (attackerChooses || still.length === 0)) { surf += 1; continue; }
     const face = pickFace(still, attackerChooses, scores, defenderBlock);
     if (defenderDownOn(face, scores, defenderBlock)) down += 1;
@@ -274,6 +312,9 @@ export function blockOutcomeChance(dice: number, attackerChooses: boolean, score
   }
   return { down, surf, attackerDown, den };
 }
+
+/** P(a Steady Footing roll fails), as faces of 6: it keeps the player up on a 6 only (StepSteadyFooting.java:46, :214). */
+export const STEADY_FOOTING_FAIL6 = 5;
 
 /** FieldCoordinateBounds.FIELD: the pitch squares (x 0..25, y 0..14). */
 export function onPitch(x: number, y: number): boolean { return x >= 0 && x <= 25 && y >= 0 && y <= 14; }
@@ -284,12 +325,8 @@ export function onPitch(x: number, y: number): boolean { return x >= 0 && x <= 2
  * null when the two are not adjacent (no block geometry to read).
  */
 export function crowdPushForced(attacker: readonly [number, number], defender: readonly [number, number], occupied: (x: number, y: number) => boolean): boolean | null {
-  const dx = defender[0] - attacker[0], dy = defender[1] - attacker[1];
-  if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return null;
-  const [x, y] = defender;
-  const squares: [number, number][] = dx === 0 ? [[x - 1, y + dy], [x, y + dy], [x + 1, y + dy]]
-    : dy === 0 ? [[x + dx, y - 1], [x + dx, y], [x + dx, y + 1]]
-    : [[x + dx, y], [x + dx, y + dy], [x, y + dy]];
+  const squares = pushbackSquares(attacker, defender);
+  if (!squares) return null;
   const inside = squares.filter(([sx, sy]) => onPitch(sx, sy));
   if (inside.length === 3) return false;
   return inside.every(([sx, sy]) => occupied(sx, sy));
@@ -301,4 +338,90 @@ export function freeSquareAround(defender: readonly [number, number], occupied: 
     if ((dx || dy) && onPitch(x, y) && !occupied(x, y)) return true;
   }
   return false;
+}
+/** The three push-back squares of a player at `at` pushed from `from` (UtilServerPushback.findPushbackSquares,
+ *  PushbackMode.REGULAR, in the server's order), null when the two are not adjacent. */
+export function pushbackSquares(from: readonly [number, number], at: readonly [number, number]): [number, number][] | null {
+  const dx = at[0] - from[0], dy = at[1] - from[1];
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return null;
+  const [x, y] = at;
+  return dx === 0 ? [[x - 1, y + dy], [x, y + dy], [x + 1, y + dy]]
+    : dy === 0 ? [[x + dx, y - 1], [x + dx, y], [x + dx, y + 1]]
+    : [[x + dx, y], [x + dx, y + dy], [x, y + dy]];
+}
+
+/** A player standing in a chain push, as the pre-block board shows him (see the header). */
+export interface ChainPlayer {
+  id: string;
+  /** On the attacker's team. */
+  own: boolean;
+  /** Rooted: never moved (StandFirmBehaviour: an automatic Stand Firm - the whole push is cancelled). */
+  rooted: boolean;
+  /** Stand Firm he can use here (tackle zones, not cancelled by Juggernaut on a Blitz): his coach may cancel the push. */
+  standFirm: boolean;
+  /** Side Step he can use (tackle zones): with a free square next to him his coach may step him there. */
+  sideStep: boolean;
+}
+export type ChainResult = { kind: 'none' } | { kind: 'capped' } | { kind: 'surf'; victim: string; own: boolean };
+/** The longest chain resolved (players pushed after the defender); a longer one, or one that comes back to a square
+ *  already in it, is not read (the caller leaves the block unmeasured, whatever the dice did). */
+export const CHAIN_DEPTH_CAP = 8;
+/**
+ * `defenderStops`: the defender himself can stop the push (Stand Firm, or Side Step with a free square): his coach's
+ * call like a chained player's.
+ * Owner 10-16: how a push of the defender at `defender` by the attacker at `attacker` resolves when all three of its
+ * squares are on the pitch and taken (a chain push), from the board before the block. null = not a chain push (a free
+ * square, the crowd straight away, or not adjacent). The attacker picks the square at every full row; Stand Firm and
+ * Side Step are their owners' coaches' calls; each side takes what is best for it, ranked by `value(id, own)` (the
+ * expected turns a crowd injury costs that player's team): a surf of an opposing player first (the costlier the
+ * better), then no surf, then a surf of the attacker's own team-mate (the cheaper the better). `capped` when any branch
+ * is longer than `cap` or comes back to a square already in the chain.
+ */
+export function chainPushOutcome(attacker: readonly [number, number], defender: readonly [number, number], playerAt: (x: number, y: number) => ChainPlayer | null,
+  value: (id: string, own: boolean) => number, cap = CHAIN_DEPTH_CAP, defenderStops = false): ChainResult | null {
+  const occupied = (x: number, y: number) => playerAt(x, y) != null;
+  const first = pushbackSquares(attacker, defender);
+  if (!first) return null;
+  const inside = first.filter(([x, y]) => onPitch(x, y));
+  if (inside.length < 3 || inside.some(([x, y]) => !occupied(x, y))) return null;
+  type Scored = { score: number; result: ChainResult } | 'capped';
+  const NONE = { score: 1000, result: { kind: 'none' } as ChainResult };
+  const surf = (p: ChainPlayer): Scored => {
+    const v = value(p.id, p.own);
+    return { score: p.own ? 500 - v : 2000 + v, result: { kind: 'surf', victim: p.id, own: p.own } };
+  };
+  /** The attacker picks among the full row ahead of the player at `at` (pushed from `from`). */
+  const row = (from: readonly [number, number], at: readonly [number, number], depth: number, path: Set<string>): Scored => {
+    const squares = pushbackSquares(from, at)!;
+    const on = squares.filter(([x, y]) => onPitch(x, y));
+    if (on.some(([x, y]) => !occupied(x, y))) return NONE;
+    if (on.length < 3) return surf(playerAt(at[0], at[1])!);
+    if (depth >= cap) return 'capped';
+    let best: { score: number; result: ChainResult } | null = null;
+    for (const sq of on) {
+      const key = `${sq[0]},${sq[1]}`;
+      if (path.has(key)) return 'capped';
+      const next = new Set(path); next.add(key);
+      const got = node(at, sq, depth + 1, next);
+      if (got === 'capped') return 'capped';
+      if (!best || got.score > best.score) best = got;
+    }
+    return best!;
+  };
+  /** A chained player at `at`, pushed from `from`. */
+  const node = (from: readonly [number, number], at: readonly [number, number], depth: number, path: Set<string>): Scored => {
+    const p = playerAt(at[0], at[1])!;
+    if (p.rooted) return NONE;
+    const on = row(from, at, depth, path);
+    if (on === 'capped') return 'capped';
+    const stop = p.standFirm || (p.sideStep && freeSquareAround(at, occupied));
+    if (!stop) return on;
+    // his coach's call: stop the push (no surf) or let it run
+    return p.own ? (on.score >= NONE.score ? on : NONE) : (on.score <= NONE.score ? on : NONE);
+  };
+  const got = row(attacker, defender, 0, new Set([`${defender[0]},${defender[1]}`, `${attacker[0]},${attacker[1]}`]));
+  if (got === 'capped') return { kind: 'capped' };
+  // Astra footing r1 #4: the defender's own Stand Firm / Side Step (`defenderStops`) is his coach's call too - used
+  // unless the chain would surf one of the attacker's team-mates
+  return defenderStops && got.score > NONE.score ? NONE.result : got.result;
 }

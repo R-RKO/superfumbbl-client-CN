@@ -215,8 +215,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 09-16: the NEEDED roll renders as a number instead of a die face. */
   logNeededAsNumbers: boolean;
   /** Owner 10-15 (Settings > Display > Log > Log style): 'text' = the plain log (default); 'graphical' = every line a
-   *  row tinted with the acting team's colour, with the action's icon (and a reroll's source icon) on its left. */
-  logStyle: 'text' | 'graphical';
+   *  row tinted with the acting team's colour, with the action's icon (and a reroll's source icon) on its left;
+   *  'fumbbl' (owner 10-16) = the upstream FUMBBL client's own log wording and layout. */
+  logStyle: 'text' | 'graphical' | 'fumbbl';
   /** Owner 10-16 (Settings > Display > Log > Chat style): 'bubbles' = each chat message a bubble shaded with a dark
    *  version of the speaker's team colour, the chat building from the bottom (default); 'text' = the plain chat lines. */
   chatStyle: 'text' | 'bubbles';
@@ -1167,7 +1168,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;
-    merged.logStyle = raw.logStyle === 'graphical' ? 'graphical' : 'text'; // owner 10-15: Text unless the user picked Graphical
+    merged.logStyle = raw.logStyle === 'graphical' || raw.logStyle === 'fumbbl' ? raw.logStyle : 'text'; // owner 10-15: Text unless the user picked another style
     merged.chatStyle = raw.chatStyle === 'text' ? 'text' : 'bubbles'; // owner 10-16: Bubbles unless the user picked Text
     { const v = Number(raw.logTintStrength); merged.logTintStrength = Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : DEFAULTS.logTintStrength; }
     // Fail closed to the quiet match log for fresh, older, or corrupted settings blobs.

@@ -35,10 +35,13 @@ export function visibleMatchLogEntries<T extends MatchLogVisibilityEntry>(
   /** Owner 10-15: rows only the Modern log's Graphical style shows (block flow pushes, skill uses). Every other
    *  reader of this list - the Modern Text style and the Classic log - leaves them out, so their text is unchanged. */
   includeGraphicalOnly = false,
+  /** Owner 10-16: rows only the FUMBBL log style shows (reports upstream prints that the Text log does not list). */
+  includeUpstreamOnly = false,
 ): T[] {
   return entries.filter((entry) =>
     entry.kind !== 'talk'
       && (includeGraphicalOnly || !(entry as { graphicalOnly?: unknown }).graphicalOnly)
+      && (includeUpstreamOnly || !(entry as { upstreamOnly?: unknown }).upstreamOnly)
       && (showServerSequencingEvents || entry.category !== 'server-sequencing'),
   );
 }

@@ -10810,7 +10810,7 @@ export class PitchRenderer {
       .roundRect(m.left - 2 * ds, -h / 2, m.width, h, 3 * ds)
       .stroke({ color: plate.stroke, width: 1 * ds });
     const die = this.buildRollDie(0, 0, ds * 0.65, target); // owner 10-14: face 1.3x the first cut, spans -5.65..+5.65 ds; the '+' (or 'N+') follows
-    const word = this.buildPlannerWord(kind, ds);
+    const word = this.buildPlannerWord(kind === 'jump' ? this.jumpWordKind() : kind, ds); // owner 10-16: JUMP / LEAP / POGO
     word.position.set(m.wordX + m.wordW / 2, 0);
     for (const child of [plateG, die, word]) { child.x -= m.centre; tag.addChild(child); }
     tag.position.set(x, y);
@@ -10970,8 +10970,21 @@ export class PitchRenderer {
   }
 
   /** Orange jump tag "J6+". */
+  /** Owner 10-16: the jump tag is named for the skill the mover jumps with: Pogo ('POGO' / P), Leap ('LEAP' / L),
+   *  else the plain Jump ('JUMP' / J). The mover is the selected player, else the acting player. */
+  private jumpWordKind(): 'jump' | 'leap' | 'pogo' {
+    const g = this.game;
+    const id = this.selectedPlayerId ?? String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (!g || !id) return 'jump';
+    const player = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => String(p.playerId) === id);
+    if (!player) return 'jump';
+    if (playerHasSkill(player, 'Pogo')) return 'pogo';
+    if (playerHasSkill(player, 'Leap')) return 'leap';
+    return 'jump';
+  }
   private buildJumpChip(x: number, y: number, scale: number, target: number): Container {
-    return this.buildRollTag(x, y, scale, 'J', target, 0xe08a2a, 0x6a3c10);
+    const word = this.jumpWordKind();
+    return this.buildRollTag(x, y, scale, word === 'pogo' ? 'P' : word === 'leap' ? 'L' : 'J', target, 0xe08a2a, 0x6a3c10);
   }
 
   /** Yellow dodge tag "D4+". */

@@ -7,6 +7,8 @@ import { emptyTally, type DiceTally } from './diceStats';
 import { addCount, addTrial, binaryKey, blockFaceScores, blockRollKey, emptyBucket, emptyLuck, injuryKey, parseDist } from './diceLuck';
 import { attackOutcomes, blockArmourTiers, blockKnockdownChance, outcomeKey, turnsScore } from './turnsLost';
 import type { PostGameSnapshot } from './postGameProjection';
+import { emptyBreaks } from './luckBreaks';
+import { emptyCutShort } from './turnsCutShort';
 
 export const EXAMPLE_GAME_ID = 'example';
 export const EXAMPLE_KEY = `example|${EXAMPLE_GAME_ID}`;
@@ -142,6 +144,22 @@ function tally(seed: number): DiceTally {
   const lost = odd ? 14 : 3;
   turns.x6 += lost * 6;
   addCount(turns, 'lost', lost); addCount(turns, 'stuns', odd ? 1 : 3); addCount(turns, 'kos', odd ? 1 : 0); addCount(turns, 'casualties', odd ? 1 : 0);
+  // Owner 10-16: the Luck row - a few unlikely outcomes each way (the other side's mirror of each other's)
+  const breaks = (t.breaks = emptyBreaks());
+  const mine = odd
+    ? [{ label: '5+ dodge made', p: 2 / 6, slot: 2 }, { label: 'Injury roll: casualty', p: 6 / 36, slot: 5 }, { label: '2+ rush failed', p: 1 / 6, slot: 9 }]
+    : [{ label: '6+ pass made', p: 1 / 6, slot: 4 }, { label: 'Armour broken (10+)', p: 6 / 36, slot: 11 }];
+  const theirs = odd
+    ? [{ label: '6+ pass made', p: 1 / 6, slot: 4 }, { label: 'Armour broken (10+)', p: 6 / 36, slot: 11 }]
+    : [{ label: '5+ dodge made', p: 2 / 6, slot: 2 }, { label: 'Injury roll: casualty', p: 6 / 36, slot: 5 }, { label: '2+ rush failed', p: 1 / 6, slot: 9 }];
+  Object.assign(breaks, { lucky: mine.length, luckyExpected: odd ? 2.4 : 2.6, luckyVar: 1.9, bad: theirs.length, badExpected: odd ? 2.6 : 2.4, badVar: 1.9, events: 40 });
+  breaks.log = [...mine.map((e, i) => ({ ...e, seq: i + 1, lucky: true })), ...theirs.map((e, i) => ({ ...e, seq: i + 10, lucky: false }))]
+    .map((e) => ({ ...e, player: 'example', playerName: odd ? 'Ironjaw' : 'Riverside', half: 1, turn: Math.floor(e.slot / 2) + 1 }))
+    .sort((a, b) => a.slot - b.slot);
+  // Owner 10-16: Turns cut short - one turnover each, the luckier side's later in its turn
+  t.cutShort = { ...emptyCutShort(), rolls: 18, expected: 1.4, variance: 0.6, actual: odd ? 0.3 : 1.0 };
+  t.cutShort.log = [{ seq: 50, label: odd ? '3+ dodge failed' : '2+ rush failed', player: 'example', playerName: odd ? 'Ironjaw' : 'Riverside', half: 1, slot: odd ? 7 : 2,
+    turn: odd ? 4 : 2, share: odd ? 0.3 : 1.0, cost: odd ? 0.3 : 1.0, firstAction: !odd, streak: false }];
   return t;
 }
 
@@ -149,7 +167,7 @@ export function exampleSnapshot(now: number = Date.now()): PostGameSnapshot {
   const home = team('EXH', 'Riverside Reavers', 'ExampleCoach', 'Human', HUMAN_POSITIONS, HUMANS);
   const away = team('EXA', 'Ironjaw Krumpaz', 'AnotherCoach', 'Orc', ORC_POSITIONS, ORCS);
   return {
-    version: 4,
+    version: 7,
     key: EXAMPLE_KEY,
     server: 'example',
     gameId: EXAMPLE_GAME_ID,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { installMouseEntropy } from '../game/mouseEntropy';
+import { composeGraphicalJoins } from '../game/reportFormatter';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
@@ -97,6 +98,7 @@ import WatchOutToast from '../components/WatchOutToast.vue';
 import SppGainToast from '../components/SppGainToast.vue';
 import TurnToast from '../components/TurnToast.vue';
 import { visibleMatchLogEntries } from '../game/logVisibility';
+import { upstreamDirectionWord, upstreamLogRows, upstreamLogSegments, type UpstreamLogLine, type UpstreamLogSegment } from '../game/upstreamLog';
 import {
   bladeOf, ownedResources, phaseMoney, phaseOf, roleFromWire, summaryCards, usesFanFactor,
   type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption,
@@ -784,15 +786,32 @@ const chatBubbleTimes = computed(() => chatEntries.value.map((e) => e.time));
 // Owner 2026-07-08: chat lives ONLY in the Chat tab now — occlude 'talk' lines from
 // the Log pane so it stays a pure event log.
 const logEntries = computed(() => {
-  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical');
+  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical', settings.logStyle === 'fumbbl');
   // Owner 10-15 (Graphical block flow): a line whose Graphical version is null is left out there (another row says it)
   if (settings.logStyle !== 'graphical') return entries;
+  // owner 10-16 (evening): the coach's block-die choice joins the block's dice row
+  const joined = composeGraphicalJoins(entries);
   // a Graphical line can expand into further rows (g.more: a self-vomit's armour / injury and casualty rows); each
   // becomes its own row with the parent's time, kind and tint
-  return entries.flatMap((entry) => (entry.g === null ? [] : entry.g?.more?.length
+  return joined.flatMap((entry) => (entry.g === null ? [] : entry.g?.more?.length
     ? [entry, ...entry.g.more.map((more) => ({ ...entry, g: more }))]
     : [entry]));
 });
+/** Owner 10-16 (FUMBBL log style): upstream's own lines, one row each (indent and text styles as the Java client). */
+const upstreamRows = computed(() => (settings.logStyle === 'fumbbl' ? upstreamLogRows(logEntries.value) : []));
+const upstreamSegCache = new WeakMap<object, UpstreamLogSegment[]>();
+function upstreamSegmentsFor(line: UpstreamLogLine): UpstreamLogSegment[] {
+  let segs = upstreamSegCache.get(line);
+  if (!segs) {
+    segs = upstreamLogSegments(line);
+    upstreamSegCache.set(line, segs);
+  }
+  return segs;
+}
+/** A segment's text; a direction word reads as upstream's mapToLocal does, for the pitch as shown (screen up = North). */
+function upstreamSegText(s: UpstreamLogSegment): string {
+  return s.direction ? upstreamDirectionWord(s.direction, !!s.lower, appliedPitchView.value.orientation, appliedPitchView.value.flipped) : s.text;
+}
 /** Owner 10-15: the line a row renders - its Graphical version in the Graphical style when it has one, else itself. */
 function logRowLine(entry: (typeof logEntries.value)[number]) {
   // a rare easter-egg wording (alt) shows in both styles; the Graphical row already carries it in `g`
@@ -1534,7 +1553,8 @@ function onLogHover(hovering: boolean) {
 const paneSearch = usePaneSearch({
   // a stable key per rendered row (the entry object); the match text is read from the rendered rows themselves
   // (Graphical: the row's own GraphicalLine, which stays the same object even for the rows a line expands into)
-  keys: () => (panelTab.value === 'log' ? logEntries.value.map((e) => (settings.logStyle === 'graphical' && e.g ? e.g : e)) : panelTab.value === 'chat' ? chatEntries.value : []),
+  // FUMBBL style (owner 10-16): one key per rendered upstream line, the rows the pane shows in that style
+  keys: () => (panelTab.value === 'log' ? (settings.logStyle === 'fumbbl' ? upstreamRows.value.map((r) => r.line) : logEntries.value.map((e) => (settings.logStyle === 'graphical' && e.g ? e.g : e))) : panelTab.value === 'chat' ? chatEntries.value : []),
   container: () => (panelCollapsed.value ? null : panelTab.value === 'log' ? logEl.value : panelTab.value === 'chat' ? chatEl.value : null),
 });
 const paneSearchQuery = paneSearch.query;
@@ -1557,8 +1577,10 @@ function jumpToBottom(which: 'log' | 'chat') {
 
 // UI8: stick to bottom unless the user scrolled up — then freeze the view
 // and surface a "new events" pill that jumps back down
+// Astra 10-16: watch the SOURCE log's length, not the composed rows' - a block-die choice folded onto the dice row
+// (composeGraphicalJoins) adds an entry without adding a row, and must still follow / raise the pill.
 watch(
-  () => logEntries.value.length,
+  () => gameStore.state.log.length,
   async () => {
     await nextTick();
     if (!logEl.value) return;
@@ -13535,7 +13557,7 @@ const liveSnapshot = computed<PostGameSnapshot | null>(() => {
   if (!game) return null;
   const server = settings.activeServerTarget;
   return {
-    version: 4, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
+    version: 7, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
     game, tallies: { home: teamDiceTally(game, 'home'), away: teamDiceTally(game, 'away') },
     diceCoverage: props.mode === 'spectate' ? gameDiceCoverage(game) : null, // owner 10-10: whole game, or what is missing
     endGameStats: gameStore.state.endGameStats, defectors: gameStore.state.defectors?.names ?? null, portraits: {},
@@ -14716,8 +14738,9 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
-</span></span></pre>
+              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
+</span></template><template v-else><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+</span></span></template></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
               </button>
@@ -21001,6 +21024,20 @@ function sendChat() {
    reroll line's text starts after its source icon. Text style = none of this applies: no class, no row attribute, no icon nodes, and the
    .log-text wrapper is an unstyled inline span there. The log panel is always dark (its own gradient), so one tint set
    serves every UI theme. */
+/* Owner 10-16 (FUMBBL log style): upstream's ChatLogDocument - 12 px per indent level, 4 px of space around the
+   SPACE_ABOVE / SPACE_BELOW paragraphs; ROLL and TURN bold, EXPLANATION italic. */
+.log.log-fumbbl > .log-u { display: block; white-space: pre-wrap; }
+.log.log-fumbbl > .log-u[data-indent='1'] { padding-left: 12px; }
+.log.log-fumbbl > .log-u[data-indent='2'] { padding-left: 24px; }
+.log.log-fumbbl > .log-u[data-indent='3'] { padding-left: 36px; }
+.log.log-fumbbl > .log-u[data-indent='4'] { padding-left: 48px; }
+.log.log-fumbbl > .log-u[data-indent='5'] { padding-left: 60px; }
+.log.log-fumbbl > .log-u[data-indent='6'] { padding-left: 72px; }
+.log.log-fumbbl > .log-u[data-space='above'] { margin-top: 4px; }
+.log.log-fumbbl > .log-u[data-space='below'] { margin-bottom: 4px; }
+.log.log-fumbbl > .log-u[data-space='aboveBelow'] { margin: 4px 0; }
+.log.log-fumbbl .log-u-bold, .log.log-fumbbl .log-u-roll, .log.log-fumbbl .log-u-turn { font-weight: 700; }
+.log.log-fumbbl .log-u-explanation { font-style: italic; }
 .log.log-graphical {
   /* Row tints - the ONE place to tune them (owner 10-15: "too subtle, home/away need to be visually distinct"): a
      saturated, brighter blue / red than the dice colours, alpha-blended over the dark panel; -alt = the zebra row. */
@@ -21029,10 +21066,9 @@ function sendChat() {
 /* Owner 10-16: the activation structure. A declaration is a head row (indent 0); its events sit one SMALL step in,
    a block's steps two, their outcome rows three (1.5 characters per step, owner: "a 1-2 space indent"). A wrapped
    line wraps at its own indent; the outcome icons stay inline at the indent. */
-.log.log-graphical { --log-indent: 1.5ch; }
-.log.log-graphical .log-text[data-indent='1'] { padding-left: var(--log-indent); }
-.log.log-graphical .log-text[data-indent='2'] { padding-left: calc(var(--log-indent) * 2); }
-.log.log-graphical .log-text[data-indent='3'] { padding-left: calc(var(--log-indent) * 3); }
+/* Owner 10-16 (evening): no indentation in the Graphical log - every row starts at the same column (the structure
+   stays in data-indent for tooling; the owner found the stepped rows looked bad). */
+.log.log-graphical { --log-indent: 0; }
 /* Owner 10-15 (live 1.0.220): in the Graphical style every inline die / roll glyph - d6 faces, block dice, the armour
    shield and the apothecary injury icon - is the SAME size as the row's action icon (--log-icon-size: 1.7 x one text
    line, 20-42 px), vertically centred on the line; the line box grows to fit, so nothing clips and wrapping stays in
