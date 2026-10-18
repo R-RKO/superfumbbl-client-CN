@@ -37,8 +37,8 @@ defineProps<{ injury?: RosterInjuryBadge | null; injuryNew?: boolean; advancemen
 .roster-badge img { -webkit-user-drag: none; }
 .roster-badge-lvl-img { height: 1em; width: auto; max-width: 3.6em; object-fit: contain; image-rendering: auto; }
 .roster-badge-inj-img { height: 1.5em; width: auto; max-width: 3.6em; object-fit: contain; image-rendering: auto; }
-.roster-badge-rip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 3.4em; height: 2.4em; }
-.roster-badge-rip-skull { position: absolute; inset: 0; margin: auto; height: 2.7em; width: 2.7em; object-fit: contain; image-rendering: auto; }
+.roster-badge-rip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 3.4em; height: 2em; } /* owner 10-18: nearer the other injury marks */
+.roster-badge-rip-skull { position: absolute; inset: 0; margin: auto; height: 2.1em; width: 2.1em; object-fit: contain; image-rendering: auto; }
 .roster-badge-rip-text { position: relative; height: 1.1em; width: auto; image-rendering: auto; }
 .roster-badge-text {
   display: inline-block;

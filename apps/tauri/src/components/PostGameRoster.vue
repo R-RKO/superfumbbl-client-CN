@@ -265,8 +265,9 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
 .pg-roster-inj-img { height: 1.5em; width: auto; max-width: 3.6em; object-fit: contain; image-rendering: auto; } /* smooth down from the 4x / 8x masters */
 /* Owner 10-02: RIP over the skull - the skull (64 px block-die face, scaled down smoothly) fills a 2em square behind,
    the RIP text art is centred on it at the injury-text height. */
-.pg-roster-rip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 3.4em; height: 2.4em; }
-.pg-roster-rip-skull { position: absolute; inset: 0; margin: auto; height: 2.7em; width: 2.7em; object-fit: contain; image-rendering: auto; }
+/* Owner 10-18: the skull read larger than the other injury marks (1.5em text art) - 2.7em -> 2.1em, the slot 2.4em -> 2em. */
+.pg-roster-rip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 3.4em; height: 2em; }
+.pg-roster-rip-skull { position: absolute; inset: 0; margin: auto; height: 2.1em; width: 2.1em; object-fit: contain; image-rendering: auto; }
 .pg-roster-rip-text { position: relative; height: 1.1em; width: auto; image-rendering: auto; }
 /* Fallback until the badge art lands: chunky gold-on-dark pixel text. */
 /* Owner 10-02: injury badge fallback - the same plate, crimson lettering. */
