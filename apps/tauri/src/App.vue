@@ -47,6 +47,7 @@ import type { ClientTourHost } from './game/clientTourController';
 import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
+import { fumbblPlayUrl, serverVersionBlock } from './game/serverVersionGate';
 import { UI_FONTS } from './game/uiFonts';
 import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
 import DisplayCaps from './components/DisplayCaps.vue';
@@ -970,6 +971,26 @@ function launchBlockedByRequiredUpdate(): boolean {
   return true;
 }
 setJnlpLaunchGate(() => launchBlockedByRequiredUpdate()); // the shared router refuses under a required update
+// Owner 10-17: the server-version hard stop. The session refused the join (serverVersionGate); the modal says why and
+// points at the main FUMBBL client. Spectating is not blocked, so the modal only ever follows a coach's join.
+function dismissServerVersionBlock(): void { serverVersionBlock.value = null; }
+function openFumbblToPlay(): void { void openExternal(fumbblPlayUrl(serverVersionBlock.value?.coach ?? null)); }
+const serverVersionBlockRoot = ref<HTMLElement | null>(null);
+/** The block modal is on screen (an update prompt renders instead of it while that is up). */
+const serverVersionBlockShown = computed(() => serverVersionBlock.value !== null && !updatePrompt.value);
+// Astra 10-17: the modal takes the focus whenever it (re)appears (Enter must not fire a Play button behind it)
+watch(serverVersionBlockShown, (shown) => { if (shown) void nextTick(() => serverVersionBlockRoot.value?.querySelector<HTMLElement>('button.primary')?.focus()); });
+// Astra r2: Tab stays inside the modal
+function onServerVersionBlockKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); dismissServerVersionBlock(); return; }
+  if (event.key !== 'Tab') return;
+  const buttons = Array.from(serverVersionBlockRoot.value?.querySelectorAll<HTMLElement>('button') ?? []);
+  if (buttons.length === 0) return;
+  const at = buttons.indexOf(document.activeElement as HTMLElement);
+  const next = event.shiftKey ? (at <= 0 ? buttons.length - 1 : at - 1) : (at < 0 || at === buttons.length - 1 ? 0 : at + 1);
+  event.preventDefault();
+  buttons[next]!.focus();
+}
 function routeNativeJnlp(request: JnlpJoinRequest): void {
   cancelLeaveGame(); // a JNLP intake never inherits a Return-to-Menu prompt opened for the previous game
   const result = routeJnlpRequest(request, {
@@ -1039,6 +1060,7 @@ function openConsole() {
 function escConsoleMenu(e: KeyboardEvent): void {
   if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || ui.setupWizardRerunOpen || guideOpen.value || credsMenuOpen.value) return;
   if (shellReportOpen.value) return; // owner 10-13: the open Report dialog owns Escape (it closes itself)
+  if (serverVersionBlockShown.value) { dismissServerVersionBlock(); return; } // owner 10-17: the VISIBLE server-version stop owns Escape
   if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
   ui.gameMenuOpen = !ui.gameMenuOpen;
 }
@@ -1930,6 +1952,7 @@ function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'):
   // would switch the blade it is reporting from).
   if (shellReportOpen.value && (id === 'gameMenu' || id === 'bladePrev' || id === 'bladeNext')) return false;
   if (updatePrompt.value?.required && !gameStore.game.value) return false; // Astra 10-17: nothing on the shell acts under a required update
+  if (serverVersionBlockShown.value) return false; // Astra 10-17 r3: nor under the server-version stop (no blade change, no Settings over it)
   if (id === 'gameMenu') {
     if (settingsEscape()) return true; // Settings (or a modal over it) is open: the same Esc step
     if (gameStore.game.value || ui.setupWizardRerunOpen) return false;
@@ -1985,6 +2008,7 @@ function onShellActionKey(event: KeyboardEvent): void {
   // Play button behind it, Tab comes back into the prompt), and FIRST: it renders above an open Report dialog (r2).
   if (updatePrompt.value?.required) { onReportOwnedKey(event, updatePromptRoot.value); return; }
   if (shellReportOpen.value) { onReportOwnedKey(event, shellReportModal.value?.root ?? null); return; }
+  if (serverVersionBlockShown.value) { onReportOwnedKey(event, serverVersionBlockRoot.value); return; } // Astra 10-17 r3: the stop owns the keyboard
   if (gameStore.game.value || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen) || capturingKey.value || capturingBinding.value) return;
   if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -2372,6 +2396,21 @@ onBeforeUnmount(() => {
           <button v-if="updatePrompt.inApp && (!updateError || pendingPatch)" class="primary" @click="installUpdateNow()">Update now</button>
           <button v-else class="primary" @click="openUpdateRelease()">Download now</button>
           <button v-if="!updatePrompt.required" @click="dismissUpdate()">{{ updatePrompt.inApp ? 'Later' : 'Download later' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Owner 10-17: FUMBBL's game server moved to a version this build has not been vetted against: no coach seat until a patch approves it. -->
+    <!-- Astra 10-17: an update prompt (the way out) renders INSTEAD of this modal while it is up; the block returns when it closes. -->
+    <div v-if="serverVersionBlockShown && serverVersionBlock" class="modal-backdrop save-prompt-backdrop" data-testid="server-version-block" @click.self="dismissServerVersionBlock()">
+      <div ref="serverVersionBlockRoot" class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="server-version-block-title" @keydown="onServerVersionBlockKeydown">
+        <h3 id="server-version-block-title">FUMBBL updated its game server</h3>
+        <p class="hint">FUMBBL's game server is now version {{ serverVersionBlock.serverVersion }}. Super FUMBBL {{ appVersion }} is approved for {{ serverVersionBlock.approved.join(', ') }}.</p>
+        <p class="hint">Playing is disabled until a compatible update is released. Spectating and replays still work. To play this game now, use the main FUMBBL client.</p>
+        <div class="save-prompt-actions">
+          <button class="primary" @click="openFumbblToPlay()">Play with the FUMBBL client</button>
+          <button @click="void checkForUpdate()">Check for update</button>
+          <button @click="dismissServerVersionBlock()">Close</button>
         </div>
       </div>
     </div>

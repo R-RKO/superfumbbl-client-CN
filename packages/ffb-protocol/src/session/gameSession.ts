@@ -59,9 +59,15 @@ export function isRecoverableFumbblLobbyStatus(serverStatus: unknown): boolean {
   return String(serverStatus ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === 'gameinuse';
 }
 
+/** Owner 10-17 (server-version hard stop): consulted once the server has announced its version and before any join
+ *  leaves. A string refuses the join with that reason (the session emits `refused` and closes); null lets it through. */
+export type JoinGate = (version: ServerCommandVersion, join: { mode: ClientMode; gameId: number | null; coach: string | null }) => string | null;
+
 export interface GameSessionEvents {
   state: (state: SessionState) => void;
   version: (command: ServerCommandVersion) => void;
+  /** The join gate refused this server (owner 10-17): no join was sent, the session closes. */
+  refused: (info: { reason: string; serverVersion: string }) => void;
   join: (command: ServerCommandJoin) => void;
   gameState: (command: ServerCommandGameState) => void;
   gameList: (command: ServerCommandGameList) => void;
@@ -110,6 +116,7 @@ export class GameSession {
   private readonly listeners: { [K in keyof GameSessionEvents]: Set<GameSessionEvents[K]> } = {
     state: new Set(),
     version: new Set(),
+    refused: new Set(),
     join: new Set(),
     gameState: new Set(),
     gameList: new Set(),
@@ -122,7 +129,13 @@ export class GameSession {
     close: new Set(),
   };
 
-  constructor(connectionOptions: FfbConnectionOptions) {
+  private readonly joinGate: JoinGate | null;
+  private lastVersion: ServerCommandVersion | null = null;
+  /** The gate's verdict for this version announcement (consulted once per connect; the join funnels reuse it). */
+  private gateVerdict: { checked: boolean; refusal: string | null } = { checked: false, refusal: null };
+
+  constructor(connectionOptions: FfbConnectionOptions & { joinGate?: JoinGate }) {
+    this.joinGate = connectionOptions.joinGate ?? null;
     this.connection = new FfbConnection(connectionOptions);
     this.connection.on('command', (command) => this.handleCommand(command as ServerCommand));
     this.connection.on('error', (error) => this.emit('error', error));
@@ -242,6 +255,9 @@ export class GameSession {
   }
 
   private sendPreparedJoin(coach: string | undefined, joinTarget: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null }): void {
+    // Astra 10-17: the gate speaks before the password challenge too (a refused lobby never waits on a challenge reply)
+    const refusal = this.joinRefusal(joinTarget.gameId || null);
+    if (refusal) { this.refuseJoin(refusal); return; }
     if (this.passwordLobby) {
       // S44: the server checks team ownership letter for letter, so a password join may carry the account's exact
       // spelling (both the challenge and the join use params.coach). The list request above already went out as typed.
@@ -270,6 +286,20 @@ export class GameSession {
 
   /** Send CLIENT_JOIN with the given password (HMAC challenge response, or a FUMBBL
    *  one-time -auth token). Shared by both join paths. */
+  /** Owner 10-17: the gate's verdict for the params' seat on the announced server; null before the version is known. */
+  private joinRefusal(gameId: number | null): string | null {
+    if (!this.joinGate || !this.lastVersion || !this.params) return null;
+    if (!this.gateVerdict.checked) this.gateVerdict = { checked: true, refusal: this.joinGate(this.lastVersion, { mode: this.params.mode, gameId, coach: this.params.coach || null }) };
+    return this.gateVerdict.refusal;
+  }
+  private lastRefusal: string | null = null;
+  /** The gate's refusal that closed this session, if any (the app's close handlers read it instead of guessing). */
+  get refusal(): string | null { return this.lastRefusal; }
+  private refuseJoin(reason: string): void {
+    this.lastRefusal = reason;
+    this.emit('refused', { reason, serverVersion: String(this.lastVersion?.serverVersion ?? '') });
+    this.close();
+  }
   private sendJoinCommand(password: string, override?: {
     gameId: number;
     gameName: string | null;
@@ -279,6 +309,8 @@ export class GameSession {
   }): void {
     const params = this.params;
     if (!params) return;
+    const refusal = this.joinRefusal(override ? override.gameId || null : Number(params.gameId) || null);
+    if (refusal) { this.refuseJoin(refusal); return; }
     if (override?.joining !== false) this.setState('joining');
     this.connection.send({
       netCommandId: NetCommandId.CLIENT_JOIN,
@@ -326,6 +358,8 @@ export class GameSession {
         // cadence (client.ping.interval); the upstream client pings from the
         // moment it learns it, or the session-timeout will drop us.
         const version = command as ServerCommandVersion;
+        this.lastVersion = version;
+        this.gateVerdict = { checked: false, refusal: null };
         const properties = version.clientProperties ?? [];
         const values = version.clientPropertyValues ?? [];
         const pingIndex = properties.indexOf('client.ping.interval');
@@ -335,6 +369,9 @@ export class GameSession {
         this.emit('version', version);
         if (this.autoJoinAfterVersion) {
           this.autoJoinAfterVersion = false;
+          // owner 10-17: the gate speaks here, before a token join OR a password challenge leaves
+          const refusal = this.joinRefusal(Number(this.params?.gameId) || null);
+          if (refusal) { this.refuseJoin(refusal); break; }
           if (this.oneTimeFumbblToken) {
             const token = this.oneTimeFumbblToken;
             this.sendJoinCommand(token);

@@ -61,7 +61,8 @@ import {
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
-import { withEntropy } from './mouseEntropy';
+import { createGameSession } from './gameSessionFactory';
+import { serverVersionBlock } from './serverVersionGate';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
 import { upstreamLinesText, upstreamLogLines, type UpstreamLogLine } from './upstreamLog';
@@ -21934,8 +21935,11 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   if (dlg === 'apothecaryChoice' && (!dpPlayer || mine.has(dpPlayer))) {
     if (humanDecisionSurface(interactiveApothecaryPrompts()) && dpPlayer && mine.has(dpPlayer)) return; // cinematic owns it
+    // Upstream PR #325 (10-17, "Prevent client-injected Apothecary outcomes"): the server reads only `choiceNewInjury`
+    // and applies its own dialog's outcome; a command without it NPEs in initFrom on that server. The legacy fields
+    // ride along for servers before it (both ignore keys they do not read).
     return once(`apoChoice:${dpPlayer}`, {
-      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, playerId: dpPlayer,
+      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, choiceNewInjury: true, playerId: dpPlayer,
       playerState: dp?.playerStateNew, seriousInjury: dp?.seriousInjuryNew, playerStateOld: dp?.playerStateOld,
     });
   }
@@ -26487,7 +26491,7 @@ export const gameStore = {
     state.spectateConnectError = null; // owner 08-18: fresh attempt — drop any prior connect-error modal
     if (!retainedHistory) { game.value = null; triggerRef(game); }
     expectingGame = true;
-    session = new GameSession({ url: params.url, compression: params.compression ?? true, decorateOutgoing: withEntropy }); // owner 10-16: client-supplied entropy on every command
+    session = createGameSession({ url: params.url, compression: params.compression ?? true }); // owner 10-16 entropy + owner 10-17 server-version gate
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
     wireConnection('join-start', { mode: 'spectator', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0) });
     // Ignore late events from a prior session that this connect just replaced (a stale async close was otherwise setting a bogus joinError over the new game — seen on rapid reconnects).
@@ -26717,6 +26721,7 @@ export const gameStore = {
   },
 
   async connectReplay(params: { url: string; coach: string; gameId: number; compression?: boolean; auth?: string }) {
+    serverVersionBlock.value = null; // Astra 10-17 r2: a replay launch supersedes an old block (its handshake is its own, not gated)
     this.disconnect();
     clearLogKeepingChatForRejoin();
     chatStash = null; // a replay is another session: live chat does not wait behind it
@@ -26874,7 +26879,7 @@ export const gameStore = {
     if (!viaReconnect) { seatAutomation = false; classicOptOutCandidate = null; }
     declareSeatedCoachAtConnect();
     pregameHandled.clear();
-    session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true, decorateOutgoing: withEntropy });
+    session = prepared?.session ?? createGameSession({ url: params.url, compression: params.compression ?? true }); // owner 10-16 entropy + owner 10-17 server-version gate
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
     wireConnection('join-start', { mode: 'player', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0), byName: !!params.gameName, withTeam: !!params.teamId, official: officialFumbbl });
     // A prior session closes asynchronously AFTER this connect starts; its late
@@ -27047,6 +27052,14 @@ export const gameStore = {
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
         if (!officialFumbbl) this.scheduleAutoReconnect();
       } else if (expectingGame && !game.value) {
+        // Owner 10-17: the server-version gate refused the seat before any join; the App modal explains it, the banner
+        // carries the same reason (not a generic "couldn't join")
+        if (thisSession.refusal) {
+          state.joinError = thisSession.refusal;
+          expectingGame = false;
+          if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
+          return;
+        }
         // fresh-join failure (never connected, not a reconnect)
         // Owner 10-10 (g1952048): a seat the server had ACCEPTED (serverJoin) and then closed while the game had not
         // started is not "couldn't join" - the coach was in and waiting. Say that, and that the join can be repeated.
@@ -27191,6 +27204,7 @@ export const gameStore = {
     state.apothecaryD16 = null;
     sendCommand({
       netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE,
+      choiceNewInjury: useNew, // upstream PR #325: the server's own outcome, picked by this flag (see the headless answer above)
       playerId: c.playerId,
       playerState: useNew ? raw.playerStateNew : raw.playerStateOld,
       seriousInjury: useNew ? raw.seriousInjuryNew : raw.seriousInjuryOld,

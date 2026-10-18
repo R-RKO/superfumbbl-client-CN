@@ -1,4 +1,4 @@
-import { withEntropy } from './mouseEntropy';
+import { createGameSession } from './gameSessionFactory';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   GameSession,
@@ -225,7 +225,7 @@ function stageFumbblLobby(
   const generation = preparedFumbblGeneration;
   const target = server ?? activeServerTarget();
   preparedFumbblServer = { url: target.url, compression: target.compression };
-  const prepared = new GameSession({ url: target.url, compression: target.compression, decorateOutgoing: withEntropy }); // owner 10-16: client-supplied entropy
+  const prepared = createGameSession({ url: target.url, compression: target.compression }); // owner 10-16 entropy + owner 10-17 server-version gate
   preparedFumbblSession = prepared;
   preparedFumbblHandedOff = false;
   preparedFumbblActiveParams = null;
@@ -278,6 +278,8 @@ function stageFumbblLobby(
   prepared.on('close', (code, reason) => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     preparedFumbblSession = null;
+    // Owner 10-17: the server-version gate refused the seat; the App modal explains it (no second, generic failure)
+    if (prepared.refusal) { fumbblLobbyError.value = prepared.refusal; fumbblLobbyState.value = 'closed'; return; }
     if (!fumbblLobbyError.value) {
       fumbblLobbyError.value = `FUMBBL lobby connection closed (${code}${reason ? `: ${reason}` : ''}). ${lobby.password ? 'Open My FUMBBL games again to retry.' : 'Reload the JNLP to try again.'}`;
       if (!preparedFumbblHandedOff) surfaceOfficialFailure(fumbblLobbyError.value);
@@ -573,6 +575,9 @@ function proceedFumbblPlayer(
   // join (the list branch spends no token - the same request "List Games" makes). Never blocks or fails the join.
   if (!lobby.password && target.gameId && !fumbblLobbyGames.value.some((e) => Number(e.gameId) === target.gameId)) {
     try { prepared.requestPreparedGameList(); } catch { /* the banner keeps what the join knew */ }
+    // Astra 10-17 r2: that list request is the first join funnel the server-version gate sees; a refusal closed the
+    // socket, so no hand-off (the store would only report a dead socket over the modal's own explanation)
+    if (prepared.refusal) { fumbblLobbyError.value = prepared.refusal; fumbblLobbyState.value = 'closed'; return; }
   }
 
   preparedFumbblHandedOff = true;
