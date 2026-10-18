@@ -19792,9 +19792,10 @@ export class PitchRenderer {
       const walker = isWalkerToken(token);
       const ratio = walker ? (walkerFigureRatio(token) ?? 1) : 1;
       // Owner 10-17 ("Eye gouge plate is much too large ... 30% opacity fill ... tighten the margins against the
-      // artwork"): the plate hugs the art (3 px, 2 crowded) with a thin edge and a translucent fill.
+      // artwork"): the plate hugs the art (3 px, 2 crowded) with a translucent fill. Owner 10-18: no edge at all
+      // ("remove the outline around the eye gouge plate"); `stroke` stays as the fit's edge allowance, now 0.
       const pad = crowded ? 2 : 3;
-      const stroke = 3;
+      const stroke = 0;
       const w = tex.width + pad * 2;
       const h = tex.height + pad * 2;
       const unit = 14 / tex.height; // texture px -> token-local units at multiplier 1
@@ -19839,11 +19840,10 @@ export class PitchRenderer {
       const seat = isHome === false ? COLORS.awayBody : COLORS.homeBody;
       const ring = eyeGougeRingColor((walker ? walkerKitColor(token) : null) ?? seat);
       // Vector plate in texture pixels, so it scales with the sprite and stays crisp at every zoom: a pill `pad` px past
-      // the art, its fill at 30% (owner 10-17) with a crisp opposite-pole edge.
+      // the art, its fill at 30% (owner 10-17), no edge (owner 10-18).
       const plate = new Graphics()
         .roundRect(-w / 2, -h / 2, w, h, h / 2)
-        .fill({ color: ring.fill, alpha: EYE_GOUGE_PLATE_FILL_ALPHA })
-        .stroke({ color: ring.edge, width: stroke, alpha: 1 });
+        .fill({ color: ring.fill, alpha: EYE_GOUGE_PLATE_FILL_ALPHA });
       plate.label = 'eyeGougeRing';
       const group = new Container();
       group.addChild(plate, sprite);
