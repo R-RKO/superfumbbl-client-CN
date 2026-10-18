@@ -46,7 +46,7 @@ import { spectatorFieldFlip, spectatorFixedFlip, viewerCoachName, viewerSide } f
 import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, blitzTokenView, type BlitzProjection } from './blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
 import { computed, customRef, nextTick, reactive, ref, shallowRef, triggerRef, watch } from 'vue';
-import { boardTurnKey, createBoardProjection, reduceBoardProjection } from './boardProjection';
+import { boardTurnKey, boardTurnKeyAfter, createBoardProjection, reduceBoardProjection } from './boardProjection';
 import {
   GameSession,
   ModelChangeId,
@@ -8428,6 +8428,11 @@ function applyFrameContents(frame: QueuedFrame) {
   const changes = (cmd.modelChangeList as { modelChangeArray?: {
     modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown;
   }[] } | undefined)?.modelChangeArray ?? [];
+  // JamToast / JDWhitee 10-18 (g1954283 #3286): the server TAKES the block (gameSetDefenderId = our pending defender) and
+  // then waits on the other coach's Trickster prompt for seconds before the block report. That fresh delta, correlated
+  // to the pending occurrence, retires the "not registered" watchdog (never standing model state, never an open dialog:
+  // Astra 10-18; a Foul Appearance failure keeps its own occurrence-scoped handling below).
+  if (!defenderDeltaJudgedAtReceipt.has(cmd as object)) retireBlockWatchOnDefenderDelta(changes);
   const setupPlacedIds = SETUP_TURN_MODES.has(game.value.turnMode ?? '') ? changes.filter((change) => {
     const coordinate = change.modelChangeValue;
     return change.modelChangeId === 'fieldModelSetPlayerCoordinate' && Array.isArray(coordinate)
@@ -9320,7 +9325,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 07-04: per-TURN "has acted" set → pitch rings (white = to act, grey = done); cleared on turnKey change.
   {
     const g = game.value as { turnMode?: unknown; homePlaying?: unknown; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } };
-    const turnKey = boardTurnKey(game.value); // S46: the same helper-based key as priorBoardTurnKey, so the Blastin' flip is no boundary
+    const turnKey = boardTurnKeyAfter(priorBoardTurnKey, game.value); // S46: the same helper-based key as priorBoardTurnKey, so the Blastin' flip is no boundary
     // Prime the current coach-turn on join; splash raise paths own later toast timing.
     if (turnToastKey === '' && String(g.turnMode ?? '') === 'regular') {
       const home = !!g.homePlaying;
@@ -12007,6 +12012,8 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
       if (blockWatchTimer) clearBlockWatch();
       lastSentPushKey = ''; // g330 #11: a fresh block arrived → its (legit) push may re-offer; drop the stale-push guard
     }
+    retireBlockWatchOnDefenderDelta(((cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [])); // at receipt, before any presentation hold queues the frame
+    defenderDeltaJudgedAtReceipt.add(cmd as object);
   }
   // Order 66 play applies every sync immediately; spectator and flag-off paths retain paced playback.
   const o66Play = settings.order66 && play.active;
@@ -12477,6 +12484,19 @@ type BlockWatchOccurrence = { id: number; attackerId: string; defenderId: string
 let blockWatchOccurrence: BlockWatchOccurrence | null = null;
 let blockWatchOccurrenceSeq = 0;
 let activeFoulAppearanceContext: BlockWatchOccurrence | null = null;
+/** JamToast / JDWhitee 10-18 (g1954283 #3286): the server TAKES the block (gameSetDefenderId = our pending defender; the id
+ *  rides modelChangeKey on the wire, gameKeySetter) and then waits on the other coach's Trickster prompt for seconds before
+ *  the block report. That fresh delta, correlated to the pending occurrence, retires the "not registered" watchdog (never
+ *  standing model state, never an open dialog: Astra). Run at receipt (enqueueSync) and at apply (harness frames). */
+/** Frames whose defender delta was already judged at receipt (Astra 10-18 r2: the apply-time pass is for frames that never
+ *  went through enqueueSync - harness frames - so an already-received frame applied later can never acknowledge a LATER send). */
+const defenderDeltaJudgedAtReceipt = new WeakSet<object>();
+function retireBlockWatchOnDefenderDelta(changes: readonly { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[]): void {
+  if (!blockWatchTimer || !blockWatchOccurrence) return;
+  const pending = blockWatchOccurrence;
+  if (changes.some((c) => String(c.modelChangeId ?? '') === 'gameSetDefenderId'
+    && (String(c.modelChangeKey ?? '') === pending.defenderId || String(c.modelChangeValue ?? '') === pending.defenderId))) clearBlockWatch();
+}
 function clearBlockWatch() {
   if (blockWatchTimer) { cancelGameTimeout(blockWatchTimer); blockWatchTimer = null; }
   blockWatchOccurrence = null;

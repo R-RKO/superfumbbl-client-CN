@@ -22,9 +22,27 @@ export function createBoardProjection(): BoardProjection {
  *  StepInitBlocking (selectBlockKind) / StepRaidingParty / StepHitAndRun / StepThenIStartedBlastin / StepPlaceBall
  *  (safePairOfHands), and the passing / bomb / wizard / trickster / illegal-substitution sub-modes the behaviours set
  *  and their end steps restore). None of them is a team turn; the side / turn numbers in the key still are. */
-const MID_ACTIVATION_SUB_MODES: Record<string, string> = Object.fromEntries(['selectBlitzTarget', 'selectGazeTarget', 'selectBlockKind',
-  'raidingParty', 'hitAndRun', 'thenIStartedBlastin', 'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway',
-  'bombHomeBlitz', 'bombAwayBlitz', 'wizard', 'illegalSubstitution'].map((mode) => [mode, 'regular']));
+const MID_ACTIVATION_SUB_MODES: Record<string, string> = {
+  ...Object.fromEntries(['selectBlitzTarget', 'selectGazeTarget', 'selectBlockKind', 'raidingParty', 'hitAndRun', 'thenIStartedBlastin',
+    'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway', 'wizard', 'illegalSubstitution'].map((mode) => [mode, 'regular'])),
+  // Astra 10-18: the kick-off Bombardier modes sit inside the `blitz` kick-off phase (upstream BombardierBehaviour), not the regular turn
+  bombHomeBlitz: 'blitz', bombAwayBlitz: 'blitz',
+};
+/** A bomb mode names the BOMBER's team (Home / Away): the acting player changes team on every return throw (upstream
+ *  StepEndBomb), so a bomb's side comes from its mode, never from the current catcher. null = not a bomb mode. */
+function bombSideIsHome(mode: string): boolean | null {
+  return mode.startsWith('bombHome') ? true : mode.startsWith('bombAway') ? false : null;
+}
+/** A `skillUse` prompt addressed to a player of the team that is NOT the activation's (the defender's Safe Pair of
+ *  Hands / Trickster ...): the server flips homePlaying to that coach for the prompt while the mode is still `regular`
+ *  (upstream StepPlaceBall for Safe Pair of Hands); it is part of the reaction, not a team turn. */
+function opposingSkillPromptOpen(g: GameJson, activationIsHome: boolean): boolean {
+  const dp = g.dialogParameter as { dialogId?: unknown; playerId?: unknown } | null | undefined;
+  if (!dp || String(dp.dialogId ?? '') !== 'skillUse') return (g as { waitingForOpponent?: unknown }).waitingForOpponent === true;
+  const pid = String(dp.playerId ?? '');
+  const promptedIsHome = g.teamHome.playerArray.some((p) => p.playerId === pid) ? true : g.teamAway.playerArray.some((p) => p.playerId === pid) ? false : null;
+  return promptedIsHome !== null && promptedIsHome !== activationIsHome;
+}
 export const MID_ACTIVATION_TURN_MODES: ReadonlySet<string> = new Set(Object.keys(MID_ACTIVATION_SUB_MODES));
 /** The team whose activation is running: the acting player's team; null without one or when he is on neither roster. */
 function activationSideIsHome(g: GameJson): boolean | null {
@@ -35,15 +53,47 @@ function activationSideIsHome(g: GameJson): boolean | null {
   return null;
 }
 export function boardTurnKey(g: GameJson): string {
-  const sub = MID_ACTIVATION_SUB_MODES[String(g.turnMode)];
+  const turnMode = String(g.turnMode);
+  // Astra 10-18: a bomb (or an interception nested in one, lastTurnMode = the bomb mode) belongs to the bomber's team
+  const bombMode = bombSideIsHome(turnMode) !== null ? turnMode : turnMode === 'interception' && bombSideIsHome(String(g.lastTurnMode ?? '')) !== null ? String(g.lastTurnMode) : null;
+  // Astra 10-18 r3: with no prior key (a seed inside a bomb) the bomb's side is UNKNOWN to this reader - the mode name
+  // is in the server's orientation (wrong for the away coach's transformed feed) and upstream keeps both teams'
+  // turnStarted true through a bomb. The key says so ('?'): boardTurnKeyAfter carries it until the turn numbers move
+  // (every real team-turn boundary increments the incoming team's turnNr, StepEndTurn), so no side flip inside this
+  // turn, the bomb's end included, is read as a boundary.
+  if (bombMode) return `${MID_ACTIVATION_SUB_MODES[bombMode]}:?:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`;
+  const sub = MID_ACTIVATION_SUB_MODES[turnMode];
   const mode = sub ?? g.turnMode;
   // JamToast / JDWhitee 10-18 (1.0.235-236, FUMBBL g1954283 #3290-3293, g1954254 #1751-1754): a defender's Trickster
   // runs as a sub-mode of the blitzing team's turn AND flips homePlaying to the defender for its frames. The side of a
   // mid-activation sub-mode is the ACTIVATION's team (the acting player's), never the flipped homePlaying, so the key
   // stays that of the regular turn it sits in (1.0.230 keyed the mode but still read the flipped side: the team-turn
   // reset cleared the acting mirror and End Blitz read "nothing declared").
-  const side = sub ? (activationSideIsHome(g) ?? turnSideIsHome(g)) : turnSideIsHome(g);
+  const activation = activationSideIsHome(g);
+  // Astra 10-18 (Safe Pair of Hands): still `regular`, the side flipped to the opposing coach for his skill prompt
+  const reactionPrompt = !sub && turnMode === 'regular' && activation !== null && activation !== turnSideIsHome(g) && opposingSkillPromptOpen(g, activation);
+  const side = sub ? (activation ?? turnSideIsHome(g)) : reactionPrompt ? activation : turnSideIsHome(g);
   return `${mode}:${side}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
+}
+/** Astra 10-18 r2: the bomb modes name the bomber's team in the SERVER's orientation (bombHome / bombAway), but the away
+ *  coach is served a transformed model (rosters swapped, homePlaying flipped: upstream Game.transform) while turn modes
+ *  keep their names - so the name alone cannot say which model-side the bomb belongs to. A bomb is thrown inside a
+ *  turn this reader already keyed: while a bomb mode (or an interception nested in one) is up, the key is the PRIOR
+ *  key when that key sits in the bomb's parent phase with the same turn numbers; the name-derived key is only the
+ *  fallback (a seed inside a bomb, where the prior key is primed from the same model anyway). */
+export function boardTurnKeyAfter(priorKey: string | null | undefined, g: GameJson): string {
+  const fresh = boardTurnKey(g);
+  if (!priorKey) return fresh;
+  const [priorPhase, priorSide, priorHomeNr, priorAwayNr] = priorKey.split(':');
+  const [freshPhase, , freshHomeNr, freshAwayNr] = fresh.split(':');
+  const sameTurn = priorHomeNr === freshHomeNr && priorAwayNr === freshAwayNr;
+  // Astra 10-18 r3: a key seeded inside a bomb (side '?') stays until the turn numbers move: the bomb's end is no boundary
+  if (priorSide === '?' && priorPhase === freshPhase && sameTurn) return priorKey;
+  const turnMode = String(g.turnMode);
+  const bombMode = bombSideIsHome(turnMode) !== null ? turnMode : turnMode === 'interception' && bombSideIsHome(String(g.lastTurnMode ?? '')) !== null ? String(g.lastTurnMode) : null;
+  if (!bombMode) return fresh;
+  const parent = MID_ACTIVATION_SUB_MODES[bombMode];
+  return priorPhase === parent && sameTurn ? priorKey : fresh;
 }
 export function reduceBoardProjection(previous: BoardProjection, game: GameJson, input: {
   recoveringPlayers: readonly string[];
@@ -67,7 +117,7 @@ export function reduceBoardProjection(previous: BoardProjection, game: GameJson,
     || !!game.gameResult?.teamResultHome?.conceded || !!game.gameResult?.teamResultAway?.conceded;
   let activePlayerId = over ? null : sawActiveBit ? activeByState : activeByState ?? acting ?? notation;
   if (!over && acting && input.followupAttackerId === acting) activePlayerId = acting;
-  const turnKey = boardTurnKey(game);
+  const turnKey = boardTurnKeyAfter(previous.turnKey, game);
   if (turnKey !== previous.turnKey) activePlayerId = null;
   const actedPlayers = over ? [] : players.filter((p) => {
     if (p.playerId === activePlayerId || (p.playerState & 0x100) !== 0 || homeIds.has(p.playerId) !== playingIsHome) return false;
