@@ -5,9 +5,9 @@
  * popped-out ChatDock: teleported to `body`, ONE fixed box sized to itself (never a viewport-wide layer, so the
  * pitch keeps its input around it), dragged by the header, CSS-resizable. Closed = not rendered at all.
  * Owner 10-02 (v2): the content GROWS with the window (game/rosterPopoutScale.ts). Taller = more rows at the base size
- * until ELEVEN rows are in view; past that every size (header, team switch, rows, portraits, badges, text) scales up
- * evenly so exactly eleven rows fill the list, and players 12+ scroll. Wider allows the scale-up too. The scale is
- * written to --roster-scale on the frame; the scalable PostGameRoster multiplies it into every size.
+ * up to SIXTEEN rows (players 17+ scroll); WIDER scales every size (header, team switch, rows, portraits, badges, text)
+ * up evenly (owner 10-18: vertical adds rows, horizontal grows the text). The scale is written to --roster-scale on the
+ * frame; the scalable PostGameRoster multiplies it into every size.
  * Width / height are written imperatively, never through the reactive style: Vue re-applies every key of a style
  * object on each patch, which would snap a user-resized window back to its default size.
  */
@@ -15,7 +15,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PostGameRoster from './PostGameRoster.vue';
 import { clampPanelPosition } from '../game/edgePanelLayout';
 import { defaultRosterPosition } from '../game/rosterPopoutLayout';
-import { ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, rosterPopoutScale } from '../game/rosterPopoutScale';
+import { ROSTER_POPOUT_DEFAULT_ROWS, ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, rosterPopoutScale } from '../game/rosterPopoutScale';
 import type { PostGameSide, Side } from '../game/postGameProjection';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
@@ -98,6 +98,10 @@ function parts() {
   if (!panel || !head || !body || !list || !row || row.offsetHeight <= 0) return null;
   return { panel, head, body, list, row };
 }
+/** Astra 10-18: the real height of the first `rows` rows (fractional; skills wrap, so rows differ), at the current scale. */
+function rowsSpan(el: NonNullable<ReturnType<typeof parts>>, rows: number): number {
+  return Array.from(el.list.querySelectorAll<HTMLElement>('li')).slice(0, rows).reduce((sum, li) => sum + li.getBoundingClientRect().height, 0);
+}
 /** Header, body-minus-list and one row, divided back to scale 1. */
 function metricsAt(el: NonNullable<ReturnType<typeof parts>>, s: number) {
   // Owner 10-02: skills now wrap, so a row can be taller than the rest - the 11-row unit is the SHORTEST (unwrapped) row.
@@ -107,7 +111,7 @@ function metricsAt(el: NonNullable<ReturnType<typeof parts>>, s: number) {
 function applyScale() {
   const el = parts();
   if (!el || !sized) return;
-  // Measure uncapped: with the eleven-row cap on, the free space under the list would read as chrome and pin the scale.
+  // Measure uncapped: with the row cap on, the free space under the list would read as chrome.
   el.panel.style.removeProperty('--roster-list-max');
   // A few passes: 1px borders do not scale, so the per-row measure drifts a hair between scales.
   for (let pass = 0; pass < 3; pass++) {
@@ -116,17 +120,19 @@ function applyScale() {
     scale = next;
     el.panel.style.setProperty('--roster-scale', String(next));
   }
-  // Astra review: a narrow, tall window caps the scale by WIDTH; the list still stops at eleven rows (players 12+ scroll).
-  el.panel.style.setProperty('--roster-list-max', `${Math.ceil(ROSTER_POPOUT_ROWS * metricsAt(el, scale).rowH * scale) + 1}px`);
+  // The list stops at sixteen rows (players 17+ scroll): the cap is the measured span of the first sixteen rows at this
+  // scale (Astra 10-18: the shortest row x 16 under-counted wrapped rows); the scale is the width's alone (owner 10-18).
+  el.panel.style.setProperty('--roster-list-max', `${Math.ceil(rowsSpan(el, ROSTER_POPOUT_ROWS)) + 1}px`);
 }
-/** First layout: start ELEVEN rows tall (fewer when neither team has that many), within the viewport. */
+/** First layout: start ELEVEN rows tall (fewer when neither team has that many), within the viewport; taller is a drag away. */
 function sizeFrame() {
   if (sized) return;
   const el = parts();
   if (!el) return;
-  const rows = Math.max(1, Math.min(ROSTER_POPOUT_ROWS, Math.max(props.teams?.home.roster.length ?? 0, props.teams?.away.roster.length ?? 0)));
+  const rows = Math.max(1, Math.min(ROSTER_POPOUT_DEFAULT_ROWS, Math.max(props.teams?.home.roster.length ?? 0, props.teams?.away.roster.length ?? 0)));
   const borders = el.panel.offsetHeight - el.panel.clientHeight;
-  const want = rosterPopoutHeightFor(metricsAt(el, 1), rows) + borders;
+  const m = metricsAt(el, 1);
+  const want = rosterPopoutHeightFor({ ...m, rowH: 0 }, 0) + rowsSpan(el, rows) + borders; // the first `rows` rows as they really measure
   el.panel.style.height = `${Math.ceil(Math.min(want, window.innerHeight * 0.9))}px`;
   sized = true;
   rememberSelfSize();

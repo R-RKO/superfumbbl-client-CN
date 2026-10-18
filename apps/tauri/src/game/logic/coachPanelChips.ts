@@ -62,6 +62,23 @@ const INDUCEMENT_ICONS: Record<string, string> = {
  * type; it must be overridden with the live turnData.wanderingApothecaries
  * count (and dropped once that hits zero) instead of trusted as-is.
  */
+/** sv398 10-18: the chip's hover text showed the wire key ("briberyAndCorruption"). The known inducements by name; an
+ *  unknown key reads as its words ("someNewThing" -> "Some New Thing"), never the raw key. */
+const INDUCEMENT_CHIP_LABELS: Readonly<Record<string, string>> = {
+  briberyAndCorruption: 'Bribery and Corruption', bribes: 'Bribes', halflingMasterChef: 'Halfling Master Chef',
+  wanderingApothecaries: 'Wandering Apothecary', biasedRef: 'Biased Referee', teamMascot: 'Team Mascot',
+  partTimeCoach: 'Part-time Assistant Coaches', tempCheerleader: 'Temp Agency Cheerleaders', weatherMage: 'Weather Mage',
+  wizard: 'Wizard', bloodweiserBabes: 'Bloodweiser Kegs', bugmansXXXXXX: "Bugman's XXXXXX", josefBugman: 'Josef Bugman',
+  mortuaryAssistant: 'Mortuary Assistant', plagueDoctor: 'Plague Doctor', riotousRookies: 'Riotous Rookies',
+  throwARock: 'Throw a Rock', dwarfenWisdom: 'Wisdom of the White Dwarf', infamousStaff: 'Infamous Coaching Staff',
+  extraTeamTraining: 'Extra Team Training', starPlayers: 'Star Players', mercenaries: 'Mercenaries', card: 'Cards', prayers: 'Prayers',
+};
+export function inducementChipLabel(type: string): string {
+  const known = INDUCEMENT_CHIP_LABELS[type];
+  if (known) return known;
+  const words = type.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : type;
+}
 export function buildInducementChips(turnData: CoachPanelTurnData): InducementChip[] {
   // `reRolls` is the server's aggregate team-reroll total: each drive-scoped
   // grant increments it as well as its source counter, and consumption/expiry
@@ -115,7 +132,7 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
 
   for (const [type, count] of byType) {
     const icon = INDUCEMENT_ICONS[type];
-    if (icon) chips.push({ icon, count, label: type }); // unmapped types have no coach-panel chip
+    if (icon) chips.push({ icon, count, label: inducementChipLabel(type) }); // unmapped types have no coach-panel chip
   }
   if (set.prayers.length > 0) chips.push({ icon: 'prayer', count: set.prayers.length, label: 'Prayers' });
   const cards = set.cardsAvailable.length + set.cardsActive.length;

@@ -1,9 +1,12 @@
 /**
- * Owner 10-02: the Roster pop-out's grow-with-the-window rule. Taller = more rows at the base size until ELEVEN rows
- * are in view; past that the whole content scales so exactly eleven rows fill the list (players 12+ scroll). Wider
- * allows the scale-up too: scale = max(1, min(heightFit, widthFit)).
+ * Owner 10-18 (sv398's report: the list stopped at eleven players and a taller window only added blank space):
+ * the two axes do two different things. TALLER adds rows at the base size, up to the full SIXTEEN (players 17+
+ * scroll); WIDER scales the whole content (text, portraits, badges) up: scale = max(1, widthFit). Height never scales.
+ * (Owner 10-02's rule was eleven rows, then scale by height-and-width.)
  */
-export const ROSTER_POPOUT_ROWS = 11;
+export const ROSTER_POPOUT_ROWS = 16;
+/** The window opens showing this many rows (fewer when neither team has that many); drag it taller for the rest. */
+export const ROSTER_POPOUT_DEFAULT_ROWS = 11;
 
 export interface RosterPopoutMetrics {
   /** The frame's inner size, px. */
@@ -22,9 +25,7 @@ export function rosterPopoutHeightFor(m: Pick<RosterPopoutMetrics, 'headH' | 'ch
   return m.headH + m.chromeH + rows * m.rowH;
 }
 
-export function rosterPopoutScale(m: RosterPopoutMetrics): number {
-  const need = rosterPopoutHeightFor(m, ROSTER_POPOUT_ROWS);
-  if (!(need > 0) || !(m.baseWidth > 0) || !(m.frameHeight > 0) || !(m.frameWidth > 0)) return 1;
-  const fit = Math.min(m.frameHeight / need, m.frameWidth / m.baseWidth);
-  return Math.max(1, Math.floor(fit * 100) / 100); // floored: eleven rows never spill a sliver of scrollbar
+export function rosterPopoutScale(m: Pick<RosterPopoutMetrics, 'frameWidth' | 'baseWidth'> & Partial<RosterPopoutMetrics>): number {
+  if (!(m.baseWidth > 0) || !(m.frameWidth > 0)) return 1;
+  return Math.max(1, Math.floor((m.frameWidth / m.baseWidth) * 100) / 100); // floored: the base width never spills a sliver
 }

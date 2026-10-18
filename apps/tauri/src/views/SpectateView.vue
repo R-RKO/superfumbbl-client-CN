@@ -14440,7 +14440,7 @@ function sendChat() {
             <div class="coach-name">{{ homePanel.coach }}</div>
             <div class="team-title">{{ homePanel.teamName }}</div>
             <div v-if="homePanel.chips.length" class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
+              <span v-for="(chip, chipIndex) in homePanel.chips" :key="`${chipIndex}:${chip.icon}:${chip.label}`" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
                 <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
                 <template v-else>
                   <img :src="resourceIcon(chip.icon)" alt="" />
@@ -14477,7 +14477,7 @@ function sendChat() {
             <div class="coach-name">{{ awayPanel.coach }}</div>
             <div class="team-title">{{ awayPanel.teamName }}</div>
             <div v-if="awayPanel.chips.length" class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
+              <span v-for="(chip, chipIndex) in awayPanel.chips" :key="`${chipIndex}:${chip.icon}:${chip.label}`" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
                 <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
                 <template v-else>
                   <img :src="resourceIcon(chip.icon)" alt="" />

@@ -6046,7 +6046,16 @@ function talkSide(coach: string | undefined): LogEntry['side'] {
  *  a new spectator arrived → bump `livePulse` so the view flashes the on-air light. The
  *  first join after a connect just sets the baseline (no self-flash on our own join). */
 let spectatorBaselineSeen = false;
+/** Keithabix 10-18 (g1954506): when a coach REJOINS, the server broadcasts his new session's join and then closes his old
+ *  socket, whose SocketClosed handler sends a `serverLeave` for the same coach - milliseconds AFTER the join. That leave
+ *  is about the session he just replaced, not about him; the opponent-left notice armed on it and nothing cleared it
+ *  (the 10-10 clear needs a LATER join). The player joins are remembered here so such a leave is recognised. */
+const recentPlayerJoinAt = new Map<string, { at: number; gameId: string }>();
+const STALE_SESSION_LEAVE_WINDOW_MS = 10_000;
 function handleServerJoin(cmd: { spectators?: number; spectatorNames?: unknown; coach?: unknown; clientMode?: unknown }) {
+  // (Astra 10-18: the rejoin's own snapshot resets playback between the join and the stale leave, so the record is kept
+  // across snapshots of the SAME game - keyed by game id - and dropped only on disconnect / another game.)
+  if (/player/i.test(String(cmd.clientMode ?? '')) && String(cmd.coach ?? '').trim()) recentPlayerJoinAt.set(String(cmd.coach).trim().toLowerCase(), { at: Date.now(), gameId: String(game.value?.gameId ?? '') });
   // Owner 09-07: the join broadcast is the log's join line ("<Coach> joined as Home" / "<Coach> is now spectating
   // the game.") — the socket's own "connection: joined" state line is no longer logged.
   const line = joinLogLine(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
@@ -24560,6 +24569,16 @@ function handleServerPush(cmd: Record<string, unknown>) {
     // Owner 10-10: never about the coach in this seat (a leave for my own earlier session after I rejoined).
     const mine = play.active && leftCoach.trim().toLowerCase() === String(play.coach ?? '').trim().toLowerCase();
     if (/player/i.test(String(cmd.clientMode ?? '')) && leftCoach && !mine) {
+      // Keithabix 10-18: a leave right after that coach's own player join is his REPLACED session closing (the server
+      // closes the old socket after the rejoin): he is still seated. Logged, never a notice.
+      // ONE leave per join is the replaced session's (Astra: a second leave inside the window is a real drop)
+      const key = leftCoach.trim().toLowerCase();
+      const joined = recentPlayerJoinAt.get(key);
+      if (joined && joined.gameId === String(g?.gameId ?? '') && Date.now() - joined.at <= STALE_SESSION_LEAVE_WINDOW_MS) {
+        recentPlayerJoinAt.delete(key);
+        log('system', `${leftCoach}'s previous connection closed (rejoined)`);
+        return;
+      }
       state.opponentLeft = { coach: leftCoach, seq: (state.opponentLeft?.seq ?? 0) + 1 };
       log('system', `${leftCoach} has left the game`);
     }
@@ -26563,6 +26582,11 @@ export const gameStore = {
           void backfillSpectatorHistoryFromReplay({ url: params.url, coach: params.coach, compression: params.compression },
             history, result.checkpoint);
         }
+        // Owner 10-18 (g1954489: a spectate join whose wire log began at the first frame AFTER the snapshot): every
+        // spectator snapshot - the join's AND a reconnect's replacement (the review-preserving branch below returns
+        // before the switch, Astra) - is teed like the player's (store ~26974), so the log carries the state the backfill
+        // continuity check compared against and the file rolls on this game id. Frames are teed by enqueueSync.
+        if (thisSession === session && cmd.netCommandId === NetCommandId.SERVER_GAME_STATE) verboseTee('in', cmd as unknown as Record<string, unknown>);
         if (spectatorTransport) {
           const packetClass = classifySpectatorPacket(cmd as Record<string, unknown>);
           if (packetClass === 'snapshot' || packetClass === 'match' || packetClass === 'clock') {
@@ -26595,7 +26619,6 @@ export const gameStore = {
         }
         switch (cmd.netCommandId) {
           case NetCommandId.SERVER_GAME_STATE: {
-
             if (thisSession !== session) return;
             expectingGame = false;
             state.waitingForMatch = null; // the match started — drop the waiting modal
@@ -29634,6 +29657,7 @@ export const gameStore = {
   },
 
   disconnect() {
+    recentPlayerJoinAt.clear(); // Keithabix 10-18: rejoin evidence belongs to this connection
     settleAllInjuryPillBeats(false); // owner 10-12 / Astra item 2: leaving (or a new join) never sounds the old game's injury
     clearOfficialRejoinTarget(); // S44: leaving on purpose (or any other join starting) drops the official rejoin target
     demoLoadGeneration++;
