@@ -21935,11 +21935,8 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   if (dlg === 'apothecaryChoice' && (!dpPlayer || mine.has(dpPlayer))) {
     if (humanDecisionSurface(interactiveApothecaryPrompts()) && dpPlayer && mine.has(dpPlayer)) return; // cinematic owns it
-    // Upstream PR #325 (10-17, "Prevent client-injected Apothecary outcomes"): the server reads only `choiceNewInjury`
-    // and applies its own dialog's outcome; a command without it NPEs in initFrom on that server. The legacy fields
-    // ride along for servers before it (both ignore keys they do not read).
     return once(`apoChoice:${dpPlayer}`, {
-      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, choiceNewInjury: true, playerId: dpPlayer,
+      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, playerId: dpPlayer,
       playerState: dp?.playerStateNew, seriousInjury: dp?.seriousInjuryNew, playerStateOld: dp?.playerStateOld,
     });
   }
@@ -27204,7 +27201,6 @@ export const gameStore = {
     state.apothecaryD16 = null;
     sendCommand({
       netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE,
-      choiceNewInjury: useNew, // upstream PR #325: the server's own outcome, picked by this flag (see the headless answer above)
       playerId: c.playerId,
       playerState: useNew ? raw.playerStateNew : raw.playerStateOld,
       seriousInjury: useNew ? raw.seriousInjuryNew : raw.seriousInjuryOld,

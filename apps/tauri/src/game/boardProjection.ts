@@ -26,9 +26,24 @@ const MID_ACTIVATION_SUB_MODES: Record<string, string> = Object.fromEntries(['se
   'raidingParty', 'hitAndRun', 'thenIStartedBlastin', 'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway',
   'bombHomeBlitz', 'bombAwayBlitz', 'wizard', 'illegalSubstitution'].map((mode) => [mode, 'regular']));
 export const MID_ACTIVATION_TURN_MODES: ReadonlySet<string> = new Set(Object.keys(MID_ACTIVATION_SUB_MODES));
+/** The team whose activation is running: the acting player's team; null without one or when he is on neither roster. */
+function activationSideIsHome(g: GameJson): boolean | null {
+  const id = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!id) return null;
+  if (g.teamHome.playerArray.some((p) => p.playerId === id)) return true;
+  if (g.teamAway.playerArray.some((p) => p.playerId === id)) return false;
+  return null;
+}
 export function boardTurnKey(g: GameJson): string {
-  const mode = MID_ACTIVATION_SUB_MODES[String(g.turnMode)] ?? g.turnMode;
-  return `${mode}:${turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
+  const sub = MID_ACTIVATION_SUB_MODES[String(g.turnMode)];
+  const mode = sub ?? g.turnMode;
+  // JamToast / JDWhitee 10-18 (1.0.235-236, FUMBBL g1954283 #3290-3293, g1954254 #1751-1754): a defender's Trickster
+  // runs as a sub-mode of the blitzing team's turn AND flips homePlaying to the defender for its frames. The side of a
+  // mid-activation sub-mode is the ACTIVATION's team (the acting player's), never the flipped homePlaying, so the key
+  // stays that of the regular turn it sits in (1.0.230 keyed the mode but still read the flipped side: the team-turn
+  // reset cleared the acting mirror and End Blitz read "nothing declared").
+  const side = sub ? (activationSideIsHome(g) ?? turnSideIsHome(g)) : turnSideIsHome(g);
+  return `${mode}:${side}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
 }
 export function reduceBoardProjection(previous: BoardProjection, game: GameJson, input: {
   recoveringPlayers: readonly string[];
