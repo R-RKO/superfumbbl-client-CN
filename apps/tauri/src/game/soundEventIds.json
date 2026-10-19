@@ -43,5 +43,10 @@
   "boing",
   "angel",
   "chatToast",
-  "setupPlace"
+  "setupPlace",
+  "plannerWaypoint",
+  "actionCancel",
+  "turnClockMinute",
+  "turnClockCountdown",
+  "rollFailed"
 ]

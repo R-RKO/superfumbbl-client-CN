@@ -114,6 +114,14 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
   this entry becomes: "Xbox controller button images © Microsoft, used per the Xbox 360 Controller Button Images
   licence" (licence text shipped beside the images).
 
+## Licensed sounds
+
+- **Andrea Baroni (Cyberleaf Studio, andreabaroni.com)**: "Retro SFX" pack, the planner waypoint, cancel, turn-clock
+  and failed-roll cues (`apps/tauri/src/assets/sounds/plannerWaypoint/`, `actionCancel.wav`, `turnClockMinute.wav`,
+  `turnClockCountdown.wav`, `rollFailed.wav`). Licensed for use in the product, attribution optional; the files may not
+  be redistributed or remixed, so they ship unmodified inside the app only (the installer and its app updates) and stay out
+  of the public repository.
+
 ## Licensed imagery
 
 - **Whirlpool Galaxy backdrop** (`packages/ffb-pitch/assets/backdrops/galaxy.jpg`, the "Whirlpool Galaxy (Hubble)"

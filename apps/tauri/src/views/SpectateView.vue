@@ -50,6 +50,7 @@ import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAn
 import { isRightStuffReRolledAction } from '../game/logic/ttmLandingPromptHold';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
+import { ROLL_FAILED_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed } from '../game/logic/uiSoundCues';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
@@ -152,7 +153,7 @@ import { quickSnapExhaustedText } from '../game/quickSnapController';
 import { currentBlockChoosingTeamId, currentMultiBlockChoosingTeamId, isCurrentBlockChoiceDialog, isCurrentMultiBlockChoiceDialog, projectBlockChooser, type BlockChooserSide } from '../game/blockChooser';
 import { savedSetupPreview, templatePreview } from '../game/setupTemplatePreview';
 import { hmpScatterSkillUseCardCopy, modifyingSkillCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
-import { swoopChoiceCopy, swoopIndicator, type SwoopPathSquare } from '../game/logic/swoopPresentation';
+import { swoopChoiceCopy, swoopIndicator, type SwoopIndicator } from '../game/logic/swoopPresentation';
 import { watchedCardHandoffMs } from '../game/logic/minimumVisible';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
@@ -3064,6 +3065,8 @@ watch(
       // Owner 10-15: a server Disturbing Presence modifier on the roll rides the die as its "DP −N" tag.
       if (m.disturbingPresence) renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed, undefined, undefined, undefined, undefined, undefined, undefined, m.disturbingPresence);
       else renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed);
+      // Owner 10-19: these calls pass no reroll caption, so the renderer always pops the die in first (Astra r2 P3).
+      if (!m.ok) scheduleRollFailedCue(presentationMs(ROLL_FAILED_CUE_DELAY_MS));
     }
   },
 );
@@ -3641,6 +3644,26 @@ decisionSurfaceReplays.push(() => {
   const at = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === prompt.playerId)?.playerCoordinate;
   myRerollOfferSquare = at && at[0] >= 0 && at[0] <= 25 && at[1] >= 0 && at[1] <= 14 ? [at[0], at[1]] : null;
 });
+/** Owner 10-19 (Astra P2): failed-roll sound timers belong to the dice presentation - a seek, a catch-up cleanup, a
+ *  reset or unmount that drops the dice drops their sounds too, and nothing is scheduled while catching up. */
+const rollFailedCueTimers = new Set<number>();
+/** Astra 10-19 (P2-2): once per die occurrence - a re-shown FAILED die never re-fires. */
+const rollFailedCueOnce = createFailedRollCueOnce();
+watch(() => gameStore.game.value?.gameId, () => rollFailedCueOnce.reset());
+function scheduleRollFailedCue(ms: number): void {
+  // Astra 10-19 (P2-2): only this client's own play - never a spectator seat, a replay at any speed or a catch-up.
+  if (!rollFailedCueAllowed({ playing: gameStore.isPlaying.value, replay: gameStore.isReplay.value, catchingUp: gameStore.playbackCatchingUp.value })) return;
+  const timer = window.setTimeout(() => { rollFailedCueTimers.delete(timer); playSound('rollFailed'); }, ms);
+  rollFailedCueTimers.add(timer);
+}
+function cancelRollFailedCues(): void {
+  for (const timer of rollFailedCueTimers) window.clearTimeout(timer);
+  rollFailedCueTimers.clear();
+}
+onBeforeUnmount(cancelRollFailedCues);
+// Astra confirmation 10-19 (P3): a live snapshot / reconnect / seek resets playback without clearing the dice slot -
+// a failed-roll sound still pending from before it must not play after it.
+watch(() => gameStore.playbackResetRev.value, cancelRollFailedCues);
 const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
 /** Fail-open margin of a movement die's arrival wait once nothing is moving its token (one step + this). */
 const MOVE_DIE_ARRIVAL_MARGIN_MS = 100;
@@ -3667,7 +3690,14 @@ const actionDiceDrain = createActionDiceQueueDrain({
   moverMoving: (playerId) => gameStore.movementStepPendingFor(playerId) || !!renderer?.movementOnScreen(playerId).inFlight,
   arrivalGraceMs: () => presentationMs(settings.moveSpeedMs) + MOVE_DIE_ARRIVAL_MARGIN_MS,
   // Owner 10-09: tell the store when each batch is really shown - its read beats start there, not at an estimate.
-  onShown: (seq, msUntilShown) => gameStore.actionDiceShown(seq, msUntilShown),
+  onShown: (seq, msUntilShown, rolls, dieKeys) => {
+    gameStore.actionDiceShown(seq, msUntilShown);
+    // Owner 10-19: a FAILED die sounds as it settles - once per die occurrence (Astra P2-2), in this client's own play.
+    // Every shown FAILED die is recorded (a suppressed catch-up die included), so its re-show stays silent.
+    const settleMs = rolls ? failedRollCueDelayMs(rolls) : null;
+    const firstShow = !!rolls && rollFailedCueOnce.admit(seq, rolls, dieKeys);
+    if (settleMs !== null && firstShow) scheduleRollFailedCue(msUntilShown + presentationMs(settleMs));
+  },
 });
 onBeforeUnmount(() => actionDiceDrain.cancelPickupWaits());
 // Batches published before this view mounted are history, not cues: drop them so the first live cue does not replay them.
@@ -3684,6 +3714,7 @@ watch(
     if (!a) {
       actionDiceDrain.cancelPickupWaits();
       actionDiceLifecycle.onDiceCleared();
+      cancelRollFailedCues();
       if (gameStore.state.actionDiceQueue.length) gameStore.state.actionDiceQueue.splice(0); // nothing survives a reset
       return;
     }
@@ -4249,7 +4280,10 @@ watchDecisionSurface(
       if (!gameStore.state.reRollPrompt) { rerollMenuPos.ready = false; return; }
       // Owner 10-13: a TTM landing card sits on the server's landing square (the card is held until the thrown player
       // has come down there), never on a token still in flight or hopping. Every other card keeps the token anchor.
-      const pos = (sq && isRightStuffReRolledAction(p.reRolledAction) ? renderer?.screenPosOf(sq) : null)
+      // Owner 10-19: the Swoop Distance card sits on the server's destination square (marker / red X), not the swooper.
+      const swoopDestination = p.reRolledAction === 'Swoop Distance' ? swoopRerollCardAnchor() : null;
+      const pos = (swoopDestination ? renderer?.screenPosOfSquare(swoopDestination) : null)
+        ?? (sq && isRightStuffReRolledAction(p.reRolledAction) ? renderer?.screenPosOf(sq) : null)
         ?? renderer?.playerScreenPos(p.playerId, sq);
       const host = pitchHost.value;
       if (reactivePromptHeld.value !== 'reroll') {
@@ -6587,7 +6621,7 @@ watch(jumpCrosshairSquares, (squares) => { renderer?.setJumpCrosshairs(squares);
 // swoopDistance option marked along each line, with an X in every square past the end zone / sideline. The gate is the
 // pure swoopIndicator (logic/swoopPresentation.ts): the PICK (SWOOP state, >= 2 cardinal offers, no reroll card) and the
 // ROLL (Swoop Direction / Distance reroll offer, until this seat answers it or the flight starts). Null clears it.
-const swoopPathIndicator = computed<{ from: [number, number]; paths: SwoopPathSquare[][] } | null>(() => {
+const swoopPathIndicator = computed<SwoopIndicator | null>(() => {
   const g = gameStore.game.value;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const throwAnim = gameStore.state.throwAnim;
@@ -6601,6 +6635,7 @@ const swoopPathIndicator = computed<{ from: [number, number]; paths: SwoopPathSq
     from: normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
       .find((d) => d.playerId === actingId)?.playerCoordinate),
     reportedDirection: gameStore.state.ballDirection,
+    reportedDestination: gameStore.state.swoopDestination,
     dialogAnswered: coaching && gameStore.liveDialogAnswered(),
     swoopState,
     reRollPromptUp,
@@ -6608,8 +6643,12 @@ const swoopPathIndicator = computed<{ from: [number, number]; paths: SwoopPathSq
     flightCueForActing: throwAnim?.kind === 'throwTeamMate' && throwAnim.thrownId === actingId,
   });
 });
+/** Owner 10-19: the Swoop Distance reroll card's anchor - the indicator's destination square (null otherwise). */
+function swoopRerollCardAnchor(): [number, number] | null {
+  return swoopPathIndicator.value?.destination?.square ?? null;
+}
 watch([swoopPathIndicator, rendererReady], ([indicator]) => {
-  renderer?.setSwoopPaths(indicator?.from ?? null, indicator?.paths ?? []);
+  renderer?.setSwoopPaths(indicator?.from ?? null, indicator?.paths ?? [], indicator?.destination ?? null);
 }, { immediate: true });
 // Arm the tile-pick overlay (②) with those squares → the renderer draws them + routes clicks to onTilePick,
 // which steps the acting player (below). Re-arms each step as the server sends a fresh moveSquareArray.
@@ -8936,6 +8975,30 @@ function clearO66Arms() {
   // 'cancel-kick-em-nomination' case (escCascadeDecision's own kickEmNominated input).
 }
 
+/** Owner 10-19: the coach cancelled an action (a plotted route / armed target cleared, a declared action backed out). */
+function playCancelCue(): void { playSound('actionCancel'); }
+/** Astra 10-19 (P2): ending now backs out an action - a declaration of mine still in flight, or my acting player with
+ *  no square moved and no block thrown. Read BEFORE the end is sent. */
+function endingCancelsAction(): boolean {
+  if (gameStore.declarationInFlight()) return true;
+  // Astra r2: a step / block sent but not yet echoed reads untouched on the model - that end is no cancel.
+  if (gameStore.gameplaySendUnanswered()) return false;
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return !!actingId && gameStore.iControl(actingId) && blitzUntouched(g);
+}
+/** Astra r2: after an end, the cancel cue sounds only when `cancels` and the end really sent something (`sentBefore` =
+ *  gameStore.gameplaySendCount() read just before it). A refused end - e.g. a second right-click while the first
+ *  cancel is in flight - stays silent. */
+function cancelCueIfSent(cancels: boolean, sentBefore: number): void {
+  if (cancels && gameStore.gameplaySendCount() !== sentBefore) playCancelCue();
+}
+/** Astra 10-19 (P2): a cancel that sends an end cues only when nothing else of mine is unanswered (a declaration still in
+ *  flight is the action being backed out, so it does not count). Read BEFORE the end is sent. */
+function endCancelsNothingElseUnanswered(): boolean {
+  return gameStore.declarationInFlight() || !gameStore.gameplaySendUnanswered();
+}
+
 // R3: every context-menu activation end owns the same planner cleanup and guarded wire path.
 function endActivationFromMenu() {
   // g1951755 (Elyod 10-09): when the end ASKS first, the prompt owns the cleanup (Confirm clears, Go back keeps the
@@ -9323,6 +9386,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
+    playCancelCue();
     return;
   }
   const boardPick = gameStore.state.playerPick;
@@ -9346,9 +9410,12 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     // right-click did nothing. This gesture IS the owner-ruled cancel, and at this step the server keeps its own
     // safeguard (StepSelectBlitzTarget: a self-target after the blitzer has acted raises its confirm-end dialog;
     // before that it just cancels the target selection) - so it carries the confirmation token.
+    const cancels = endCancelsNothingElseUnanswered();
+    const sentBefore = gameStore.gameplaySendCount();
     gameStore.endActivation({ blitzConfirmed: true });
     clearO66Arms();
     ctxMenu.visible = false;
+    cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
     return;
   }
   // StepInitBlocking accepts CLIENT_ACTING_PLAYER{null} while waiting for Fury's
@@ -9388,11 +9455,12 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
       confirmationCardOpen: !!gameStore.state.yesNo?.key.startsWith('kickEmConfirm:'),
       clientState: kickEmSt,
     });
-    if (kickEmDecision === 'clearRoute') { clearO66Arms(); ctxMenu.visible = false; return; }
+    if (kickEmDecision === 'clearRoute') { clearO66Arms(); ctxMenu.visible = false; playCancelCue(); return; }
     if (kickEmDecision === 'cancelNomination'
         && kickEmActing && kickEmActing === gameStore.state.kickEmBlitzTarget?.actingId && gameStore.iControl(kickEmActing)) {
       gameStore.clearKickEmBlitzNomination();
       ctxMenu.visible = false;
+      playCancelCue();
       return;
     }
     // 'passThrough' (or a cancelNomination whose actor/control check failed) continues into the ordinary
@@ -9477,7 +9545,10 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
       if (ttmCancel === 'cancel-and-end' && ttmKey) {
         ttmCancelledActivationKeys.add(ttmKey);
         clearTtmTargetingSurface(); // retire ruler/destination immediately even if the ownership rail refuses
+        const cancels = endCancelsNothingElseUnanswered();
+        const sentBefore = gameStore.gameplaySendCount();
         gameStore.endActivation(); // exact clientActingPlayer(null); one attempt per stable activation key
+        cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
         return;
       }
       if (ttmCancel === 'already-cancelled') return;
@@ -9491,6 +9562,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         // Go back leaves the nomination exactly as it was; confirming clears them and sends the same endActivation.
         if (cancelDeclaredFoul) { requestEndActivation(); return; }
         clearO66Arms();
+        playCancelCue();
       } else {
         // #231 (owner-fg 07-29): a right-click DURING A BLITZ activation must CONFIRM before ending — a stray
         //   right-click on empty was silently firing endActivation and burning the once-per-turn blitz. Gate ONLY
@@ -9681,6 +9753,7 @@ let toastTimer = 0;
 function cancelViewMatchPresentation() {
   actionDiceLifecycle.cancelPending(); // Owner 09-28 (S7 v3): advance the epoch + cancel pending deferred die shows
   actionDiceDrain.cancelPickupWaits(); // owner 10-06: and every per-batch pickup-on-arrival wait
+  cancelRollFailedCues(); // owner 10-19: their failed-roll sounds go with them
   for (const timer of [riotousRookiesSplashTimer, negatraitCueTimer,
     stallerSplashTimer, fallOverHideTimer, toastTimer, infoNoticeTimer]) window.clearTimeout(timer);
   riotousRookiesSplashTimer = negatraitCueTimer = 0;
@@ -10306,17 +10379,23 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       else if (decision.prompt === 'skillChoice') { if (!gameStore.state.skillChoice?.modifyingSkill) gameStore.resolveSkillUse(false); } // S40: Esc never picks among three
       else gameStore.resolveReRoll(null);
       return;
-    case 'undeclare':
+    case 'undeclare': {
       clearO66Arms();
+      const cancels = endCancelsNothingElseUnanswered();
+      const sentBefore = gameStore.gameplaySendCount();
       gameStore.endActivation();
+      cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): an unconfirmed Blitz end sends nothing - no cue
       return;
+    }
     case 'cancel-kick-em-nomination':
       // Owner 09-28 (Spec S3 v2 #3): cancel just the nomination — no wire, the activation stays live, and the
       // existing rail (syncKickEmTargetRail, called from clearKickEmBlitzNomination) re-arms the picker.
       gameStore.clearKickEmBlitzNomination();
+      playCancelCue();
       return;
     case 'abort-preview':
       clearO66Arms();
+      playCancelCue();
       return;
     case 'close-menu':
       if (decision.target === 'context') ctxMenu.visible = false;
@@ -10328,7 +10407,11 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       return;
     case 'clear-selection':
       // Astra r1 F2: a local commit whose declaration is still in flight is backed out with its (one) cancel.
-      if (gameStore.declarationInFlight()) { gameStore.cancelPlan(); gameStore.endActivation(); }
+      if (gameStore.declarationInFlight()) {
+        const sentBefore = gameStore.gameplaySendCount();
+        gameStore.cancelPlan(); gameStore.endActivation();
+        cancelCueIfSent(true, sentBefore); // the in-flight declaration is the action backed out
+      }
       gameStore.abandonQueuedDeclaration(); // Astra r4 F2: a declaration queued behind an unanswered cancel goes too
       renderer?.clearSelection();
       return;
@@ -12007,6 +12090,7 @@ onMounted(async () => {
               if (!combined || combined.length === 0) { return; }
               o66PendingMove.value = { dest: c, route: combined };
               setO66PathFromOrigin(from, combined, actingId);
+              playSound('plannerWaypoint'); // owner 10-19
               return;
             }
             const route = renderer?.o66AutoPath(actingId, c) ?? null;
@@ -12017,6 +12101,7 @@ onMounted(async () => {
             }
             o66PendingMove.value = { dest: c, route }; // preview
             setO66PathFromOrigin(from, route, actingId);
+            playSound('plannerWaypoint'); // owner 10-19
             return;
           }
           // Pass template targeting uses two-click nominate/confirm; changing the square re-nominates.
@@ -12137,6 +12222,7 @@ onMounted(async () => {
     if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
+    playCancelCue();
   };
   renderer.onContextMenu = openContextMenu;
   renderer.onMiddleClick = onPitchMiddleClick;
@@ -13673,14 +13759,39 @@ watch(() => mvpPick.value?.seq, (seq) => {
   if (typeof seq === 'number' && seq !== lastMvpPickSeq) { lastMvpPickSeq = seq; mvpRoundKey.value++; }
 });
 
+/** Whole seconds left on the turn clock (the same reading the clock shows). */
+const turnClockRemainingS = computed(() => {
+  const turnTime = gameStore.state.gameClock?.turnTime ?? (hud.value?.turnTime ?? 0);
+  return Math.max(0, Math.floor((turnLimitMs.value - turnTime) / 1000));
+});
+// Owner 10-19: my own turn clock warns at 1:00 left and counts each of the last ten seconds. Never on a finished game,
+// a replay or a catch-up fast-forward (playSound is muted there too).
+// Astra 10-19 (P2-3): only the SERVER's clock (state.gameClock) is a reading - never the model / 240 s fallback - and
+// the tracker treats the first reading of each turn (and the first after the reading was lost, e.g. a reconnect) as
+// initialisation, consuming each threshold once per turn.
+const turnClockCues = createTurnClockCueTracker();
+const turnClockCueReading = computed<{ key: string | null; seconds: number | null; sample: number | null }>(() => {
+  const g = gameStore.game.value;
+  const clock = gameStore.state.gameClock;
+  if (!g || !clock || gameOver.value || gameStore.isReplay.value || gameStore.playbackCatchingUp.value || !gameStore.isPlaying.value) return { key: null, seconds: null, sample: null };
+  return {
+    key: `${String((g as { gameId?: unknown }).gameId ?? '')}:${g.half ?? 0}:${g.turnDataHome?.turnNr ?? 0}:${g.turnDataAway?.turnNr ?? 0}`,
+    seconds: Math.max(0, Math.floor((turnLimitMs.value - clock.turnTime) / 1000)),
+    sample: clock.syncAt, // each SERVER_GAME_TIME is a new sample: a new turn starts from its own, never the carried-over one
+  };
+});
+watch(() => [turnClockCueReading.value.key, turnClockCueReading.value.seconds, turnClockCueReading.value.sample] as const, ([key, seconds, sample]) => {
+  const cue = turnClockCues.reading(key, seconds, gameStore.myTurn.value, sample);
+  if (cue === 'minute') playSound('turnClockMinute');
+  else if (cue === 'countdown') playSound('turnClockCountdown');
+});
 // Render raw SERVER_GAME_TIME snapshots; without a running flag, local extrapolation lies during pauses.
 const turnClock = computed(() => {
   if (gameOver.value) return null; // B9-12 G8: stop ticking once the game ends
   // #39 GC-1: turnTime is RAW-SNAPPED from the SERVER_GAME_TIME truth (state.gameClock) — never forward-smoothed.
   // The value re-snaps each ~1000ms tick (per-second stopwatch); pre-first-tick (gameClock null) falls back to the
   // model turnTime raw. No local extrapolation → it can never creep-then-snap when the server stops the turn timer.
-  const turnTime = gameStore.state.gameClock?.turnTime ?? (hud.value?.turnTime ?? 0);
-  const remaining = Math.max(0, Math.floor((turnLimitMs.value - turnTime) / 1000));
+  const remaining = turnClockRemainingS.value;
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
@@ -13888,6 +13999,8 @@ watch(() => [currentActingId(), gameStore.myTurn.value] as const, ([actingId, mi
     endTurnWarnCount.value = null; endTurnWarnBallAction.value = null; renderer?.clearUnactivatedCues();
   }
 });
+/** The confirmation kinds whose untouched form is a "Cancel ..." card (askEndActivation below). */
+const CANCEL_CARD_KINDS: ReadonlySet<EndActivationConfirmKind> = new Set(['blitz', 'handOver', 'pass', 'foul', 'punt']);
 function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
   // Astra P2 (10-09): the coach is ending; an open convert-to-Move question is moot and never shares the screen with this prompt.
   gameStore.retireGazeToMoveQuestionForEnd();
@@ -13896,10 +14009,13 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
   if (!endActivationConfirmEnabled(kind, settings)) {
     const actingNow = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     const direct = endActivationConfirmDecision({ origin, kind, rollPlayerId: gameStore.bigGuyActivateRollPlayerId(), actingId: actingNow, rollLabel: bigGuyRollEndLabel(gameStore.game.value, actingNow) });
+    const cancels = CANCEL_CARD_KINDS.has(kind) && endingCancelsAction(); // the card it skips would read "Cancel ..."
     endActConfirm.value = null;
     clearO66Arms();
     renderer?.clearSelection();
+    const sentBefore = gameStore.gameplaySendCount();
     gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: direct.roll });
+    cancelCueIfSent(cancels, sentBefore);
     return;
   }
   // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
@@ -13952,9 +14068,12 @@ function o66HasPlan(): boolean {
  *  real deselect is the implicit end-activation (a safe no-op when nothing is active). Shared with the pad's B. */
 function deselectByClickOff(): void {
   if (proneMenuJustDismissed()) return; // Astra r9 F1: this gesture only closed the prone-teammate menu
+  const cancels = endingCancelsAction();
   if (gameStore.declarationInFlight()) gameStore.cancelPlan(); // Astra r1 F2: the committed walk goes with the cancel
   renderer?.clearSelection();
+  const sentBefore = gameStore.gameplaySendCount();
   gameStore.endActivation(); // owner 10-15 P0 #2: sends only when a declaration of ours exists, and only once
+  cancelCueIfSent(cancels, sentBefore);
 }
 /** A held pan (right stick / WASD) won over the crosshair follow; on its release the follow runs again. */
 function refollowCrosshair(): void {
@@ -14018,12 +14137,20 @@ function requestEndActivation() {
   else if (st === 'PUNT') askEndActivation('punt');
   else if (ballAction) askEndActivation(ballAction);
   else if (gameStore.state.gazeIntent) askEndActivation('generic', 'explicit');
-  else gameStore.endActivation({ rollActivate: true }); // explicit End gesture: a held Activate intent rolls (Spec S15B)
+  else {
+    // owner 10-19: ending an untouched activation backs it out (a held Big Guy Activate intent ROLLS here instead)
+    const cancels = endingCancelsAction() && !gameStore.bigGuyActivateRollPlayerId();
+    const sentBefore = gameStore.gameplaySendCount();
+    gameStore.endActivation({ rollActivate: true }); // explicit End gesture: a held Activate intent rolls (Spec S15B)
+    cancelCueIfSent(cancels, sentBefore);
+  }
 }
 function confirmEndActivation() {
   if (endActConfirm.value && currentActingId() !== endActConfirmActingId) { endActConfirm.value = null; return; } // stale: send nothing
   const kind = endActConfirm.value?.kind;
   const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
+  // Owner 10-19: a "Cancel Blitz" etc. card; Astra r3: never over a step / block still unanswered.
+  const cancelsAction = !!endActConfirm.value?.confirmLabel?.startsWith('Cancel') && !gameStore.gameplaySendUnanswered();
   // Owner 10-08: this Yes is the coach's one confirmation for the back-out. The store spends it only on the server's
   // confirmEndAction for this same Hypnotic Gaze activation (an unused gaze), so the coach is not asked a second time.
   if (endActConfirm.value) gameStore.noteEndActivationConfirmed();
@@ -14031,7 +14158,9 @@ function confirmEndActivation() {
   endActConfirm.value = null;
   clearO66Arms();
   renderer?.clearSelection();
+  const sentBefore = gameStore.gameplaySendCount();
   gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: roll });
+  cancelCueIfSent(cancelsAction, sentBefore); // Astra r3: a refused (repeat) confirm stays silent
 }
 function cancelEndActivation() {
   // Owner punt-① (08-12): Declining "End your punt?" de-escalates the punt targeting back to the walk state

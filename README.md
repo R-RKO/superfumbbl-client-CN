@@ -162,7 +162,8 @@ the assets or putting them on merchandise, credit FUMBBL with a link and indicat
 - **Flaticon licence (attribution)** — American football helmet icon by justicon.
 - **Licensed purchases, use in the product only** — SakPix "Football Championship Megapack" (stadium props, in this
   tree as derivative crops); Acasas / unTied pitch textures via GameDev Market; The Sound Guild, Gamemaster Audio and
-  Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
+  Khron Studio sound libraries; "Retro SFX" by Andrea Baroni (Cyberleaf Studio), used unmodified. The textures and
+  library-derived sounds ship in the installer only.
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 - **KrisB block dice faces** — © Kristofer Bengtsson (KrisB), used with permission; not under the Super FUMBBL Media
   License (`packages/ffb-pitch/assets/blockdice-krisb/`, `apps/tauri/src/assets/blockdice-log-krisb/`).

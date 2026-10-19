@@ -597,7 +597,7 @@ function openTournamentNotification() {
   }));
   dismissTournamentNotification(notification.id);
 }
-import { SOUND_CATALOG, previewSound, invalidateSoundCache } from './game/sounds';
+import { SOUND_CATALOG, SOUND_STYLE_OFF, previewSound, invalidateSoundCache } from './game/sounds';
 import { commitMarkingStores, currentMarkingStores, invalidateMarkingsImports, normalizeMarkingStores, setTableMarker } from './game/markingRules';
 import SkillMarkingsSettings from './components/SkillMarkingsSettings.vue';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
@@ -1172,6 +1172,30 @@ const footstepStyle = computed({
   get: () => settings.soundStyles.step ?? 'tick',
   set: (value: string) => { settings.soundStyles.step = value; previewSound('step'); },
 });
+// Owner 10-19: the client-only UI cues. The waypoint picks one of five bundled sounds; every cue can be turned off.
+// 'on' = no stored style (the bundled default); 'off' = SOUND_STYLE_OFF, which playSound skips.
+const WAYPOINT_SOUND_OPTIONS = [
+  { value: 'generic13', label: 'Blip 1 (default)' },
+  { value: 'generic3', label: 'Blip 2' },
+  { value: 'generic11', label: 'Blip 3' },
+  { value: 'generic12', label: 'Blip 4' },
+  { value: 'generic14', label: 'Blip 5' },
+  { value: SOUND_STYLE_OFF, label: 'Off' },
+] as const;
+const waypointSound = computed({
+  get: () => settings.soundStyles.plannerWaypoint ?? 'generic13',
+  set: (value: string) => { settings.soundStyles.plannerWaypoint = value; previewSound('plannerWaypoint'); },
+});
+const UI_CUE_TOGGLES = [
+  { id: 'actionCancel', label: 'Cancel an action' },
+  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left' },
+  { id: 'turnClockCountdown', label: 'Turn clock: last 10 seconds' },
+  { id: 'rollFailed', label: 'Failed dice roll' },
+] as const;
+function uiCueOn(id: string): boolean { return settings.soundStyles[id] !== SOUND_STYLE_OFF; }
+function setUiCueOn(id: string, on: boolean): void {
+  if (on) { delete settings.soundStyles[id]; previewSound(id); } else settings.soundStyles[id] = SOUND_STYLE_OFF;
+}
 // Owner 2026-07-14: the "Dodge" row of AUTOMATIC SKILL USAGE — a checkbox view over the dodgeReroll field
 // (a re-roll, kept on its own proven path). On == 'auto' (auto-spend), off == 'manual' (prompt).
 const autoDodge = computed({
@@ -3627,6 +3651,17 @@ onBeforeUnmount(() => {
                 <option value="footsteps">Footsteps by weather</option>
               </select>
             </label>
+            <label class="row">
+              <span>Planner waypoint</span>
+              <select v-model="waypointSound" data-testid="waypoint-sound">
+                <option v-for="option in WAYPOINT_SOUND_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </label>
+            <label v-for="cue in UI_CUE_TOGGLES" :key="cue.id" class="row">
+              <span>{{ cue.label }}</span>
+              <input type="checkbox" :checked="uiCueOn(cue.id)" :data-testid="`ui-cue-${cue.id}`"
+                @change="setUiCueOn(cue.id, ($event.target as HTMLInputElement).checked)" />
+            </label>
             <p class="hint">Event-specific sound packs are managed in Art.</p>
           </fieldset>
         </section>
@@ -3682,7 +3717,7 @@ onBeforeUnmount(() => {
               </span>
             </li>
             <li><span>Pitch textures (grass, dugout stone) — Acasas and unTied, licensed via GameDev Market. Sign fans — licensed purchase.</span></li>
-            <li><span>Sound effects — The Sound Guild, Gamemaster Audio and Khron Studio libraries (licensed purchases), plus owner recordings.</span></li>
+            <li><span>Sound effects — The Sound Guild, Gamemaster Audio and Khron Studio libraries (licensed purchases), plus owner recordings. Planner, cancel, turn-clock and failed-roll cues — "Retro SFX" by Andrea Baroni (Cyberleaf Studio).</span></li>
             <li><span>Player sprites, star players, team crests and dugout cobble — original pixel art produced with PixelLab. Skill badges — Super FUMBBL originals; the illustrated set via Codex image generation.</span></li>
             <li>
               <span>Whirlpool Galaxy backdrop (the "Whirlpool Galaxy (Hubble)" backdrop option). Image: NASA, ESA, S. Beckwith (STScI), and The Hubble Heritage Team (STScI/AURA).

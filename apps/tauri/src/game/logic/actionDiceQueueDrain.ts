@@ -13,7 +13,7 @@ export function isPickupDieCause(cause: string | undefined): boolean {
 }
 
 /** One published batch (the store's `state.actionDice` / `state.actionDiceQueue` element). */
-export interface ActionDiceBatch { rolls: readonly ActionDieRoll[]; seq: number }
+export interface ActionDiceBatch { rolls: readonly ActionDieRoll[]; seq: number; /** Astra 10-19: each die's occurrence key (parallel to rolls). */ dieKeys?: readonly string[] }
 
 /** The renderer surface the drain reads (a subset of PitchRenderer). */
 export interface ActionDiceDrainRenderer {
@@ -46,7 +46,7 @@ export interface ActionDiceQueueDrainDeps {
   moverMoving?: (playerId: string) => boolean;
   /** Owner 10-09: batch `seq` is being shown, on screen in `msUntilShown` ms (camera pan / order floor). The store
    *  starts the die's read beat from this, not from an estimate. Not called for a batch that is dropped. */
-  onShown?: (seq: number, msUntilShown: number) => void;
+  onShown?: (seq: number, msUntilShown: number, rolls?: ActionDiceBatch['rolls'], dieKeys?: ActionDiceBatch['dieKeys']) => void;
   /** The bounded fail-open of that wait once nothing is moving the token any more (one step + a margin): a token the
    *  renderer never brings onto the square cannot hold the die longer than this. */
   arrivalGraceMs?: () => number;
@@ -73,7 +73,7 @@ export function createActionDiceQueueDrain(deps: ActionDiceQueueDrainDeps): Acti
     const wait = Math.max(0, ownWait, lastShowAt - now);
     lastShowAt = now + wait;
     deps.lifecycle.onDiceCue(batch.rolls, wait);
-    deps.onShown?.(batch.seq, wait);
+    deps.onShown?.(batch.seq, wait, batch.rolls, batch.dieKeys);
   };
   // seq -> pending pickup wait: with a queue, two pickup waits can overlap (one per batch). `showNow` flushes it.
   const pickupWaits = new Map<number, { timer: number; showNow: () => void; superseded?: (by: ActionDiceBatch) => void }>();

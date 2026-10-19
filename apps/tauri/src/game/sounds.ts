@@ -80,7 +80,20 @@ export const SOUND_CATALOG: SoundEntry[] = [
   { id: 'angel', label: 'Angel (Steady Footing save)', file: 'angel.ogg' },
   { id: 'chatToast', label: 'Chat toast', file: 'chatToast.ogg' },
   { id: 'setupPlace', label: 'Setup: player placed', file: 'setupPlace.ogg' },
+  // Owner 10-19: client-only UI cues (Cyberleaf Retro SFX, shipped unmodified inside the app: installer + app patches, owner 10-19). Each can be turned off
+  // (or, for the waypoint, swapped) in Settings › Sound via settings.soundStyles.
+  { id: 'plannerWaypoint', label: 'Planner: waypoint plotted', file: 'plannerWaypoint.wav' },
+  { id: 'actionCancel', label: 'Action cancelled', file: 'actionCancel.wav' },
+  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left', file: 'turnClockMinute.wav' },
+  { id: 'turnClockCountdown', label: 'Turn clock: last 10 seconds', file: 'turnClockCountdown.wav' },
+  { id: 'rollFailed', label: 'Failed roll', file: 'rollFailed.wav' },
 ];
+
+/** Owner 10-19: `settings.soundStyles[id] === SOUND_STYLE_OFF` silences that one event (Settings › Sound). */
+export const SOUND_STYLE_OFF = 'off';
+function soundEventOff(soundId: string): boolean {
+  return settings.soundStyles[soundId] === SOUND_STYLE_OFF;
+}
 
 const SOUND_IDS = new Set(soundEventIds);
 if (SOUND_CATALOG.length !== soundEventIds.length
@@ -311,7 +324,7 @@ export function onSoundCue(listener: (soundId: string) => void): () => void {
 }
 
 export function playSound(soundId: string | null | undefined): void {
-  if (!soundId || suppressed) return;
+  if (!soundId || suppressed || soundEventOff(soundId)) return;
   for (const listener of [...soundCueListeners]) {
     try { listener(soundId); } catch { /* presentation-only */ }
   }
@@ -342,6 +355,7 @@ export function playSound(soundId: string | null | undefined): void {
 /** Settings preview: play a sound at (at least audible) volume, ignoring mute so
  *  the user can hear a candidate override. */
 export function previewSound(soundId: string): void {
+  if (soundEventOff(soundId)) return;
   const src = sourceFor(soundId);
   if (!src) return;
   const audio = new Audio(src);

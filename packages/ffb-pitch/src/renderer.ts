@@ -4129,17 +4129,24 @@ export class PitchRenderer {
 
   /** Owner 10-19: SWOOP possible-path indicator (the Punt aim preview's Swoop twin). The host feeds six squares per
    *  line (swoopPathPreview / swoopLinePreview): one line per server-offered cardinal square while the coach picks a
-   *  direction, then the single rolled direction while the Swoop Direction / Distance reroll is offered. Squares past
-   *  the end zone / sideline are kept and flagged: the renderer draws an X in each, so the count of X tiles is the number
-   *  of distance results that end out of bounds. Visual-only (the click targets stay the Ball & Chain crosshairs on the
+   *  direction, then the single rolled direction while the Swoop Direction / Distance reroll is offered. On-pitch
+   *  squares get a chevron pointing the swoop direction; squares past the end zone / sideline are kept and flagged: the
+   *  renderer draws a red X in each, so the count of X tiles is the number of distance results that end out of bounds. Visual-only (the click targets stay the Ball & Chain crosshairs on the
    *  offered squares); null/[] clears. Drawn on overlayLayer in redrawOverlays. */
   private swoopPathFrom: Square | null = null;
   private swoopPaths: { square: Square; outOfBounds: boolean }[][] = [];
+  /** Owner 10-19: the Swoop Distance reroll window's server end square (destination marker, or red X off the pitch). */
+  private swoopDestination: { square: Square; outOfBounds: boolean } | null = null;
   /** The Graphics drawSwoopPaths added this redraw (excluded from readContentBounds). */
-  private swoopPreviewNodes: Graphics[] = [];
-  setSwoopPaths(from: Square | null, paths: { square: Square; outOfBounds: boolean }[][]): void {
+  private swoopPreviewNodes: Container[] = [];
+  setSwoopPaths(
+    from: Square | null,
+    paths: { square: Square; outOfBounds: boolean }[][],
+    destination: { square: Square; outOfBounds: boolean } | null = null,
+  ): void {
     this.swoopPathFrom = from;
     this.swoopPaths = from ? paths.filter((path) => path.length > 0) : [];
+    this.swoopDestination = from ? destination : null;
     this.redrawOverlays();
     // Astra P2: X tiles past the end zone / sideline lie outside the normal pitch clamp. While the indicator is up the
     // camera bounds include its extent (the coach can pan to count them); clearing it re-clamps to the normal bounds.
@@ -4150,7 +4157,7 @@ export class PitchRenderer {
   /** World-space box of every Swoop preview square (null when no indicator is up). */
   private swoopPreviewWorldBounds(): { x0: number; y0: number; x1: number; y1: number } | null {
     let box: { x0: number; y0: number; x1: number; y1: number } | null = null;
-    for (const path of this.swoopPaths) {
+    for (const path of [...this.swoopPaths, ...(this.swoopDestination ? [[this.swoopDestination]] : [])]) {
       for (const { square } of path) {
         for (const [x, y] of squareQuad(square[0], square[1]).points) {
           box = box
@@ -6481,6 +6488,7 @@ export class PitchRenderer {
     this.pendingTtmThrow.clear(); // LIVE TTM: a stale throw-flight cue must not leak games
     this.swoopPathFrom = null; // owner 10-19: a Swoop path indicator never leaks games (camera limits restore with it)
     this.swoopPaths = [];
+    this.swoopDestination = null;
     this.retirePassBallFlight(undefined, false);
     this.pendingBallThrow = null; // pass/punt: a stale ball throw-arc must not leak games
     this.passBallHold = null;
@@ -12846,44 +12854,109 @@ export class PitchRenderer {
     return null;
   }
 
-  /** Owner 10-19: draw the Swoop possible paths - a line from the swooping player along each direction, a projected
-   *  mark on every square it may reach (the furthest on-pitch square outlined) and an X in every square past the pitch
-   *  edge. Server-derived directions only; the host fixes each line at six squares. */
+  /** Owner 10-19 (after 1.0.245, owner: "a series of chevrons in each square ... rather than the straight line"): every
+   *  on-pitch square of a Swoop possible path carries ONE yellow chevron pointing the swoop direction (rotated per
+   *  direction in projected space, so cardinal and diagonal both read), sized like the other overlay glyphs (depth +
+   *  overlay zoom scale) over one uniform 30% yellow tile fill; every square past the pitch edge gets a red X only. No
+   *  origin-to-tip line. Server-derived directions only; the host fixes the possible distances. */
   private drawSwoopPaths(): void {
     this.swoopPreviewNodes = [];
     const from = this.swoopPathFrom;
-    if (!from || this.swoopPaths.length === 0) return;
-    const origin = squareAnchor(from[0], from[1]);
+    if (!from) return;
+    const factor = this.overlayZoomFactor();
+    // Owner 10-19 ("Roll 2 = Distance: destination marker"): the server's end square - a destination crosshair on the
+    // pitch (the pass-target marker's cyan crosshair), or the red X tile when the swoop ends in the crowd.
+    const destination = this.swoopDestination;
+    if (destination) {
+      const [dx, dy] = destination.square;
+      if (destination.outOfBounds) {
+        const crowd = new Graphics();
+        crowd.label = 'swoop-out-of-bounds';
+        this.drawSwoopCrowdTile(crowd, dx, dy);
+        this.overlayLayer.addChild(crowd);
+        this.swoopPreviewNodes.push(crowd);
+      } else {
+        const crosshair = this.buildPushCrosshair([dx, dy], 0x22d3ee, 1.08);
+        const marker = new Container();
+        marker.position.copyFrom(crosshair.position);
+        crosshair.position.set(0, 0);
+        crosshair.eventMode = 'none';
+        marker.addChild(crosshair);
+        marker.alpha = 0.95;
+        marker.eventMode = 'none';
+        marker.label = 'swoop-destination-marker';
+        this.overlayLayer.addChild(marker);
+        this.swoopPreviewNodes.push(marker);
+      }
+    }
     for (const path of this.swoopPaths) {
-      const end = path[path.length - 1];
-      if (!end) continue;
-      const lastOnPitch = [...path].reverse().find((entry) => !entry.outOfBounds);
-      const marks = new Graphics();
+      const first = path[0];
+      if (!first) continue;
+      // The direction of this path: the sign of (first square - swooper); the server-offered / rolled delta.
+      const delta: [number, number] = [Math.sign(first.square[0] - from[0]), Math.sign(first.square[1] - from[1])];
+      if (delta[0] === 0 && delta[1] === 0) continue;
+      const crowd = new Graphics();
+      crowd.label = 'swoop-out-of-bounds';
+      let crowdTiles = 0;
+      // Owner 10-19 ("Yellow fill with a 30% opacity is fine"): every on-pitch path square gets one uniform yellow tile
+      // fill under its chevron; off-pitch squares get the red X only.
+      const fills = new Graphics();
+      fills.label = 'swoop-path-fill';
+      let filled = 0;
       for (const { square: [x, y], outOfBounds } of path) {
-        const quad = squareQuad(x, y).points;
         if (!outOfBounds) {
-          marks.poly(quad.flat()).fill({ color: 0xffe066, alpha: lastOnPitch && lastOnPitch.square[0] === x && lastOnPitch.square[1] === y ? 0.34 : 0.2 });
+          fills.poly(squareQuad(x, y).points.flat()).fill({ color: 0xffe066, alpha: 0.3 });
+          filled++;
+        }
+      }
+      if (filled > 0) {
+        this.overlayLayer.addChild(fills);
+        this.swoopPreviewNodes.push(fills);
+      } else fills.destroy();
+      for (const { square: [x, y], outOfBounds } of path) {
+        if (outOfBounds) {
+          this.drawSwoopCrowdTile(crowd, x, y);
+          crowdTiles++;
           continue;
         }
-        // Out of bounds: a dim tile with an X corner to corner - that distance lands the player in the crowd.
-        marks.poly(quad.flat()).fill({ color: 0xff5a4a, alpha: 0.14 });
-        const [a, b, c, d] = quad as [[number, number], [number, number], [number, number], [number, number]];
-        const inset = (p: [number, number], q: [number, number]): [number, number] => [p[0] + (q[0] - p[0]) * 0.2, p[1] + (q[1] - p[1]) * 0.2];
-        const [a1, c1] = [inset(a, c), inset(c, a)];
-        const [b1, d1] = [inset(b, d), inset(d, b)];
-        marks.moveTo(a1[0], a1[1]).lineTo(c1[0], c1[1]).moveTo(b1[0], b1[1]).lineTo(d1[0], d1[1])
-          .stroke({ width: 3, color: 0xff5a4a, alpha: 0.9 });
+        // On the pitch: one chevron (^) at the square centre, its tip toward the next square along the direction.
+        const centre = squareAnchor(x, y);
+        const ahead = squareAnchor(x + delta[0], y + delta[1]);
+        const chevron = new Container();
+        chevron.label = 'swoop-chevron';
+        chevron.position.set(centre.x, centre.y);
+        chevron.rotation = Math.atan2(ahead.y - centre.y, ahead.x - centre.x) + Math.PI / 2; // local "up" = the direction
+        const halfW = TILE_W * 0.26;
+        const rise = TILE_W * 0.16;
+        const glyph = new Graphics()
+          .moveTo(-halfW, rise).lineTo(0, -rise).lineTo(halfW, rise)
+          .stroke({ width: 7, color: 0x000000, alpha: 0.45, cap: 'round', join: 'round' })
+          .moveTo(-halfW, rise).lineTo(0, -rise).lineTo(halfW, rise)
+          .stroke({ width: 4, color: 0xffe066, alpha: 0.95, cap: 'round', join: 'round' });
+        chevron.addChild(glyph);
+        const base = depthScale(x, y);
+        this.overlayBaseScale.set(chevron, base);
+        this.overlayScaleGroups.push(chevron);
+        chevron.scale.set(factor * base);
+        this.overlayLayer.addChild(chevron);
+        this.swoopPreviewNodes.push(chevron);
       }
-      if (lastOnPitch) {
-        marks.poly(squareQuad(lastOnPitch.square[0], lastOnPitch.square[1]).points.flat()).stroke({ width: 2, color: 0xffe066, alpha: 0.85 });
-      }
-      this.overlayLayer.addChild(marks);
-      const tip = squareAnchor(end.square[0], end.square[1]);
-      const line = new Graphics();
-      line.moveTo(origin.x, origin.y).lineTo(tip.x, tip.y).stroke({ width: 3, color: 0xffe066, alpha: 0.75 });
-      this.overlayLayer.addChild(line);
-      this.swoopPreviewNodes.push(marks, line);
+      if (crowdTiles > 0) {
+        this.overlayLayer.addChild(crowd);
+        this.swoopPreviewNodes.push(crowd);
+      } else crowd.destroy();
     }
+  }
+
+  /** Out of bounds: a red X corner to corner (no tile fill, owner 10-19) - that swoop distance lands the player in the crowd. */
+  private drawSwoopCrowdTile(g: Graphics, x: number, y: number): void {
+    const quad = squareQuad(x, y).points;
+    const [qa, qb, qc, qd] = quad as [[number, number], [number, number], [number, number], [number, number]];
+    const inset = (p: [number, number], q: [number, number]): [number, number] => [p[0] + (q[0] - p[0]) * 0.2, p[1] + (q[1] - p[1]) * 0.2];
+    const [a1, c1] = [inset(qa, qc), inset(qc, qa)];
+    const [b1, d1] = [inset(qb, qd), inset(qd, qb)];
+    g.moveTo(a1[0], a1[1]).lineTo(c1[0], c1[1]).moveTo(b1[0], b1[1]).lineTo(d1[0], d1[1])
+      .stroke({ width: 3, color: 0xff5a4a, alpha: 0.9 });
   }
 
   private drawJumpCrosshairs(): void {
@@ -16452,6 +16525,15 @@ export class PitchRenderer {
   /** Owner 2026-07-05: world→screen position of a pitch square's token, for
    *  anchoring DOM overlays (e.g. the skill-use toast) right at the action.
    *  Returns null when off-pitch or before the stage exists. */
+  /** Owner 10-19: screen position of any grid square, including one past the pitch edge (a Swoop that ends in the
+   *  crowd anchors its Distance reroll card on that square). screenPosOf keeps its on-pitch guard for every other use. */
+  screenPosOfSquare(square: [number, number]): { x: number; y: number } | null {
+    if (!this.app) return null;
+    const tp = this.tokenPos(square[0], square[1]);
+    const scale = this.world.scale.x;
+    return { x: this.world.position.x + tp.x * scale, y: this.world.position.y + tp.y * scale };
+  }
+
   screenPosOf(square: [number, number]): { x: number; y: number } | null {
     if (!this.app || !isOnPitch(square)) return null;
     const tp = this.tokenPos(square[0], square[1]);

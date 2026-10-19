@@ -145,6 +145,53 @@ export function swoopRolledDirection(
   return delta ? [delta[0], delta[1]] : null;
 }
 
+/** The Swoop reroll window the server has parked for the acting swooper ("Swoop Direction" / "Swoop Distance"), or
+ * null: not swooping, another dialog, this seat already answered it, or the flight has started (IN_THE_AIR). */
+export function swoopRerollWindow(
+  game: GameJson | null | undefined,
+  answered = false,
+): 'Swoop Direction' | 'Swoop Distance' | null {
+  const acting = game?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  const actingId = String(acting?.playerId ?? '');
+  if (!game || answered || !actingId || String(acting?.playerAction ?? '') !== 'swoop') return null;
+  const dialog = game.dialogParameter as { dialogId?: string; playerId?: string; reRolledAction?: string } | null | undefined;
+  const action = String(dialog?.reRolledAction ?? '');
+  if (String(dialog?.dialogId ?? '') !== 'reRollProperties' || String(dialog?.playerId ?? '') !== actingId
+      || !SWOOP_ROLL_REROLLED_ACTIONS.has(action)) return null;
+  const swooper = (game.fieldModel?.playerDataArray ?? []).find((d) => d.playerId === actingId);
+  if (!swooper?.playerCoordinate || ((swooper.playerState ?? 0) & 0xff) === PLAYER_STATE_IN_THE_AIR) return null;
+  return action as 'Swoop Direction' | 'Swoop Distance';
+}
+
+/** Owner 10-19 ("Roll 2 = Distance: destination marker should be drawn here with the reroll prompt at the location"):
+ * the server's swoop end square while the Swoop Distance reroll is offered. Server truth = the swoopPlayer report
+ * (start must be the swooper's square), cross-checked with the single move square the server adds on the end square
+ * when it is on the pitch (StepInitScatterPlayer: MoveSquare at lastValidCoordinate). Out of bounds: the report's
+ * off-pitch end square, flagged (drawn as the red X), only when no move square is live. A disagreeing report and move
+ * square draw nothing; an on-pitch report with no move square draws nothing (the server always adds one). */
+export function swoopDistanceDestination(
+  game: GameJson | null | undefined,
+  from: readonly [number, number] | null,
+  report: { start: [number, number]; end: [number, number]; outOfBounds: boolean } | null | undefined,
+): SwoopPathSquare | null {
+  if (!game || !from) return null;
+  const markers = ((game.fieldModel as { moveSquareArray?: { coordinate?: [number, number] }[] } | undefined)?.moveSquareArray ?? [])
+    .map((m) => m.coordinate).filter((c): c is [number, number] => Array.isArray(c));
+  const marker = markers.length === 1 ? markers[0]! : null;
+  const fresh = report && report.start[0] === from[0] && report.start[1] === from[1] ? report : null;
+  // Astra P3: the live move square is the current server truth. With one present, a report is accepted only when it
+  // names that very square (a retained [15,8]->[28,8] report never overrides a current [21,8] marker); an off-pitch
+  // report is accepted only when no move square contradicts it.
+  if (marker) {
+    if (!onPitch(marker[0], marker[1])) return null;
+    if (fresh && (fresh.outOfBounds || fresh.end[0] !== marker[0] || fresh.end[1] !== marker[1])) return null;
+    return { square: [marker[0], marker[1]], outOfBounds: false };
+  }
+  if (!fresh) return null;
+  const [x, y] = fresh.end;
+  return fresh.outOfBounds || !onPitch(x, y) ? { square: [x, y], outOfBounds: true } : null;
+}
+
 export interface SwoopIndicatorInputs {
   /** The live server model. */
   game: GameJson | null | undefined;
@@ -154,6 +201,8 @@ export interface SwoopIndicatorInputs {
   from: [number, number] | null;
   /** The swoopDirectionRoll report direction (store `ballDirection`). */
   reportedDirection: { playerId: string; direction: string } | null | undefined;
+  /** The swoopPlayer report (store `swoopDestination`). */
+  reportedDestination?: { start: [number, number]; end: [number, number]; outOfBounds: boolean } | null;
   /** This seat already answered the live dialog occurrence. */
   dialogAnswered: boolean;
   /** Client state is SWOOP. */
@@ -166,17 +215,34 @@ export interface SwoopIndicatorInputs {
   flightCueForActing: boolean;
 }
 
-/** The view's whole Swoop indicator gate (SpectateView feeds it reactive state). Two server-derived windows:
- *  - the PICK: SWOOP state, StepSwoop's cardinal offers live (>= 2), no reroll card up - one line per offer;
- *  - the ROLL: the Swoop Direction / Distance reroll offer, until answered or the flight starts - the rolled line.
- * Every line marks the possible distances of the server's swoopDistance option. Null = cleared. */
-export function swoopIndicator(inputs: SwoopIndicatorInputs): { from: [number, number]; paths: SwoopPathSquare[][] } | null {
+export interface SwoopIndicator {
+  from: [number, number];
+  /** Chevron paths (the pick, and the Swoop Direction window). */
+  paths: SwoopPathSquare[][];
+  /** The Swoop Distance window: the server's end square (marker / red X), also the reroll card's anchor. */
+  destination: SwoopPathSquare | null;
+}
+
+/** The view's whole Swoop indicator gate (SpectateView feeds it reactive state). Three server-derived windows:
+ *  - the PICK: SWOOP state, StepSwoop's cardinal offers live (>= 2), no reroll card up - one chevron path per offer;
+ *  - Roll 1, the Swoop Direction reroll offer: the chevron path along the rolled direction;
+ *  - Roll 2, the Swoop Distance reroll offer: NO path - the destination marker on the server's end square.
+ * Both roll windows end once this seat has answered the offer or the flight has started. Paths mark the possible
+ * distances of the server's swoopDistance option. Null = cleared. */
+export function swoopIndicator(inputs: SwoopIndicatorInputs): SwoopIndicator | null {
   const { game, from } = inputs;
   if (!game || !inputs.coaching || !from || inputs.flightCueForActing) return null;
+  const window = swoopRerollWindow(game, inputs.dialogAnswered);
+  if (window === 'Swoop Distance') {
+    const destination = swoopDistanceDestination(game, from, inputs.reportedDestination);
+    return destination ? { from, paths: [], destination } : null;
+  }
   const distances = swoopDistanceOutcomes(game);
-  const rolled = swoopRolledDirection(game, inputs.reportedDirection, inputs.dialogAnswered);
-  if (rolled) return { from, paths: [swoopLinePreview(from, rolled, distances)] };
+  if (window === 'Swoop Direction') {
+    const rolled = swoopRolledDirection(game, inputs.reportedDirection, inputs.dialogAnswered);
+    return rolled ? { from, paths: [swoopLinePreview(from, rolled, distances)], destination: null } : null;
+  }
   if (!inputs.swoopState || inputs.reRollPromptUp || inputs.offers.length < 2) return null;
   const paths = swoopPathPreview(from, inputs.offers, distances);
-  return paths.length ? { from, paths } : null;
+  return paths.length ? { from, paths, destination: null } : null;
 }

@@ -489,7 +489,7 @@ fn sound_event_ids() -> Option<&'static HashSet<String>> {
     IDS.get_or_init(|| {
         let values: Vec<String> = serde_json::from_str(SOUND_EVENT_IDS_JSON).ok()?;
         let ids: HashSet<_> = values.iter().cloned().collect();
-        (ids.len() == 45
+        (ids.len() == 50 // owner 10-19: + the five client-only UI cues
             && ids.len() == values.len()
             && values.iter().all(|value| valid_sound_event_syntax(value)))
         .then_some(ids)

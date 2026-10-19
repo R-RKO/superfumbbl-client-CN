@@ -92,5 +92,19 @@
   "boing": "boing.ogg",
   "angel": "angel.ogg",
   "chatToast": "chatToast.ogg",
-  "setupPlace": "setupPlace.ogg"
+  "setupPlace": "setupPlace.ogg",
+  "plannerWaypoint": {
+    "styles": {
+      "generic13": "plannerWaypoint/generic13.wav",
+      "generic3": "plannerWaypoint/generic3.wav",
+      "generic11": "plannerWaypoint/generic11.wav",
+      "generic12": "plannerWaypoint/generic12.wav",
+      "generic14": "plannerWaypoint/generic14.wav"
+    },
+    "default": "generic13"
+  },
+  "actionCancel": "actionCancel.wav",
+  "turnClockMinute": "turnClockMinute.wav",
+  "turnClockCountdown": "turnClockCountdown.wav",
+  "rollFailed": "rollFailed.wav"
 }

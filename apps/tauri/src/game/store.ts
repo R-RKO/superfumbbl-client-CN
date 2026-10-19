@@ -527,7 +527,9 @@ function noteChatGame(url: string, coach: string, gameId: unknown): void {
 
 const spectatorPublication = new SpectatorPublication();
 /** One published action-dice batch (`state.actionDice` / an `state.actionDiceQueue` element). */
-type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean; disturbingPresence?: number }[]; seq: number };
+type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean; disturbingPresence?: number }[]; seq: number;
+  /** Astra 10-19 (P2-2): each die's occurrence (server command + its place in that frame), parallel to `rolls`; absent = unknown. */
+  dieKeys?: string[] };
 /** Owner 10-06 (spec-dice-queue): the queue only bridges one tick to the view's drain; cap it so an unmounted view
  *  (lobby, headless tests) cannot grow it without bound. */
 const ACTION_DICE_QUEUE_CAP = 16;
@@ -1139,6 +1141,9 @@ const legacyState = reactive({
   } | null,
   /** #141: punt/swoop DIRECTION (wire Report{Punt,Swoop}Direction) → Voss draws a direction arrow (#122 renderer). Presentation-only; cleared on game-change. */
   ballDirection: null as { playerId: string; direction: string; seq: number } | null,
+  /** Owner 10-19: the last swoopPlayer report (ReportSwoopPlayer: start/end coordinate, outOfBounds) - the Swoop
+   *  Distance reroll window's destination marker and card anchor. Decision data, cleared on game change. */
+  swoopDestination: null as { start: [number, number]; end: [number, number]; outOfBounds: boolean; seq: number } | null,
   /** Owner 07-08: Hypnotic-Gaze victims → 👁 marker (not the generic '?'); pruned to still-confused; per game. */
   gazeVictims: [] as string[],
   /** W40: menu-declared gaze intent. Owner 10-08: Modern names no victim at declare - the activation is live on the
@@ -1481,7 +1486,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
   'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
   'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
-  'kickDescend', 'kickClearSeq', 'throwAnim', 'scatterAnim', 'ballOut', 'ballCatch', 'ballDirection',
+  'kickDescend', 'kickClearSeq', 'throwAnim', 'scatterAnim', 'ballOut', 'ballCatch', 'ballDirection', 'swoopDestination',
   'bombBlast', 'fireballAnim', 'zapAnim', 'leap', 'leapFail', 'trickster', 'crowdSurf',
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
@@ -1569,8 +1574,8 @@ let actionDiceClearEpoch = 0;
  *  and BEFORE the batch reaches reactive state - so its show waiter exists before any watcher (the view's dice drain,
  *  which reports the show synchronously) can possibly run. Allocate id -> register waiter -> publish, one step. */
 const actionDicePublicationHooks = new WeakMap<object, (batch: ActionDiceBatchState) => void>();
-function publishActionDice(rolls: ActionDiceBatchState['rolls']): void {
-  const batch: ActionDiceBatchState = { rolls, seq: ++actionDiceBatchSeq };
+function publishActionDice(rolls: ActionDiceBatchState['rolls'], dieKeys?: string[]): void {
+  const batch: ActionDiceBatchState = { rolls, seq: ++actionDiceBatchSeq, ...(dieKeys && dieKeys.length === rolls.length ? { dieKeys } : {}) };
   const hook = actionDicePublicationHooks.get(rolls);
   if (hook) { actionDicePublicationHooks.delete(rolls); hook(batch); }
   state.actionDice = batch;
@@ -3392,6 +3397,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   // #140 (owner concede item): defected players — captured from ReportDefectingPlayers, surfaced below.
   // #141 (owner ball-flight item): punt/swoop direction — captured from Report{Punt,Swoop}Direction, surfaced below.
   let ballDir: { playerId: string; direction: string } | null = null;
+  let swoopDest: { start: [number, number]; end: [number, number]; outOfBounds: boolean } | null = null;
   // #169 (owner v0.3.9): end-of-match results — winnings (ReportWinnings) + the BB2025 dedicated-fans roll (ReportDedicatedFans, mixed/end); captured here, merged into state.endGameStats below.
   let weatherMageResult: { roll: number[]; weather: string } | null = null;
   for (const report of reports) {
@@ -3499,6 +3505,13 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       const pid = String(report.playerId ?? '');
       const dir = String(report.direction ?? '');
       if (pid && dir) ballDir = { playerId: pid, direction: dir };
+    } else if (id === 'swoopPlayer') {
+      // Owner 10-19: ReportSwoopPlayer (StepInitScatterPlayer.swoop) - the server's distance result for the swoop.
+      const start = report.startCoordinate as unknown;
+      const end = report.endCoordinate as unknown;
+      if (Array.isArray(start) && Array.isArray(end) && start.length >= 2 && end.length >= 2) {
+        swoopDest = { start: [Number(start[0]), Number(start[1])], end: [Number(end[0]), Number(end[1])], outOfBounds: report.outOfBounds === true };
+      }
     }
   }
   state.gazeVictims = reduceGazeVictims(state.gazeVictims, reports, g);
@@ -3736,6 +3749,16 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   // #141 (owner ball-flight): surface the punt/swoop direction for Voss's direction arrow (view-watches .seq).
   if (ballDir && !suppressPresentation) {
     state.ballDirection = { ...ballDir, seq: (state.ballDirection?.seq ?? 0) + 1 };
+  }
+  if (swoopDest) state.swoopDestination = { ...swoopDest, seq: (state.swoopDestination?.seq ?? 0) + 1 };
+  else if (state.swoopDestination) {
+    // Astra P3: the distance result is only meaningful while its Swoop Distance offer is up and nobody is in the air yet.
+    // Withdrawn / replaced dialog, the flight's throwTeamMate animation, or a new declaration retire it.
+    const dialog = g.dialogParameter as { dialogId?: string; reRolledAction?: string } | null | undefined;
+    const distanceOffer = String(dialog?.dialogId ?? '') === 'reRollProperties' && String(dialog?.reRolledAction ?? '') === 'Swoop Distance';
+    const animationType = String((cmd as { animation?: { animationType?: unknown } | null } | undefined)?.animation?.animationType ?? '');
+    const declared = reports.some((report) => String(report.reportId ?? '') === 'playerAction');
+    if (!distanceOffer || animationType === 'throwTeamMate' || animationType === 'kickTeamMate' || declared) state.swoopDestination = null;
   }
 
 }
@@ -9941,7 +9964,13 @@ function applyFrameContents(frame: QueuedFrame) {
     }
     const pushDice = (batch: typeof firstRolls) => {
       if (batch.length === 0) return;
-      const surface = () => { publishActionDice(batch); };
+      // Astra 10-19 (P2-2): a die's occurrence = its server command + its place among that frame's first / rerolled rolls,
+      // so a re-published die is recognisable (the failed-roll cue sounds once per occurrence).
+      const commandNr = Number((cmd as { commandNr?: unknown }).commandNr);
+      const dieKeys = Number.isFinite(commandNr)
+        ? batch.map((die) => (firstRolls.includes(die) ? `${commandNr}:f${firstRolls.indexOf(die)}` : `${commandNr}:r${reRolledRolls.indexOf(die)}`))
+        : undefined;
+      const surface = () => { publishActionDice(batch, dieKeys); };
       const surfaceNow = () => { if (!fireballSpellEffect || !enqueueBehindFireball(`fireballRoll:${String((cmd as { commandNr?: unknown }).commandNr)}`, surface)) surface(); };
       if (gazeDeclared && !playback.catchingUp && batch.some((die) => die.cause === 'gaze')) {
         holdPlayback(presentationMs(GAZE_REVEAL_MS));
@@ -12158,7 +12187,11 @@ function forceSnapshotTick() {
   try { applyFrame({ cmd, receivedAt: Date.now() }); } catch (e) { console.error('[play] snapshot tick error:', e); }
   state.snapshotEpoch += 1;
 }
+/** Astra confirmation 10-19 (P3): bumped by every playback reset (live snapshot, reconnect, seek, fresh game) so the
+ *  view can drop presentation timers of its own that the reset does not reach (the failed-roll sound). */
+const playbackResetRev = ref(0);
 function resetPlayback() {
+  playbackResetRev.value += 1;
   // Owner 10-13 (Astra): the block reroll re-tumble state never crosses a reset (disconnect, reconnect, a fresh game or
   // seat: SERVER_GAME_STATE resets here), so a die chosen before it cannot steer a later observed reroll.
   ownBlockRerollIndices = null;
@@ -12273,6 +12306,7 @@ function resetPlayback() {
   state.penaltyShootout = null;
   penaltyShootoutPresentationState = { ...EMPTY_PENALTY_SHOOTOUT_PRESENTATION };
   state.ballDirection = null; // #141: no stale punt/swoop direction across games / reconnects
+  state.swoopDestination = null; // owner 10-19: nor a stale Swoop distance result
   lastSentPushKey = ''; // g330 #11: fresh game — drop the stale-push guard
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
   state.ttmRailTerminal = null; // fresh game/reconnect — no historical landing may retire a new rail
@@ -12349,6 +12383,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.defectors = null; // #140: flush the defector list on a game change
   state.endGameStats = null; // #169: flush the end-of-match results on a game change
   state.ballDirection = null; // #141: flush the punt/swoop direction on a game change
+  state.swoopDestination = null; // owner 10-19: and the Swoop distance result
 
   state.gazeVictims = []; // owner 2026-07-08: fresh game — clear gaze-victim markers
   state.fanFactorCine = null; state.inducementReveal = null; state.apothecaryChoice = null;
@@ -12814,6 +12849,9 @@ let bigGuyActivateIntent: BigGuyActivateIntent | null = null;
 /** Astra 10-10: a gameplay command went out and no server frame has been applied since. The model on screen may be
  *  about to change (a sent Jump reads unmoved until the reply), so the End row must not promise a cancel. */
 let gameplaySendUnanswered = false;
+/** Owner 10-19 (Astra r2): every gameplay command that actually left, counted - a view compares it across a call to
+ *  learn whether that call sent anything (a refused end sends nothing). Presentation-only, never reset. */
+let gameplaySendCount = 0;
 /** S42: the Foul / Chainsaw row the coach picked for THIS activation (the server has one foul declare; the chainsaw is
  *  the `usingChainsaw` flag on the terminal clientFoul). Client-held: armed at the declaration's wire boundary,
  *  carried by the terminal command, dropped when the activation ends or is cancelled (any change of acting player or
@@ -19411,7 +19449,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
     // send). Always-allowed commands (concede, time-out call, chat, ping ...) say nothing about the activation.
-    if (!ALWAYS_ALLOWED_COMMANDS.has(String(cmd.netCommandId ?? ''))) { bigGuyActivateIntent = null; gameplaySendUnanswered = true; }
+    if (!ALWAYS_ALLOWED_COMMANDS.has(String(cmd.netCommandId ?? ''))) { bigGuyActivateIntent = null; gameplaySendUnanswered = true; gameplaySendCount += 1; }
     return true;
   } catch (e) {
     // connection dropped between the state update and the send — ignore.
@@ -25555,6 +25593,8 @@ export const gameStore = {
   },
   /** M4.2: true when joined as a PLAYER (real commands), not a spectator/demo. */
   isPlaying: computed(() => play.active),
+  /** Astra confirmation 10-19 (P3): increments on every playback reset (see resetPlayback). */
+  playbackResetRev: computed(() => playbackResetRev.value),
   /** Strict seat for ownership presentation/decision gates; null on missing or ambiguous coach identity. */
   blockPresentationSeat: computed<'home' | 'away' | null>(() => blockPresentationSeat(game.value)),
   /** #157-v2 (owner 08-18): which SEAT the local coach occupies, or null when there is no seat
@@ -27844,6 +27884,7 @@ export const gameStore = {
   },
   /** True from an accepted gameplay send until the next applied server frame (the End row label reads it). */
   gameplaySendUnanswered(): boolean { return gameplaySendUnanswered; },
+  gameplaySendCount(): number { return gameplaySendCount; },
 
   /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent.
    *  No victim is named here (owner 10-08): the server echo makes the activation live and the victim is picked later. */
