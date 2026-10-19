@@ -2183,14 +2183,16 @@ function syncMoveRollHeldBacklog(): void {
   if (playback.queue.length === 0) moveRollHeldBacklog = false;
   // Astra confirmation of 37aec0877 (MAJOR): a frame queued behind a TTM flight / bounce latches the backlog too, so the
   // lock stays closed after the hold expires until the held frames have DRAINED (pumpPlayback applies one per step).
-  else if (moveRollHoldActive() || (ttmPresentationHoldUntil !== 0 && Date.now() < ttmPresentationHoldUntil)) moveRollHeldBacklog = true;
+  else if (moveRollHoldActive() || (ttmPresentationHoldUntil !== 0 && Date.now() < ttmPresentationHoldUntil)
+    // Owner 10-19 (Astra round 2): frames held behind a Swoop landing reroll leave the board just as stale.
+    || landingRerollHoldActive()) moveRollHeldBacklog = true;
   // Owner 10-13 (Astra MAJOR 1): a thrown team-mate in the air holds the End Turn button too (its wake re-syncs).
   const busy = moveRollHeldBacklog || ttmHoldActive();
   if (state.moveRollHoldBusy !== busy) state.moveRollHoldBusy = busy;
 }
 /** Every command producer stands down while frames wait behind a movement-roll hold or a TTM flight / bounce. */
 function presentationHoldBlocksActions(): boolean {
-  return moveRollHoldQueued() || ttmHoldActive();
+  return moveRollHoldQueued() || ttmHoldActive() || (landingRerollHoldActive() && playback.queue.length > 0);
 }
 function rescuedMoveHoldWaitMs(): number {
   if (rescuedMoveHoldUntil === 0) return 0;
@@ -9971,6 +9973,14 @@ function applyFrameContents(frame: QueuedFrame) {
       // stage below then sets the exact one.
       const anchored = !!moveReroll && hasFail && !!firstBatch;
       const failOpenMs = anchored ? actionDiceShownFailOpenMs(rr.pid) : null;
+      // Owner 10-19 (g1060 Swoop landing): a landing roll rerolled INSIDE its own frame (Swoop's automatic Right Stuff
+      // reroll: rightStuffRoll failed + reRoll + rightStuffRoll reRolled) is followed within ms by the landing's own
+      // knock-down, injury and apothecary offer. In play the generic holdPlayback below is a no-op, so those frames
+      // applied with the first die: the armour roll and the apothecary card landed on top of the failed die, before the
+      // Swoop toast and the rerolled die. Hold the frames behind this one (every seat) until the rerolled die has read -
+      // a receive-gate hold (landingRerollHoldWaitMs), so it also stops a frame that arrives after the queue drained.
+      const landingRerolled = !playback.catchingUp && reRolledRolls.length > 0 && reports.some((r) =>
+        String(r.reportId) === 'rightStuffRoll' && r.reRolled === true && String(r.playerId ?? '') === rr.pid);
       if (anchored && failOpenMs !== null) {
         const provisional = Date.now() + failOpenMs + presentationMs(RESCUED_MOVE_ROLL_HOLD.failReadMs + RESCUED_MOVE_ROLL_HOLD.resultReadMs);
         if (rescuedMove) { rescuedMoveHoldUntil = Math.max(rescuedMoveHoldUntil, provisional); rescuedMoveFloorUntil = Math.max(rescuedMoveFloorUntil, provisional); }
@@ -10006,6 +10016,7 @@ function applyFrameContents(frame: QueuedFrame) {
           repumpPlaybackAfterHoldChange();
         };
         holdPlayback(rescuedMove ? rescuedHold : moveReroll ? failBeat + presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs) : failBeat + resultBeat);
+        if (landingRerolled) armLandingRerollHold(failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS));
         if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw, rr.proRescuedBy), failBeat));
         // B2 / R1: the rerolled die's read is anchored on ITS show. The waiter is registered by the publication hook,
         // inside publishActionDice and before the batch reaches reactive state, so the view's report cannot precede it.
@@ -11383,6 +11394,7 @@ function pumpPlayback() {
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
     if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); }
+    retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
       playback.timer = null;
       const frame = playback.queue.shift();
@@ -11397,6 +11409,7 @@ function pumpPlayback() {
     setSoundsSuppressed(false);
     clearCatchupTransients();
     playback.holdUntil = 0;
+    retireLandingRerollHoldForCatchup(); // Astra round 2: retire a stale landing-reroll hold at the live tail too
     pumpApothecaryFixUps(); // wake a fix-up line that was retained through the catch-up
     // Historical prayer occurrences stay suppressed, but a dialog still authoritative at the live tail must mount
     // once, read-only or interactive as appropriate.
@@ -11436,6 +11449,14 @@ function pumpPlayback() {
   const ttmWait = ttmPresentationWaitMs();
   if (ttmWait > 0) {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, ttmWait);
+    return;
+  }
+  // Owner 10-19: a landing roll rerolled in its own frame (Swoop) reads before its fall / injury / apothecary apply.
+  const landingRerollWait = landingRerollHoldWaitMs();
+  if (landingRerollWait > 0) {
+    const timer = scheduleGameTimeout(() => { if (landingRerollTimer === timer) landingRerollTimer = null; playback.timer = null; pumpPlayback(); }, landingRerollWait);
+    playback.timer = timer;
+    landingRerollTimer = timer;
     return;
   }
   // Owner 10-09: a movement roll rescued by a reroll is shown before the rest of the path is applied (every seat).
@@ -11735,6 +11756,37 @@ function ttmPresentationWaitMs(): number {
   const remaining = playback.catchingUp ? 0 : ttmPresentationHoldUntil - Date.now();
   if (remaining > 0) return remaining;
   ttmPresentationHoldUntil = 0;
+  return 0;
+}
+/** Owner 10-19 (g1060 Swoop landing): the frames behind a landing roll rerolled inside its own frame wait until the
+ *  rerolled die has read. Part of the live receive gate (enqueueSync) and the drain (pumpPlayback); bounded by its own
+ *  deadline and a hard cap (fail-open), never across a reset / catch-up. */
+const LANDING_REROLL_HOLD_CAP_MS = 6000;
+let landingRerollHoldUntil = 0;
+let landingRerollTimer: ReturnType<typeof scheduleGameTimeout> | null = null;
+/** Astra round 2 (P2): a backlog past the catch-up threshold retires the landing hold - including its pending drain
+ *  timer, which would otherwise keep the fast-forward from starting until the stale deadline. */
+function retireLandingRerollHoldForCatchup(): void {
+  landingRerollHoldUntil = 0;
+  if (landingRerollTimer !== null && playback.timer === landingRerollTimer) {
+    cancelGameTimeout(playback.timer);
+    playback.timer = null;
+  }
+  landingRerollTimer = null;
+}
+function armLandingRerollHold(ms: number): void {
+  if (playback.catchingUp) return;
+  const until = Date.now() + Math.min(Math.max(0, ms), LANDING_REROLL_HOLD_CAP_MS);
+  landingRerollHoldUntil = Math.max(landingRerollHoldUntil, until);
+}
+function landingRerollHoldActive(): boolean {
+  return landingRerollHoldUntil !== 0 && !playback.catchingUp && Date.now() < landingRerollHoldUntil;
+}
+function landingRerollHoldWaitMs(): number {
+  if (landingRerollHoldUntil === 0) return 0;
+  const remaining = playback.catchingUp ? 0 : landingRerollHoldUntil - Date.now();
+  if (remaining > 0) return remaining;
+  landingRerollHoldUntil = 0;
   return 0;
 }
 let bombFlightHoldUntil = 0;
@@ -12066,11 +12118,12 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
       && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && ttmPresentationWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
-      && failedMoveHoldWaitMs() === 0) {
+      && failedMoveHoldWaitMs() === 0 && landingRerollHoldWaitMs() === 0) {
     applyFrame(frame);
     return;
   }
   playback.queue.push(frame);
+  if (playback.queue.length > CATCHUP_FRAMES && landingRerollHoldUntil !== 0) retireLandingRerollHoldForCatchup();
   pendingFollowupWake?.(); // owner 10-13: the frame that resolves a pending follow/stay may just have arrived
   syncMoveRollHeldBacklog(); // Astra P2-1 / R2: held from here until the whole queue has drained
   // Astra 10-09: a server prompt queued behind a movement-roll hold shortens it (queuedPromptSince) - re-evaluate now.
@@ -12114,6 +12167,8 @@ function resetPlayback() {
   lastMultiBlockDialog = null;
   rockThrowResolveStartedAt = null;
   bombFlightHoldUntil = 0;
+  landingRerollHoldUntil = 0; // owner 10-19: the Swoop landing reroll hold never crosses a reset / seek / snapshot
+  landingRerollTimer = null;
   clearTtmPresentationHold(); // owner 10-13: the TTM flight / bounce hold never crosses a reset / seek / snapshot
   ttmFlightThrownId = '';
   rescuedMoveHoldUntil = 0;
@@ -25537,6 +25592,9 @@ export const gameStore = {
   /** Owner 2026-07-09 (C1): is this player id one the LOCAL coach may control RIGHT NOW
    *  (owned + my turn + playing)? The view gates selection/menus on this. */
   iControl: (playerId: string) => iControlPlayer(playerId),
+  /** Owner 10-19 (Swoop indicator): this seat has already answered the live server dialog occurrence (the server keeps
+   *  it until its next step). Not reactive on its own: read it next to `state.reRollPrompt`, which answering clears. */
+  liveDialogAnswered: (): boolean => dialogAlreadyAnswered(),
   /** A dismissible pre-game/kick-off cinematic is on screen (drives the click-to-skip catcher). Prayer
    *  announcements share the queue but deliberately never enter this legacy/cinematic affordance. */
   cineShowing: computed(() => isDismissibleCineShowing()),

@@ -4127,6 +4127,41 @@ export class PitchRenderer {
     this.redrawOverlays();
   }
 
+  /** Owner 10-19: SWOOP possible-path indicator (the Punt aim preview's Swoop twin). The host feeds six squares per
+   *  line (swoopPathPreview / swoopLinePreview): one line per server-offered cardinal square while the coach picks a
+   *  direction, then the single rolled direction while the Swoop Direction / Distance reroll is offered. Squares past
+   *  the end zone / sideline are kept and flagged: the renderer draws an X in each, so the count of X tiles is the number
+   *  of distance results that end out of bounds. Visual-only (the click targets stay the Ball & Chain crosshairs on the
+   *  offered squares); null/[] clears. Drawn on overlayLayer in redrawOverlays. */
+  private swoopPathFrom: Square | null = null;
+  private swoopPaths: { square: Square; outOfBounds: boolean }[][] = [];
+  /** The Graphics drawSwoopPaths added this redraw (excluded from readContentBounds). */
+  private swoopPreviewNodes: Graphics[] = [];
+  setSwoopPaths(from: Square | null, paths: { square: Square; outOfBounds: boolean }[][]): void {
+    this.swoopPathFrom = from;
+    this.swoopPaths = from ? paths.filter((path) => path.length > 0) : [];
+    this.redrawOverlays();
+    // Astra P2: X tiles past the end zone / sideline lie outside the normal pitch clamp. While the indicator is up the
+    // camera bounds include its extent (the coach can pan to count them); clearing it re-clamps to the normal bounds.
+    // Astra round 2: the cached content box never includes the transient preview (readContentBounds hides it), so a
+    // resetCamera() taken while the indicator was up cannot keep the widened limits after it clears.
+    if (this.app?.screen) this.clampCamera();
+  }
+  /** World-space box of every Swoop preview square (null when no indicator is up). */
+  private swoopPreviewWorldBounds(): { x0: number; y0: number; x1: number; y1: number } | null {
+    let box: { x0: number; y0: number; x1: number; y1: number } | null = null;
+    for (const path of this.swoopPaths) {
+      for (const { square } of path) {
+        for (const [x, y] of squareQuad(square[0], square[1]).points) {
+          box = box
+            ? { x0: Math.min(box.x0, x), y0: Math.min(box.y0, y), x1: Math.max(box.x1, x), y1: Math.max(box.y1, y) }
+            : { x0: x, y0: y, x1: x, y1: y };
+        }
+      }
+    }
+    return box;
+  }
+
   /** #249 (owner): view-fed jump-target crosshairs. Armed with the server's eligible jump squares
    *  (serverMoveSquares while actingPlayer.leaping); [] clears. Visual-only — the leaping click routing
    *  stays in the host. Mirrors setBncAim. */
@@ -6033,6 +6068,8 @@ export class PitchRenderer {
     this.bncAimFrom = null;
     this.bncAimSquares = [];
     this.bncAimCoords = [];
+    this.swoopPathFrom = null;
+    this.swoopPaths = [];
     this.puntConeCenterWorld = null;
     this.puntReaimHits = [];
     for (const release of this.assetPresentationTokenReleases.values()) release();
@@ -6442,6 +6479,8 @@ export class PitchRenderer {
     this.suppressGenericBallInThisRefresh = false;
     this.kickoffScatterSeqSeen = -1;
     this.pendingTtmThrow.clear(); // LIVE TTM: a stale throw-flight cue must not leak games
+    this.swoopPathFrom = null; // owner 10-19: a Swoop path indicator never leaks games (camera limits restore with it)
+    this.swoopPaths = [];
     this.retirePassBallFlight(undefined, false);
     this.pendingBallThrow = null; // pass/punt: a stale ball throw-arc must not leak games
     this.passBallHold = null;
@@ -9283,6 +9322,7 @@ export class PitchRenderer {
     this.drawSpectatorTackleZones(); // owner 10-12: spectate / replay only (the host holds it at 'none' in play)
     // Owner 2026-07-13: BALL & CHAIN aim arrows (drawn on overlayLayer, cleared with it each redraw).
     this.drawBncAim();
+    this.drawSwoopPaths();
     this.drawJumpCrosshairs();
     this.drawPassDestinationMarker();
     this.drawHmpScatterMarks();
@@ -12804,6 +12844,46 @@ export class PitchRenderer {
       if (Math.hypot(worldX - (hit.ax + dx * t), worldY - (hit.ay + dy * t)) <= hit.radius) return hit.dir;
     }
     return null;
+  }
+
+  /** Owner 10-19: draw the Swoop possible paths - a line from the swooping player along each direction, a projected
+   *  mark on every square it may reach (the furthest on-pitch square outlined) and an X in every square past the pitch
+   *  edge. Server-derived directions only; the host fixes each line at six squares. */
+  private drawSwoopPaths(): void {
+    this.swoopPreviewNodes = [];
+    const from = this.swoopPathFrom;
+    if (!from || this.swoopPaths.length === 0) return;
+    const origin = squareAnchor(from[0], from[1]);
+    for (const path of this.swoopPaths) {
+      const end = path[path.length - 1];
+      if (!end) continue;
+      const lastOnPitch = [...path].reverse().find((entry) => !entry.outOfBounds);
+      const marks = new Graphics();
+      for (const { square: [x, y], outOfBounds } of path) {
+        const quad = squareQuad(x, y).points;
+        if (!outOfBounds) {
+          marks.poly(quad.flat()).fill({ color: 0xffe066, alpha: lastOnPitch && lastOnPitch.square[0] === x && lastOnPitch.square[1] === y ? 0.34 : 0.2 });
+          continue;
+        }
+        // Out of bounds: a dim tile with an X corner to corner - that distance lands the player in the crowd.
+        marks.poly(quad.flat()).fill({ color: 0xff5a4a, alpha: 0.14 });
+        const [a, b, c, d] = quad as [[number, number], [number, number], [number, number], [number, number]];
+        const inset = (p: [number, number], q: [number, number]): [number, number] => [p[0] + (q[0] - p[0]) * 0.2, p[1] + (q[1] - p[1]) * 0.2];
+        const [a1, c1] = [inset(a, c), inset(c, a)];
+        const [b1, d1] = [inset(b, d), inset(d, b)];
+        marks.moveTo(a1[0], a1[1]).lineTo(c1[0], c1[1]).moveTo(b1[0], b1[1]).lineTo(d1[0], d1[1])
+          .stroke({ width: 3, color: 0xff5a4a, alpha: 0.9 });
+      }
+      if (lastOnPitch) {
+        marks.poly(squareQuad(lastOnPitch.square[0], lastOnPitch.square[1]).points.flat()).stroke({ width: 2, color: 0xffe066, alpha: 0.85 });
+      }
+      this.overlayLayer.addChild(marks);
+      const tip = squareAnchor(end.square[0], end.square[1]);
+      const line = new Graphics();
+      line.moveTo(origin.x, origin.y).lineTo(tip.x, tip.y).stroke({ width: 3, color: 0xffe066, alpha: 0.75 });
+      this.overlayLayer.addChild(line);
+      this.swoopPreviewNodes.push(marks, line);
+    }
   }
 
   private drawJumpCrosshairs(): void {
@@ -17940,6 +18020,9 @@ export class PitchRenderer {
    *  tokens…) — the furthest rendered asset on each axis. The screen-space backdrop
    *  is a separate layer, so it doesn't inflate this. Null if nothing is drawn. */
   private readContentBounds(): { x: number; y: number; width: number; height: number } | null {
+    // Owner 10-19 (Astra round 2): the Swoop preview's off-pitch marks are transient - keep them out of the cached box.
+    const hidden = this.swoopPreviewNodes.filter((node) => !node.destroyed && node.visible);
+    for (const node of hidden) node.visible = false;
     try {
       const b = this.world.getLocalBounds() as unknown as { minX: number; minY: number; maxX: number; maxY: number };
       const width = b.maxX - b.minX;
@@ -17948,6 +18031,8 @@ export class PitchRenderer {
       return { x: b.minX, y: b.minY, width, height };
     } catch {
       return null;
+    } finally {
+      for (const node of hidden) node.visible = true;
     }
   }
 
@@ -17978,10 +18063,19 @@ export class PitchRenderer {
       return Math.min(hi, Math.max(lo, pos));
     };
     const ew = getOrientation() === 'ew';
+    // Owner 10-19 / Astra P2: while the Swoop indicator is up its off-pitch X tiles widen the pannable range.
+    const preview = this.swoopPreviewWorldBounds();
+    const widen = (min: number, size: number, lo: number | undefined, hi: number | undefined): [number, number] => {
+      if (lo === undefined || hi === undefined) return [min, size];
+      const nextMin = Math.min(min, lo);
+      return [nextMin, Math.max(min + size, hi) - nextMin];
+    };
     // Classic (clampToPitchEdge): bind BOTH axes to the pitch rectangle itself.
     if (this.clampToPitchEdge) {
-      this.world.position.x = clampAxis(this.world.position.x, 0, worldWidth(), this.app.screen.width);
-      this.world.position.y = clampAxis(this.world.position.y, 0, worldHeight(), this.app.screen.height);
+      const [cx, cw] = widen(0, worldWidth(), preview?.x0, preview?.x1);
+      const [cy, ch] = widen(0, worldHeight(), preview?.y0, preview?.y1);
+      this.world.position.x = clampAxis(this.world.position.x, cx, cw, this.app.screen.width);
+      this.world.position.y = clampAxis(this.world.position.y, cy, ch, this.app.screen.height);
       return;
     }
     // X → pitch + dugout box (dugouts flank the horizontal in N-S). Excludes the crowd.
@@ -17989,17 +18083,18 @@ export class PitchRenderer {
     // (the end-zone corner) off the pannable range; the camera now reaches the dugout's outer edge.
     const dugoutW = 4 * TILE_W;
     const sideInset = 0;
-    const xMin = (ew ? 0 : -dugoutW) + sideInset;
-    const xSize = worldWidth() + (ew ? 0 : 2 * dugoutW) - sideInset * 2;
+    const [xMin, xSize] = widen((ew ? 0 : -dugoutW) + sideInset, worldWidth() + (ew ? 0 : 2 * dugoutW) - sideInset * 2,
+      preview?.x0, preview?.x1);
     this.world.position.x = clampAxis(this.world.position.x, xMin, xSize, this.app.screen.width);
     // Y → full rendered-content extent. Bug 10-13: in E-W the top sideline band can always come down below the HUD.
     if (this.contentBounds) {
       const reserve = this.topHudReserve();
       const bandTop = reserve > 0 ? Math.min(...this.sidelineBandWorldRects().map((r) => r.y0)) : 0;
+      const [yMin, ySize] = widen(this.contentBounds.y, this.contentBounds.height, preview?.y0, preview?.y1);
       this.world.position.y = clampAxis(
         this.world.position.y,
-        this.contentBounds.y,
-        this.contentBounds.height,
+        yMin,
+        ySize,
         this.app.screen.height,
         this.southernPanExtension,
         reserve > 0 ? reserve - bandTop * scale : -Infinity,

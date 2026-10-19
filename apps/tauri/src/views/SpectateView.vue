@@ -152,7 +152,7 @@ import { quickSnapExhaustedText } from '../game/quickSnapController';
 import { currentBlockChoosingTeamId, currentMultiBlockChoosingTeamId, isCurrentBlockChoiceDialog, isCurrentMultiBlockChoiceDialog, projectBlockChooser, type BlockChooserSide } from '../game/blockChooser';
 import { savedSetupPreview, templatePreview } from '../game/setupTemplatePreview';
 import { hmpScatterSkillUseCardCopy, modifyingSkillCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
-import { swoopChoiceCopy } from '../game/logic/swoopPresentation';
+import { swoopChoiceCopy, swoopIndicator, type SwoopPathSquare } from '../game/logic/swoopPresentation';
 import { watchedCardHandoffMs } from '../game/logic/minimumVisible';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
@@ -6583,6 +6583,34 @@ const jumpCrosshairSquares = computed<[number, number][]>(() => {
   return leaping && !isPuntTargeting(g) && JUMP_MOVE_STATES.has(deriveClientState(g, o66Ctx())) ? serverMoveSquares(g) : [];
 });
 watch(jumpCrosshairSquares, (squares) => { renderer?.setJumpCrosshairs(squares); });
+// Owner 10-19: Swoop possible-path indicator (the Punt aim preview's twin): every possible distance of the server's
+// swoopDistance option marked along each line, with an X in every square past the end zone / sideline. The gate is the
+// pure swoopIndicator (logic/swoopPresentation.ts): the PICK (SWOOP state, >= 2 cardinal offers, no reroll card) and the
+// ROLL (Swoop Direction / Distance reroll offer, until this seat answers it or the flight starts). Null clears it.
+const swoopPathIndicator = computed<{ from: [number, number]; paths: SwoopPathSquare[][] } | null>(() => {
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const throwAnim = gameStore.state.throwAnim;
+  const reRollPromptUp = !!gameStore.state.reRollPrompt; // read first: answering clears it (re-evaluates the gate)
+  if (!g) return null;
+  const coaching = settings.order66 && gameStore.isPlaying.value && !!actingId && gameStore.iControl(actingId);
+  const swoopState = coaching && deriveClientState(g, o66Ctx()) === 'SWOOP';
+  return swoopIndicator({
+    game: g,
+    coaching,
+    from: normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
+      .find((d) => d.playerId === actingId)?.playerCoordinate),
+    reportedDirection: gameStore.state.ballDirection,
+    dialogAnswered: coaching && gameStore.liveDialogAnswered(),
+    swoopState,
+    reRollPromptUp,
+    offers: swoopState ? (swoopCoordinateSquares(g, o66Ctx()) ?? []) : [],
+    flightCueForActing: throwAnim?.kind === 'throwTeamMate' && throwAnim.thrownId === actingId,
+  });
+});
+watch([swoopPathIndicator, rendererReady], ([indicator]) => {
+  renderer?.setSwoopPaths(indicator?.from ?? null, indicator?.paths ?? []);
+}, { immediate: true });
 // Arm the tile-pick overlay (②) with those squares → the renderer draws them + routes clicks to onTilePick,
 // which steps the acting player (below). Re-arms each step as the server sends a fresh moveSquareArray.
 // P1: observe the server actor-null edge; an at-rest HMP has no o66MoveSquares transition to trigger teardown.
