@@ -115,11 +115,14 @@ export interface ApothecaryFixUpCue {
   side: 'home' | 'away';
   /** Where the server put the player: Reserves (the bench), or left on the pitch Stunned. */
   outcome: 'bench' | 'stunned';
+  /** Owner 10-18: who fixed them up - the Apothecary, or their own Regeneration. */
+  kind: 'apothecary' | 'regeneration';
   text: string;
 }
 
-/** What an `apothecaryChoice` report claims for a player: Reserves (9) or Stunned (4). */
-export interface ApothecaryFixUpClaim { playerId: string; reported: 4 | 9 }
+/** What an `apothecaryChoice` report claims for a player: Reserves (9) or Stunned (4). Owner 10-18: a successful
+ *  `regenerationRoll` claims Reserves (9) the same way (`kind: 'regeneration'`); the rail and the model check are shared. */
+export interface ApothecaryFixUpClaim { playerId: string; reported: 4 | 9; kind: 'apothecary' | 'regeneration' }
 export type ApothecaryFixUpVerdict = 'agrees' | 'pending' | 'contradicted';
 
 /** Owner 10-09: the server resolved the apothecary by itself - no `apothecaryChoice` dialog, nothing to choose.
@@ -146,7 +149,26 @@ export function apothecaryFixUpClaims(
   for (const [playerId, reported] of last) {
     if (reported !== 4 && reported !== 9) continue;
     if (![...game.teamHome.playerArray, ...game.teamAway.playerArray].some((player) => player.playerId === playerId)) continue;
-    claims.push({ playerId, reported });
+    claims.push({ playerId, reported, kind: 'apothecary' });
+  }
+  return claims;
+}
+
+/** Owner 10-18 ("Can we add a pill toast for when a regen is successful?"): a `regenerationRoll` with `successful: true`
+ *  claims Reserves for its player. Upstream writes it in the INJURY frame itself (g1951999 #702: injury report +
+ *  regenerationRoll + state 9 + the box coordinate in one serverModelSync), so the line is true at once - the store
+ *  only holds it behind that player's casualty pill. A failed roll claims nothing (the pill already told the story). */
+export function regenerationFixUpClaims(
+  reports: readonly Record<string, unknown>[],
+  game: GameJson,
+): ApothecaryFixUpClaim[] {
+  const claims: ApothecaryFixUpClaim[] = [];
+  for (const report of reports) {
+    if (String(report.reportId) !== 'regenerationRoll' || report.successful !== true) continue;
+    const playerId = String(report.playerId ?? '');
+    if (!playerId || claims.some((claim) => claim.playerId === playerId)) continue;
+    if (![...game.teamHome.playerArray, ...game.teamAway.playerArray].some((player) => player.playerId === playerId)) continue;
+    claims.push({ playerId, reported: 9, kind: 'regeneration' });
   }
   return claims;
 }
@@ -175,11 +197,13 @@ export function apothecaryFixUpCue(game: GameJson, claim: ApothecaryFixUpClaim):
   const player = playerName(game, claim.playerId);
   const outcome = claim.reported === 9 ? 'bench' : 'stunned';
   return {
-    playerId: claim.playerId, player, outcome,
+    playerId: claim.playerId, player, outcome, kind: claim.kind,
     side: game.teamHome.playerArray.some((entry) => entry.playerId === claim.playerId) ? 'home' : 'away',
-    text: outcome === 'bench'
-      ? `The Apothecary fixes up ${player} and they return to the bench!`
-      : `The Apothecary fixes up ${player} and they stay on the pitch, Stunned!`,
+    text: claim.kind === 'regeneration'
+      ? `${player} regenerates and returns to the reserves!`
+      : outcome === 'bench'
+        ? `The Apothecary fixes up ${player} and they return to the bench!`
+        : `The Apothecary fixes up ${player} and they stay on the pitch, Stunned!`,
   };
 }
 

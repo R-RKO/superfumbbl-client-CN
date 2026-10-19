@@ -10,6 +10,7 @@ import {
   type AppSettings,
 } from './settings';
 import { skillConfigEntryFor } from './skillConfigRows';
+import { filterHatredChips, hatredIconApplies, positionOf } from './hatredIconGate';
 
 /**
  * Per-skill display config (owner 2026-07-03 r6f). Turns the sparse
@@ -163,11 +164,15 @@ export function playerDetailSkills(
 /** Owner 10-01 (S87): a player CARD's skills with `added` judged against the player's own roster position - the
  *  profile popup and the apothecary card called `playerDetailSkills(player)` with no baseline, which marks EVERY
  *  skill as added. A position the roster does not list (no baseline to compare with) marks nothing as added. */
-export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDetailSkill[] {
+export function playerCardSkills(team: TeamJson, player: PlayerJson, opponents?: TeamJson | null): PlayerDetailSkill[] {
   const roster = team.roster as { positionArray?: PositionLike[] } | undefined;
   const position = roster?.positionArray?.find((p) => p.positionId === player.positionId);
-  if (!position) return playerDetailSkills(player).map((skill) => ({ ...skill, added: false }));
-  return playerDetailSkills(player, new Set(position.skillArray ?? []));
+  const skills = !position
+    ? playerDetailSkills(player).map((skill) => ({ ...skill, added: false }))
+    : playerDetailSkills(player, new Set(position.skillArray ?? []));
+  // Owner 10-18: the card's Hatred chips follow the pitch icon - a valued chip stays while ITS keyword is on the other
+  // team (Astra r1: per keyword, icons mode only, position-level value honoured). See filterHatredChips.
+  return filterHatredChips(skills, player, position, opponents);
 }
 
 export interface RosterSkill extends PlayerDetailSkill {
@@ -190,9 +195,10 @@ export interface RosterSkill extends PlayerDetailSkill {
  *     in skillValuesMap / skillDisplayValuesMap is a skill the PLAYER carries (a learned copy, an improved value);
  *   - its keyword / value equals the position's (RosterPlayer.java:211-212: own value, else the position's).
  */
-export function playerRosterSkills(player: PlayerJson, position: PositionLike | undefined): RosterSkill[] {
+export function playerRosterSkills(player: PlayerJson, position: PositionLike | undefined, opponents?: TeamJson | null): RosterSkill[] {
   const positionSkills = position?.skillArray ?? [];
-  const detail = playerDetailSkills(player, new Set(positionSkills));
+  // Astra 10-18 r1: the live roster rows (and the MVP card) draw the same skill icons as the player card - same gate.
+  const detail = filterHatredChips(playerDetailSkills(player, new Set(positionSkills)), player, position, opponents);
   if (!position || String(player.playerKind) === 'zappedPlayer') return detail.map((skill) => ({ ...skill, innate: false }));
   const text = (v: unknown): string => String(v ?? '').trim().toLowerCase();
   const positionValue = (name: string): string => {
@@ -254,13 +260,16 @@ export function markerGlyph(skill: string): string {
 export function computeIconSkills(game: GameJson): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const mechanic = statsMechanicFor(game);
-  for (const [team, mine] of [
-    [game.teamHome, true],
-    [game.teamAway, false],
-  ] as [TeamJson, boolean][]) {
+  for (const [team, mine, opponents] of [
+    [game.teamHome, true, game.teamAway],
+    [game.teamAway, false, game.teamHome],
+  ] as [TeamJson, boolean, TeamJson][]) {
     for (const player of team.playerArray) {
       const baseline = baselineSkillsFor(team, player);
-      const skills = displayedSkills(player).filter((s) => shows(iconBehaviour(s, mine), baseline.has(s)));
+      // Owner 10-18: Hatred's icon only while someone on the other team carries a hated keyword (setting, default on).
+      // Astra r1: the hated keyword may live on the POSITION (RosterPlayer:212), so the position goes along.
+      const hatredShown = !settings.hatredIconNeedsTarget || hatredIconApplies(player, opponents, positionOf(team, player));
+      const skills = displayedSkills(player).filter((s) => shows(iconBehaviour(s, mine), baseline.has(s)) && (hatredShown || normalizeSkillName(s) !== 'hatred'));
       // Owner 09-06: a stat increase already arrives as a '+ST'/'+AG'/… SKILL in skillArray AND as a characteristic
       // diff vs the roster position — one icon, not two (Set keeps first-seen order: characteristic icons lead).
       // S94: an injury icon (NI / a stat bust) follows its row in the table - shown unless set to Never (an injury is

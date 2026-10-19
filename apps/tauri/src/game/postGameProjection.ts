@@ -212,7 +212,7 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
       // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
       // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
       const position = roster.positionArray?.find((q) => q.positionId === p?.positionId);
-      const detail = p ? playerRosterSkills(p, position) : [];
+      const detail = p ? playerRosterSkills(p, position, side === 'home' ? game.teamAway : game.teamHome) : []; // owner 10-18: Hatred icon gate
       const addedSkillList = detail.filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
       const skillList = addedSkillsLast(detail).map((sk) => ({ name: sk.name, label: sk.label, added: sk.added, innate: sk.innate }));
       const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
@@ -356,7 +356,7 @@ export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrai
     portrait, spp, sppGain,
     // Astra 10-10: a star, a mercenary or a dead player never advances, so the card offers no advancement advice.
     advancement: isStarOrMercenary(player, pos) || injury === 'rip' ? null : advancementReadiness(spp + sppGain, taken),
-    skills: playerRosterSkills(player, pos), // every skill the player has (owner 09-14), base + acquired, each flagged innate or not
+    skills: playerRosterSkills(player, pos, side === 'home' ? game.teamAway : game.teamHome), // every skill the player has (owner 09-14), base + acquired, each flagged innate or not; owner 10-18: Hatred icon gate
     value: progress.value, advancements: progress.advancements, injury, injuryNew: rosterInjuryIsNew(game, playerId, injury),
     awards: Number((r as { playerAwards?: number } | undefined)?.playerAwards ?? 0),
   };

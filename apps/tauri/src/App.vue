@@ -3326,6 +3326,14 @@ onBeforeUnmount(() => {
           </fieldset>
 
           <fieldset class="settings-group">
+            <legend>Hatred</legend>
+            <label class="row">
+              <input v-model="settings.hatredIconNeedsTarget" type="checkbox" />
+              <span>Show the Hatred icon only when an opposing player has the hated trait</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="settings-group">
             <legend>Position rings</legend>
             <label class="row">
               <input v-model="settings.showPositionRings" type="checkbox" />

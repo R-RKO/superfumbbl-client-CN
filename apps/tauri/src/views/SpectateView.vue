@@ -473,6 +473,8 @@ import { acknowledgeBetaNotice, betaNoticeDue, BETA_NOTICE_BUTTON, BETA_NOTICE_T
 import { botGet, botPost } from '../game/forkChallenge';
 import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsMissing } from '../game/fumbblAuth';
 import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
+import { cardInjuryLines } from '../game/cardInjuryLines';
+import { opponentsOf } from '../game/hatredIconGate';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
 import { createCameraStickHandler, createHoldZoom, createHoldZoomOwner, createInGameActionRunner, type CrosshairActionDeps } from '../game/inGameActions';
@@ -2068,6 +2070,8 @@ function skillIconUrl(
   return reactiveSkillIconUrl(skill, style, context);
 }
 const kickElectionIconUrl = computed(() => skillIconUrl('Kick', effectiveIconStyle.value));
+/** Owner 10-18: the Regeneration line on the fix-up rail carries the skill's icon (the apothecary's when the set lacks it). */
+const regenerationIconUrl = computed(() => skillIconUrl('Regeneration', effectiveIconStyle.value) || apothecaryIconUrl);
 function cycleSkillDisplay() {
   toggleSkillDisplay(settings);
   popQuickBarTip('skillDisplay');
@@ -4586,7 +4590,7 @@ function refreshApothecarySubject(): void {
   const entry = playerSideById(injury?.playerId);
   apoChoicePortrait.value = injury?.playerId && renderer ? renderer.playerPortrait(injury.playerId) : null;
   const apoTeam = entry ? (entry.side === 'home' ? gameStore.game.value?.teamHome : gameStore.game.value?.teamAway) : null;
-  apoChoiceSkills.value = entry && apoTeam ? playerCardSkills(apoTeam, entry.player) : [];
+  apoChoiceSkills.value = entry && apoTeam ? playerCardSkills(apoTeam, entry.player, gameStore.game.value ? opponentsOf(gameStore.game.value, entry.player.playerId) : null) : [];
   apoChoicePositionId.value = entry?.player.positionId ?? null;
   apoChoiceSide.value = entry?.side ?? injury?.side ?? null;
 }
@@ -7867,6 +7871,7 @@ watch(
 );
 watch(() => settings.skillConfig, () => applyMarkings(), { deep: true });
 watch(gameStore.game, () => applyMarkings());
+watch(() => [settings.hatredIconNeedsTarget, settings.skillDisplay], () => { applyMarkings(); refreshApothecarySubject(); }); // owner 10-18: the Hatred icon gate (Astra r1: an open apothecary card re-reads it too)
 watchAssetModRendererRefresh(() => {
   const choice = gameStore.state.skillChoice;
   const ids = [popup.visible ? popup.playerId : null, choice?.playerId ?? null].filter((id): id is string => !!id);
@@ -8124,22 +8129,20 @@ const popupInfo = computed(() => {
       : cardStatLine(player, pos, statsMechanicFor(game), { MA: effMa, AV: effAv }),
     // Preserve the raw key for icons/rules text while the shared Modern/Classic
     // projection labels valued temporary Hatred as e.g. `Hatred (Orc)`. S87: `added` is judged against the position.
-    skills: playerCardSkills(team, player),
+    skills: playerCardSkills(team, player, side === 'home' ? game.teamAway : game.teamHome),
     spp,
     sppEarned,
     // Owner 2026-07-08: current location/injury status (KO'd / Badly Hurt / Seriously Hurt /
     // Dead / Sent off / Reserves) — shown on the card so a DUGOUT player's injury reads.
     status: playerState(player),
     // non-stat injuries only (NI/MNG); stat reductions show as red stats.
-    // Owner 2026-07-08: an ON-PITCH player can't currently be Badly/Seriously Hurt or Dead —
-    // if such a casualty string lingers while they're actively playing, the injury was
-    // cleared/reversed (apothecary), so it's STALE and hidden. Permanent injuries (Niggling
-    // "(NI)", stat losses) still show. `rendersOnPitch` = the same active-on-field test the
-    // status label uses.
+    // Owner 2026-07-08: an ON-PITCH player can't currently be Badly/Seriously Hurt or Dead, so such a string was
+    // hidden on the pitch. Owner 10-18: a Badly Hurt / Seriously Hurt (MNG) / Dead entry of the roster's HISTORY never
+    // shows (a Reserves player read "Seriously Hurt (MNG)" from it); the current condition is THIS game's result, shown
+    // only while his state is a casualty. Permanent injuries (Niggling "(NI)") still show; a historical stat loss never
+    // does here. See cardInjuryLines.
     injuries: [
-      ...player.lastingInjuries.filter(
-        (i) => !/\(-(MA|ST|AG|PA|AV)\)/.test(i) && !(onPitchNow && /\(mng\)|\(rip\)|badly hurt|seriously hurt|\bdead\b|killed/i.test(i)),
-      ),
+      ...cardInjuryLines(player.lastingInjuries, pdata ? baseState(pdata.playerState) : null, playerResult?.seriousInjury as string | null | undefined),
       ...(player.recoveringInjury && !onPitchNow ? [`Recovering: ${player.recoveringInjury}`] : []),
     ],
   };
@@ -16370,8 +16373,8 @@ function sendChat() {
              (a match announcement, one band below the centred reroll announcements), so neither can cover or
              replace the other. The key never repeats: each line mounts a fresh element and replays the entry. -->
         <div v-if="gameStore.state.apothecaryFixUp" :key="'apo-fix-' + gameStore.state.apothecaryFixUp.seq"
-          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" data-testid="apothecary-fix-up">
-          <img class="reroll-toast-icon" :src="apothecaryIconUrl" alt="" />
+          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" :data-kind="gameStore.state.apothecaryFixUp.kind" data-testid="apothecary-fix-up">
+          <img class="reroll-toast-icon" :src="gameStore.state.apothecaryFixUp.kind === 'regeneration' ? regenerationIconUrl : apothecaryIconUrl" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.apothecaryFixUp.text }}</span>
         </div>
 

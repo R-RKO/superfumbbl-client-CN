@@ -114,6 +114,8 @@ export interface AppSettings extends ConfirmationSettings {
   spectatorTackleZoneMode: SpectatorTackleZoneMode;
   showDefaultSkills: boolean;
   showPositionRings: boolean;
+  /** Owner 10-18: the Hatred icon draws only while a player on the OTHER team carries a hated keyword (hatredIconGate). */
+  hatredIconNeedsTarget: boolean;
   /** Owner 2026-07-08: persistently show the block-dice preview (count over each
    *  adjacent opponent's head) for the selected/active player. */
   showBlockDice: boolean;
@@ -640,6 +642,7 @@ const DEFAULTS: AppSettings = {
   spectatorTackleZoneMode: 'none',
   showDefaultSkills: false,
   showPositionRings: true,
+  hatredIconNeedsTarget: true,
   showBlockDice: false,
   markingsConfig: '',
   markingsImportCoach: '',

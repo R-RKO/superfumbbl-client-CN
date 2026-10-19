@@ -4,7 +4,7 @@ import { ballProjectilePresentation, createBallOutContext, createBallProjectileC
 export { throwPresentationKind } from './ballProjectilePresentation';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
-import { apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
+import { apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, regenerationFixUpClaims, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
 import { injuryPresentation, armourPresentation, skipsArmourDiceOnCasualty, type InjuryEvent } from './injuryPresentation';
 import { rerollPresentation } from './rerollPresentation';
@@ -1408,7 +1408,7 @@ const legacyState = reactive({
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
    *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
-  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned'; text: string; seq: number } | null,
+  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned'; kind: 'apothecary' | 'regeneration'; text: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
 /** Owner 10-11: the automatic (spectator / replay / review) field flip under Settings > Spectator and replay view.
@@ -2432,6 +2432,20 @@ function showMascotSplash(g: GameJson, teamId: string, roll: number | null): voi
 const APOTHECARY_FIX_UP_HOLD_MS = 2000; // = REROLL_SPLASH_HOLD_MS, the toast's own animation length (--p-2000)
 const APOTHECARY_FIX_UP_GAP_MS = 250;
 const APOTHECARY_FIX_UP_QUEUE_CAP = 8;
+/** Owner 10-18: a Regeneration line waits for that player's casualty pill (the roll rides the injury frame, so the
+ *  line would otherwise spoil the pill): woken by the injury slot's end, polled meanwhile, and given up after the cap. */
+const APOTHECARY_FIX_UP_INJURY_POLL_MS = 250;
+const APOTHECARY_FIX_UP_INJURY_WAIT_MAX_MS = 15000;
+let apothecaryFixUpInjuryWaitSince: number | null = null;
+let apothecaryFixUpInjuryPoll: ReturnType<typeof setTimeout> | null = null;
+/** Astra 10-18: whenever the queue is discarded (catch-up expiry) the injury wait goes with it - a stale deadline
+ *  would discard the NEXT regeneration line at once (`??=`). */
+function dropApothecaryFixUpQueue(): void {
+  apothecaryFixUpQueue = [];
+  if (apothecaryFixUpInjuryPoll) cancelGameTimeout(apothecaryFixUpInjuryPoll);
+  apothecaryFixUpInjuryPoll = null;
+  apothecaryFixUpInjuryWaitSince = null;
+}
 /** A claim the model does not confirm yet. There is NO command or time bound on it: uninterrupted, the player's own
  *  state change is one sync behind the report, but StepApothecaryMultiple can stop on another injury's result-choice
  *  dialog before applying anything, and any number of unrelated syncs (marker updates from either coach) can pass
@@ -2477,6 +2491,9 @@ function clearApothecaryFixUps(): void {
   if (apothecaryFixUpCatchUpRetry) cancelGameTimeout(apothecaryFixUpCatchUpRetry);
   apothecaryFixUpCatchUpRetry = null;
   apothecaryFixUpCatchUpSince = null;
+  if (apothecaryFixUpInjuryPoll) cancelGameTimeout(apothecaryFixUpInjuryPoll);
+  apothecaryFixUpInjuryPoll = null;
+  apothecaryFixUpInjuryWaitSince = null;
   apothecaryFixUpQueue = [];
   pendingApothecaryFixUps.clear();
   state.apothecaryFixUp = null;
@@ -2490,7 +2507,7 @@ function pumpApothecaryFixUps(): void {
     // Nothing STARTS during catch-up, but the waiting lines are kept (see APOTHECARY_FIX_UP_CATCH_UP_MAX_MS).
     apothecaryFixUpCatchUpSince ??= Date.now();
     if (Date.now() - apothecaryFixUpCatchUpSince >= APOTHECARY_FIX_UP_CATCH_UP_MAX_MS) {
-      apothecaryFixUpQueue = [];
+      dropApothecaryFixUpQueue();
       apothecaryFixUpCatchUpSince = null;
       return;
     }
@@ -2503,7 +2520,7 @@ function pumpApothecaryFixUps(): void {
   if (apothecaryFixUpCatchUpSince !== null) {
     const retainedFor = Date.now() - apothecaryFixUpCatchUpSince;
     apothecaryFixUpCatchUpSince = null;
-    if (retainedFor >= APOTHECARY_FIX_UP_CATCH_UP_MAX_MS) { apothecaryFixUpQueue = []; return; }
+    if (retainedFor >= APOTHECARY_FIX_UP_CATCH_UP_MAX_MS) { dropApothecaryFixUpQueue(); return; }
   }
   if (centreBannerVisible && !apothecaryFixUpBannerWaitExpired) {
     // Deferred behind the banner. Woken by the banner clearing; this timer only backstops a banner that never does.
@@ -2517,16 +2534,31 @@ function pumpApothecaryFixUps(): void {
   if (apothecaryFixUpBannerBackstop) cancelGameTimeout(apothecaryFixUpBannerBackstop);
   apothecaryFixUpBannerBackstop = null;
   apothecaryFixUpBannerWaitExpired = false;
+  if (apothecaryFixUpInjuryPoll) cancelGameTimeout(apothecaryFixUpInjuryPoll);
+  apothecaryFixUpInjuryPoll = null;
   const g = game.value;
   let cue: ReturnType<typeof apothecaryFixUpCue> | null = null;
   while (g && !cue && apothecaryFixUpQueue.length) {
+    // Owner 10-18: a Regeneration line stays behind its player's casualty pill (queued or on screen) - the roll came
+    // in the injury frame. The slot's end wakes this pump; the poll covers a slot voided without one; the cap ends it.
+    if (apothecaryFixUpQueue[0]!.kind === 'regeneration' && injuryEventPendingFor(apothecaryFixUpQueue[0]!.playerId)) {
+      apothecaryFixUpInjuryWaitSince ??= Date.now();
+      if (Date.now() - apothecaryFixUpInjuryWaitSince < APOTHECARY_FIX_UP_INJURY_WAIT_MAX_MS) {
+        apothecaryFixUpInjuryPoll = scheduleGameTimeout(() => { apothecaryFixUpInjuryPoll = null; pumpApothecaryFixUps(); }, APOTHECARY_FIX_UP_INJURY_POLL_MS);
+        return;
+      }
+      apothecaryFixUpInjuryWaitSince = null;
+      apothecaryFixUpQueue.shift();
+      continue;
+    }
+    apothecaryFixUpInjuryWaitSince = null;
     const claim = apothecaryFixUpQueue.shift()!;
     // Re-validated at the moment it is shown: a player who was re-fielded or changed state while the line waited
     // behind another one is skipped.
     if (apothecaryFixUpVerdict(g, claim) === 'agrees') cue = apothecaryFixUpCue(g, claim);
   }
-  if (!cue) { apothecaryFixUpQueue = []; return; }
-  state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, text: cue.text, seq: ++apothecaryFixUpSeq };
+  if (!cue) { dropApothecaryFixUpQueue(); return; }
+  state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, kind: cue.kind, text: cue.text, seq: ++apothecaryFixUpSeq };
   apothecaryFixUpTimer = scheduleGameTimeout(() => {
     state.apothecaryFixUp = null;
     apothecaryFixUpTimer = scheduleGameTimeout(() => {
@@ -2550,7 +2582,7 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
   const turn = apothecaryFixUpTurnKey(g);
   const actingId = String(g.actingPlayer?.playerId ?? '');
   const apothecaryDialogOpen = APOTHECARY_DIALOG_IDS.has(String(g.dialogParameter?.dialogId ?? ''));
-  const claims = apothecaryFixUpClaims(reports, g);
+  const claims = [...apothecaryFixUpClaims(reports, g), ...regenerationFixUpClaims(reports, g)];
   const ready: ApothecaryFixUpClaim[] = [];
   for (const [playerId, pending] of [...pendingApothecaryFixUps]) {
     if (pending.commandNr !== null && commandNr !== null && commandNr <= pending.commandNr) continue; // its own frame again
@@ -2562,7 +2594,7 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
     if (verdict === 'contradicted' || sequenceOver) drop();
   }
   for (const claim of claims) {
-    const key = `fixup:${gameId}:${commandNr ?? 'unknown'}:${claim.playerId}`;
+    const key = `fixup:${claim.kind}:${gameId}:${commandNr ?? 'unknown'}:${claim.playerId}`;
     if (apothecaryAutoReturnSeen.has(key)) continue;
     apothecaryAutoReturnSeen.add(key);
     const verdict = apothecaryFixUpVerdict(g, claim);
@@ -4485,6 +4517,7 @@ function pumpInjuries() {
       }
       pumpInjuries();
       plannerOnInjuryBeatReleased(); // the injury slot holds the planner's Animal Savagery resend: every hold needs a wake
+      if (apothecaryFixUpQueue.length) pumpApothecaryFixUps(); // owner 10-18: a Regeneration line waiting behind this pill
     }, stepMs);
   };
   // Owner 10-13: a crowd push no longer waits on a fans cinematic first (it never ran: the server has him off the pitch

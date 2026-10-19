@@ -2927,7 +2927,8 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
       // S42: the server has ONE foul declare; the chainsaw is a flag on the terminal clientFoul. A Chainsaw carrier
       // therefore gets two rows on the same `foulMove` token, and the row picked is the coach's Foul / Chainsaw choice.
       // P0 10-18 (owner: "Users should be offered Foul (Chainsaw) on the context menu"): the chainsaw row LEADS and reads
-      // "Foul (Chainsaw)" (a Looney picked the plain row and booted without the saw); the plain row follows.
+      // "Foul (Chainsaw)" (a Looney's foul went out without the saw - g1954531 #322; which control produced the plain pick
+      // is not recorded, Astra); the plain row follows.
       if (ctx.foulVariants === true && hasSkill(game, playerId, 'Chainsaw')) {
         out.push({ action: 'foulMove', label: `${foulLabel} (Chainsaw)`, kind: 'declare', enabled: true, usingChainsaw: true });
         out.push({ action: 'foulMove', label: foulLabel, kind: 'declare', enabled: true, usingChainsaw: false });
