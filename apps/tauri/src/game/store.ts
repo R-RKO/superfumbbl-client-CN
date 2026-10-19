@@ -14002,6 +14002,18 @@ function plannerStart(input: {
   let declare: string = moving
     ? ({ pass: 'passMove', foul: 'foulMove', handOver: 'handOverMove', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove' } as const)[actKind]
     : ({ pass: 'pass', foul: 'foul', handOver: 'handOver', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove' } as const)[actKind];
+  // P0 10-18 (nerdkingdan g1954531 #2442-2448, chainsaw foul "didn't work"): a foul plan with no walk left must NOT
+  // re-declare the standing `foul` while the server already has this player acting under `foulMove`. Upstream
+  // StepInitMoving accepts CLIENT_FOUL ONLY under FOUL_MOVE (bb2025/move/StepInitMoving.java:192-197; pass and
+  // hand-off accept both variants, :199-212), and a CLIENT_ACTING_PLAYER{foul} inside the move sequence merely renames
+  // the action (no dispatch) - every later clientFoul is then dropped on the floor and the activation is dead (the
+  // coach sat 80 s on it, then ended it). The same rule keeps passMove / handOverMove: upstream declares once per
+  // activation and the terminal command rides the moving variant it declared.
+  if (!moving && !input.declareAction && plannerActingId() === playerId) {
+    const cur = plannerActingAction();
+    const movingVariant = ({ foul: 'foulMove', pass: 'passMove', handOver: 'handOverMove' } as Record<string, string | undefined>)[actKind];
+    if (movingVariant && cur === movingVariant) declare = cur;
+  }
   let requestedDeclare = input.declareAction ?? declare;
   if (requestedDeclare === 'shotToNothing') declare = 'passMove';
   else if (requestedDeclare === 'shotToNothingBomb') declare = 'throwBomb';
@@ -18913,7 +18925,7 @@ export function installFoulChoiceTestHarness(
   dismiss(): boolean;
   held(): { actingId: string; defenderId: string } | null;
   remembered(): boolean | null;
-  startFoulPlan(playerId: string, targetPlayerId: string): boolean;
+  startFoulPlan(playerId: string, targetPlayerId: string, route?: [number, number][]): boolean;
   planActive(): boolean;
   advancePlan(): void;
   turnBoundary(): void;
@@ -18965,7 +18977,7 @@ export function installFoulChoiceTestHarness(
     dismiss: () => gameStore.dismissFoulChoice(),
     held: () => state.foulChoiceHold ? { actingId: state.foulChoiceHold.actingId, defenderId: state.foulChoiceHold.defenderId } : null,
     remembered: () => gameStore.foulChoiceUsingChainsaw(),
-    startFoulPlan: (playerId, targetPlayerId) => plannerStart({ playerId, actKind: 'foul', route: [], targetPlayerId }),
+    startFoulPlan: (playerId, targetPlayerId, route = []) => plannerStart({ playerId, actKind: 'foul', route, targetPlayerId }),
     planActive: () => plannerPlan != null,
     advancePlan: () => plannerAdvance(),
     turnBoundary() {

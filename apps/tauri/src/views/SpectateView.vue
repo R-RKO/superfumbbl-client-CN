@@ -16066,11 +16066,12 @@ function sendChat() {
           <template v-if="gameStore.state.foulChoiceHold">
             <div class="block-alt-title">Choose the foul</div>
             <div class="block-alt-actions">
-              <button @click="chooseFoulKind(false)">🥾 Foul</button>
-              <button @click="chooseFoulKind(true)">
-                {{ BLOCK_KIND_EMOJI.chainsaw }} Chainsaw
+              <!-- P0 10-18: the chainsaw option leads and reads like the menu row, "Foul (Chainsaw)". -->
+              <button data-pad-primary @click="chooseFoulKind(true)">
+                {{ BLOCK_KIND_EMOJI.chainsaw }} Foul (Chainsaw)
                 <small v-if="foulChoiceChainsawTarget != null">Armour {{ foulChoiceChainsawTarget }}+</small>
               </button>
+              <button @click="chooseFoulKind(false)">🥾 Foul</button>
             </div>
           </template>
           <template v-else-if="gameStore.state.blitzBlockChoice">
