@@ -5,7 +5,7 @@ export function jumpKindFor(game: GameJson | null, playerId: unknown): 'jump' | 
   const id = String(playerId ?? '');
   const player = game && id ? [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => String(p.playerId) === id) : null;
   if (!player) return 'jump';
-  if (playerHasSkill(player, 'Pogo')) return 'pogo';
+  if (playerHasSkill(player, 'Pogo') || playerHasSkill(player, 'Pogo Stick')) return 'pogo'; // Astra 10-19: BB2020 spells it 'Pogo Stick'
   if (playerHasSkill(player, 'Leap')) return 'leap';
   return 'jump';
 }
@@ -563,6 +563,7 @@ function logActionKindPlate(report: Report, game: GameJson | null, context: LogA
       // icon never changes the row's tint - side null keeps the report's dice owner (fallbackSide, reportDiceOwner)
       const kind = REPORT_ACTION_KIND[id];
       if (kind === 'jump') return plate(jumpKindFor(game, report.playerId), null); // owner 10-16: Leap / Pogo by the mover's skill
+      if (id === 'spellEffectRoll') return plate(String(report.specialEffect ?? '').toLowerCase() === 'bomb' ? 'bomb' : 'wizard', null); // owner 10-19: a bomb's explosion roll wears the bomb
       return kind ? plate(kind, null) : null;
     }
   }

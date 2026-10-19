@@ -1,6 +1,5 @@
 import type { PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { decodePlayerSkills, normalizeSkillName } from '@fumbbl40k/ffb-protocol';
-import { settings } from './settings';
 
 /** Owner 10-18 ("Let's only display the [Hatred] icon if a player on the opposition team has the trait that the player
  *  has hatred for"): Hatred (upstream bb2025/Hatred.java) is valued by KEYWORD - the wire carries the hated keyword(s)
@@ -9,10 +8,10 @@ import { settings } from './settings';
  *  worth drawing only while someone on the OTHER team carries a hated keyword.
  *  Astra 10-18 r1: the base value falls back to the POSITION's (upstream RosterPlayer.java:211-212: own value, else
  *  the position's - the common wire shape puts "troll" on the position, nothing on the player); a zapped opponent (a
- *  frog) carries no keywords (ZappedPosition); a valued chip ("Hatred (Troll)") is judged by ITS keyword, the one
- *  pitch badge by the union; the preference is about ICONS, so text-mode lists are left whole.
+ *  frog) carries no keywords (ZappedPosition). The gate drives the pitch badge only (owner 10-19): the badge shows on
+ *  the union of the hated keywords; cards, rosters and the apothecary card always list Hatred.
  *  Fail soft: a Hatred whose keyword was not captured (bare "Hatred"), or an opponent roster without keyword data at all,
- *  keeps the icon - hiding on missing data would hide a real hatred. Settings-gated (hatredIconNeedsTarget). */
+ *  keeps the icon - hiding on missing data would hide a real hatred. Settings-gated (hatredIconNeedsTarget, pitch icons only). */
 
 export interface HatredPositionLike {
   positionId?: unknown;
@@ -79,40 +78,4 @@ export function hatredIconApplies(player: PlayerJson, opponents: TeamJson | null
   if (present === null) return true;
   for (const k of hated) if (present.has(k)) return true;
   return false;
-}
-
-/** The keyword a card / roster chip names: "Hatred (Troll)" -> "troll"; null for a bare "Hatred". */
-export function hatredChipKeyword(label: string): string | null {
-  const m = /^hatred \((.+)\)$/i.exec(label.trim());
-  return m ? text(m[1]) : null;
-}
-
-/** Is the preference in force for icon surfaces right now? (The setting, and icons - not text - are being drawn.) */
-export function hatredIconsGated(): boolean {
-  return settings.hatredIconNeedsTarget && settings.skillDisplay === 'icons';
-}
-
-/** The shared chip filter for every live skill-ICON surface (card, apothecary card, roster rows): a valued Hatred chip
- *  stays while ITS keyword is on the other team, a bare one by the union rule; everything else passes. No-op when the
- *  preference is off, text is being drawn, or there are no opponents to judge against. */
-export function filterHatredChips<T extends { name: string; label: string }>(
-  skills: readonly T[], player: PlayerJson, position: HatredPositionLike | null | undefined, opponents: TeamJson | null | undefined,
-): T[] {
-  if (!opponents || !hatredIconsGated()) return [...skills];
-  if (!skills.some((skill) => normalizeSkillName(skill.name) === 'hatred')) return [...skills];
-  const present = teamPlayerKeywords(opponents);
-  if (present === null) return [...skills];
-  const union = hatredIconApplies(player, opponents, position);
-  return skills.filter((skill) => {
-    if (normalizeSkillName(skill.name) !== 'hatred') return true;
-    const keyword = hatredChipKeyword(skill.label);
-    return keyword === null ? union : present.has(keyword);
-  });
-}
-
-/** The opposing team of the one that holds `playerId`, or null when he is on neither. */
-export function opponentsOf(game: { teamHome: TeamJson; teamAway: TeamJson }, playerId: string): TeamJson | null {
-  if (game.teamHome.playerArray.some((p) => p.playerId === playerId)) return game.teamAway;
-  if (game.teamAway.playerArray.some((p) => p.playerId === playerId)) return game.teamHome;
-  return null;
 }

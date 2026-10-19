@@ -66,6 +66,15 @@ export function passDestinationFromGame(
   const x = square[0];
   const y = square[1];
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= 26 || y < 0 || y >= 15) return null;
+  // Owner 10-19 (g1058, "pass markers after a dumpoff are persisting"): the bb2025 Dump-Off pass never reaches a
+  // clearing step - DumpOffBehaviour.java:47-50 only restores the turn mode and nulls throwerId, so passCoordinate (and
+  // throwerAction 'dumpOff') stay in the model until a later pass, hand-off, bomb or TTM clears them. The server's own
+  // end-of-dump-off signal is that throwerId clear: from then on the coordinate is history, not a destination. Not the
+  // turn mode (Astra review): StepIntercept.java:153/177 parks turnMode 'interception' mid-throw with the thrower and
+  // destination still set, then restores the old mode. Derived from each received model (no latch), so a resync or a
+  // dropped frame cannot strand it.
+  if (String((g as { throwerAction?: unknown }).throwerAction ?? '') === 'dumpOff'
+    && !String((g as { throwerId?: unknown }).throwerId ?? '')) return null;
   const actions = [
     String((g as { throwerAction?: unknown }).throwerAction ?? ''),
     String((g.actingPlayer as { playerAction?: unknown } | undefined)?.playerAction ?? ''),

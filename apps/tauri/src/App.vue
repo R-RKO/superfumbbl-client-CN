@@ -3329,7 +3329,7 @@ onBeforeUnmount(() => {
             <legend>Hatred</legend>
             <label class="row">
               <input v-model="settings.hatredIconNeedsTarget" type="checkbox" />
-              <span>Show the Hatred icon only when an opposing player has the hated trait</span>
+              <span>Pitch icons: show the Hatred icon only when an opposing player has the hated trait (cards and rosters always list it)</span>
             </label>
           </fieldset>
 

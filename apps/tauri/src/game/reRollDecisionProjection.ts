@@ -6,6 +6,7 @@ import { actionRollFor, type ActionRollProjection } from './actionRollProjection
 import { d6RerollNeeded, d6RerollRoll } from './d6Log';
 import { playerName } from './reportFormatter';
 import { adjacentSavageryTargetIds, dodgeSkillCancelledAt, normSquare, skillMarkedUsed } from './logic/availableActions';
+import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
@@ -31,9 +32,11 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
   if (!options.length && !clientWithheld) return null; // a client-withheld card stays up (empty) for the coach's own decline
   const prior = actionRollFor(rolls, playerId);
   const passTruth = prior?.pass ?? undefined;
-  const presentation = reRollPromptPresentation(dialog, passTruth);
+  // Owner 10-19: a Leap / Pogo Stick player's failed jump is offered as "Leap" / "Pogo Stick", not "Jump" (the wire says Jump).
+  const jumpKind = jumpKindFor(game, playerId);
+  const presentation = reRollPromptPresentation(dialog, passTruth, jumpKind);
   const modifier = reRollSourceName(dialog.modifyingSkill);
-  const action = reRollActionName(dialog.reRolledAction);
+  const action = jumpActionName(reRollActionName(dialog.reRolledAction), jumpKind);
   const name = playerName(game, playerId);
   const label = /foul ?appearance/i.test(String(dialog.reRolledAction ?? ''))
     ? (mine ? `${name} failed their Foul Appearance roll. Use a reroll?` : `${name} is deciding whether to reroll…`)
@@ -196,11 +199,18 @@ export function ttmSuperbTarget(messages: string[]): number | undefined {
   return undefined;
 }
 
+/** Owner 10-19: the wire's "Jump" reads as the mover's own skill - "Leap" or "Pogo Stick" (logActionPlates.jumpKindFor). */
+export function jumpActionName(action: string, jumpKind: 'jump' | 'leap' | 'pogo' | undefined): string {
+  if (!/^jump$/i.test(action.trim()) || !jumpKind || jumpKind === 'jump') return action;
+  return jumpKind === 'leap' ? 'Leap' : 'Pogo Stick';
+}
+
 export function reRollPromptPresentation(
   dp: Record<string, unknown>,
   passRoll?: ServerPassRollTruth,
+  jumpKind?: 'jump' | 'leap' | 'pogo',
 ): ReRollPromptPresentation {
-  const action = reRollActionName(dp.reRolledAction);
+  const action = jumpActionName(reRollActionName(dp.reRolledAction), jumpKind);
   const passTruth = passRoll?.reportId === 'throwTeamMateRoll'
     ? (/throw team.?mate|kick team.?mate/i.test(action) ? passRoll : undefined)
     : passRoll?.reportId === 'passRoll'

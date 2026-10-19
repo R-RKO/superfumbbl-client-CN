@@ -474,7 +474,6 @@ import { botGet, botPost } from '../game/forkChallenge';
 import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsMissing } from '../game/fumbblAuth';
 import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
 import { cardInjuryLines } from '../game/cardInjuryLines';
-import { opponentsOf } from '../game/hatredIconGate';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
 import { createCameraStickHandler, createHoldZoom, createHoldZoomOwner, createInGameActionRunner, type CrosshairActionDeps } from '../game/inGameActions';
@@ -4590,7 +4589,7 @@ function refreshApothecarySubject(): void {
   const entry = playerSideById(injury?.playerId);
   apoChoicePortrait.value = injury?.playerId && renderer ? renderer.playerPortrait(injury.playerId) : null;
   const apoTeam = entry ? (entry.side === 'home' ? gameStore.game.value?.teamHome : gameStore.game.value?.teamAway) : null;
-  apoChoiceSkills.value = entry && apoTeam ? playerCardSkills(apoTeam, entry.player, gameStore.game.value ? opponentsOf(gameStore.game.value, entry.player.playerId) : null) : [];
+  apoChoiceSkills.value = entry && apoTeam ? playerCardSkills(apoTeam, entry.player) : [];
   apoChoicePositionId.value = entry?.player.positionId ?? null;
   apoChoiceSide.value = entry?.side ?? injury?.side ?? null;
 }
@@ -7871,7 +7870,7 @@ watch(
 );
 watch(() => settings.skillConfig, () => applyMarkings(), { deep: true });
 watch(gameStore.game, () => applyMarkings());
-watch(() => [settings.hatredIconNeedsTarget, settings.skillDisplay], () => { applyMarkings(); refreshApothecarySubject(); }); // owner 10-18: the Hatred icon gate (Astra r1: an open apothecary card re-reads it too)
+watch(() => [settings.hatredIconNeedsTarget, settings.skillDisplay], () => { applyMarkings(); }); // owner 10-18: the Hatred icon gate (pitch icons only, owner 10-19)
 watchAssetModRendererRefresh(() => {
   const choice = gameStore.state.skillChoice;
   const ids = [popup.visible ? popup.playerId : null, choice?.playerId ?? null].filter((id): id is string => !!id);
@@ -8129,7 +8128,7 @@ const popupInfo = computed(() => {
       : cardStatLine(player, pos, statsMechanicFor(game), { MA: effMa, AV: effAv }),
     // Preserve the raw key for icons/rules text while the shared Modern/Classic
     // projection labels valued temporary Hatred as e.g. `Hatred (Orc)`. S87: `added` is judged against the position.
-    skills: playerCardSkills(team, player, side === 'home' ? game.teamAway : game.teamHome),
+    skills: playerCardSkills(team, player),
     spp,
     sppEarned,
     // Owner 2026-07-08: current location/injury status (KO'd / Badly Hurt / Seriously Hurt /

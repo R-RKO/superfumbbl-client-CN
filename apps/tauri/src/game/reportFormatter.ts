@@ -1,4 +1,4 @@
-import { effectiveArmour, type GameJson } from '@fumbbl40k/ffb-protocol';
+import { effectiveArmour, effectiveStat, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { isD6FaceValue, playerServerSide, teamServerSide, type D6FaceValue, type ServerSide } from '@fumbbl40k/ffb-pitch';
 import type { D6LogToken } from './d6Log';
 import { isBlockDieFaceValue, type BlockDieLogToken } from './blockDieLog';
@@ -406,7 +406,8 @@ function armourModifierSuffix(value: unknown, broken: boolean): string {
     if (abbreviation) {
       if (broken) consumed.push(abbreviation);
     } else {
-      annotations.push(name);
+      // Owner 10-19: the chainsaw's armour modifier is +3 (upstream skill/bb2025/Chainsaw.java) - say so: "+3 Chainsaw"
+      annotations.push(normalizedModifierName(name) === 'chainsaw' ? `+3 ${name}` : name);
     }
   }
   return `${annotations.length ? ` (${annotations.join(', ')})` : ''}${consumed.length ? ` + (${consumed.join(', ')})` : ''}`;
@@ -496,6 +497,33 @@ function playerOnSquare(game: GameJson | null, square: unknown): string | null {
 
 /** Owner 10-16: "<Player> regenerates and returns to the reserves." / "<Player> fails to regenerate." then the dice (both
  *  styles; the Graphical row keeps the place the sequence gives it, e.g. under the casualty). Null for a partial report. */
+/** Owner 10-19 (screenshot: "spell effect roll | <Player>, roll [2], successful false" for a bomb): the special-effect roll
+ *  reads by its effect - "<Player> is hit by the bomb's explosion" / "<Player> dodges the bomb's explosion" (Roll) (Needed);
+ *  a fireball and a lightning bolt alike, a zap "is zapped" / "resists the zap". `successful` = the effect TOOK
+ *  (DiceInterpreter.isSpecialEffectSuccesful: fireball / bomb 4+, lightning 2+, zap a 6 or >= ST). Roll 0 = no roll was
+ *  made (a prone player is hit outright), so no dice follow. */
+/** Astra 10-19: a Zap's target is the victim's ST clamped to 2..6 (DiceInterpreter: a 6, or >= getStrengthWithModifiers), read
+ *  from the player BEFORE the transformation (a zapped frog keeps `originalPlayer`, replayModel.ts). */
+function zapTarget(g: GameJson | null, playerId: unknown): number | null {
+  const id = String(playerId ?? '');
+  const player = g && id ? [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === id) : undefined;
+  if (!player) return null;
+  const base = ((player as { originalPlayer?: unknown }).originalPlayer ?? player) as Parameters<typeof effectiveStat>[0];
+  const st = effectiveStat(base, 'ST');
+  return Number.isFinite(st) && st > 0 ? Math.max(2, Math.min(6, st)) : null;
+}
+function specialEffectRow(r: Report, g: GameJson | null): { head: string; dice: string | null } | null {
+  const effect = String(r.specialEffect ?? '').toLowerCase();
+  if (!effect || typeof r.successful !== 'boolean') return null;
+  const name = pn(g, r.playerId);
+  const hit = r.successful === true;
+  const thing = effect === 'bomb' ? "the bomb's explosion" : effect === 'fireball' ? 'the fireball' : effect === 'lightning' ? 'the lightning bolt' : effect === 'zap' ? 'the zap' : `the ${effect}`;
+  const head = effect === 'zap' ? (hit ? `${name} is zapped!` : `${name} resists ${thing}.`) : (hit ? `${name} is hit by ${thing}` : `${name} dodges ${thing}`);
+  const roll = Number(r.roll);
+  if (!Number.isFinite(roll) || roll <= 0) return { head, dice: null };
+  const target = effect === 'lightning' ? 2 : effect === 'zap' ? zapTarget(g, r.playerId) : 4;
+  return { head, dice: rollWithTarget({ roll, minimumRoll: target } as unknown as Report) };
+}
 function regenerationRow(r: Report, g: GameJson | null): { head: string; dice: string } | null {
   if (r.successful === true) return { head: `${pn(g, r.playerId)} regenerates and returns to the reserves.`, dice: rollWithTarget(r) };
   if (r.successful === false) return { head: `${pn(g, r.playerId)} ${FAILS} to regenerate.`, dice: rollWithTarget(r) };
@@ -815,6 +843,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   dauntlessRoll: skillRoll('uses Dauntless'),
   // Owner 10-16 (both styles): "<Player> regenerates and returns to the reserves." / "<Player> fails to regenerate."
   regenerationRoll: (r, g) => { const row = regenerationRow(r, g); return row ? `${row.head} | ${row.dice}` : skillRoll('regenerates')(r, g); },
+  // Owner 10-19: a bomb's / spell's effect roll names the effect, never "spell effect roll".
+  spellEffectRoll: (r, g) => { const row = specialEffectRow(r, g); return row ? (row.dice ? `${row.head} | ${row.dice}` : row.head) : `${pn(g, r.playerId)} | ${humanize(String(r.specialEffect ?? 'spell effect'))} roll`; },
   // Owner 10-15 (both styles). Upstream StepFoulAppearance: the ACTING player (playerId) rolls against the Foul
   // Appearance player (the defender: the report's defenderId when sent, else the game's current defender).
   foulAppearanceRoll: (r, g) => {
