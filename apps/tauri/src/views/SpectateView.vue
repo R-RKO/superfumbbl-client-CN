@@ -11614,6 +11614,15 @@ onMounted(async () => {
                 return;
               }
             }
+            // P0 owner 10-20 (Astra P1): a Ball and Chain player never blocks or blitzes by clicking an enemy - upstream's
+            // LogicModule offers him Move only (preventRegularBlockAction / preventRegularBlitzAction); the store refuses the
+            // declare too (declareAction), this is the teachable surface.
+            if (movesRandomly(g, actActingId)) {
+              const p = enemySq ? renderer?.squareToCanvas(enemySq) : null;
+              showToast('Ball and Chain can only take a Move action', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              o66AggroStage.value = null;
+              return;
+            }
             const adjacent = adjacentStandingEnemyIds(g, actActingId).includes(playerId);
             if (!adjacent && endActConfirm.value) return;
             // #93 (owner): a BLITZ (distant enemy) can only target a player that canBeBlocked (STANDING||MOVING) —

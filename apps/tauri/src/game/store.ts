@@ -99,7 +99,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -27712,6 +27712,13 @@ export const gameStore = {
   declareAction(playerId: string, playerAction: string, leapingOverride?: boolean, options: { bigGuyActivate?: boolean; foulChainsaw?: boolean } = {}) {
     if (!play.active || !game.value) return;
     if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return; }
+    // P0 owner 10-20 (Astra P1): the shared declaration boundary refuses what upstream's LogicModule never offers a Ball and
+    // Chain player (BALL_AND_CHAIN_PREVENTED_DECLARES) - the adjacent-enemy click shortcut and any other gesture that
+    // bypasses availableActions() land here. Move (the random scatter) and the rest are untouched.
+    if (movesRandomly(game.value, playerId) && BALL_AND_CHAIN_PREVENTED_DECLARES.has(playerAction)) {
+      log('system', `ignored: ${playerName(game.value, playerId)} has Ball and Chain - only a Move action is allowed`);
+      return;
+    }
     // Owner 09-09: upstream declares ONCE — a plain-Move re-declare on the player the server already has acting
     // under a walk-capable action (Secure the Ball, Stand Up, Move…) would REPLACE that action server-side
     // (StepInitMoving changePlayerAction). The left-click auto-Move shortcut and friendly-switch fallbacks route

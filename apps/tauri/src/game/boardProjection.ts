@@ -62,8 +62,14 @@ export function boardTurnKey(g: GameJson): string {
   // (every real team-turn boundary increments the incoming team's turnNr, StepEndTurn), so no side flip inside this
   // turn, the bomb's end included, is read as a boundary.
   if (bombMode) return `${MID_ACTIVATION_SUB_MODES[bombMode]}:?:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`;
+  // RickWreckless 10-20 (FUMBBL g1955027 #106-#108, 1.0.246): a Blitz on the kick-off Blitz! / Charge free turn (turn mode
+  // `blitz`) enters selectBlitzTarget and returns to `blitz` (upstream setTurnMode(getLastTurnMode())). The table's
+  // `regular` parent read that as two team-turn boundaries inside the free turn: the acting mirror was cleared and the
+  // end of the blitz read "nothing declared". A sub-mode's parent is the phase it returns to: the server's lastTurnMode
+  // when that is one of the activation phases (`regular` / `blitz`), else the table's default.
   const sub = MID_ACTIVATION_SUB_MODES[turnMode];
-  const mode = sub ?? g.turnMode;
+  const lastMode = String(g.lastTurnMode ?? '');
+  const mode = sub ? (sub !== 'blitz' && (lastMode === 'regular' || lastMode === 'blitz') ? lastMode : sub) : g.turnMode;
   // JamToast / JDWhitee 10-18 (1.0.235-236, FUMBBL g1954283 #3290-3293, g1954254 #1751-1754): a defender's Trickster
   // runs as a sub-mode of the blitzing team's turn AND flips homePlaying to the defender for its frames. The side of a
   // mid-activation sub-mode is the ACTIVATION's team (the acting player's), never the flipped homePlaying, so the key

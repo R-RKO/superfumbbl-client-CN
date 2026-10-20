@@ -3213,8 +3213,29 @@ export function availableActions(
   ctx: ClientStateContext,
   selectedPlayerId: string,
 ): CoachAction[] {
-  return stablePartitionEnabledFirst(availableActionsRaw(game, ctx, selectedPlayerId));
+  const raw = availableActionsRaw(game, ctx, selectedPlayerId);
+  const rows = game && selectedPlayerId && movesRandomly(game, selectedPlayerId)
+    ? raw.filter((a) => a.kind !== 'declare' || !BALL_AND_CHAIN_PREVENTED_DECLARES.has(a.action))
+    : raw;
+  return stablePartitionEnabledFirst(rows);
 }
+/** P0 owner 10-20 ("Ball and chain players should not have access to blitz ... match upstream's logic module"): the
+ *  declares upstream's LogicModule.is*ActionAvailable refuses a player carrying the properties bb2025/BallAndChain.java
+ *  registers - preventRegularBlockAction (isBlockActionAvailable:288, isMultiBlockActionAvailable:304,
+ *  isSpecialBlockActionAvailable:723), preventRegularBlitzAction (:352), preventRegularFoulAction (:364),
+ *  preventRegularPassAction (:382), preventRegularHandOverAction (:404), preventThrowTeamMateAction (:413),
+ *  preventKickTeamMateAction (:443), preventStandUpAction (:482), preventSecureTheBallAction (:340). Dropped after the
+ *  ordinary assembly for the fresh menu and the acting player's change set alike. NOT in this set, as upstream does not
+ *  gate them on these properties: Move (the random scatter, #179 movesRandomly), Recover (confusion / gaze already follow
+ *  preventRecoverFrom* via PREVENT_RECOVER_FROM_*_SKILLS; eye gouge is never prevented), Punt (preventPuntAction is not
+ *  Ball and Chain's), Throw Bomb, Hypnotic Gaze, the star specials, End Activation. */
+export const BALL_AND_CHAIN_PREVENTED_DECLARES: ReadonlySet<string> = new Set([
+  // Astra 10-20: NOT kickEmBlock / kickEmBlitz (LogicModule:521 checks the Kick 'Em skill, Chainsaw, downed targets and
+  // the blitz budget, never the regular Block / Blitz prevention) nor putridRegurgitationBlitz (the follow-up after a
+  // block, PutridRegurgitationBlitzLogicModule:83): upstream offers those to a Ball and Chain carrier.
+  'block', 'multipleBlock', 'blitzMove', 'standUpBlitz',
+  'foulMove', 'passMove', 'handOverMove', 'throwTeamMateMove', 'kickTeamMateMove', 'standUp', 'secureTheBall',
+]);
 
 function availableActionsRaw(
   game: GameJson | null | undefined,
