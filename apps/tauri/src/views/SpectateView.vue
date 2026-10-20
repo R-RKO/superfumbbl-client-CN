@@ -181,7 +181,7 @@ function replayDecisionSurfaces(): void {
   for (const replay of decisionSurfaceReplays) replay();
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
 import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
@@ -3208,6 +3208,21 @@ watch(
   () => renderer?.setKickPickLock(kickConfirmCard.value?.square ?? null),
   { flush: 'sync' },
 );
+// Owner 10-20 (RickWreckless g1955027): the free-select Pass "Throw to ...?" card (store-held, live-derived).
+const passConfirmCard = computed(() => gameStore.freeSelectPassConfirmLive());
+watch(() => passConfirmCard.value?.seq, () => { reactivePromptDragPos.passConfirm = null; });
+/** Beside the nominated square (the shadowing-card offset) so the square and its pass-roll cue stay visible. */
+const passConfirmAnchor = computed(() => {
+  const card = passConfirmCard.value;
+  const host = pitchHost.value;
+  const c = card && renderer ? renderer.squareToCanvas(card.square) : null;
+  if (!c || !host) return undefined;
+  return {
+    x: Math.min(Math.max(c.x + 44, 8), Math.max(host.clientWidth - 376, 8)),
+    y: Math.min(Math.max(c.y - 112, 8), Math.max(host.clientHeight - 168, 8)),
+    leftEdge: true,
+  };
+});
 // Owner o66aj: INTERACTIVE KICK PLACEMENT — arm the receiving-half aim squares as clickable crosshairs; the
 // click routes to resolveKickPlacement in onTilePick. Cleared (setTilePick(false)) when the pick resolves.
 watch(
@@ -4311,7 +4326,7 @@ type ReactivePromptDragKey =
   | 'apothecaryChoice' | 'apothecaryD16' | 'selectSkill' | 'endTurnWarn' | 'endActConfirm'
   | 'blitzMove' | 'keywordChoice' | 'cardChoice' | 'cardBuy' | 'coinChoice' | 'receiveChoice'
   | 'yesNo' | 'blockAlternative' | 'followup' | 'blockPartial' | 'multiBlock'
-  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer' | 'kickConfirm';
+  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer' | 'kickConfirm' | 'passConfirm';
 type ReactivePromptDragPos = { x: number; y: number };
 const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePromptDragPos | null>>({
   skillChoice: null,
@@ -4327,6 +4342,7 @@ const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePro
   endTurnWarn: null,
   endActConfirm: null,
   kickConfirm: null,
+  passConfirm: null,
   blitzMove: null,
   keywordChoice: null,
   cardChoice: null,
@@ -9327,7 +9343,28 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
   placeCtxMenu(items, x, y, target.playerId);
 }
 
+/** The plotted-route cancel a right-click used to run on the acting player (owner 10-20: now the rail menu's
+ *  "Cancel plotted route" row; a right-click on grass / off-pitch still runs it directly). */
+function cancelPlottedRoute(): void {
+  if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
+  clearO66Arms();
+  ctxMenu.visible = false;
+  playCancelCue();
+}
+/** Owner 10-20 (RickWreckless g1955027): "we need to be sure users can cancel plots" - the rail menu row. */
+function plottedRouteCancelRow(): MenuItem {
+  return {
+    label: CANCEL_PLOTTED_ROUTE_LABEL,
+    action: () => {
+      ctxMenu.visible = false;
+      if ((o66PendingMove.value?.route.length ?? 0) === 0) return; // the route already went (sent / cleared)
+      cancelPlottedRoute();
+    },
+  };
+}
+
 function openContextMenu(target: ContextTarget, x: number, y: number) {
+  const fromOffPitch = !!target.offPitch; // owner 10-20: an off-pitch right-click keeps cancelling a plotted route
   // Owner 10-14: an off-pitch right-click (sidelines, dugouts, surround) is the acting player's rail menu when I have
   // an active player (opened AT THE CURSOR, same placeCtxMenu as the on-token click), else the empty-square cascade
   // below; spectating / not my turn keep today's no-op.
@@ -9369,6 +9406,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   if (endActConfirm.value) { ctxMenu.visible = false; cancelEndActivation(); return; }
   if (endTurnWarnCount.value !== null) { ctxMenu.visible = false; cancelEndTurnWarn(); return; }
   if (kickConfirmCard.value) { ctxMenu.visible = false; gameStore.cancelKickSquare(); return; } // owner 10-13: = Go back
+  if (passConfirmCard.value) { ctxMenu.visible = false; cancelPassCard(); return; } // owner 10-20: = Go back
   // Owner 10-05: a right-click with a player switch pending only cancels it (never an end of the activation). After
   // the confirmation branches above (Astra): an open prompt owns the gesture.
   if (cancelDeferredFriendlySwitch()) { ctxMenu.visible = false; popup.visible = false; return; }
@@ -9380,15 +9418,17 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // Drift backstop: Pixi normally consumes an open plotted route before hit-testing and calls
   // onWaypointPlanCancel. If the view owns a route before its overlay reaches Pixi, the same right-click still
   // cancels the plan and cannot become a player/pitch context-menu gesture.
-  // R4.2: menu-bound acting-player clicks retain the pre-09-01 plotted-route cancellation.
-  if ((o66PendingMove.value?.route.length ?? 0) > 0
-      && (controlledActingTarget ? disposition === 'menu' : !selectedToken)) {
-    if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
-    clearO66Arms();
-    ctxMenu.visible = false;
-    playCancelCue();
+  // Owner 10-20 (RickWreckless g1955027, "menu wouldn't open on him"): a right-click on my acting player whose rail
+  // menu has an enabled row OPENS that menu even with a route plotted (it used to cancel the route and open nothing);
+  // the route stays cancellable from the menu's "Cancel plotted route" row, Esc, and a right-click on grass/off-pitch.
+  const routeRightClick = actingRightClickWithRoute({
+    hasRoute: (o66PendingMove.value?.route.length ?? 0) > 0, controlledActingTarget, disposition, selectedToken, offPitch: fromOffPitch,
+  });
+  if (routeRightClick === 'menuWithRouteCancel') {
+    placeCtxMenu(withPlottedRouteCancelRow(rows, true, plottedRouteCancelRow()), x, y, target.playerId);
     return;
   }
+  if (routeRightClick === 'cancelRoute') { cancelPlottedRoute(); return; }
   const boardPick = gameStore.state.playerPick;
   const boardPickUndo = boardPick?.key.startsWith('pchoice:dwarfenWisdom:')
     || boardPick?.key.startsWith('pchoice:knuckleDusters:')
@@ -9861,6 +9901,54 @@ function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' 
   o66PendingHandOff.value = null;
 }
 
+/** The pass commit the shared nominate/confirm second click runs (walk-then-pass from a plotted route, else the
+ *  direct pass + destination bridge), then the same teardown. Owner 10-20: the free-select card's Confirm runs it. */
+function commitNominatedPass(square: [number, number]): void {
+  if (!commitPlannedPassFromDestination(null, square, null)) sendDirectPassWithBridge(square);
+  o66PendingPass.value = null;
+  o66PendingThrowKind.value = null;
+  clearHailMaryPassRulerAfterCommit();
+  o66PendingHandOff.value = null;
+}
+/** Owner 10-20 (RickWreckless g1955027): free-select Pass, a click on an in-template square raises the "Throw to
+ *  ...?" card (nothing sent); a click on another in-template square moves it. The pass cue marks the square. */
+function nominateFreePass(square: [number, number]): void {
+  if (!gameStore.nominateFreeSelectPass(square)) return;
+  o66PendingPass.value = square;
+  o66PendingThrowKind.value = 'pass';
+  o66PendingHandOff.value = null;
+}
+/** Owner 10-20: Confirm = exactly what the second click sent before. A card no longer live sends nothing. */
+function confirmPassCard(): void {
+  // Astra 52f8d4a6a P2: revalidate at Confirm. Walk-then-pass keeps the destination check (Space's passTargetInRangeFrom);
+  // a direct pass is re-checked by the store against the passer's current square.
+  const plannedFrom = plannedPassDestination();
+  const g = gameStore.game.value;
+  const square = passConfirmCard.value?.square ?? null;
+  if (plannedFrom && g && square && !passTargetInRangeFrom(g, plannedFrom, square)) {
+    const p = renderer?.squareToCanvas(square);
+    showToast(`Out of range from ${squareLabel(plannedFrom[0], plannedFrom[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+    cancelPassCard();
+    return;
+  }
+  if (!gameStore.confirmFreeSelectPass(commitNominatedPass, { fromPlannedRoute: !!plannedFrom })) { o66PendingPass.value = null; o66PendingThrowKind.value = null; }
+}
+/** Owner 10-20: Go back (button / right-click / Esc): drop the nomination, keep free-select armed. No wire. */
+function cancelPassCard(): void {
+  gameStore.cancelFreeSelectPassConfirm();
+  if (o66PendingThrowKind.value === 'pass') { o66PendingPass.value = null; o66PendingThrowKind.value = null; }
+}
+/** Owner 10-20: a right-click on grass with a route plotted is consumed by the renderer's waypoint cancel; under the
+ *  pass card it is the card's Go back only (routeRightClickAnswersOpenPrompt doctrine): the route is redrawn. */
+function routeRightClickAnswersPassCard(): boolean {
+  if (!passConfirmCard.value) return false;
+  const actingId = currentActingId();
+  if (o66PendingMove.value) setO66PathFromOrigin(playerSquareById(actingId), o66PendingMove.value.route, actingId);
+  ctxMenu.visible = false;
+  cancelPassCard();
+  return true;
+}
+
 /** U9c: first server-offered Punt target click nominates; the same click again commits the field coordinate. */
 function nominateOrConfirmPunt(g: Parameters<typeof o66SquareClick>[0], actingId: string, square: [number, number]): void {
   const ix = o66SquareClick(g, o66Ctx(), square);
@@ -10045,6 +10133,7 @@ function o66ConfirmPending(): boolean {
   if (wideRailActivationPrompt.value) return true;
   if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
   if (endActConfirm.value) { confirmEndActivation(); return true; }
+  if (passConfirmCard.value) { confirmPassCard(); return true; } // owner 10-20: Space = the card's Confirm
   if (setupConfirm.value) { if (setupConfirm.value.problems.length) cancelSetupConfirm(); else confirmSetupNow(); return true; }
   if (gameStore.state.followupChoice) { answerFollowup(true); return true; }
   // S40: with a modifying skill there are three answers and no default: Space is consumed without a wire.
@@ -10425,6 +10514,7 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
  *  END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical. */
 function escapeCascade(): void {
   if (kickConfirmCard.value) { gameStore.cancelKickSquare(); return; } // owner 10-13: Esc = Go back, keep aiming
+  if (passConfirmCard.value) { cancelPassCard(); return; } // owner 10-20: Esc = Go back, free-select stays armed
   if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
     popup.visible = false;
   } else if (settings.order66 && gameStore.isPlaying.value) {
@@ -11455,6 +11545,7 @@ onMounted(async () => {
             return;
           }
           // Receiver-click Pass uses the same two-click nominate/confirm rail as square targeting.
+          if (passConfirmCard.value) gameStore.cancelFreeSelectPassConfirm(); // owner 10-20: the receiver replaces the card's square
           nominateOrConfirmThrow(ix.square, 'pass');
           return;
         }
@@ -12057,8 +12148,9 @@ onMounted(async () => {
             return;
           }
           // Free-select PASS treats any in-template tile as a two-click throw target and ignores non-template tiles.
+          // Owner 10-20 (g1955027): the first click raises the "Throw to ...?" card; Confirm on the card throws.
           if (st === 'PASS' && gameStore.state.freeSelectPass) {
-            if (passTargetInTemplate(g, actingId, c)) nominateOrConfirmThrow(c, 'pass');
+            if (passTargetInTemplate(g, actingId, c)) nominateFreePass(c);
             return;
           }
           // BOMB is stationary: every legal tile click nominates a bomb target before movement routing.
@@ -12228,6 +12320,7 @@ onMounted(async () => {
   renderer.onWaypointPlanCancel = () => {
     deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
     if (routeRightClickAnswersOpenPrompt()) return; // Astra 10-10 (P3): under an open prompt this is "Go back", nothing else
+    if (routeRightClickAnswersPassCard()) return; // owner 10-20: likewise under the free-select Pass card
     if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
@@ -16286,6 +16379,20 @@ function sendChat() {
           <template #actions>
             <button class="rr-use" data-pad-primary @click="gameStore.confirmKickSquare()">Confirm</button>
             <button class="rr-decline" data-pad-cancel @click="gameStore.cancelKickSquare()">Go back</button>
+          </template>
+        </PitchConfirmationPanel>
+        <!-- Owner 10-20 (RickWreckless g1955027): free-select Pass ("Throw Pass" from the passer's menu). The first click
+             on an in-template square holds it here; Confirm sends the same CLIENT_PASS the second click sent; Go back
+             (or right-click / Esc) drops it and keeps free-select armed; another in-template click moves it. -->
+        <PitchConfirmationPanel v-if="passConfirmCard" :key="'pass-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
+          title="Throw Pass?" label="Throw Pass?" test-id="free-select-pass-confirm" compact
+          :position-style="reactivePromptStyle('passConfirm', passConfirmAnchor)" draggable
+          :data-square="passConfirmCard.square.join(',')"
+          @drag-start="startReactivePromptDrag('passConfirm', $event)">
+          Throw to {{ squareLabel(passConfirmCard.square[0], passConfirmCard.square[1]) }}?
+          <template #actions>
+            <button class="rr-use" data-pad-primary @click="confirmPassCard()">Confirm</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelPassCard()">Go back</button>
           </template>
         </PitchConfirmationPanel>
 

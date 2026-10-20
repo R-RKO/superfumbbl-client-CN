@@ -350,7 +350,11 @@ export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrai
   // SkillMechanic.countAdvancements). Temporary grants live in temporarySkillsMap, so they never count.
   const taken = advancementsTaken((player.skillArray ?? []).filter((n) => !baseline.has(n)));
   const progress = playerProgress(player, pos);
-  const injury = rosterInjuryBadge(game, playerId, r as unknown as Record<string, unknown> | undefined);
+  // Owner 10-20: "On the MVP pane, let's suppress Badly Hurt / KO results from being displayed. Only lasting injuries
+  // that occurred in this game should be present." The card keeps SH / NI / a stat loss / RIP suffered this game (the
+  // gold box) and drops BH and KO; a Miss Next Game carried INTO the game (MNG) is not this game's either. The Roster
+  // tab's rows are untouched (owner 10-02: KO'd and BH players are tracked there).
+  const injury = mvpPaneInjury(rosterInjuryBadge(game, playerId, r as unknown as Record<string, unknown> | undefined));
   return {
     playerId, nr: player.playerNr, name: player.playerName, position: positionNameFor(game, side, player.positionId), positionId: player.positionId,
     portrait, spp, sppGain,
@@ -360,6 +364,12 @@ export function mvpCardFor(game: GameJson, side: Side, playerId: string, portrai
     value: progress.value, advancements: progress.advancements, injury, injuryNew: rosterInjuryIsNew(game, playerId, injury),
     awards: Number((r as { playerAwards?: number } | undefined)?.playerAwards ?? 0),
   };
+}
+
+/** Owner 10-20: the MVP card shows only a lasting injury suffered this game - never BH, KO or a carried-in MNG. */
+export const MVP_PANE_HIDDEN_INJURIES: ReadonlySet<RosterInjuryBadge> = new Set<RosterInjuryBadge>(['bh', 'ko', 'mng']);
+export function mvpPaneInjury(badge: RosterInjuryBadge | null): RosterInjuryBadge | null {
+  return badge && MVP_PANE_HIDDEN_INJURIES.has(badge) ? null : badge;
 }
 
 /** The side that conceded (server dedicated-fans stats carry it): it forfeits its MVP, so no "Awaiting result". */

@@ -79,6 +79,10 @@ export const POSITION_TYPE_BY_NAME: Record<string, RingType> = {
   grombrindal: 'star',
   gufflepusmaw: 'star',
   halfling: 'lineman',
+  // Owner 10-20: Halfling Hopefuls ring as LINEMAN (grey) - bare + race-qualified keys (the BB2025 Halfling roster's
+  // lineman position is named 'Halfling Hopeful').
+  hopeful: 'lineman',
+  halflinghopeful: 'lineman',
   helmutwulf: 'star',
   highelflineman: 'lineman',
   hobgoblin: 'lineman',

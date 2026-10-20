@@ -107,6 +107,37 @@ export function selectedActingRightClick(rows: ReadonlyArray<RightClickRow>, sta
   return state && TARGET_PENDING_STATES.has(state) ? 'menu' : 'cancel';
 }
 
+/** Owner 10-20 (RickWreckless, FUMBBL g1955027: "Declared pass and couldn't work out how to pass to empty square, menu
+ *  wouldn't open on him"). A right-click while a walk route is plotted:
+ *  - on my controlled acting player whose rail menu has an enabled row ('menu'): 'menuWithRouteCancel' = open the rail
+ *    menu with a "Cancel plotted route" row (it used to cancel the route and open nothing, so a left-click on any
+ *    empty square during a declared pass made the menu unreachable);
+ *  - on my controlled acting player with no enabled row ('cancel'): 'passThrough' (today's handling below);
+ *  - an OFF-PITCH right-click routed to the acting player (offPitchRightClickRoute 'acting-menu'): unchanged, a 'menu'
+ *    disposition cancels the route ('cancelRoute'), a 'cancel' one passes through;
+ *  - anywhere else that is not the selected token (empty square, other player): 'cancelRoute' (unchanged);
+ *  - no route plotted: 'passThrough'. Esc keeps cancelling the route (escCascadeDecision). */
+export function actingRightClickWithRoute(input: {
+  hasRoute: boolean; controlledActingTarget: boolean; disposition: 'menu' | 'cancel'; selectedToken: boolean; offPitch?: boolean;
+}): 'menuWithRouteCancel' | 'cancelRoute' | 'passThrough' {
+  if (!input.hasRoute) return 'passThrough';
+  if (input.controlledActingTarget) {
+    if (input.disposition !== 'menu') return 'passThrough';
+    return input.offPitch ? 'cancelRoute' : 'menuWithRouteCancel';
+  }
+  return input.selectedToken ? 'passThrough' : 'cancelRoute';
+}
+
+/** Owner 10-20: the rail menu row that cancels a plotted route sits just above the End Activation row (or last). */
+export const CANCEL_PLOTTED_ROUTE_LABEL = 'Cancel plotted route';
+export function withPlottedRouteCancelRow<T extends { endActivation?: boolean }>(rows: ReadonlyArray<T>, hasRoute: boolean, row: T): T[] {
+  if (!hasRoute) return [...rows];
+  const end = rows.findIndex((r) => r.endActivation);
+  const out = [...rows];
+  out.splice(end < 0 ? out.length : end, 0, row);
+  return out;
+}
+
 /** Owner 10-14 (JLeav, 1.0.208: "right clicking off pitch doesn't react like a normal right click"). Routing of a
  *  right-click that landed OFF the 26x15 grid (sidelines, dugouts, surround):
  *  - 'acting-menu': my turn, I control the acting player -> the acting player's rail menu, as right-clicking him does;

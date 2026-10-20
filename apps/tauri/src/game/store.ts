@@ -709,6 +709,9 @@ const legacyState = reactive({
   opponentChoicePendingPlayerId: null as string | null,
   /** Free-select Pass routes any in-template square to pass targeting and clears when PASS ends; presentation only. */
   freeSelectPass: false,
+  /** Owner 10-20 (RickWreckless g1955027): the free-select Pass square waiting on the "Throw to ...?" card. Client-only
+   *  (no server dialog); it renders from freeSelectPassConfirmLive, so it dies with the arm / activation / a dialog. */
+  freeSelectPassConfirm: null as { square: [number, number]; playerId: string; seq: number } | null,
   /** A planner-owned pass target that crossed the real send boundary. This is not server truth and never drives
    *  legality; it only keeps the destination bridge alive between accepted CLIENT_PASS and the canonical
    *  passCoordinate echo. Plan cancellation/replacement cannot manufacture it. */
@@ -10781,6 +10784,7 @@ function freeSelectPassOnModelApplied() {
   if (!g || !canFreeSelectPass(g, { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome })) {
     state.freeSelectPass = false;
   }
+  if (state.freeSelectPassConfirm && !gameStore.freeSelectPassConfirmLive()) state.freeSelectPassConfirm = null;
 }
 
 /**
@@ -12309,6 +12313,7 @@ function resetPlayback() {
   state.swoopDestination = null; // owner 10-19: nor a stale Swoop distance result
   lastSentPushKey = ''; // g330 #11: fresh game — drop the stale-push guard
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
+  state.freeSelectPassConfirm = null; // owner 10-20: nor its pending "Throw to ...?" card
   state.ttmRailTerminal = null; // fresh game/reconnect — no historical landing may retire a new rail
   state.passDestination = null; // a server-owned destination never crosses a snapshot boundary
   cancelBombDestinationHold(); // Astra review 10-03: nor does a pending hold on one
@@ -29435,6 +29440,55 @@ export const gameStore = {
    *  intents they are and can't race the auto-clear. */
   disarmFreeSelectPass() {
     state.freeSelectPass = false;
+    state.freeSelectPassConfirm = null;
+  },
+  /** Owner 10-20 (RickWreckless g1955027, "couldn't work out how to pass to empty square"): with free-select Pass
+   *  armed, a click on an in-template square raises the "Throw to ...?" card and sends NOTHING. A click on another
+   *  in-template square moves the card (re-nominates). False = not answerable now (nothing held). */
+  nominateFreeSelectPass(square: [number, number]): boolean {
+    const g = game.value;
+    if (!state.freeSelectPass || !play.active || !g) return false;
+    const playerId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (!playerId || !passTargetInTemplate(g, playerId, square)) return false;
+    state.freeSelectPassConfirm = { square: [square[0], square[1]], playerId, seq: (state.freeSelectPassConfirm?.seq ?? 0) + 1 };
+    if (!gameStore.freeSelectPassConfirmLive()) { state.freeSelectPassConfirm = null; return false; }
+    return true;
+  },
+  /** Owner 10-20: the held free-select Pass square, only while it is still answerable: seated, my turn, free-select
+   *  still armed, the same acting player still in a live PASS, and no server dialog up. The card renders from this
+   *  and Confirm re-checks it, so it closes the moment the activation ends or a dialog replaces it. */
+  freeSelectPassConfirmLive(): { square: [number, number]; playerId: string; seq: number } | null {
+    const pending = state.freeSelectPassConfirm;
+    const g = game.value;
+    if (!pending || !state.freeSelectPass || !play.active || !g || !isMyTurn(g)) return null;
+    if (g.dialogParameter != null) return null;
+    if (String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') !== pending.playerId) return null;
+    if (!canFreeSelectPass(g, { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome })) return null;
+    return pending;
+  },
+  /** Owner 10-20: Confirm on the "Throw to ...?" card = exactly the throw the second click sent before (the view
+   *  passes its commit: walk-then-pass from a plotted route, else the direct pass + destination bridge; headless
+   *  default sendPassTarget). Sends nothing when the card is no longer live. */
+  confirmFreeSelectPass(
+    commit: (square: [number, number]) => void = (square) => { gameStore.sendPassTarget(square); },
+    /** The view's walk-then-pass: it validated the square against the plotted route's destination itself. */
+    opts: { fromPlannedRoute?: boolean } = {},
+  ): boolean {
+    const pending = gameStore.freeSelectPassConfirmLive();
+    state.freeSelectPassConfirm = null;
+    if (!pending) return false;
+    // Astra 52f8d4a6a P2: the card can outlive a further step echo; a direct pass is re-checked against the passer's
+    // CURRENT square at Confirm (as the old second click and Space did). Out of range: send nothing, free-select stays.
+    if (!opts.fromPlannedRoute && !passTargetInTemplate(game.value!, pending.playerId, pending.square)) {
+      log('system', `ignored: pass target [${pending.square[0]},${pending.square[1]}] is out of range from the passer's square; pick a target again`);
+      return false;
+    }
+    commit([pending.square[0], pending.square[1]]);
+    return true;
+  },
+  /** Owner 10-20: Go back / right-click / Esc on the card: drop the held square, keep free-select armed. No wire. */
+  cancelFreeSelectPassConfirm() {
+    state.freeSelectPassConfirm = null;
   },
   /** Owner 2026-07-15 (#5 bomb-select): the bomb was already declared (throwBomb → state BOMB); a click on a
    *  range square sends the bare CLIENT_PASS the server resolves as the bomb throw (3×3 blast). Deliberately
@@ -30084,6 +30138,8 @@ export const gameStore = {
 // ANY reason (the ball in play, the setting switched off, a dialog, ownership, a phase change), not only when the
 // pregame driver next runs. The card and the crosshair lock follow kickConfirmLive and close with it.
 watch(() => gameStore.kickConfirmLive() === null, (dead) => { if (dead && state.kickConfirm) state.kickConfirm = null; }, { flush: 'sync' });
+// Owner 10-20: likewise the free-select Pass card closes with its live derive (activation end, dialog, game change).
+watch(() => gameStore.freeSelectPassConfirmLive() === null, (dead) => { if (dead && state.freeSelectPassConfirm) state.freeSelectPassConfirm = null; }, { flush: 'sync' });
 
 // DEV verification hook: expose the REAL store instance — console dynamic imports otherwise create a second module copy whose pushes never render.
 if (import.meta.env.DEV) {

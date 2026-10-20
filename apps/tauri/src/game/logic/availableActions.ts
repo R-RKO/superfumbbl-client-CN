@@ -1860,7 +1860,17 @@ export function blockAlternativeOffers(game: GameJson, playerId: string): BlockA
     'canPerformArmourRollInsteadOfBlockThatMightFail',
     'canPerformArmourRollInsteadOfBlockThatMightFailWithTurnover',
   ]);
+  // Owner 10-20: "Projectile Vomit is being offered after a block action has been performed. Let's also suppress that on
+  // all context menus." The owner's suppression rule: once the acting player has blocked (actingPlayer.hasBlocked) the
+  // vomit row is gone from every menu that reads these offers (the acting player's Blitz flavours, the target's attack
+  // menu, the attack preview). Upstream agrees for the cases that follow a block - a Frenzy second block is scheduled
+  // with askForBlockKind=false / usingVomit=false (bb2025 StepEndBlocking:291, generator/BlitzBlock:29) and Multiple
+  // Block never offers a vomit (BlockLogicExtension:95). The Putrid Regurgitation ADDITIONAL vomit after a block is its
+  // own row (putridRegurgitationBlitz), untouched.
+  const acting = game.actingPlayer as { playerId?: string | null; hasBlocked?: boolean } | undefined;
+  const blockedAlready = !!acting && String(acting.playerId ?? '') === playerId && acting.hasBlocked === true;
   return (Object.keys(BLOCK_ALTERNATIVE_GRANTORS) as BlockAlternativeProperty[]).flatMap((property) => {
+    if (blockedAlready && BLOCK_ALTERNATIVE_KIND[property] === 'vomit') return [];
     const grantors = BLOCK_ALTERNATIVE_GRANTORS[property];
     const offered = unusedProperties.has(property)
       ? hasUnusedGrantor(game, playerId, grantors)
