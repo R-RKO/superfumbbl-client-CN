@@ -482,7 +482,28 @@ function skillRoll(verb: string) {
 /** The Hatred keyword a Getting Even roll is about, as the server names it; "their foe" without one. */
 function hatredTrait(r: Report): string {
   const keyword = typeof r.keyword === 'string' && r.keyword.trim() ? r.keyword.trim() : '';
-  return keyword ? titleCase(humanize(keyword)) : 'their foe';
+  return keyword ? pluralKeyword(titleCase(humanize(keyword))) : 'their foe';
+}
+/** Owner 10-21: the hated keyword reads as a people ("the hate toward Humans"), not a label. Upstream Keyword names
+ *  (ffb-common Keyword.java): regular plurals take an s; -man -> -men (Lizardman, Beastman, Treeman, Snakeman,
+ *  Lineman, Bugman); Dwarf / Elf / Werewolf -> -ves; Skaven and Spawn are their own plural; Undead reads
+ *  "the Undead"; "all" reads "everyone"; Unknown stays "their foe". Multi-word names pluralise their last word (Big Guy -> Big Guys). */
+const KEYWORD_PLURAL_SAME = new Set(['Skaven', 'Spawn']);
+export function pluralKeyword(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed || /^unknown$/i.test(trimmed)) return 'their foe';
+  if (/^undead$/i.test(trimmed)) return 'the Undead';
+  if (/^all$/i.test(trimmed)) return 'everyone'; // Astra P3: "learns to hate everyone", not "All"
+  if (KEYWORD_PLURAL_SAME.has(trimmed)) return trimmed;
+  const words = trimmed.split(/\s+/);
+  const last = words[words.length - 1] ?? trimmed;
+  let plural: string;
+  if (/man$/i.test(last) && !/^human$/i.test(last)) plural = last.replace(/man$/i, (m) => (m === 'MAN' ? 'MEN' : 'men'));
+  else if (/^(dwarf|elf|werewolf)$/i.test(last)) plural = last.replace(/f$/i, (m) => (m === 'F' ? 'VES' : 'ves'));
+  else if (/(s|x|z|ch|sh)$/i.test(last)) plural = `${last}es`;
+  else plural = `${last}s`;
+  words[words.length - 1] = plural;
+  return words.join(' ');
 }
 
 /** The team's captain (the player whose server skill list holds Team Captain), name-tagged; else "<team>'s captain". */
