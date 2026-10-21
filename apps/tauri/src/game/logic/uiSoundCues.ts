@@ -20,6 +20,32 @@ export function failedRollCueDelayMs(rolls: readonly CueRoll[]): number | null {
   return failed.every((roll) => !!roll.rerollSkill || !!roll.rerollTeam) ? ROLL_FAILED_REROLL_CUE_DELAY_MS : ROLL_FAILED_CUE_DELAY_MS;
 }
 
+/** Owner 10-21 (RickWreckless, g1955268: "Sure hands pickup that fails then succeeds plays the success noise first then
+ *  the fail"): the frame sounds that announce a roll's SUCCESS, by the server roll report they belong to. Upstream sets
+ *  PICKUP (StepPickUp) and CATCH (StepCatchScatterThrowIn) only when the roll that settles the ball succeeded. The DODGE
+ *  sound is not one: StepMove sets it on the move into the square, a frame before the dodge roll is made. */
+const SUCCESS_SOUND_ROLL_REPORT: Readonly<Record<string, string>> = { pickup: 'pickUpRoll', catch: 'catchRoll' };
+/**
+ * Owner 10-21 (rule A): the frame's success sound when its rolls end in a REROLLED SUCCESS - a failed roll (in this
+ * frame or an earlier one) followed by any reroll whose result passed. That sound rides the last roll's landing (after
+ * the failed die's cue and the reroll beat), never the start of the frame's beat. Null for a frame with no reroll (it
+ * keeps its timing) and for a chain that ends in failure (the server sends no success sound then).
+ */
+export function rerollChainSuccessSound(reports: readonly Record<string, unknown>[], frameSound: unknown): string | null {
+  const sound = typeof frameSound === 'string' ? frameSound : '';
+  const reportId = SUCCESS_SOUND_ROLL_REPORT[sound];
+  if (!reportId) return null;
+  const rolls = reports.filter((report) => String(report.reportId) === reportId);
+  const last = rolls[rolls.length - 1];
+  return last && last.reRolled === true && last.successful === true ? sound : null;
+}
+/** Unscaled ms from a die's show until it settles on its face: a rerolled die tumbles in place, any other pops in first. */
+export function dieSettleMs(roll: CueRoll | null | undefined): number {
+  return roll && (!!roll.rerollSkill || !!roll.rerollTeam) ? ROLL_FAILED_REROLL_CUE_DELAY_MS : ROLL_FAILED_CUE_DELAY_MS;
+}
+/** The success sound of a rerolled chain never crowds the failed die's cue: at least this long after it. */
+export const REROLL_SUCCESS_AFTER_FAIL_CUE_MS = 150;
+
 /** Seconds left on the clock when the one-minute warning sounds. */
 export const TURN_CLOCK_MINUTE_S = 60;
 /** The last-seconds countdown sounds once on each of these remaining values (10, 9, ... 1). */

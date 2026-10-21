@@ -3,8 +3,9 @@
  * Game-load rank panel (owner 10-20), Modern view. Owner 10-21: it IS the waiting board's red match-up bar - a second
  * instance of components/WaitingVsBanner.vue (crest circle | TEAM NAME + coach in the pink accent | red VS medallion |
  * mirrored), never a hand-drawn copy. Our additions ride the banner's slots: the rank badge between each crest and its
- * names (the title centred on it, or the text chip), and "Record W/D/L · win % · CR · WAR" under the coach in the
- * banner's small type. The race / TV row is not shown.
+ * names (the title centred on it, or the text chip), and under the coach two lines in the banner's small type:
+ * "Record W/D/L · win %" and "CR n · ±x.x WAR" (owner, 1.0.252 follow-up: "Set CR and WAR onto their own lines"). The
+ * race / TV row is not shown. The bar's type is ~15% over the banner's and its vertical padding / row gaps x 1.25.
  *
  * Layout (browser check 10-21; game/rankBarLayout.ts): each side is [crest | badge | text column], the column taking
  * the remaining width; the record line is ONE line - the bar steps its +30% growth, the record line, the badge and
@@ -19,10 +20,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import CoachBadge from '../views/console/play/CoachBadge.vue';
 import WaitingVsBanner from './WaitingVsBanner.vue';
-import { coachProfileStatItems, coachProfileStatParts, coachTitleSlug } from '../game/fumbblCoachProfile';
+import { coachProfileStatLines, coachProfileStatParts, coachTitleSlug } from '../game/fumbblCoachProfile';
 import type { RankPanelSide, RankPanelState } from '../game/gameLoadRankPanel';
 import type { BannerSide, WaitingBannerModel } from '../game/waitingVsBanner';
-import { DEFAULT_BAR_FONTS, RANK_BAR_LAYOUT_SCALE, makeMeasureBarText, rankBarLayout, rankBarTop, renderedFont, type BarFonts } from '../game/rankBarLayout';
+import { DEFAULT_BAR_FONTS, RANK_BAR_LAYOUT_SCALE, RANK_BAR_TYPE_BOOST, RANK_BAR_PAD_Y, makeMeasureBarText, rankBarHeightBudget, rankBarLayout, rankBarTop, renderedFont, type BarFonts } from '../game/rankBarLayout';
 import { settings } from '../game/settings';
 
 /** `covering` (owner 10-21: "load the elements and sprites behind this pane"): the renderer has not reported ready -
@@ -37,6 +38,9 @@ const bannerHost = ref<HTMLElement | null>(null);
 const areaWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280);
 const rootPx = ref(16);
 const top = ref(0);
+/** the layer's height and the HUD's bottom (in layer coordinates): the bar's height budget (Astra r1) */
+const areaHeight = ref(0);
+const hudBottomPx = ref(0);
 /** The fonts the team name and the record line actually render with (read from the elements; Astra r3). */
 const fonts = ref<BarFonts>({ ...DEFAULT_BAR_FONTS });
 /** Astra r4: a font LOAD leaves the computed family / weight unchanged, so the layout would keep its fallback-font
@@ -53,6 +57,12 @@ const name = (s: RankPanelSide): string => s.profile?.name || s.coach;
 const title = (s: RankPanelSide): string | undefined => s.profile?.title;
 const stats = (s: RankPanelSide): string => coachProfileStatParts(s.profile).join(' · ');
 const showBadge = (s: RankPanelSide, w: 'left' | 'right'): boolean => !!coachTitleSlug(title(s)) && !badgeFailed[w];
+/** Owner (1.0.252 follow-up): "Set CR and WAR onto their own lines" - line 3 "Record W/D/L · win %", line 4
+ *  "CR n · ±x.x WAR"; a line with nothing available is dropped. */
+const detailLines = (s: RankPanelSide) => {
+  const lines = coachProfileStatLines(s.profile);
+  return [lines.record, lines.rating].filter((line) => line.length > 0);
+};
 
 function bannerSide(s: RankPanelSide): BannerSide {
   const coach = name(s);
@@ -72,11 +82,17 @@ const layout = computed(() => {
     rootPx: rootPx.value,
     layoutScale: RANK_BAR_LAYOUT_SCALE,
     teamNames: [m?.mine.teamName ?? '', m?.opponent.teamName ?? ''],
-    records: [p ? stats(p.left) : '', p ? stats(p.right) : ''],
+    records: p ? [p.left, p.right].flatMap((s) => detailLines(s).map((line) => line.map((i) => i.text).join(' · '))) : [],
+    typeBoost: RANK_BAR_TYPE_BOOST,
+    padY: RANK_BAR_PAD_Y,
+    detailLineCount: p ? Math.max(detailLines(p.left).length, detailLines(p.right).length) : 0,
+    heightBudget: areaHeight.value > 0 ? rankBarHeightBudget({ height: areaHeight.value, hudBottom: hudBottomPx.value }) : undefined,
     measure: measureText.value,
   });
 });
-const barVars = computed(() => ({ '--vs-bar-width': `${layout.value.barWidth}px`, '--vs-type': String(layout.value.typeScale) }));
+const barVars = computed(() => ({
+  '--vs-bar-width': `${layout.value.barWidth}px`, '--vs-type': String(layout.value.typeScale), '--vs-pad-y': String(layout.value.padY),
+}));
 const sideVars = computed(() => ({
   mine: { '--vs-team-fit': String(layout.value.teamFit[0]), '--vs-detail-fit': String(layout.value.recordFit) },
   opponent: { '--vs-team-fit': String(layout.value.teamFit[1]), '--vs-detail-fit': String(layout.value.recordFit) },
@@ -116,6 +132,8 @@ function measure(): void {
     const r = hud.getBoundingClientRect();
     if (r.height > 0) hudBottom = Math.max(hudBottom, r.bottom - layerTop);
   }
+  areaHeight.value = el.clientHeight;
+  hudBottomPx.value = hudBottom;
   top.value = rankBarTop({ height: el.clientHeight, barHeight: bannerHost.value?.offsetHeight ?? 0, hudBottom });
 }
 let frame = 0;
@@ -181,9 +199,10 @@ watch(() => settings.uiFont, fontsChanged);
             <span v-else-if="title(panel[which(slot)])" class="rank-title-chip">{{ title(panel[which(slot)]) }}</span>
           </template>
           <template #detail="{ side: slot }">
-            <span class="rank-stats" :data-side="which(slot)"><template v-for="(item, i) in coachProfileStatItems(panel[which(slot)].profile)" :key="i"><span
-              class="rank-stat" :title="item.title" :aria-label="item.title ? `${item.text}, ${item.title}` : undefined">{{ item.text }}</span><template
-              v-if="i < coachProfileStatItems(panel[which(slot)].profile).length - 1"> · </template></template></span>
+            <span class="rank-stats" :data-side="which(slot)"><span v-for="(line, l) in detailLines(panel[which(slot)])" :key="l"
+              class="rank-stats-line"><template v-for="(item, i) in line" :key="i"><span class="rank-stat" :title="item.title"
+              :aria-label="item.title ? `${item.text}, ${item.title}` : undefined">{{ item.text }}</span><template
+              v-if="i < line.length - 1"> · </template></template></span></span>
           </template>
         </WaitingVsBanner>
       </div>
@@ -214,7 +233,9 @@ watch(() => settings.uiFont, fontsChanged);
   font-family: 'Nuffle', system-ui, sans-serif; font-size: 0.9em; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
   white-space: nowrap;
 }
-/* The record line is one line (the layout sizes it to fit); each part is kept whole. */
+/* Lines 3 and 4 (record, rating) are each ONE line (the layout sizes them to fit); each part is kept whole. */
+.rank-stats { display: flex; flex-direction: column; align-items: inherit; }
+.rank-stats-line { display: block; white-space: nowrap; }
 .rank-stat { white-space: nowrap; }
 /* The loading cover: the waiting board's pitch backdrop at the same strength (WaitingBoardView.vue: the #05070c board
    under the .waiting-board-overlay gradient), so sprites still loading behind it are not seen. pinned equal there. */
@@ -224,6 +245,8 @@ watch(() => settings.uiFont, fontsChanged);
 }
 .rank-cover-leave-active { transition: opacity var(--p-400, 400ms) ease; }
 .rank-cover-leave-to { opacity: 0; }
-.rank-panel-enter-active, .rank-panel-leave-active { transition: opacity var(--p-400, 400ms) ease; }
+/* a load cover must be readable at once: a short enter fade (the cover keeps its own fade-out) */
+.rank-panel-enter-active { transition: opacity 200ms ease; }
+.rank-panel-leave-active { transition: opacity var(--p-400, 400ms) ease; }
 .rank-panel-enter-from, .rank-panel-leave-to { opacity: 0; }
 </style>

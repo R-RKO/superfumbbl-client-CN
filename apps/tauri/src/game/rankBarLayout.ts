@@ -3,8 +3,8 @@
  * Pure math over the banner's own metrics (components/WaitingVsBanner.vue, every size x --vs-scale):
  *
  *   bar  = min(880 x 1.3, area - 32)                        (the width cap, kept at every step)
- *   side = (bar - 2 border - 2 x 16L padding - 2 x 14L grid gap - 66L VS medallion) / 2
- *   text column = side - 64L crest - 12L gap - badge - 12L gap      (badge = round(64L x k), k = 1.3 -> 1)
+ *   side = (bar - 4 border - 2 x 16L padding - 2 x 14L grid gap - (66L + 4) VS medallion) / 2
+ *   text column = side - (64L + 2) crest - 12L gap - badge - 12L gap      (badge = round(64L x k), k = 1.3 -> 1)
  *
  * In that column the RECORD line must fit on ONE line, so the bar steps down (rankBarSteps) until it does: the +30%
  * growth first (L and the type T together, 1.3 -> 1; owner: the growth is secondary to a clean layout), then the record
@@ -14,6 +14,10 @@
  */
 
 export const RANK_BAR_LAYOUT_SCALE = 1.3;
+/** owner (1.0.252 follow-up): "increase the size of text a bit" - the bar's type ~15% over the banner's */
+export const RANK_BAR_TYPE_BOOST = 1.15;
+/** ...and "add some vertical space": the rank bar's vertical padding and text-row gaps x 1.25 (--vs-pad-y) */
+export const RANK_BAR_PAD_Y = 1.25;
 
 /** The banner's base type (WaitingVsBanner.vue): `max(<floor>px, <n>rem)` at the given root font size. */
 export const bannerType = {
@@ -31,7 +35,16 @@ export interface RankBarLayoutInput {
   rootPx: number;
   layoutScale: number;
   teamNames: readonly [string, string];
-  records: readonly [string, string];
+  /** every detail line of both sides (each must fit on ONE line) */
+  records: readonly string[];
+  /** owner 1.0.252 follow-up: the bar's text ~15% larger than the banner's (T starts at L x typeBoost) */
+  typeBoost?: number;
+  /** the most detail lines either side shows (record / rating: 0-2) */
+  detailLineCount?: number;
+  /** the rank bar's extra vertical room (--vs-pad-y) before any height shrink */
+  padY?: number;
+  /** Astra r1 (1.0.252 follow-up): the most height the bar may take - from the HUD's bottom + 12 px to the pitch centre */
+  heightBudget?: number;
   measure: MeasureBarText;
 }
 
@@ -50,6 +63,14 @@ export interface RankBarLayout {
   recordWidth: number;
   /** false only when even the last step could not fit the record line (it then overflows rather than wraps) */
   recordFits: boolean;
+  /** per input line (`records`): it fits the column on one line at the chosen size */
+  lineFits: boolean[];
+  /** the vertical padding / row-gap factor chosen (--vs-pad-y) */
+  padY: number;
+  /** the bar's estimated height (border + padding + the tallest of crest / badge / medallion / text column) */
+  barHeight: number;
+  /** the height budget was met (or there was none) */
+  heightFits: boolean;
   /** per side: the team name's factor (<= 1) on top of typeScale, and its lines (word boundaries only) */
   teamFit: [number, number];
   teamLines: [string[], string[]];
@@ -83,47 +104,89 @@ export function fitWords(
   return { fit: floor, lines };
 }
 
-interface Step { L: number; badgeK: number; T: number; recordFit: number }
+export interface Step { L: number; badgeK: number; T: number; recordFit: number; padY: number }
 /** The reductions, in order, until the record line fits on one line: the +30% growth goes first (layout and type
  *  together, 1.3 -> 1), then the record line alone (to 0.8), then the badge (1.3 -> 1x the crest), then the type
  *  (to 0.8), and as a last resort the crests / gaps / medallion below the waiting board's size (to 0.8). The bar's width stays at its cap (min(880 x 1.3, area - 32)) throughout. */
-export function rankBarSteps(maxScale: number): Step[] {
+export function rankBarSteps(maxScale: number, typeBoost = 1, padY = 1): Step[] {
   const steps: Step[] = [];
-  for (let L = maxScale; L >= 1 - 1e-9; L -= 0.05) steps.push({ L: Number(L.toFixed(3)), badgeK: 1.3, T: Number(L.toFixed(3)), recordFit: 1 });
-  for (let r = 0.95; r >= 0.8 - 1e-9; r -= 0.05) steps.push({ L: 1, badgeK: 1.3, T: 1, recordFit: Number(r.toFixed(3)) });
-  for (const k of [1.2, 1.1, 1]) steps.push({ L: 1, badgeK: k, T: 1, recordFit: 0.8 });
-  for (let t = 0.95; t >= 0.8 - 1e-9; t -= 0.05) steps.push({ L: 1, badgeK: 1, T: Number(t.toFixed(3)), recordFit: 0.8 });
+  const b = typeBoost;
+  const p = padY;
+  const r3 = (n: number) => Number(n.toFixed(3));
+  for (let L = maxScale; L >= 1 - 1e-9; L -= 0.05) steps.push({ L: r3(L), badgeK: 1.3, T: r3(L * b), recordFit: 1, padY: p });
+  for (let r = 0.95; r >= 0.8 - 1e-9; r -= 0.05) steps.push({ L: 1, badgeK: 1.3, T: r3(b), recordFit: r3(r), padY: p });
+  for (const k of [1.2, 1.1, 1]) steps.push({ L: 1, badgeK: k, T: r3(b), recordFit: 0.8, padY: p });
+  // the type comes down only once the width has run out at the badge's smallest size
+  for (let t = b - 0.05; t >= 0.8 - 1e-9; t -= 0.05) steps.push({ L: 1, badgeK: 1, T: r3(t), recordFit: 0.8, padY: p });
+  // then the extra vertical room goes back toward the banner's own (height budget, Astra r1)
+  for (let q = p - 0.1; q >= 1 - 1e-9; q -= 0.1) steps.push({ L: 1, badgeK: 1, T: 0.8, recordFit: 0.8, padY: r3(q) });
+  if (p > 1) steps.push({ L: 1, badgeK: 1, T: 0.8, recordFit: 0.8, padY: 1 });
   // last resort (a very long record in a narrow area): the crests, gaps and VS medallion below the waiting board's size
-  for (const L of [0.95, 0.9, 0.85, 0.8]) steps.push({ L, badgeK: 1, T: 0.8, recordFit: 0.8 });
+  for (const L of [0.95, 0.9, 0.85, 0.8]) steps.push({ L, badgeK: 1, T: 0.8, recordFit: 0.8, padY: 1 });
   return steps;
 }
+
+/** The banner's borders (WaitingVsBanner.vue, content-box except the bar): `.vs-banner` 2 px each side (border-box, so
+ *  inside its width), `.vs-crest` 1 px each side (outside its 64L box), `.vs-mark` 2 px each side (outside its 66L box).
+ *  Astra r2: leaving them out made each text column 4 px narrower than estimated and the height estimate low. */
+export const BAR_BORDER = 2 * 2;
+export const CREST_BORDER = 2 * 1;
+export const MARK_BORDER = 2 * 2;
+
+/** Line height of the banner's text column (WaitingVsBanner.vue `.vs-text { line-height: 1.2 }`). */
+const LINE = 1.2;
 
 export function rankBarLayout(input: RankBarLayoutInput): RankBarLayout {
   const barWidth = Math.min(880 * input.layoutScale, Math.max(0, input.areaWidth - 32));
   const meta = bannerType.meta(input.rootPx);
   const recordWidthAt = (px: number) => Math.max(0, ...input.records.map((r) => (r ? input.measure(r, px, 'record') : 0)));
-  const steps = rankBarSteps(input.layoutScale);
-  const geometry = (step: Step) => {
-    const sideWidth = (barWidth - 4 - 2 * 16 * step.L - 2 * 14 * step.L - 66 * step.L) / 2;
+  const steps = rankBarSteps(input.layoutScale, input.typeBoost ?? 1, input.padY ?? 1);
+  const detailCount = input.detailLineCount ?? 2;
+  const budget = input.heightBudget;
+  const evaluate = (step: Step) => {
+    const sideWidth = (barWidth - BAR_BORDER - 2 * 16 * step.L - 2 * 14 * step.L - (66 * step.L + MARK_BORDER)) / 2;
     const badgeSize = Math.round(64 * step.L * step.badgeK);
-    return { sideWidth, badgeSize, column: Math.max(0, sideWidth - 64 * step.L - 12 * step.L - badgeSize - 12 * step.L) };
+    const column = Math.max(0, sideWidth - (64 * step.L + CREST_BORDER) - 12 * step.L - badgeSize - 12 * step.L);
+    const recordPx = meta * step.T * step.recordFit;
+    const teamBase = bannerType.team(input.rootPx) * step.T;
+    const team = input.teamNames.map((name) => fitWords(name, teamBase, column, 2, 0.6, (line, px) => input.measure(line, px, 'team')));
+    // the text column: team lines + the coach + the detail lines, with the two row gaps between its three blocks
+    const textHeight = Math.max(...team.map((t) => Math.max(1, t.lines.length) * teamBase * t.fit * LINE))
+      + bannerType.coach(input.rootPx) * step.T * LINE
+      + detailCount * recordPx * LINE
+      + (detailCount > 0 ? 2 : 1) * 3 * step.L * step.padY;
+    const content = Math.max(64 * step.L + CREST_BORDER, badgeSize, 66 * step.L + MARK_BORDER, textHeight);
+    const barHeight = BAR_BORDER + 2 * 10 * step.L * step.padY + content;
+    return { sideWidth, badgeSize, column, recordPx, team, barHeight };
   };
   let chosen = steps[steps.length - 1]!;
   let fits = false;
+  let heightFits = budget === undefined;
   for (const step of steps) {
-    const g = geometry(step);
-    if (recordWidthAt(meta * step.T * step.recordFit) <= g.column) { chosen = step; fits = true; break; }
+    const e = evaluate(step);
+    const widthOk = recordWidthAt(e.recordPx) <= e.column;
+    const heightOk = budget === undefined || e.barHeight <= budget;
+    if (widthOk && heightOk) { chosen = step; fits = true; heightFits = true; break; }
   }
-  const g = geometry(chosen);
-  const recordPx = meta * chosen.T * chosen.recordFit;
-  const teamBase = bannerType.team(input.rootPx) * chosen.T;
-  const team = input.teamNames.map((name) => fitWords(name, teamBase, g.column, 2, 0.6, (line, px) => input.measure(line, px, 'team')));
+  if (!fits) {
+    // no step meets both: keep the first that fits the width (the height budget is the one to give)
+    const widthOnly = steps.find((step) => { const e = evaluate(step); return recordWidthAt(e.recordPx) <= e.column; });
+    if (widthOnly) { chosen = widthOnly; fits = true; heightFits = false; }
+  }
+  const e = evaluate(chosen);
   return {
-    barWidth, layoutScale: chosen.L, sideWidth: g.sideWidth, badgeSize: g.badgeSize, column: g.column,
-    typeScale: chosen.T, recordFit: chosen.recordFit, recordPx, recordWidth: recordWidthAt(recordPx), recordFits: fits,
-    teamFit: [team[0]!.fit, team[1]!.fit],
-    teamLines: [team[0]!.lines, team[1]!.lines],
+    barWidth, layoutScale: chosen.L, sideWidth: e.sideWidth, badgeSize: e.badgeSize, column: e.column,
+    typeScale: chosen.T, recordFit: chosen.recordFit, recordPx: e.recordPx, recordWidth: recordWidthAt(e.recordPx), recordFits: fits,
+    lineFits: input.records.map((r) => !r || input.measure(r, e.recordPx, 'record') <= e.column),
+    padY: chosen.padY, barHeight: e.barHeight, heightFits,
+    teamFit: [e.team[0]!.fit, e.team[1]!.fit],
+    teamLines: [e.team[0]!.lines, e.team[1]!.lines],
   };
+}
+
+/** The height the bar may take: from the HUD's bottom + 12 px down to the pitch centre (Astra r1). */
+export function rankBarHeightBudget(input: { height: number; hudBottom: number }): number {
+  return Math.max(0, input.height / 2 - (input.hudBottom + 12));
 }
 
 /**
@@ -131,11 +194,13 @@ export function rankBarLayout(input: RankBarLayoutInput): RankBarLayout {
  * card (WaitingBoardView.vue `.waiting-board-overlay`: flex column, justify-content center, gap 16 px) - measured in
  * the browser at about a third of the way down the pitch (y 160-240 of 600, centre ~ H / 3). The game view has no card,
  * so the bar's centre goes to H / 3 - but never over the in-game top HUD band (coach panels, scoreboard, clock): its
- * top is at least the HUD's bottom + 12 px.
+ * top is at least the HUD's bottom + 12 px - and its bottom no lower than the pitch centre (H / 2) when it fits there
+ * (the layout sizes it to the budget between the two).
  */
 export function rankBarTop(input: { height: number; barHeight: number; hudBottom: number }): number {
   const third = input.height / 3 - input.barHeight / 2;
-  return Math.round(Math.max(input.hudBottom + 12, third, 0));
+  const aboveCentre = input.height / 2 - input.barHeight;
+  return Math.round(Math.max(input.hudBottom + 12, Math.min(third, aboveCentre), 0));
 }
 
 /** The fonts the two measured lines RENDER with (Astra r3): the panel reads them from the rendered elements'

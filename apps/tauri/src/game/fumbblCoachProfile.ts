@@ -274,6 +274,14 @@ export function formatWinsAboveReplacement(war: number): string {
 
 export const WAR_TITLE = 'wins above a .500 coach';
 
+/** Owner 10-21 (1.0.252 follow-up): the in-game bar shows the stats as two lines - "Record W/D/L · win %" and
+ *  "CR n · ±x.x WAR" - each omitted when none of its parts is available. */
+export function coachProfileStatLines(profile: FumbblOverallRanking | null | undefined): { record: { text: string; title?: string }[]; rating: { text: string; title?: string }[] } {
+  const items = coachProfileStatItems(profile);
+  const isRecord = (text: string) => text.startsWith('Record ') || text.endsWith(' %');
+  return { record: items.filter((i) => isRecord(i.text)), rating: items.filter((i) => !isRecord(i.text)) };
+}
+
 /** The stats line as parts, each with an optional tooltip / accessible description (the WAR part's). */
 export function coachProfileStatItems(profile: FumbblOverallRanking | null | undefined): { text: string; title?: string }[] {
   if (!profile) return [];

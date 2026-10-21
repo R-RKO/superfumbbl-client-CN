@@ -77,7 +77,7 @@ function initials(name: string): string {
   position: absolute; top: 18px; left: 50%; transform: translateX(-50%); z-index: 3;
   width: var(--vs-bar-width, min(calc(880px * var(--vs-scale, 1)), calc(100% - 32px))); box-sizing: border-box;
   display: grid; grid-template-columns: 1fr auto 1fr; grid-template-areas: 'mine mark opponent'; align-items: center; gap: calc(14px * var(--vs-scale, 1));
-  padding: calc(10px * var(--vs-scale, 1)) calc(16px * var(--vs-scale, 1)); border-radius: calc(10px * var(--vs-scale, 1));
+  padding: calc(10px * var(--vs-scale, 1) * var(--vs-pad-y, 1)) calc(16px * var(--vs-scale, 1)); border-radius: calc(10px * var(--vs-scale, 1));
   background: linear-gradient(90deg, #300f0fe8 0%, rgba(12, 15, 21, 0.95) 32%, rgba(12, 15, 21, 0.95) 68%, #300f0fe8 100%);
   border: 2px solid #e03030cc; box-shadow: 0 10px 28px #000c, inset 0 0 0 1px #00000080;
   color: var(--ui-text, #f0f0f0); pointer-events: none;
@@ -112,7 +112,10 @@ function initials(name: string): string {
 }
 /* keepWords (rank bar): never a break inside a word; the text column takes the side's remaining width. */
 .vs-banner.keep-words .vs-team { overflow-wrap: normal; word-break: keep-all; }
-.vs-banner.keep-words .vs-text { flex: 1 1 auto; }
+.vs-banner.keep-words .vs-text { flex: 1 1 auto; row-gap: calc(3px * var(--vs-scale, 1) * var(--vs-pad-y, 1)); }
+/* the rank bar's detail block: its lines stacked (each one line), aligned to the side's edge */
+.vs-banner.keep-words .vs-detail { flex-direction: column; gap: 0; }
+.vs-banner.keep-words .vs-side.opponent .vs-detail { align-items: flex-end; }
 .vs-mark {
   grid-area: mark; display: grid; place-items: center; width: calc(66px * var(--vs-scale, 1)); height: calc(66px * var(--vs-scale, 1)); border-radius: 50%;
   font-family: 'SNES', 'Nuffle', system-ui, sans-serif; font-size: calc(2rem * var(--vs-type, var(--vs-scale, 1))); font-style: italic; font-weight: 900; color: #fff;

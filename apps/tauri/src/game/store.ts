@@ -106,6 +106,7 @@ import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENT
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
+import { REROLL_SUCCESS_AFTER_FAIL_CUE_MS, ROLL_FAILED_CUE_DELAY_MS, dieSettleMs, rerollChainSuccessSound } from './logic/uiSoundCues';
 import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
 import {
@@ -1603,6 +1604,52 @@ let actionDiceClearEpoch = 0;
  *  and BEFORE the batch reaches reactive state - so its show waiter exists before any watcher (the view's dice drain,
  *  which reports the show synchronously) can possibly run. Allocate id -> register waiter -> publish, one step. */
 const actionDicePublicationHooks = new WeakMap<object, (batch: ActionDiceBatchState) => void>();
+/** Owner 10-21: a second reader of the same publication (the reroll chain's success sound) runs after any hook already
+ *  registered for those rolls, never instead of it. */
+function addActionDicePublicationHook(rolls: object, hook: (batch: ActionDiceBatchState) => void): void {
+  const prior = actionDicePublicationHooks.get(rolls);
+  actionDicePublicationHooks.set(rolls, prior ? (batch) => { prior(batch); hook(batch); } : hook);
+}
+/** Owner 10-21 (RickWreckless g1955268; rule A): a reroll chain that ends in a success plays the frame's success sound
+ *  (pickup) when the REROLLED die settles - after the failed die has settled and sounded its cue, after the reroll
+ *  beat. Anchored on the view's show reports of both batches (whenActionDiceShown), each with a bounded fail-open;
+ *  a dice clear (reset / seek / catch-up cleanup / game change) discards it, and nothing waits on it. `failedBatch`
+ *  null: the failed die was an earlier frame's (a team reroll answered through the dialog) - its cue is history.
+ *  `failedShownInMs`: the failed die's show the VIEW REPORTED (a movement roll's staging starts on it) - never a
+ *  staging timeout's guess (Astra r1 P2: a pickup die waiting on its mover's arrival is shown after that timeout).
+ *  Every fail-open path takes "now" as the failed die's show, so the sound still comes after the fail cue it implies. */
+function armRerollChainSound(sound: string, failedBatch: ActionDiceBatchState | null, failedShownInMs: number | null, rerolled: ActionDiceBatchState['rolls'], publishInMs: number): void {
+  const epoch = actionDiceClearEpoch;
+  let failedShownAt: number | null = !failedBatch ? Date.now() : failedShownInMs !== null ? Date.now() + failedShownInMs : null;
+  let resultShownAt: number | null = null;
+  let armed = false;
+  const settle = presentationMs(dieSettleMs(rerolled[0]));
+  const arm = () => {
+    if (armed || failedShownAt === null || resultShownAt === null || epoch !== actionDiceClearEpoch) return;
+    armed = true;
+    const at = Math.max(resultShownAt + settle,
+      failedBatch ? failedShownAt + presentationMs(ROLL_FAILED_CUE_DELAY_MS + REROLL_SUCCESS_AFTER_FAIL_CUE_MS) : 0);
+    rerollStageTimers.push(scheduleGameTimeout(() => {
+      if (epoch !== actionDiceClearEpoch || playback.catchingUp) return;
+      playSound(sound);
+    }, Math.max(0, at - Date.now())));
+  };
+  const resultFailOpen = presentationMs(RESULT_DIE_SHOWN_FAILOPEN_MS);
+  if (failedBatch && failedShownAt === null) whenActionDiceShown(failedBatch, publishInMs + resultFailOpen, (msUntilShown, reported) => { failedShownAt = Date.now() + (reported ? msUntilShown : 0); arm(); });
+  let published = false;
+  addActionDicePublicationHook(rerolled, (batch) => {
+    published = true;
+    const publishedAt = Date.now();
+    whenActionDiceShown(batch, resultFailOpen, (msUntilShown, reported) => { resultShownAt = reported ? Date.now() + msUntilShown : publishedAt; arm(); });
+  });
+  // never published (deferred behind another surface): from the same fail-open
+  rerollStageTimers.push(scheduleGameTimeout(() => {
+    if (published || epoch !== actionDiceClearEpoch) return;
+    resultShownAt = Date.now();
+    if (failedShownAt === null) failedShownAt = Date.now();
+    arm();
+  }, publishInMs + resultFailOpen));
+}
 /** Owner 10-20 (Astra r3): per player, the action roll a reroll offer would be FOR - that player's latest first roll
  *  the server left rerollable: a failed one, or one it may offer a reroll for without failing (Breathe Fire NO_EFFECT /
  *  PRONE: `rerollOfferNotFailed`). Recorded from the reports as each frame is read (any reader, catch-up included); a
@@ -2193,6 +2240,22 @@ export const RESCUED_MOVE_ROLL_HOLD = { failReadMs: 560, resultReadMs: 650 } as 
  *  planner's resolved-roll bookkeeping and the dodge tallies are untouched), and nothing the client sends waits on it.
  *  A join / reconnect backlog fast-forwards past it (catch-up), a reset clears it. */
 let rescuedMoveHoldUntil = 0;
+/** Astra r1 P2 (10-21): a same-frame catch reroll's rerolled die is staged (fail beat + reroll beat) - the frames behind
+ *  it wait until it has been published and read (BALL_CHAIN_CATCH_READ_MS), on every seat, so a later catch can never
+ *  overtake it. A receive-gate deadline: armed at apply as a duration, its timer is the wake, catch-up / reset retire
+ *  it - it can delay the next frame, never wedge it. Astra r2 P2 (owner law: nothing fences input): a frame carrying a
+ *  server dialog (any dialogParameter, either seat) retires it at once - received, queued, or with its timer pending. */
+let stagedCatchReadUntil = 0;
+/** The pending playback timer when it is this hold's wait (a dialog frame cancels it). */
+let stagedCatchTimer: ReturnType<typeof setTimeout> | null = null;
+function stagedCatchReadWaitMs(incoming?: QueuedFrame): number {
+  if (stagedCatchReadUntil === 0) return 0;
+  const dialog = (!!incoming && frameSetsDialog(incoming)) || playback.queue.some(frameSetsDialog);
+  const left = playback.catchingUp || dialog ? 0 : stagedCatchReadUntil - Date.now();
+  if (left > 0) return left;
+  stagedCatchReadUntil = 0;
+  return 0;
+}
 /** The rescued result has been on screen for the viewer-visible 450 ms at this time (see queuedPromptSince). */
 let rescuedMoveFloorUntil = 0;
 /** Astra review of 1aa7b3b14 (P2): these two holds keep frames in the receive queue, so the applied model is OLDER
@@ -9046,6 +9109,9 @@ function applyFrameContents(frame: QueuedFrame) {
   let relocatedStepSound = false;
   // #78: sound ids relocated to a pickup/catch/bounce BEAT this frame (cued at the beat, not at apply — suppressed below).
   const relocatedBeatSounds = new Set<string>();
+  // Owner 10-21 (rule A): this frame's success sound (pickup / catch) that rides its rerolled roll's landing instead of
+  // the beat - claimed by the reroll staging below; unclaimed, it plays at apply as any unrelocated frame sound does.
+  let rerollChainBeatSound: string | null = null;
   // B5-5: injuries relocate players to the dugout during apply — remember where everyone stood BEFORE this frame so the cinematic aims at the square the armor actually broke on
   const preCoords = new Map<string, [number, number] | null>(
     game.value.fieldModel.playerDataArray.map((d) => [
@@ -9413,14 +9479,19 @@ function applyFrameContents(frame: QueuedFrame) {
     // next frame applies (ballChainWaitMs). Summed here, armed once below.
     let ballChainBeatMs = 0;
     let ballChainFrame = false;
+    // Astra review: a BOMB's scatter / catch is not the loose ball - it never opens or extends the chain.
+    const bombFrame = frameInvolvesBomb(cmd.modelChangeList as ModelChangeListJson | null | undefined, reports);
+    // Owner 10-21 (RickWreckless g1955268, rule A): a roll chain that ends in a REROLLED success keeps its beat (#78
+    // pacing) but not the beat's sound - that rides the rerolled roll's landing (staged below). The kick-off catch
+    // already gives its sound to its last roll (stageKickoffCatch) and is left as it is.
+    const chainSound = rerollChainSuccessSound(reports, snd);
+    if (chainSound && !(chainSound === 'catch' && !bombFrame && kickoffCatchOwnsFrame())) rerollChainBeatSound = chainSound;
     if (reports.some((r) => String(r.reportId) === 'pickUpRoll')) {
-      const s = (snd === 'pickup' || snd === 'catch') ? snd : undefined;
+      const s = (snd === 'pickup' || snd === 'catch') && snd !== rerollChainBeatSound ? snd : undefined;
       enqueueBeat(presentationMs(PICKUP_BOUNCE_BEAT_MS), s);
       if (s) relocatedBeatSounds.add(s);
     }
     const catchRoll = reports.find((r) => String(r.reportId) === 'catchRoll') as { successful?: unknown; bomb?: unknown } | undefined;
-    // Astra review: a BOMB's scatter / catch is not the loose ball - it never opens or extends the chain.
-    const bombFrame = frameInvolvesBomb(cmd.modelChangeList as ModelChangeListJson | null | undefined, reports);
     if (catchRoll?.successful === false || catchRoll?.successful === true) {
       // A fail beat reads before the next bounce frame; a success beat is the chain's terminal resolution.
       const s = snd === 'catch' && !relocatedBeatSounds.has('catch') ? 'catch' : undefined;
@@ -9429,8 +9500,12 @@ function applyFrameContents(frame: QueuedFrame) {
       if (!bombFrame && kickoffCatchOwnsFrame()) {
         const rolls = reports.filter((r) => String(r.reportId) === 'catchRoll');
         rolls.forEach((r, i) => stagedKickoffCatches.set(r, stageKickoffCatch(String(r.playerId ?? ''), i === rolls.length - 1 ? s : undefined)));
-      } else enqueueBeat(presentationMs(CATCH_BEAT_MS), s);
-      if (s) relocatedBeatSounds.add(s);
+        if (s) relocatedBeatSounds.add(s);
+      } else if (s && s === rerollChainBeatSound) enqueueBeat(presentationMs(CATCH_BEAT_MS));
+      else {
+        enqueueBeat(presentationMs(CATCH_BEAT_MS), s);
+        if (s) relocatedBeatSounds.add(s);
+      }
       // A catch attempt inside a bounce chain shows its die at the catcher before the next hop / the chain's end.
       if (ballChainOpen && !bombFrame) { ballChainBeatMs += presentationMs(BALL_CHAIN_CATCH_READ_MS); ballChainFrame = true; }
     }
@@ -10629,6 +10704,10 @@ function applyFrameContents(frame: QueuedFrame) {
     // Owner 2026-07-08: split this frame's action dice into the FIRST rolls and the RE-ROLLED results so a fail→reroll→result burst can be staged sequentially.
     const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean }[] = [];
     const reRolledRolls: typeof firstRolls = [];
+    // Owner 10-21 (rule A): an in-play catch rerolled inside its frame - the rerolled result's publication, staged below
+    const rerolledCatchModals: (() => void)[] = [];
+    let failedCatchModalShown = false;
+    let rerolledCatchModalShown = false;
     // Astra r5: snapshotted at THAT player's Loner-gated use, after the frame's earlier rolls went by
     let lonerAtUse: LonerOriginalAtUse | null = null;
     const lonerUse = lonerGatedUse(reports);
@@ -10663,7 +10742,13 @@ function applyFrameContents(frame: QueuedFrame) {
           const publishModal = () => { state.rollModal = { ...modal, seq: (state.rollModal?.seq ?? 0) + 1 }; };
           // Owner 10-08: the kick-off catch die shows when the ball lands (behind the flight), not at apply time.
           const stagedCatch = reportId === 'catchRoll' ? stagedKickoffCatches.get(report) : undefined;
-          if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal); else publishModal();
+          if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal);
+          else if (modal.kind === 'catch' && modal.reRolled && failedCatchModalShown && settings.order66 && !playback.catchingUp) rerolledCatchModals.push(publishModal);
+          else {
+            publishModal();
+            if (modal.kind === 'catch' && !modal.ok) failedCatchModalShown = true;
+            if (modal.kind === 'catch' && modal.reRolled) rerolledCatchModalShown = true;
+          }
         }
         // owner 10-20: a failed Loner gate's roll is the Loner check, not the action's - never an on-pitch die (Modern)
         if (cue?.die && !lonerGateDieHidden(report)) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
@@ -10680,6 +10765,35 @@ function applyFrameContents(frame: QueuedFrame) {
         const cue = skillUsePresentation(report, raw, visibleBlockContext, playerName(game.value, String(pid)));
         if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
       }
+    }
+    // Owner 10-21 (RickWreckless g1955268, rule A): an in-play catch rerolled inside its frame (the Catch skill) used
+    // to publish both catch dice at once - only the rerolled one ever showed, under a catch sound that led the frame.
+    // Staged like the action dice: the failed roll, the reroll beat, the rerolled result - and the frame's catch sound
+    // when that result has settled (after the failed die's cue). A catch rerolled through the dialog (its failed die was
+    // an earlier frame's) keeps its die with its frame; only its catch sound waits for that die to settle. Timers ride
+    // rerollStageTimers: a reset / seek / game change drops them; a dice clear discards them; nothing waits on them.
+    const catchStageMs = rerolledCatchModals.length > 0
+      ? presentationMs(FAIL_BEAT_MS) + presentationMs(pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw) ? REROLL_BEAT_MS : 300)
+      : 0;
+    const catchEpoch = actionDiceClearEpoch;
+    if (rerolledCatchModals.length > 0) {
+      // Astra r1 P2: holdPlayback alone is a no-op in live play - the receive gate holds every seat
+      stagedCatchReadUntil = Math.max(stagedCatchReadUntil, Date.now() + catchStageMs + presentationMs(BALL_CHAIN_CATCH_READ_MS));
+      holdPlayback(catchStageMs);
+      rerollStageTimers.push(scheduleGameTimeout(() => {
+        if (catchEpoch === actionDiceClearEpoch) for (const publish of rerolledCatchModals) publish();
+      }, catchStageMs));
+    }
+    if (rerollChainBeatSound === 'catch' && (rerolledCatchModals.length > 0 || rerolledCatchModalShown)) {
+      const sound = rerollChainBeatSound;
+      rerollChainBeatSound = null;
+      relocatedBeatSounds.add(sound);
+      // the catch die always pops in, then tumbles (the view passes it no reroll caption)
+      const at = Math.max(catchStageMs + presentationMs(ROLL_FAILED_CUE_DELAY_MS),
+        failedCatchModalShown ? presentationMs(ROLL_FAILED_CUE_DELAY_MS + REROLL_SUCCESS_AFTER_FAIL_CUE_MS) : 0);
+      rerollStageTimers.push(scheduleGameTimeout(() => {
+        if (catchEpoch === actionDiceClearEpoch && !playback.catchingUp) playSound(sound);
+      }, at));
     }
     const fireballSpellEffect = reports.some((report) => String(report.reportId) === 'spellEffectRoll'
       && String(report.specialEffect) === 'fireball');
@@ -10721,6 +10835,10 @@ function applyFrameContents(frame: QueuedFrame) {
       pushDice(firstRolls);
       const firstBatch = state.actionDice !== diceBeforeFirst ? state.actionDice : null;
       const rr = pendingActionReroll;
+      // Owner 10-21 (RickWreckless g1955268, rule A): the frame's pickup sound rides the rerolled die's landing (armed in
+      // the stage below), after the failed die's cue and the reroll beat - never the pickup beat's start.
+      const chainPickupSound = rerollChainBeatSound === 'pickup' && reRolledRolls.length > 0 && !rr.lonerFailed ? rerollChainBeatSound : null;
+      if (chainPickupSound) { relocatedBeatSounds.add(chainPickupSound); rerollChainBeatSound = null; }
       // Astra r3: the roll a failed Loner re-tumbles is captured with the frame, never read when the timer fires
       const lonerOriginal = rr.lonerFailed ? lonerOriginalFor(lonerAtUse, game.value, rr.lonerPid ?? rr.pid) : null;
       // Owner 10-09: a movement roll rescued by the reroll - the path goes on, so the frames behind this one (the next
@@ -10735,6 +10853,9 @@ function applyFrameContents(frame: QueuedFrame) {
       // view reports that (or the bounded fail-open passes) the frames behind are held by a provisional deadline; the
       // stage below then sets the exact one.
       const anchored = !!moveReroll && hasFail && !!firstBatch;
+      // Astra r1 P2 (10-21): the staging below starts on the failed die's show OR its fail-open; only a real report
+      // may anchor the reroll chain's success sound
+      let firstShowReported = false;
       const failOpenMs = anchored ? actionDiceShownFailOpenMs(rr.pid) : null;
       // Owner 10-19 (g1060 Swoop landing): a landing roll rerolled INSIDE its own frame (Swoop's automatic Right Stuff
       // reroll: rightStuffRoll failed + reRoll + rightStuffRoll reRolled) is followed within ms by the landing's own
@@ -10812,6 +10933,7 @@ function applyFrameContents(frame: QueuedFrame) {
             captainAfterShown(Date.now());
           }, failBeat + resultBeat + showFailOpen));
         }
+        if (chainPickupSound) armRerollChainSound(chainPickupSound, hasFail ? firstBatch : null, anchored && firstShowReported ? dieShownInMs : null, reRolledRolls, failBeat + resultBeat);
         rerollStageTimers.push(scheduleGameTimeout(() => pushDice(reRolledRolls), failBeat + resultBeat));
         // Owner 10-05: pin the held failed die until that result has landed on it (then release anything left). An
         // answered offer stages at once (not anchored), so the pin is still raised inside the frame that closes the dialog.
@@ -10841,7 +10963,7 @@ function applyFrameContents(frame: QueuedFrame) {
         if (reRolledRolls.length === 0) scheduleTeamCaptain(failBeat + resultBeat + presentationMs(TEAM_CAPTAIN_AFTER_RESULT_MS));
         if (anchored) repumpPlaybackAfterHoldChange();
       };
-      if (anchored) whenActionDiceShown(firstBatch, failOpenMs, stage);
+      if (anchored) whenActionDiceShown(firstBatch, failOpenMs, (msUntilShown, reported) => { firstShowReported = reported; stage(msUntilShown); });
       else stage(0);
     } else {
       const rerollUse = pendingActionReroll;
@@ -12305,6 +12427,15 @@ function pumpPlayback() {
     ballChainTimer = timer;
     return;
   }
+  // Astra r1 P2 (10-21): a staged rerolled catch die is published and read before anything behind it applies - after
+  // the dialog bypass (r2): a queued server dialog retires the hold (stagedCatchReadWaitMs).
+  const stagedCatchWait = stagedCatchReadWaitMs();
+  if (stagedCatchWait > 0) {
+    const timer = scheduleGameTimeout(() => { if (playback.timer === timer) playback.timer = null; stagedCatchTimer = null; pumpPlayback(); }, stagedCatchWait);
+    playback.timer = timer;
+    stagedCatchTimer = timer;
+    return;
+  }
   // Live is authoritative for TIMING VALUES and a live seat self-paces: it keeps the immediate drain. A spectator
   // re-applies on the wire's own inter-arrival cadence (clamped, backlog-compressed) so the model can never
   // outrun the presentation.
@@ -12956,7 +13087,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
       && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && ttmPresentationWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
-      && failedMoveHoldWaitMs() === 0 && landingRerollHoldWaitMs() === 0 && fallArmourWaitMs() === 0) {
+      && stagedCatchReadWaitMs(frame) === 0 && failedMoveHoldWaitMs() === 0 && landingRerollHoldWaitMs() === 0 && fallArmourWaitMs() === 0) {
     applyFrame(frame);
     return;
   }
@@ -12977,6 +13108,12 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
     cancelGameTimeout(ballChainTimer);
     playback.timer = null;
     ballChainTimer = null;
+  }
+  // Astra r2 P2 (owner law: nothing fences input): a dialog retires the staged-catch hold and wakes its pending timer.
+  if (frameSetsDialog(frame) && stagedCatchReadUntil !== 0) {
+    stagedCatchReadUntil = 0;
+    if (stagedCatchTimer && playback.timer === stagedCatchTimer) { cancelGameTimeout(stagedCatchTimer); playback.timer = null; }
+    stagedCatchTimer = null;
   }
   pumpPlayback();
 }
@@ -13015,6 +13152,8 @@ function resetPlayback() {
   ttmFlightThrownId = '';
   rescuedMoveHoldUntil = 0;
   rescuedMoveFloorUntil = 0;
+  stagedCatchReadUntil = 0; // Astra r1 P2 (10-21): never crosses a reset / seek / snapshot
+  stagedCatchTimer = null;
   failedMoveHold = null;
   moveRollHeldBacklog = false;
   state.moveRollHoldBusy = false;
