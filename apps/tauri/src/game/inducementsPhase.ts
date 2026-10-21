@@ -143,15 +143,18 @@ export function opponentBudget(input: {
  *  (`buyPrayersAndInducements` / `buyInducements` with THEIR teamId: availableGold / pettyCash / treasury) - when it is
  *  up, those server numbers are the budget (no client derivation). Null when the dialog is not theirs. */
 const INDUCEMENT_BUDGET_DIALOGS = new Set(['buyPrayersAndInducements', 'buyInducements', 'buyCardsAndInducements']);
-export function opponentDialogBudget(dialog: unknown, opponentTeamId: string, teamTreasury: number, panelRole?: InducementRole): PhaseMoney | null {
+export function opponentDialogBudget(dialog: unknown, opponentTeamId: string, teamTreasury: number, panelRole?: InducementRole, splitsPettyCash = true): PhaseMoney | null {
   const d = dialog as { dialogId?: unknown; teamId?: unknown; availableGold?: unknown; pettyCash?: unknown; treasury?: unknown; usesTreasury?: unknown } | null | undefined;
   if (!d || !INDUCEMENT_BUDGET_DIALOGS.has(String(d.dialogId ?? '')) || String(d.teamId ?? '') !== String(opponentTeamId)) return null;
   const availableGold = Number(d.availableGold);
   if (!Number.isFinite(availableGold)) return null;
-  const pettyCash = Number(d.pettyCash ?? 0) || 0;
-  const scumPool = Number(d.treasury ?? 0) || 0;
   // The server's own leg flag decides the readout shape (usesTreasury = one pool; otherwise petty + capped treasury).
   const role: InducementRole = d.usesTreasury === true ? 'overdog' : 'underdog';
+  // Astra 10-21 (P3): BB2016 `buyInducements` / BB2020 `buyCardsAndInducements` carry no petty / scum split - the
+  // underdog leg's whole availableGold is petty cash (as `induceMyMoney` reads it), never 0k petty / 0k scum.
+  const noSplitUnderdog = !splitsPettyCash && role === 'underdog';
+  const pettyCash = noSplitUnderdog ? availableGold : Number(d.pettyCash ?? 0) || 0;
+  const scumPool = noSplitUnderdog ? 0 : Number(d.treasury ?? 0) || 0;
   // Astra review 10-03: the panel the readout lands in is chosen by seat role, not by this leg flag. A one-pool leg
   // (equal TV / always-use-treasury) shown in the underdog panel must not read 0k / 0k: whatever of the server's
   // availableGold is not petty cash shows on the second line, so the three lines always add up to the server total.
@@ -318,6 +321,93 @@ export function estimateInducementBudget(input: BudgetEstimateInput): BudgetEsti
     cells: [{ key: 'petty', gold: petty }, { key: 'scum', gold: scum }, { key: 'treasury', gold: treasury }],
     total: scum === null ? null : petty + scum,
   };
+}
+
+/**
+ * Owner 10-21 ("Opponent's cash should always be visible and should live update if the overdog spends inducement
+ * money."): the OTHER coach's expected budget, replayed from the same server formula as `estimateInducementBudget`
+ * with that coach as the subject (so `myTv` / `myPettyCashFromTvDiff` / `treasury` are THEIRS). The server sends a
+ * budget only to the dialog's addressee, so this fills the opponent's panel (and both panels for a spectator) until
+ * that coach's own dialog figures reach the model.
+ *
+ *   underdog panel: `overdogSpent` is the overdog's spend - the local overdog's live pick total, so every purchase /
+ *     undo moves the underdog's petty cash 1:1 (bb2025 StepBuyInducements.getAvailableGold:285/302
+ *     `pettyCash = Math.max(usedInducementGold<Overdog> - freeCash, 0) + pettyCashFromTvDiff + freeCash`; bb2020
+ *     StepBuyCardsAndInducements.getAvailableGold:289/296 `usedInducementGold<Overdog> + pettyCashFromTvDiff`).
+ *   overdog panel: `spent` is what the overdog has spent when known (see `overdogSpentFromUnderdogDialog`), else 0 -
+ *     the overdog's picks stay on their client until they confirm, and the treasury on the team model only moves at
+ *     the end of the phase (treasurySpentOnInducements), so nothing reveals the spend live.
+ *
+ * DISPLAY ONLY, like `estimateInducementBudget`.
+ */
+export function estimateOpponentBudget(input: BudgetEstimateInput & { spent?: number | null }): BudgetEstimate | null {
+  const estimate = estimateInducementBudget(input);
+  if (!estimate || input.role !== 'overdog') return estimate;
+  const spent = Math.max(0, input.spent ?? 0);
+  if (spent === 0) return estimate;
+  const pool = estimate.total;
+  const remaining = pool === null ? null : Math.max(0, pool - spent);
+  return { cells: [{ key: 'spent', gold: spent }, { key: 'remaining', gold: remaining }], total: pool };
+}
+
+/** Astra 10-21 (P3): the other coach's underdog panel always shows petty / scum / treasury once its real figures
+ *  arrive (`opponentDialogBudget`; 0k where the leg has no such pool), so the estimate keeps the same three rows - a
+ *  row the estimate's shape lacks (BB2020 / BB2016 scum, a one-pool leg's petty) reads 0k, as the real figures will. */
+export const OTHER_UNDERDOG_ROWS: readonly UnderdogCashRow[] = ['petty', 'scum', 'treasury'];
+export function padEstimateRows(estimate: BudgetEstimate, rows: readonly CashRowKey[]): BudgetEstimate {
+  return { ...estimate, cells: rows.map((key) => estimate.cells.find((c) => c.key === key) ?? { key, gold: 0 }) };
+}
+
+/**
+ * Owner 10-21 / Astra 10-21 (P2): what the OTHER coach's panel shows. `legOver` = that coach's leg is finished: their
+ * reveal (`opp.ready`), or the phase having moved past their leg (the dialog moved to the next coach) - an EMPTY
+ * purchase never sets `ready`. While the leg is live their synced dialog (server figures) wins over the estimate; once
+ * it is over the dialog still on the model is their OPENING budget, so it is never shown, and the estimate stays only
+ * where it is exact: the overdog's spend known (`spendKnown`) or the rules gave them nothing. Otherwise dashes.
+ */
+export function otherLegOver(input: {
+  role: InducementRole; confirmed: boolean; isPlaying: boolean; myRole: InducementRole | null; phase: InducementPhase;
+}): boolean {
+  if (input.confirmed) return true;
+  // As the underdog: once my own dialog is up (phase 'underdog') or my leg is done, the overdog has finished.
+  return input.role === 'overdog' && input.isPlaying && input.myRole === 'underdog' && input.phase !== 'overdog';
+}
+export function otherCoachCash(input: {
+  role: InducementRole; legOver: boolean; dialogMoney: PhaseMoney | null; estimate: BudgetEstimate | null; spendKnown: boolean;
+}): { money: PhaseMoney | null; estimate: BudgetEstimate | null } {
+  const { role, legOver, dialogMoney, estimate, spendKnown } = input;
+  if (!legOver && dialogMoney) return { money: dialogMoney, estimate: null };
+  if (!estimate) return { money: null, estimate: null };
+  if (!legOver || (role === 'overdog' && spendKnown) || estimate.total === 0) return { money: null, estimate };
+  return { money: null, estimate: null };
+}
+
+/**
+ * The overdog's spend, worked back out of the UNDERDOG's own dialog (the server folded it into the underdog's petty
+ * cash, see `estimateOpponentBudget`). `underdog` is the underdog's estimate input (the underdog as subject) and is
+ * used only for its pre-spend petty cash. Null when the dialog does not tell: a one-pool (usesTreasury) leg, BB2016
+ * (no overdog spend in its formula), or a BB2025 spend that the free inducement cash swallowed (max(spent - free, 0)
+ * is 0, so any spend up to the free cash reads the same).
+ */
+export function overdogSpentFromUnderdogDialog(
+  underdog: BudgetEstimateInput,
+  dialog: { availableGold: number; pettyCash: number; usesTreasury: boolean },
+): number | null {
+  const rules = String(underdog.rulesVersion ?? '').trim().toUpperCase();
+  if (rules === 'BB2016' || dialog.usesTreasury) return null;
+  const before = estimateInducementBudget({ ...underdog, role: 'underdog', overdogSpent: 0 });
+  const petty = before?.cells.find((c) => c.key === 'petty')?.gold;
+  if (petty === null || petty === undefined) return null;
+  if (rules === 'BB2020') {
+    // availableGold = usedInducementGold<Overdog> + pettyCashFromTvDiff (no split on the BB2020 dialog).
+    const spent = dialog.availableGold - petty;
+    return Number.isFinite(spent) ? Math.max(0, spent) : null;
+  }
+  const freeCash = inducementMoneyOptions(underdog.options).freeInducementCash;
+  const extra = dialog.pettyCash - petty; // = max(spent - freeCash, 0)
+  if (!Number.isFinite(extra)) return null;
+  if (extra > 0) return extra + freeCash;
+  return freeCash > 0 ? null : 0;
 }
 
 /**

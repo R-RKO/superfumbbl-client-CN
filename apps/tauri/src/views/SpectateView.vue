@@ -112,7 +112,9 @@ import { upstreamDirectionWord, upstreamLogRows, upstreamLogSegments, type Upstr
 import {
   bladeOf, ownedResources, phaseMoney, phaseOf, roleFromWire, summaryCards, usesFanFactor,
   type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption,
-  dialogSplitsPettyCash, estimateInducementBudget, inducementMoneyOptions, settleEstimate, underdogCashRows, type BudgetEstimate } from '../game/inducementsPhase';
+  dialogSplitsPettyCash, estimateInducementBudget, estimateOpponentBudget, inducementMoneyOptions, overdogSpentFromUnderdogDialog, settleEstimate,
+  otherCoachCash, otherLegOver, padEstimateRows, OTHER_UNDERDOG_ROWS,
+  underdogCashRows, type BudgetEstimate, type BudgetEstimateInput, type PhaseMoney } from '../game/inducementsPhase';
 import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
 import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
 import { activeInducementSprite } from '../game/inducementPortrait';
@@ -5777,7 +5779,7 @@ const induceCanAct = computed(() => !!gameStore.state.inducementBuy);
 
 // Owner 10-20/10-21: GAME-LOAD RANK PANEL - the match-up bar with both coaches' FUMBBL ranks (local left on a coach
 // seat, else home left), from the moment the game model arrives (the board loads behind its cover) until the first
-// interactive phase surfaces; skipped while catching up like every splash; once per game per session (no re-show on
+// interactive phase surfaces (spectate / replay: always at the start, a 6 s hold - owner 10-21); skipped while catching up like every splash; once per game per session (no re-show on
 // reconnect or replay seek). Never a latch: pointer-events none, a click / key dismisses it, a flat 20 s backstop
 // clears it regardless. Data: game/fumbblCoachProfile.ts (same session cache as the Play card, <= 6
 // fumbbl.com requests per load). Logic in game/gameLoadRankPanel.ts.
@@ -5795,6 +5797,8 @@ const gameLoadRank = useGameLoadRankPanel({
   boardReady: () => rendererReady.value > 0,
   fetchFn: () => (inTauri ? (tauriFetch as typeof fetch) : fetch),
   durationMs: () => 20_000, // Astra r2 (P3): a flat 20 s wall-clock backstop, not presentation-scaled
+  // owner 10-21: every spectated match and replay shows it at the start again, held 6 s from the first paint
+  holdMs: () => presentationMs(6000),
 });
 const gameLoadRankPanel = gameLoadRank.panel;
 onBeforeUnmount(() => gameLoadRank.stop());
@@ -5919,6 +5923,33 @@ const induceRulesVersion = computed(() => gameStore.game.value?.gameOptions?.gam
  * applies that purchase and opens my dialog in the same command (StepBuyInducements.handleCommand -> swapTeam), so the
  * spend never sits in my model before `inducementBuy` does.
  */
+/** The estimate input with `team` as the subject against `other` (game/inducementsPhase.ts `BudgetEstimateInput`):
+ *  shared by my own estimate (owner 10-12) and the other coach's (owner 10-21). */
+function induceEstimateInput(team: InducementCardTeam, other: InducementCardTeam, role: InducementRole): BudgetEstimateInput | null {
+  const g = gameStore.game.value;
+  if (!g) return null;
+  const teamIsHome = String(team.teamId) === String(g.teamHome.teamId);
+  type Result = { teamValue?: unknown; pettyCashFromTvDiff?: unknown; pettyCashTransferred?: unknown; pettyCashUsed?: unknown } | null | undefined;
+  const ownResult = (teamIsHome ? g.gameResult?.teamResultHome : g.gameResult?.teamResultAway) as Result;
+  const otherResult = (teamIsHome ? g.gameResult?.teamResultAway : g.gameResult?.teamResultHome) as Result;
+  // Same TV reading as the opponent's derived budget: the larger of the team result's and the team's.
+  const tv = (t: unknown, result: Result) => Math.max(
+    Number(result?.teamValue ?? 0) || 0, Number((t as { teamValue?: unknown }).teamValue ?? 0) || 0);
+  const rawTreasury = (team as { treasury?: unknown }).treasury;
+  const treasury = rawTreasury === undefined || rawTreasury === null || rawTreasury === '' ? null : Number(rawTreasury);
+  return {
+    rulesVersion: induceRulesVersion.value,
+    role,
+    treasury: treasury !== null && Number.isFinite(treasury) ? treasury : null,
+    myTv: tv(team, ownResult),
+    oppTv: tv(other, otherResult),
+    myPettyCashFromTvDiff: ownResult?.pettyCashFromTvDiff,
+    oppPettyCashFromTvDiff: otherResult?.pettyCashFromTvDiff,
+    pettyCashTransferred: ownResult?.pettyCashTransferred,
+    pettyCashUsed: ownResult?.pettyCashUsed,
+    options: purchaseOptionsFromWire(g).options,
+  };
+}
 const induceMyEstimate = computed<BudgetEstimate | null>(() => {
   const g = gameStore.game.value;
   const me = induceMyTeam.value;
@@ -5928,29 +5959,60 @@ const induceMyEstimate = computed<BudgetEstimate | null>(() => {
   // Astra 10-12 (P2): only with positive evidence that my own dialog has not come up yet in this phase (store
   // `inducementOwnDialogPending`); a mid-phase rejoin without that record keeps the dash.
   if (!gameStore.state.inducementOwnDialogPending) return null;
-  const meIsHome = String(me.teamId) === String(g.teamHome.teamId);
-  type Result = { teamValue?: unknown; pettyCashFromTvDiff?: unknown; pettyCashTransferred?: unknown; pettyCashUsed?: unknown } | null | undefined;
-  const myResult = (meIsHome ? g.gameResult?.teamResultHome : g.gameResult?.teamResultAway) as Result;
-  const oppResult = (meIsHome ? g.gameResult?.teamResultAway : g.gameResult?.teamResultHome) as Result;
-  // Same TV reading as the opponent's derived budget: the larger of the team result's and the team's.
-  const tv = (team: unknown, result: Result) => Math.max(
-    Number(result?.teamValue ?? 0) || 0, Number((team as { teamValue?: unknown }).teamValue ?? 0) || 0);
-  const rawTreasury = (me as { treasury?: unknown }).treasury;
-  const treasury = rawTreasury === undefined || rawTreasury === null || rawTreasury === '' ? null : Number(rawTreasury);
-  return estimateInducementBudget({
-    rulesVersion: induceRulesVersion.value,
-    role,
-    treasury: treasury !== null && Number.isFinite(treasury) ? treasury : null,
-    myTv: tv(me, myResult),
-    oppTv: tv(opp, oppResult),
-    myPettyCashFromTvDiff: myResult?.pettyCashFromTvDiff,
-    oppPettyCashFromTvDiff: oppResult?.pettyCashFromTvDiff,
-    pettyCashTransferred: myResult?.pettyCashTransferred,
-    pettyCashUsed: myResult?.pettyCashUsed,
-    options: purchaseOptionsFromWire(g).options,
-    overdogSpent: null,
-  });
+  const input = induceEstimateInput(me, opp, role);
+  return input ? estimateInducementBudget({ ...input, overdogSpent: null }) : null;
 });
+
+/** My last pick total while I held a dialog: it outlives my confirm (the dialog, and with it `induceSpent`, goes the
+ *  moment I send), so the underdog's estimated petty cash keeps my spend after I confirm. */
+const induceMyLastSpent = ref<number | null>(null);
+watch(
+  () => [gameStore.state.inducementBuy, induceSpent.value, gameStore.state.inducementReveal] as const,
+  ([buy, spent, reveal]) => {
+    if (buy) induceMyLastSpent.value = spent;
+    else if (!reveal) induceMyLastSpent.value = null;
+  },
+  { immediate: true },
+);
+/** The panel's own server budget: that team's inducement dialog when it is synced to this seat (Elyod 10-03). */
+function induceDialogMoneyFor(role: InducementRole, team: InducementCardTeam | null): PhaseMoney | null {
+  const g = gameStore.game.value;
+  if (!g || !team) return null;
+  return opponentDialogBudget(g.dialogParameter, String(team.teamId), Number((team as { treasury?: unknown }).treasury ?? 0), role,
+    dialogSplitsPettyCash(induceRulesVersion.value));
+}
+/**
+ * Owner 10-21 ("Opponent's cash should always be visible and should live update if the overdog spends inducement
+ * money."): the OTHER coach's expected budget (both coaches' for a spectator), marked "Estimated" exactly like my own.
+ * Underdog panel: TV-difference petty cash plus the overdog's spend - my live pick total while I am the overdog, so
+ * every purchase / undo moves it 1:1; scum min(50k, their treasury); their treasury. Overdog panel: their one pool;
+ * Spent 0 while they choose (their picks stay on their client), and once they have confirmed, the spend the server
+ * folded into MY dialog's petty cash (`overdogSpentFromUnderdogDialog`). Null where the rules cannot be replayed.
+ * DISPLAY ONLY: never reaches the cap, `canAdd`, or a send.
+ */
+function induceOtherEstimate(role: InducementRole, team: InducementCardTeam | null): { estimate: BudgetEstimate; spendKnown: boolean } | null {
+  const g = gameStore.game.value;
+  if (!g || !team || props.mode === 'replay') return null;
+  const other = String(team.teamId) === String(g.teamHome.teamId) ? g.teamAway : g.teamHome;
+  const input = induceEstimateInput(team, other, role);
+  if (!input) return null;
+  const myRole = gameStore.isPlaying.value ? induceMyRole.value : null;
+  if (role === 'underdog') {
+    const overdogSpent = myRole === 'overdog' ? (induceMyLastSpent.value ?? 0) : null;
+    const estimate = estimateOpponentBudget({ ...input, overdogSpent });
+    // Astra 10-21 (P3): the same three rows the real figures will show, so nothing jumps at the hand-over.
+    return estimate ? { estimate: padEstimateRows(estimate, OTHER_UNDERDOG_ROWS), spendKnown: overdogSpent !== null } : null;
+  }
+  const buy = gameStore.state.inducementBuy;
+  const me = induceMyTeam.value;
+  let spent: number | null = null;
+  if (myRole === 'underdog' && buy && me) {
+    const mine = induceEstimateInput(me, team, 'underdog');
+    if (mine) spent = overdogSpentFromUnderdogDialog(mine, { availableGold: buy.availableGold, pettyCash: buy.pettyCash, usesTreasury: buy.usesTreasury });
+  }
+  const estimate = estimateOpponentBudget({ ...input, spent });
+  return estimate ? { estimate, spendKnown: spent !== null } : null;
+}
 
 const induceOptions = computed(() => gameStore.state.inducementBuy?.options ?? []);
 /** Owner 09-21: the opponent's money readouts while THEY choose — derived from the game JSON (upstream formula),
@@ -6159,15 +6221,28 @@ function inducePanel(role: InducementRole): PanelView {
   const seat = g && team && String(team.teamId) === String(g.teamHome.teamId) ? 'home' : 'away';
   const confirmed = mine ? !!reveal?.mine : !!reveal?.opp?.ready;
   const active = inducePhase.value === role && !confirmed;
+  // Astra 10-21 (P2): the other coach's leg is over at their reveal OR once the phase has moved past it (an empty
+  // purchase never sets `ready`): as the underdog, my own dialog / my confirm means the overdog has finished.
+  const legOver = !mine && otherLegOver({
+    role, confirmed, isPlaying: gameStore.isPlaying.value, myRole: induceMyRole.value, phase: inducePhase.value,
+  });
+  const other = mine ? null : induceOtherEstimate(role, team);
+  const otherCash = mine ? null : otherCoachCash({
+    role, legOver, dialogMoney: induceDialogMoneyFor(role, team), estimate: other?.estimate ?? null, spendKnown: !!other?.spendKnown,
+  });
   return {
     role, seat,
     ...inducePanelIdentity(team, seat),
     status: confirmed ? 'confirmed' : active ? 'selecting' : 'waiting',
-    money: mine ? induceMyMoney.value : active ? induceOppMoney.value : null, // owner 09-21: the opponent's derived budget while they choose
+    // The other coach's money: the server's own figures while their leg is live and their dialog is synced to me.
+    money: mine ? induceMyMoney.value : otherCash!.money,
     // Owner 10-12: my own estimated budget while I wait. Once my leg is over it stays only when the rules gave me
     // nothing (0 is then exact); a spent leg keeps the dashes, since what I spent is not on my model.
+    // Owner 10-21: the other coach's estimate always while their leg is live; after, only where their spend is known
+    // (overdog) or the rules gave them nothing (`otherCoachCash`).
     estimate: mine && !induceMyMoney.value && induceMyEstimate.value && (!confirmed || induceMyEstimate.value.total === 0)
-      ? induceMyEstimate.value : null,
+      ? induceMyEstimate.value
+      : (otherCash?.estimate ?? null),
     moneyRows: mine ? underdogCashRows(induceRulesVersion.value) : undefined, // the other coach's rows stay as they were
     cards: mine
       ? (induceCanAct.value ? induceMyCards.value : induceRevealCards(reveal?.mine ?? null, induceMyTeam.value))

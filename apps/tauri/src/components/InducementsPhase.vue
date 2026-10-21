@@ -558,9 +558,9 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
                 <span class="ind-cash-k"><span class="cap">{{ row.label.slice(0, 1) }}</span>{{ row.label.slice(1) }}</span>
                 <span :class="`ind-cash-${row.tone}`">{{ row.value }}</span>
               </div>
-              <!-- Owner 10-12: worked out client side while the other coach chooses; the server's figures replace it. -->
+              <!-- Owner 10-12 / 10-21: worked out client side (my own while the other coach chooses, theirs always); the server's figures replace it. -->
               <div v-if="showsEstimate(panel)" class="ind-cash-est" :data-testid="`cash-estimated-${panel.role}`"
-                title="Worked out from the team values and game options. The server's figures replace it when your turn comes.">
+                title="Worked out from the team values and game options. The server's figures replace it when they arrive.">
                 <span class="cap">E</span>stimated
               </div>
             </div>

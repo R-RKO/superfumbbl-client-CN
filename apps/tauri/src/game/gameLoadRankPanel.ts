@@ -23,7 +23,15 @@ import { FUMBBL_WS_URL } from './settings';
  *   start-game phase (any turn mode past startGame - setup, every kick-off sub-phase, play -, a turn begun on either
  *   side, the second half; a replay at its first position excepted), the inducement phase, any server dialog to either
  *   coach (FFB's startGame handshake excepted), or a turn start. It only shows while that token is still empty, so a
- *   mid-game join / spectate never shows it.
+ *   mid-game join on a COACH SEAT never shows it.
+ * - Spectate and replay (owner 10-21: "Can we actually bring the coach skill panel with winrate/war/etc up at the start
+ *   of a spectated match and replay? I actually liked having that."): a spectator join (running game or not) and a
+ *   replay (connectReplay download or a local file, at any start position) ALWAYS show it, whatever the phase
+ *   evidence says, and hold it `holdMs()` (presentationMs(6000)) from the first board paint, or until a click / key;
+ *   the phase token never ends it (Astra r2). The 20 s backstop runs from the game's model arrival and is never
+ *   restarted for these modes - not by the paint, a catch-up pause or a resume (the hold takes only what is left of
+ *   it; a resume keeps the hold's own end too). Same once-per-key rule: no re-show on a reconnect, a remount or a
+ *   later seek; an explicit leave (store.leaveGame) makes the game eligible again (Astra r1).
  * - Never a latch (LATCHES FAIL OPEN): nothing waits on it. pointer-events: none; a click or key press anywhere
  *   dismisses it (the event still reaches the board); a flat 20 s wall-clock backstop `durationMs()` clears it
  *   regardless - also when the renderer never reports ready.
@@ -57,6 +65,8 @@ export interface GameLoadRankPanelDeps {
   /** true only when this game verifiably comes from the official FUMBBL server (see officialFumbblGameServer) */
   lookupAllowed: () => boolean;
   durationMs: () => number;
+  /** spectate / replay only: the hold from the first board paint (the view's presentationMs(6000); default 6000) */
+  holdMs?: () => number;
   /** session memory of shown game keys (defaults to the module-level set) */
   shown?: Set<string>;
   /** where click / key dismissal is listened for (defaults to window) */
@@ -64,8 +74,19 @@ export interface GameLoadRankPanelDeps {
 }
 
 const sessionShown = new Set<string>();
+/** Bumped by every explicit leave: a panel created before it never marks its game afterwards. */
+let leaveGeneration = 0;
 /** Test seam: forget which games showed the panel this session. */
-export function resetGameLoadRankPanelSession(): void { sessionShown.clear(); }
+export function resetGameLoadRankPanelSession(): void { sessionShown.clear(); leaveGeneration++; }
+/** An explicit leave (store.leaveGame - not a disconnect / reconnect / seek): the game may show its bar again on a
+ *  later join this session (Astra r1). */
+export function forgetGameLoadRankPanelGame(gameId: unknown): void {
+  leaveGeneration++;
+  for (const mode of ['live', 'spectate', 'replay'] as const) {
+    const key = gameLoadRankPanelKey(mode, gameId);
+    if (key) sessionShown.delete(key);
+  }
+}
 
 export function gameLoadRankPanelKey(mode: 'live' | 'spectate' | 'replay', gameId: unknown): string | null {
   const id = typeof gameId === 'number' || typeof gameId === 'string' ? String(gameId).trim() : '';
@@ -199,6 +220,22 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
   /** the phase token when a DEV preview started: only a different token ends the preview */
   let previewToken: string | null = null;
   let sawCatchUp = false;
+  /** the current panel's game is spectated / replayed: the hold rule, not the phase rule (owner 10-21) */
+  let currentHeld = false;
+  /** the spectate / replay hold has started (the board has painted) */
+  let holdArmed = false;
+  /** live: wall-clock end of the current display's backstop (a resume restarts it, as before) */
+  let deadline = 0;
+  /** spectate / replay: when this game's model arrived - the backstop's fixed start (Astra r2) */
+  let keyArrivedAt = 0;
+  /** spectate / replay: when this game's board first painted (0 = not yet) - recorded whenever it happens, inside a
+   *  catch-up or a pause too; the hold always ends holdMs after it (Astra r3) */
+  let firstPaintAt = 0;
+  function notePaint(): void { if (!firstPaintAt && boardReady()) firstPaintAt = Date.now(); }
+  /** the leave generation the current panel was created in */
+  let currentGeneration = leaveGeneration;
+  const boardReady = (): boolean => deps.boardReady?.() ?? true;
+  const heldMode = (key: string | null): boolean => !!key && (key.startsWith('spectate:') || key.startsWith('replay:'));
 
   const onInput = (): void => finish();
   function listen(on: boolean): void {
@@ -220,15 +257,41 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
     panel.value = current;
     listen(true);
     if (timer) clearTimeout(timer);
-    timer = setTimeout(finish, Math.max(0, deps.durationMs()));
+    const backstop = Math.max(0, deps.durationMs());
+    if (!currentHeld) {
+      deadline = Date.now() + backstop;
+      timer = setTimeout(finish, backstop);
+      return;
+    }
+    holdArmed = false;
+    schedule();
+  }
+  /** Spectate / replay: finish at the earlier of the fixed backstop (model arrival + durationMs) and the hold's end,
+   *  starting the hold at the first paint. Past the backstop the panel is done at once. */
+  function schedule(): void {
+    if (!current) return;
+    const now = Date.now();
+    notePaint();
+    const holdEnd = firstPaintAt ? firstPaintAt + Math.max(0, deps.holdMs?.() ?? 6000) : 0;
+    holdArmed = holdEnd > 0;
+    const end = Math.min(keyArrivedAt + Math.max(0, deps.durationMs()), holdEnd || Infinity);
+    if (timer) { clearTimeout(timer); timer = 0; }
+    if (end <= now) { finish(); return; }
+    timer = setTimeout(finish, end - now);
+  }
+  /** Spectate / replay: the board has painted behind the bar - the hold starts now (the backstop never extends it). */
+  function armHold(): void {
+    if (!current || paused || !currentHeld || holdArmed || !boardReady()) return;
+    schedule();
   }
   /** The panel is DONE for its game - a timer expiry, a click / key, a game change, a catch-up / seek, the view going
    *  away. Only these mark the game shown (Astra r1). */
   function finish(): void {
     previewToken = null;
-    if (current) shown.add(current.key);
+    if (current && currentGeneration === leaveGeneration) shown.add(current.key);
     current = null;
     paused = false;
+    holdArmed = false;
     hide();
   }
   /** A decision card for this coach: hide but keep the game's panel; it shows again, for a fresh duration, once the
@@ -242,6 +305,7 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
   function drop(): void {
     current = null;
     paused = false;
+    holdArmed = false;
     hide();
   }
 
@@ -293,7 +357,12 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
     if (key !== lastKey) {
       lastKey = key;
       finish();
+      // Astra r3 ruling: counted from controller mount when the model arrived earlier (App.vue delays the match view
+      // for the art pack) - the backstop guards a MOUNTED pitch; before the mount nothing is covered.
+      keyArrivedAt = Date.now();
+      firstPaintAt = 0;
     }
+    notePaint();
     // A replay seek / an instant same-game fast-forward finishes it (Astra r4: never a re-show on a seek) - seen
     // through the store's reactive signal, since a synchronous seek restores the flag before this runs. A catch-up
     // this watcher SEES running (a join's fast-forward) only hides it: it waits, and comes back when the catch-up ends
@@ -313,17 +382,23 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
     // The first interactive phase has surfaced: the bar's job is done (and it never shows once it has). A DEV preview
     // runs as if the token it started on were empty.
     const token = deps.phaseToken();
+    // Spectate / replay (owner 10-21, Astra r2): the token never prevents nor ends the bar - only the hold, a click /
+    // key, a seek or the backstop do. A coach seat keeps the phase rule exactly.
+    const held = current ? currentHeld : heldMode(key);
     if (token && !(previewToken !== null && current && token === previewToken)) {
-      finish(); if (key && !shown.has(key)) shown.add(key); return;
+      if (!held) { finish(); if (key && !shown.has(key)) shown.add(key); return; }
     }
     // A decision card for this coach: pause (a panel not yet shown waits); it resumes when the card closes.
     if (deps.inputPending()) { pause(); return; }
     if (current) {
       refreshSides(current);
       if (paused) display();
+      else armHold();
       return;
     }
     if (!key || shown.has(key)) return;
+    currentHeld = heldMode(key);
+    currentGeneration = leaveGeneration;
     create(key);
   }
 
@@ -346,11 +421,16 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
     if (!key) return;
     finish();
     shown.delete(key);
+    currentHeld = heldMode(key);
+    currentGeneration = leaveGeneration;
+    keyArrivedAt = Date.now();
+    firstPaintAt = 0;
+    notePaint();
     if (create(key)) previewToken = deps.phaseToken();
   }
 
   const stopWatch = watch(
-    () => [deps.gameKey(), deps.catchUpSignal(), deps.phaseToken(), deps.inputPending(), deps.endGameActive(),
+    () => [deps.gameKey(), deps.catchUpSignal(), deps.phaseToken(), deps.inputPending(), deps.endGameActive(), boardReady(),
       deps.teams()?.home.coach, deps.teams()?.away.coach, deps.teams()?.home.team, deps.teams()?.away.team],
     update,
     { immediate: true },

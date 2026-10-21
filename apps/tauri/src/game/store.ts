@@ -157,6 +157,7 @@ import {
   strictBlockPresentationSeat,
 } from './blockChooser';
 import { leaveGameTeardownSteps, type LeaveGameTeardownStep } from './leaveGameLifecycle';
+import { forgetGameLoadRankPanelGame } from './gameLoadRankPanel';
 import {
   buildBribesCommand,
   buildUseInducementCommand,
@@ -30945,6 +30946,8 @@ export const gameStore = {
    * intent, presentation latch, dialog, or rendered model survives for the next join.
    */
   leaveGame() {
+    // Astra r1: an explicit leave makes the game eligible for its game-load rank bar again (a reconnect / seek is not)
+    forgetGameLoadRankPanelGame((game.value as { gameId?: unknown } | null)?.gameId);
     const handlers: Record<LeaveGameTeardownStep, () => void> = {
       disconnect: () => this.disconnect(),
       forgetReconnect: () => forgetLeaveReconnectIntent(),
