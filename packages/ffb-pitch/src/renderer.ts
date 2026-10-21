@@ -27,6 +27,7 @@ import { disturbingPresenceTagText } from './disturbingPresence';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
 import { jumpTargetForPlayer, serverMoveSquareRolls, type ServerMoveRoll } from './jumpTarget';
+import { breakTackleAvailable, planDodgeTarget } from './dodgeTarget';
 import {
   PITCH_COLS,
   PITCH_ROWS,
@@ -9438,10 +9439,10 @@ export class PitchRenderer {
           const persistentPath = this.movementOverlayOwner === this.o66PathMover;
           if (persistentPath) this.pathLayer.addChild(this.movementPathCostLayer);
           const agility = Number((moverPlayer as { agility?: number }).agility) || 3;
-          // base + TEMPORARY skills (shared protocol decoder) — a prayer/card grant answers rules checks too
-          const moverHasSkill = (name: string) => playerHasSkill(moverPlayer, name);
-          const moverHasStunty = moverHasSkill('stunty');
-          const moverHasTitchy = moverHasSkill('titchy');
+          // Owner 10-21 (mutations): the dodge NUMBER for a step the server has not priced is dodgeTargetForPlayer
+          // (upstream DodgeModifierFactory mirror: Two Heads, Titchy, Prehensile Tail, Stunty + cancels, Break Tackle).
+          // Break Tackle counts until the first dodge where it could actually be spent (planDodgeTarget).
+          let breakTacklePending = breakTackleAvailable(this.game, this.o66PathMover);
           // #77 (owner batch §N): a pickup is required whenever a move step LANDS ON the loose ball
           // (ballInPlay && !ballMoving — a carrier's square is occupied so can't be a move target). We only
           // DETECT that square here for chip placement; the difficulty NUMBER comes from the view's
@@ -9508,20 +9509,15 @@ export class PitchRenderer {
               chip.alpha = 0.9; this.pathLayer.addChild(chip);
             }
             if (dodge && !isJumpStep) { // a jump replaces the dodge: one jump tag, never J6+ together with D4+
-              // Upstream BB2025 citations:
-              // ffb-common/src/main/java/com/fumbbl/ffb/factory/DodgeModifierFactory.java
-              // (DodgeModifierFactory#numberOfTacklezones/#isAffectedByTackleZones) counts destination marks
-              // and drops them for an uncancelled Stunty property;
-              // ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Stunty.java (Stunty#postConstruct)
-              // supplies it. ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Titchy.java
-              // (Titchy#postConstruct) registers the mover's -1 DodgeModifier.
-              const destMarks = oppDodgeMarks.get(`${dx},${dy}`) ?? 0;
-              const localDodge = Math.min(
-                6,
-                Math.max(2, agility + (moverHasStunty ? 0 : destMarks) - (moverHasTitchy ? 1 : 0)),
-              );
+              // Upstream mirror: dodgeTarget.ts (DodgeModifierFactory + AgilityMechanic.minimumRollDodge).
+              const planned = planDodgeTarget(this.game, this.o66PathMover, [fx, fy], [dx, dy], breakTacklePending);
+              const projected = planned.target;
+              if (planned.breakTackleSpent) breakTacklePending = false;
+              const localDodge = Math.min(6, projected ?? Math.max(2, agility + (oppDodgeMarks.get(`${dx},${dy}`) ?? 0)));
               // Astra pass 6 (server-derived law): the server's dodge price for the square, when it sent one, is shown.
-              const target = srvRolls && !srvRolls.jump && srvRolls.dodge > 0 ? srvRolls.dodge : localDodge;
+              // Astra r2: only the FIRST step (from the actor's current square) can carry the server's price; a later
+              // visit to the same square is projected like any other step (Break Tackle may be spent by then).
+              const target = k === 1 && srvRolls && !srvRolls.jump && srvRolls.dodge > 0 ? srvRolls.dodge : localDodge;
               // Owner o66aq: the path COST chips (dodge / rush) belong ABOVE the tokens (pathLayer), not overlayLayer
               // (which sits UNDER tokenLayer — the chips were being occluded by players/shading; "rushes don't
               // surface"). pathLayer is the same over-tokens layer the block-dice dots already use, cleared each frame.
@@ -9821,6 +9817,7 @@ export class PitchRenderer {
       if (persistentPlannedPath) this.pathLayer.addChild(this.movementPathCostLayer);
 
       let fromSquare: Square = [px, py];
+      let breakTacklePending = breakTackleAvailable(this.game, this.selectedPlayerId);
       this.plannedPath.forEach(([sx, sy], i) => {
         const a = squareAnchor(sx, sy);
         const stepScale = depthScale(sx, sy);
@@ -9873,6 +9870,15 @@ export class PitchRenderer {
         if (dodge) {
           // dodge target = AG + 1 per opponent marking the DESTINATION
           // square (BB2025); natural 1 fails / 6 succeeds → clamp 2+..6+
+          // Owner 10-21 (mutations): the unpriced dodge is dodgeTargetForPlayer (upstream DodgeModifierFactory mirror);
+          // Break Tackle counts until the first dodge where it could actually be spent. Every modifier (incl. the
+          // worst-case Diving Tackle) is summed BEFORE the single minimum-2 clamp.
+          let btSpent = false;
+          const localBase = (extra = 0): number => {
+            const planned = planDodgeTarget(this.game, this.selectedPlayerId, fromSquare, [sx, sy], breakTacklePending, extra);
+            btSpent = planned.breakTackleSpent;
+            return planned.target ?? Math.max(2, info.player.agility + dodgeDestMarks + extra);
+          };
           const target = (() => {
             // #232 (owner): step 1 is server-verbatim; later steps assume worst-case Diving Tackle.
             if (i === 0) {
@@ -9887,9 +9893,10 @@ export class PitchRenderer {
                 const ey = Array.isArray(c) ? Number(c[1]) : Number((c as { y?: number } | null)?.y);
                 return ex === sx && ey === sy;
               });
+              const local = Math.min(6, localBase()); // also settles the Break Tackle bookkeeping for step 1
               return serverSquare && serverSquare.minimumRollDodge > 0
                 ? serverSquare.minimumRollDodge
-                : Math.min(6, Math.max(2, info.player.agility + dodgeDestMarks));
+                : local;
             }
             const selectedIsHome = this.selectedIsHome();
             const homeIds = new Set(this.game!.teamHome.playerArray.map((p) => p.playerId));
@@ -9907,18 +9914,9 @@ export class PitchRenderer {
               );
             });
             const dtAdj = hasAdjacentDivingTackle ? 2 : 0;
-            const moverHasSkill = (name: string) => playerHasSkill(info.player, name);
-            // Upstream BB2025 citations:
-            // ffb-common/src/main/java/com/fumbbl/ffb/factory/DodgeModifierFactory.java
-            // (DodgeModifierFactory#numberOfTacklezones/#isAffectedByTackleZones) counts destination marks
-            // and drops them for an uncancelled Stunty property;
-            // ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Stunty.java (Stunty#postConstruct)
-            // supplies it. ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Titchy.java
-            // (Titchy#postConstruct) registers the mover's -1 DodgeModifier.
-            const stuntyDestMarks = moverHasSkill('stunty') ? 0 : dodgeDestMarks;
-            const titchyAdj = moverHasSkill('titchy') ? -1 : 0;
-            return Math.min(6, Math.max(2, info.player.agility + stuntyDestMarks + titchyAdj) + dtAdj);
+            return Math.min(6, localBase(dtAdj));
           })();
+          if (btSpent) breakTacklePending = false;
           if (persistentPlannedPath) {
             this.syncMovementOverlayNode(
               `planned-path:dodge:${sx},${sy}`,

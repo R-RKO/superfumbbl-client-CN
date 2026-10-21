@@ -44,7 +44,7 @@ export function serverMoveSquareRolls(game: GameJson | null | undefined): Map<st
   return out;
 }
 
-function findPlayer(game: GameJson, playerId: string): { player: PlayerJson; home: boolean } | null {
+export function findPlayer(game: GameJson, playerId: string): { player: PlayerJson; home: boolean } | null {
   const home = game.teamHome.playerArray.find((p) => String(p.playerId) === playerId);
   if (home) return { player: home, home: true };
   const away = game.teamAway.playerArray.find((p) => String(p.playerId) === playerId);
@@ -52,7 +52,7 @@ function findPlayer(game: GameJson, playerId: string): { player: PlayerJson; hom
 }
 
 /** Opponents with tackle zones adjacent to `square` (UtilPlayer.findAdjacentPlayersWithTacklezones, start excluded). */
-function adjacentOpponents(game: GameJson, opponentIds: Set<string>, square: Square): PlayerJson[] {
+export function adjacentOpponents(game: GameJson, opponentIds: Set<string>, square: Square): PlayerJson[] {
   const out: PlayerJson[] = [];
   const byId = new Map([...game.teamHome.playerArray, ...game.teamAway.playerArray].map((p) => [String(p.playerId), p]));
   for (const data of game.fieldModel.playerDataArray) {
@@ -117,6 +117,19 @@ export function jumpTargetForPlayer(
     if (zones > 0) modifiers.push(zones);
     const tails = adjacentOpponents(game, opponentIds, from).filter((p) => playerHasSkill(p, 'Prehensile Tail')).length;
     if (tails > 0) modifiers.push(1);
+  }
+  const rulesVersion = String(game.gameOptions?.gameOptionArray?.find((o) => o.gameOptionId === 'rulesVersion')?.gameOptionValue ?? '');
+  if (/^BB2020$/i.test(rulesVersion.trim())) {
+    // BB2020: Leap AND Very Long Legs are both DEPENDS_ON_SUM_OF_OTHERS (skill/bb2020/Leap, skill/bb2020/VeryLongLegs):
+    // each is -1 only while the accumulated sum is above 1, walked over the BASE skills in roster order, and each
+    // one that applies lowers the running sum (JumpContext.addModifierValue).
+    let acc = modifiers.reduce((a, b) => a + b, 0);
+    for (const skill of decodePlayerSkills(player)) {
+      if (skill.source !== null) continue;
+      const name = normalizeSkillName(skill.name);
+      if ((name === normalizeSkillName('Leap') || name === normalizeSkillName('Very Long Legs')) && acc > 1) acc -= 1;
+    }
+    return Math.max(2, agility + acc);
   }
   if (playerHasSkill(player, 'Very Long Legs')) modifiers.push(-1);
   const sum = modifiers.reduce((a, b) => a + b, 0);

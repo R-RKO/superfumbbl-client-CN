@@ -47,6 +47,7 @@ export * from './crosshairRail';
 export { isPreSetupWindow, preSetupPlacements } from './preSetupFormation';
 export { rushTargetForPlayer } from './rushTarget';
 export { jumpTargetForPlayer, serverMoveSquareRolls, type ServerMoveRoll } from './jumpTarget';
+export { breakTackleAvailable, breakTackleModifier, dodgeRulesVersion, dodgeTargetForPlayer, type DodgeRulesVersion } from './dodgeTarget';
 export { RING_TYPE_COLORS, ringTypeForName, type RingType } from './positionTypes';
 export {
   DEFAULT_D6_FACE_VARIANT,

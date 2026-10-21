@@ -144,7 +144,8 @@ defineEmits<{
 .apo-option-row .apo-use { width: 100%; text-align: center; }
 .apo-use, .apo-decline { min-height: 30px; padding: 5px 9px; color: #effff1; border: 1px solid #6aa276; border-radius: 4px; background: linear-gradient(180deg, #467951, #294b31); font: inherit; font-size: max(var(--ui-min-text-size, 12px), 0.68rem); font-weight: 900; cursor: pointer; }
 .apo-use:hover { filter: brightness(1.16); }
-.apo-decline { color: #d4dae2; border-color: #657180; background: linear-gradient(180deg, #424c58, #242b33); }
+.apo-decline { color: #ffe9e9; border-color: #d56a5f; background: linear-gradient(180deg, #9b3b3b, #5e2222); } /* owner 10-21: the decline reads red, the use green */
+.apo-decline:hover { filter: brightness(1.16); }
 .apo-wait { display: block; min-width: 0; max-width: 100%; margin-top: 4px; overflow-wrap: anywhere; white-space: normal; color: #9ea9b6; font-size: max(var(--ui-min-text-size, 12px), 0.55rem); font-weight: 800; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .readonly .apo-injury { opacity: 0.9; }
 :deep(.pitch-confirm-title) { padding-right: 46px; padding-left: 0; text-align: left; }

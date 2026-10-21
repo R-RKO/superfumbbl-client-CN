@@ -2257,8 +2257,12 @@ export function pickupTargetAtBall(game: GameJson, playerId: string): number | n
   const me = findPlayer(game, playerId);
   const iAmHome = playerSideIsHome(game, playerId);
   if (!me || iAmHome === null) return null;
-  const ag = Number((me as { agility?: number }).agility ?? 0);
-  if (ag <= 0) return null;
+  // Owner 10-21 audit: AG is a ROSTER characteristic (Player.getAgilityWithModifiers) — live PlayerData carries
+  // placement only, so reading it there left the pickup tag blank in real games. Roster AG with temporary
+  // modifiers (effectiveStat); the PlayerData field is only a fallback.
+  const roster = findRosterPlayer(game, playerId);
+  const ag = roster?.agility != null ? effectiveStat(roster, 'AG') : Number((me as { agility?: number }).agility ?? 0);
+  if (!(ag > 0)) return null;
   // +1 per OPPOSING standing, non-distracted player whose tackle zone covers the BALL square (adjacent to it) —
   // the bb2025 pickup TACKLEZONE modifier. Same TZ predicate as tackleZonesAdjacentTo, anchored on the ball square.
   let tz = 0;
