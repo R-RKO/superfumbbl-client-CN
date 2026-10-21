@@ -14882,6 +14882,30 @@ function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): bool
     || state.injuryInteraction || state.yesNo
     || state.blitzBlockChoice || state.foulChoiceHold); // S42 + #111: a held blitz block-commit flavor choice pauses the queue + exempts the watchdog
 }
+/** Owner 10-21 (game-load rank panel, Astra r1-r2): a decision card ADDRESSED TO THE LOCAL COACH is up. Each card
+ *  counts by the SAME ownership its SpectateView card renders with:
+ *   - cards that carry their owner: skillChoice.mine, reRollPrompt.mine, injuryInteraction.mine, the apothecary
+ *     election / result card (apothecaryCardVisible.mine);
+ *   - cards the store arms ONLY for the asked seat (the view renders them on presence): sendOff (Argue the Call /
+ *     Bribe; the opponent sees sendOffWaiting), opponentBlockSelection (my defensive multi-block choice), inducementBuy
+ *     (I hold the live buy dialog - the view's induceCanAct), the setup rejection (setupPhase.setupErrors), the coin
+ *     call / kick-or-receive cards, the kick placement and the kick-skill election, yesNo, selectSkill / Weather /
+ *     Position, inducementUse, playerPick, followupChoice, pushChoice, reRollForTargets, blitzBlockChoice and the
+ *     foul choice hold.
+ *  The block / multi-block cards carry a live chooser projection only the view has (blockDialogMine /
+ *  multiBlockDialogMine): rankPanelInputPending (game/gameLoadRankPanel.ts) adds them. Model-level holds
+ *  (dialogParameter, waitingForOpponent, pushback squares) are deliberately NOT counted: the opponent's dialogs set
+ *  them too. */
+function localDecisionCardOpen(): boolean {
+  if (!play.active) return false;
+  return !!(state.skillChoice?.mine || state.reRollPrompt?.mine || state.injuryInteraction?.mine
+    || apothecaryCardVisible.value?.mine
+    || state.sendOff || state.opponentBlockSelection || state.inducementBuy || (state.setupPhase?.setupErrors.length ?? 0) > 0
+    || state.coinChoicePrompt || state.receiveChoicePrompt || state.kickPlacement || state.kickSkill
+    || state.yesNo || state.selectSkill || state.selectWeather || state.selectPosition || state.inducementUse
+    || state.playerPick || state.followupChoice || state.pushChoice || state.reRollForTargets
+    || state.blitzBlockChoice || state.foulChoiceHold);
+}
 /** Start a declare→move→act plan. `route` excludes the start square (may be empty = 0-waypoint declare→act). */
 function plannerStart(input: {
   playerId: string; actKind: PlanActKind; route: [number, number][];
@@ -26082,6 +26106,8 @@ export const gameStore = {
   },
   /** FIX 15: one shared predicate covers every store/model decision surface. */
   interactiveDecisionSurfaceOpen: () => plannerPromptPending(),
+  /** Owner 10-21: a decision card addressed to the local coach is on screen (game-load rank panel pause). */
+  localDecisionCardOpen: (): boolean => localDecisionCardOpen(),
   /** Owner 10-09: a confirmed step of this player is still queued or on screen (the action-dice arrival wait). */
   movementStepPendingFor: (playerId: string): boolean => movementStepsPendingFor(playerId) > 0,
   /** Owner 10-09: the view reports that it is showing published action-dice batch `seq` in `msUntilShown` ms. */

@@ -251,12 +251,37 @@ export function fetchFumbblCoachProfile(
   return request;
 }
 
-/** "Record 20/12/16 · 54 % · CR 1624" - only the parts FUMBBL sent (or the win % computed from the record). */
+/** "Record 20/12/16 · 54 % · CR 1624 · +2.0 WAR" - only the parts FUMBBL sent (or the win % / WAR computed from the
+ *  record it sent). */
 export function coachProfileStatParts(profile: FumbblOverallRanking | null | undefined): string[] {
+  return coachProfileStatItems(profile).map((item) => item.text);
+}
+
+/** Owner 10-21 (option A, no new requests): expected wins above replacement, where replacement is a .500 coach:
+ *  WAR = (W + 0.5 D) - 0.5 G = 0.5 (W - L). Only from a parsed record with games; 0/0/0 -> undefined. */
+export function winsAboveReplacement(record: FumbblCoachRecord | undefined): number | undefined {
+  if (!record) return undefined;
+  const games = record.w + record.d + record.l;
+  return games > 0 ? (record.w + 0.5 * record.d) - 0.5 * games : undefined;
+}
+
+/** "+2.0" / "−2.5" / "0.0": signed, one decimal, half away from zero (".x5" rounds up in magnitude). */
+export function formatWinsAboveReplacement(war: number): string {
+  const magnitude = Math.floor(Math.abs(war) * 10 + 0.5 + 1e-9) / 10;
+  if (magnitude === 0) return '0.0';
+  return `${war < 0 ? '−' : '+'}${magnitude.toFixed(1)}`;
+}
+
+export const WAR_TITLE = 'wins above a .500 coach';
+
+/** The stats line as parts, each with an optional tooltip / accessible description (the WAR part's). */
+export function coachProfileStatItems(profile: FumbblOverallRanking | null | undefined): { text: string; title?: string }[] {
   if (!profile) return [];
-  const parts: string[] = [];
-  if (profile.record) parts.push(`Record ${profile.record.w}/${profile.record.d}/${profile.record.l}`);
-  if (profile.winPct !== undefined) parts.push(`${profile.winPct} %`);
-  if (profile.cr !== undefined) parts.push(`CR ${profile.cr}`);
-  return parts;
+  const items: { text: string; title?: string }[] = [];
+  if (profile.record) items.push({ text: `Record ${profile.record.w}/${profile.record.d}/${profile.record.l}` });
+  if (profile.winPct !== undefined) items.push({ text: `${profile.winPct} %` });
+  if (profile.cr !== undefined) items.push({ text: `CR ${profile.cr}` });
+  const war = winsAboveReplacement(profile.record);
+  if (war !== undefined) items.push({ text: `${formatWinsAboveReplacement(war)} WAR`, title: WAR_TITLE });
+  return items;
 }

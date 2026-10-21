@@ -6,9 +6,10 @@ import { FUMBBL_WS_URL } from './settings';
  * Game-load rank panel (owner 10-20: "a small panel like this appear at game load showing both your local rank panel
  * and the opposing coach's"). Modern view only (SpectateView.vue mounts it; Classic untouched).
  *
- * - Once per game load: when a game is on the board (the renderer has mounted) and the store is NOT fast-forwarding
- *   (catch-up skips every splash - store.ts "fast-forward: skip the splash"), the panel shows both coaches; a load
- *   that starts in catch-up shows it once the catch-up ends. The key is
+ * - Once per game load, as soon as the game MODEL is known (owner 10-21: "load the elements and sprites behind this
+ *   pane" - the view covers the pitch until the renderer reports ready; nothing waits on the bar), unless the store is
+ *   fast-forwarding (catch-up skips every splash - store.ts "fast-forward: skip the splash"); a load that starts in
+ *   catch-up shows it when the catch-up ends, if the first interactive phase has not surfaced yet. The key is
  *   the mode + gameId and is remembered for the session, so a reconnect to the same game, a replay seek, or a
  *   catch-up pass never re-shows it. Event splashes do not re-fire for past events on a reconnect either.
  * - Sides: home left / away right; on a coach seat the LOCAL coach is on the left and the opponent on the right.
@@ -17,11 +18,18 @@ import { FUMBBL_WS_URL } from './settings';
  * - Data: fetchFumbblCoachProfile for both coach names (the same module and session cache as the Play screen coach
  *   card, so the local coach's data is reused): at most 6 fumbbl.com requests per game load, 3 when one coach is
  *   already cached, 0 when both are; no per-game or per-team pulls, no polling. Fail-soft per coach: name + team only.
- * - Never a latch: nothing waits on it. The panel is pointer-events: none; a click or key press anywhere dismisses it
- *   (the event still reaches the board), else it clears after `durationMs()` (presentationMs(6000) in the view).
+ * - Persistence (owner 10-21: "persist this screen until the inducement panel loads"): it stays up until the FIRST
+ *   interactive phase surfaces - `phaseToken()` turns non-empty: durable model evidence that the game has left its
+ *   start-game phase (any turn mode past startGame - setup, every kick-off sub-phase, play -, a turn begun on either
+ *   side, the second half; a replay at its first position excepted), the inducement phase, any server dialog to either
+ *   coach (FFB's startGame handshake excepted), or a turn start. It only shows while that token is still empty, so a
+ *   mid-game join / spectate never shows it.
+ * - Never a latch (LATCHES FAIL OPEN): nothing waits on it. pointer-events: none; a click or key press anywhere
+ *   dismisses it (the event still reaches the board); a flat 20 s wall-clock backstop `durationMs()` clears it
+ *   regardless - also when the renderer never reports ready.
  */
 
-export interface RankPanelTeam { coach: string; team: string }
+export interface RankPanelTeam { coach: string; team: string; /** the server's race name (the banner's crest) */ race?: string }
 export interface RankPanelSide extends RankPanelTeam { side: 'home' | 'away'; profile: FumbblCoachProfile | null }
 export interface RankPanelState { key: string; seq: number; left: RankPanelSide; right: RankPanelSide }
 
@@ -30,10 +38,21 @@ export interface GameLoadRankPanelDeps {
   gameKey: () => string | null;
   teams: () => { home: RankPanelTeam; away: RankPanelTeam } | null;
   mySeat: () => 'home' | 'away' | null;
-  boardReady: () => boolean;
+  /** non-empty once the first interactive phase has surfaced (inducements, kick-off setup, a server dialog, a turn
+   *  start): the bar clears, and never shows while it is non-empty (owner 10-21) */
+  phaseToken: () => string;
+  /** the renderer has reported ready (the view's rendererReady > 0); before it, a seek does not finish the bar */
+  boardReady?: () => boolean;
   catchingUp: () => boolean;
   /** a reactive counter that changes on every catch-up start / end and replay seek (store.catchUpSignal) */
   catchUpSignal: () => number;
+  /** true while a decision card addressed to THIS client's coach is up (store.localDecisionCardOpen - the same state
+   *  the yes/no, chooser and prompt cards render from): the panel (z 55, above the toast tiers) PAUSES so it never
+   *  covers a card that needs an answer, and resumes when it closes (owner 10-21, Astra r1) */
+  inputPending: () => boolean;
+  /** true from the end-game's first phase (endGame.phase !== 'idle'): the panel never shows over the end-game
+   *  surfaces (the MVP pane shares z 55) and marks nothing (Astra r1) */
+  endGameActive: () => boolean;
   fetchFn: () => CoachProfileFetch;
   /** true only when this game verifiably comes from the official FUMBBL server (see officialFumbblGameServer) */
   lookupAllowed: () => boolean;
@@ -53,16 +72,52 @@ export function gameLoadRankPanelKey(mode: 'live' | 'spectate' | 'replay', gameI
   return id && id !== '0' ? `${mode}:${id}` : null;
 }
 
+/** The model fields the phase evidence reads. */
+interface RankPanelGame {
+  dialogParameter?: { dialogId?: unknown } | null;
+  turnMode?: unknown;
+  half?: number;
+  turnDataHome?: { turnNr?: number } | null;
+  turnDataAway?: { turnNr?: number } | null;
+}
+
+/** The store's phase evidence plus the view's own inducement pane mount condition (SpectateView `inducePhaseOpen`:
+ *  the live buy / reveal for either seat, the underdog reveal hold, preset / replay review) - owner 10-21: the bar
+ *  clears the moment the inducement pane shows. */
+export function rankPanelPhaseToken(store: () => string, view: { inducementPaneOpen: () => boolean }): string {
+  return [store(), view.inducementPaneOpen() ? 'inducement-pane' : ''].filter(Boolean).join('|');
+}
+
+/** The block / multi-block cards' own ownership (SpectateView's blockDialogMine / multiBlockDialogMine) on top of the
+ *  store's local decision cards (Astra r2): the panel pauses exactly when a card addressed to this coach is up. */
+export function rankPanelInputPending(
+  store: Pick<RankPanelStore, 'localDecisionCardOpen'> & { state: { blockPartial?: unknown; multiBlockResolution?: unknown } },
+  view: { blockDialogMine: () => boolean; multiBlockDialogMine: () => boolean },
+): boolean {
+  return store.localDecisionCardOpen()
+    || (!!store.state.blockPartial && view.blockDialogMine())
+    || (!!store.state.multiBlockResolution && view.multiBlockDialogMine());
+}
+
 /** The store half of the deps, shared by SpectateView and its tests (the store is passed in, not imported). */
 export interface RankPanelStore {
   game: { value: unknown };
-  replay: { active: boolean };
   isPlaying: { value: boolean };
   mySeat: { value: 'home' | 'away' | null };
   isPlaybackCatchingUp: () => boolean;
   catchUpSignal: { value: number };
   /** the game server this game came from (live / spectate connect URL, server-replay URL); null for file replays / demo */
   gameServerUrl: () => string | null;
+  /** a decision card addressed to the local coach is on screen (store.ts localDecisionCardOpen) */
+  localDecisionCardOpen: () => boolean;
+  replay: { active: boolean; status?: { cursor?: number } };
+  state: {
+    endGame: { phase: string };
+    turnStart: { seq: number } | null;
+    inducementBuy: unknown;
+    inducementReveal: unknown;
+    inducementOwnDialogPending?: boolean;
+  };
 }
 
 /** The official FUMBBL game server - the host of FUMBBL_WS_URL, the URL the 'fumbbl' server target connects to. */
@@ -74,8 +129,8 @@ export function officialFumbblGameServer(url: string | null | undefined): boolea
     return false;
   }
 }
-export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPanelDeps, 'gameKey' | 'teams' | 'mySeat' | 'catchingUp' | 'catchUpSignal' | 'lookupAllowed'> {
-  type Team = { coach?: unknown; teamName?: unknown } | undefined;
+export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPanelDeps, 'gameKey' | 'teams' | 'mySeat' | 'catchingUp' | 'catchUpSignal' | 'inputPending' | 'endGameActive' | 'phaseToken' | 'lookupAllowed'> {
+  type Team = { coach?: unknown; teamName?: unknown; race?: unknown } | undefined;
   const text = (v: unknown): string => (typeof v === 'string' ? v : '');
   return {
     gameKey: () => gameLoadRankPanelKey(store.replay.active ? 'replay' : store.isPlaying.value ? 'live' : 'spectate',
@@ -84,13 +139,39 @@ export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPane
       const g = store.game.value as { teamHome?: Team; teamAway?: Team } | null;
       if (!g?.teamHome || !g.teamAway) return null;
       return {
-        home: { coach: text(g.teamHome.coach), team: text(g.teamHome.teamName) },
-        away: { coach: text(g.teamAway.coach), team: text(g.teamAway.teamName) },
+        home: { coach: text(g.teamHome.coach), team: text(g.teamHome.teamName), race: text(g.teamHome.race) },
+        away: { coach: text(g.teamAway.coach), team: text(g.teamAway.teamName), race: text(g.teamAway.race) },
       };
     },
     mySeat: () => store.mySeat.value,
     catchingUp: () => store.isPlaybackCatchingUp(),
     catchUpSignal: () => store.catchUpSignal.value,
+    inputPending: () => store.localDecisionCardOpen(),
+    endGameActive: () => store.state.endGame.phase !== 'idle',
+    phaseToken: () => {
+      const g = store.game.value as RankPanelGame | null;
+      const parts: string[] = [];
+      // Astra r2: DURABLE evidence from the model first (a transient splash resets and is skipped in catch-up): the game
+      // has left its start-game phase (setup, any kick-off sub-phase - kickoff, highKick, quickSnap, solidDefence,
+      // touchback, blitz, kickoffReturn, passBlock, swarming ... - regular play), a turn has begun on either side, or the
+      // second half is on. A replay at its first position keeps the bar (owner: "at the front of replays").
+      const atReplayStart = store.replay.active && (store.replay.status?.cursor ?? 0) === 0;
+      if (g && !atReplayStart) {
+        const mode = typeof g.turnMode === 'string' ? g.turnMode : '';
+        if (mode && mode !== 'startGame') parts.push(`mode:${mode}`);
+        if ((g.turnDataHome?.turnNr ?? 0) > 0 || (g.turnDataAway?.turnNr ?? 0) > 0) parts.push('turn-begun');
+        if ((g.half ?? 1) > 1) parts.push(`half:${g.half}`);
+      }
+      // the inducement phase as the store presents it to every seat: my live buy, the reveal / the opponent's leg
+      // (read-only), and the evidence that the phase opened while my own dialog is still to come
+      if (store.state.inducementBuy || store.state.inducementReveal || store.state.inducementOwnDialogPending) parts.push('inducements');
+      // FFB's start-game handshake (dialogId startGame, the model's state before anything is played - a replay's
+      // cursor 0 carries it) is not an interactive phase; every other dialog, to either coach, is.
+      const dialogId = String(g?.dialogParameter?.dialogId ?? '');
+      if (g?.dialogParameter && dialogId !== 'startGame') parts.push(`dialog:${dialogId || '?'}`);
+      if (store.state.turnStart) parts.push(`turn:${store.state.turnStart.seq}`);
+      return parts.join('|');
+    },
     lookupAllowed: () => officialFumbblGameServer(store.gameServerUrl()),
   };
 }
@@ -99,82 +180,180 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
   panel: Ref<RankPanelState | null>;
   dismiss: () => void;
   stop: () => void;
+  /** DEV preview (the view exposes it only under import.meta.env.DEV): show this game's bar now, as if the first
+   *  interactive phase had not surfaced; then the normal lifecycle (timer, click / key, a NEW phase, a game change). */
+  preview: () => void;
 } {
   const shown = deps.shown ?? sessionShown;
   const target = deps.target === undefined ? (typeof window !== 'undefined' ? window : null) : deps.target;
+  /** What is on screen (null while paused or gone). */
   const panel = shallowRef<RankPanelState | null>(null);
   const seq = ref(0);
+  /** The game's panel while it is showing OR paused behind a decision card. */
+  let current: RankPanelState | null = null;
+  let paused = false;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
+  let listening = false;
   let lastKey: string | null | undefined;
   let lastSignal = deps.catchUpSignal();
+  /** the phase token when a DEV preview started: only a different token ends the preview */
+  let previewToken: string | null = null;
+  let sawCatchUp = false;
 
-  const onInput = (): void => dismiss();
+  const onInput = (): void => finish();
   function listen(on: boolean): void {
-    if (!target) return;
+    if (!target || on === listening) return;
+    listening = on;
     for (const type of ['pointerdown', 'keydown'] as const) {
       if (on) target.addEventListener(type, onInput, { capture: true, passive: true } as AddEventListenerOptions);
       else target.removeEventListener(type, onInput, { capture: true } as EventListenerOptions);
     }
   }
-  function dismiss(): void {
+  function hide(): void {
     if (timer) { clearTimeout(timer); timer = 0; }
-    if (panel.value) listen(false);
+    listen(false);
     panel.value = null;
+  }
+  function display(): void {
+    if (!current) return;
+    paused = false;
+    panel.value = current;
+    listen(true);
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(finish, Math.max(0, deps.durationMs()));
+  }
+  /** The panel is DONE for its game - a timer expiry, a click / key, a game change, a catch-up / seek, the view going
+   *  away. Only these mark the game shown (Astra r1). */
+  function finish(): void {
+    previewToken = null;
+    if (current) shown.add(current.key);
+    current = null;
+    paused = false;
+    hide();
+  }
+  /** A decision card for this coach: hide but keep the game's panel; it shows again, for a fresh duration, once the
+   *  card closes. Nothing is marked. */
+  function pause(): void {
+    if (!current || paused) return;
+    paused = true;
+    hide();
+  }
+  /** The end-game: drop the panel WITHOUT marking the game (Astra r1: mark nothing). */
+  function drop(): void {
+    current = null;
+    paused = false;
+    hide();
+  }
+
+  /** Astra r2: a coach name that arrives AFTER the panel was created (a fork lobby / listed game names the opponent
+   *  late) fills its side and starts that side's lookup, keyed by the same seq. */
+  function refreshSides(panelState: RankPanelState): void {
+    const teams = deps.teams();
+    if (!teams) return;
+    const awayLeft = panelState.left.side === 'away';
+    let next = panelState;
+    const started: ('left' | 'right')[] = [];
+    for (const which of ['left', 'right'] as const) {
+      const team = (which === 'left') === awayLeft ? teams.away : teams.home;
+      const s = next[which];
+      const coach = team.coach.trim();
+      const teamName = team.team.trim();
+      const race = team.race?.trim() || undefined;
+      if (coach === s.coach && teamName === s.team && race === s.race) continue;
+      next = { ...next, [which]: { ...s, coach, team: teamName, race, profile: coach === s.coach ? s.profile : null } };
+      if (coach && coach !== s.coach) started.push(which);
+    }
+    if (next === panelState) return;
+    current = next;
+    if (!paused) panel.value = current;
+    for (const which of started) lookup(which, current.seq);
+  }
+
+  function lookup(which: 'left' | 'right', mySeq: number): void {
+    // Astra r3 (P2): a FUMBBL lookup only for a game verified to come from the official FUMBBL server (a fork / test
+    // server's coach names are not FUMBBL accounts - a namesake's rank must never show). Otherwise name + team only.
+    if (!current || !deps.lookupAllowed()) return;
+    const name = current[which].coach;
+    if (!name) return;
+    void fetchFumbblCoachProfile(name, deps.fetchFn()).then((profile) => {
+      if (!current || current.seq !== mySeq || current[which].coach !== name) return;
+      current = { ...current, [which]: { ...current[which], profile } };
+      if (!paused) panel.value = current;
+    });
   }
 
   function side(which: 'home' | 'away', team: RankPanelTeam): RankPanelSide {
-    return { side: which, coach: team.coach.trim(), team: team.team.trim(), profile: null };
+    return { side: which, coach: team.coach.trim(), team: team.team.trim(), race: team.race?.trim() || undefined, profile: null };
   }
 
   function update(): void {
     const key = deps.gameKey();
     // Astra r3 (P2): a panel belongs to ONE game. Any key change - a reset (null), a switch to another game (seen
-    // before or not) - takes the old panel down BEFORE the early returns below.
+    // before or not) - finishes the old game's panel BEFORE the early returns below.
     if (key !== lastKey) {
       lastKey = key;
-      dismiss();
+      finish();
     }
-    // A catch-up of the SAME game (a reconnect's fast-forward, a replay seek) takes a showing panel down too (Astra r4).
-    // Watched through the store's reactive signal, not the flag: a synchronous seek restores the flag before this runs.
+    // A replay seek / an instant same-game fast-forward finishes it (Astra r4: never a re-show on a seek) - seen
+    // through the store's reactive signal, since a synchronous seek restores the flag before this runs. A catch-up
+    // this watcher SEES running (a join's fast-forward) only hides it: it waits, and comes back when the catch-up ends
+    // if the first interactive phase has not surfaced meanwhile (owner 10-21).
+    const catching = deps.catchingUp();
     const signal = deps.catchUpSignal();
     if (signal !== lastSignal) {
       lastSignal = signal;
-      if (panel.value) dismiss();
+      // ...except while the board is still loading behind the bar: a replay opened at a later position (a resume)
+      // seeks before its first paint, and the bar is still the load cover then.
+      if (!catching && !sawCatchUp && (deps.boardReady?.() ?? true)) finish();
     }
-    if (panel.value && deps.catchingUp()) dismiss();
-    if (!key || shown.has(key) || !deps.boardReady()) return;
-    // Waiting out a catch-up: its end bumps catchUpSignal, which re-runs this (no timer, no polling).
-    if (deps.catchingUp()) return;
+    sawCatchUp = catching;
+    // Never over the end-game surfaces (the MVP pane shares z 55 and mounts earlier); nothing is marked.
+    if (deps.endGameActive()) { drop(); return; }
+    if (catching) { pause(); return; }
+    // The first interactive phase has surfaced: the bar's job is done (and it never shows once it has). A DEV preview
+    // runs as if the token it started on were empty.
+    const token = deps.phaseToken();
+    if (token && !(previewToken !== null && current && token === previewToken)) {
+      finish(); if (key && !shown.has(key)) shown.add(key); return;
+    }
+    // A decision card for this coach: pause (a panel not yet shown waits); it resumes when the card closes.
+    if (deps.inputPending()) { pause(); return; }
+    if (current) {
+      refreshSides(current);
+      if (paused) display();
+      return;
+    }
+    if (!key || shown.has(key)) return;
+    create(key);
+  }
+
+  function create(key: string): boolean {
     const teams = deps.teams();
-    if (!teams || (!teams.home.coach.trim() && !teams.away.coach.trim())) return;
-    shown.add(key);
-    dismiss();
+    if (!teams || (!teams.home.coach.trim() && !teams.away.coach.trim())) return false;
     const awayLeft = deps.mySeat() === 'away';
     const left = side(awayLeft ? 'away' : 'home', awayLeft ? teams.away : teams.home);
     const right = side(awayLeft ? 'home' : 'away', awayLeft ? teams.home : teams.away);
     const mySeq = ++seq.value;
-    panel.value = { key, seq: mySeq, left, right };
-    listen(true);
-    timer = setTimeout(dismiss, Math.max(0, deps.durationMs()));
-    // Astra r3 (P2): a FUMBBL lookup only for a game verified to come from the official FUMBBL server (a fork / test
-    // server's coach names are not FUMBBL accounts - a namesake's rank must never show). Otherwise name + team only.
-    if (!deps.lookupAllowed()) return;
-    const fetchFn = deps.fetchFn();
-    for (const which of ['left', 'right'] as const) {
-      const name = panel.value[which].coach;
-      if (!name) continue;
-      void fetchFumbblCoachProfile(name, fetchFn).then((profile) => {
-        const current = panel.value;
-        if (!current || current.seq !== mySeq) return;
-        panel.value = { ...current, [which]: { ...current[which], profile } };
-      });
-    }
+    current = { key, seq: mySeq, left, right };
+    display();
+    lookup('left', mySeq);
+    lookup('right', mySeq);
+    return true;
+  }
+
+  function preview(): void {
+    const key = deps.gameKey();
+    if (!key) return;
+    finish();
+    shown.delete(key);
+    if (create(key)) previewToken = deps.phaseToken();
   }
 
   const stopWatch = watch(
-    () => [deps.gameKey(), deps.boardReady(), deps.catchUpSignal(), deps.teams()?.home.coach, deps.teams()?.away.coach],
+    () => [deps.gameKey(), deps.catchUpSignal(), deps.phaseToken(), deps.inputPending(), deps.endGameActive(),
+      deps.teams()?.home.coach, deps.teams()?.away.coach, deps.teams()?.home.team, deps.teams()?.away.team],
     update,
     { immediate: true },
   );
-  return { panel, dismiss, stop: () => { stopWatch(); dismiss(); } };
+  return { panel, dismiss: finish, stop: () => { stopWatch(); finish(); }, preview };
 }

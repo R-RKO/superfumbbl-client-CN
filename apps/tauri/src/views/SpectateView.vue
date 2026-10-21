@@ -58,7 +58,7 @@ import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import D6Face from '../components/D6Face.vue';
 import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
-import { storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
+import { rankPanelInputPending, rankPanelPhaseToken, storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
 import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue';
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
 import BlockDieFace from '../components/BlockDieFace.vue';
@@ -3494,20 +3494,6 @@ watch(() => gameStore.state.riotousRookiesSplash?.seq, () => {
 });
 onBeforeUnmount(() => clearTimeout(riotousRookiesSplashTimer));
 
-// Owner 10-20: GAME-LOAD RANK PANEL - both coaches' FUMBBL rank cards (local left on a coach seat, else home left)
-// once per game load after the board is up; skipped while catching up like every splash; once per game per session
-// (no re-show on reconnect or replay seek). Never a latch: pointer-events none, a click / key dismisses it, else it
-// clears after presentationMs(6000). Data: game/fumbblCoachProfile.ts (same session cache as the Play card, <= 6
-// fumbbl.com requests per load). Logic in game/gameLoadRankPanel.ts.
-const gameLoadRank = useGameLoadRankPanel({
-  ...storeRankPanelDeps(gameStore),
-  boardReady: () => rendererReady.value > 0,
-  fetchFn: () => (inTauri ? (tauriFetch as typeof fetch) : fetch),
-  durationMs: () => presentationMs(6000),
-});
-const gameLoadRankPanel = gameLoadRank.panel;
-onBeforeUnmount(() => gameLoadRank.stop());
-
 // #136 (owner, GAP-WAVE-2): opponent-left connection notice. The store surfaces state.opponentLeft = {coach, seq}
 // when a player leaves the game and clears it when that coach joins again (or on a fresh game / disconnect).
 // Owner 10-10: '"Opponent has disconnected" popup should persist until the opponent reconnects': no view timer.
@@ -5741,6 +5727,47 @@ const inducePhaseOpen = computed(() => inducementsReadOnlyReview.value
   || !!induceRevealHoldSnapshot.value);
 /** True only while I hold the live dialog — the only state in which I may send. */
 const induceCanAct = computed(() => !!gameStore.state.inducementBuy);
+
+// Owner 10-20/10-21: GAME-LOAD RANK PANEL - the match-up bar with both coaches' FUMBBL ranks (local left on a coach
+// seat, else home left), from the moment the game model arrives (the board loads behind its cover) until the first
+// interactive phase surfaces; skipped while catching up like every splash; once per game per session (no re-show on
+// reconnect or replay seek). Never a latch: pointer-events none, a click / key dismisses it, a flat 20 s backstop
+// clears it regardless. Data: game/fumbblCoachProfile.ts (same session cache as the Play card, <= 6
+// fumbbl.com requests per load). Logic in game/gameLoadRankPanel.ts.
+// (declared after inducePhaseOpen: the inducement pane's own mount condition ends the bar the moment it shows)
+const rankStoreDeps = storeRankPanelDeps(gameStore);
+const gameLoadRank = useGameLoadRankPanel({
+  ...rankStoreDeps,
+  // owner 10-21: "persist until the inducement panel loads" - the pane's v-if (live buy / reveal for either seat, the
+  // underdog reveal hold, preset / replay review) ends the bar the moment the pane mounts
+  phaseToken: () => rankPanelPhaseToken(rankStoreDeps.phaseToken, { inducementPaneOpen: () => inducePhaseOpen.value }),
+  // the block / multi-block cards' own ownership on top of the store's local cards (Astra r2)
+  inputPending: () => rankPanelInputPending(gameStore, {
+    blockDialogMine: () => !!blockDialogMine.value, multiBlockDialogMine: () => !!multiBlockDialogMine.value,
+  }),
+  boardReady: () => rendererReady.value > 0,
+  fetchFn: () => (inTauri ? (tauriFetch as typeof fetch) : fetch),
+  durationMs: () => 20_000, // Astra r2 (P3): a flat 20 s wall-clock backstop, not presentation-scaled
+});
+const gameLoadRankPanel = gameLoadRank.panel;
+onBeforeUnmount(() => gameLoadRank.stop());
+/** DEV only (absent from builds): `window.__rankPanelPreview()` shows the bar for the current game as if the first
+ *  interactive phase had not surfaced - over the loading cover for ~1 s, then its normal lifecycle - so it can be
+ *  checked on a fixture that starts past kick-off. Not wired to any console or UI. */
+const rankPanelPreviewCover = ref(false);
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  let previewCoverTimer = 0;
+  (window as unknown as { __rankPanelPreview?: () => void }).__rankPanelPreview = () => {
+    rankPanelPreviewCover.value = true;
+    window.clearTimeout(previewCoverTimer);
+    previewCoverTimer = window.setTimeout(() => { rankPanelPreviewCover.value = false; }, 1000);
+    gameLoadRank.preview();
+  };
+  onBeforeUnmount(() => {
+    window.clearTimeout(previewCoverTimer);
+    delete (window as unknown as { __rankPanelPreview?: () => void }).__rankPanelPreview;
+  });
+}
 /** Coordinator 10-13 (game/inducementCatcher.ts): once no one can buy (the read-only review snapshot) or a Prayers to
  * Nuffle pitch pick is open, presses between the panes reach the pitch; the catcher stays for the live buying phase. */
 const induceCatcherInput = () => ({
@@ -16682,7 +16709,7 @@ function sendChat() {
         </div>
 
         <!-- Owner 10-20: game-load rank panel (both coaches' FUMBBL rank cards); pointer-events none, never a latch. -->
-        <GameLoadRankPanel :panel="gameLoadRankPanel" />
+        <GameLoadRankPanel :panel="gameLoadRankPanel" :covering="rendererReady === 0 || rankPanelPreviewCover" />
 
         <!-- Turn-boundary occupancy stack. The banner row is always reserved while the notifier is live,
              so the simultaneous turnover/turn-start + incoming-coach toast cannot cover each other. -->
@@ -21066,7 +21093,9 @@ function sendChat() {
   position: absolute;
   /* Owner 09-28 (Spec S8 follow-up): above the block/multi-block panels (both z-index 51) — the position fix
      above already keeps it clear of the panel, this is defense-in-depth for the rare frame where it isn't. Below
-     the MVP nomination overlay (55, `.mvp-nominate-overlay`), which must never be obscured by a reroll toast. */
+     the MVP nomination overlay (55, `.mvp-nominate-overlay`), which must never be obscured by a reroll toast.
+     Owner 10-21: the game-load rank panel (components/GameLoadRankPanel.vue, z 55) sits above every toast tier -
+     the full tier table is next to its z-index. */
   z-index: 52;
   left: 50%;
   top: 76px;
