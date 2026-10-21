@@ -68,16 +68,26 @@ export function kickoffOutcome(
   name: string,
   palette: KickoffBannerPalette,
   reports: Record<string, unknown>[],
-  game: Pick<GameJson, 'teamHome' | 'teamAway'>,
+  game: Pick<GameJson, 'teamHome' | 'teamAway'> & { gameOptions?: { gameOptionArray?: { gameOptionId?: string; gameOptionValue?: unknown }[] } | null },
 ): KickoffOutcome | null {
   if (!palette) return null;
   const key = normalizeKickoffName(name);
+  const rulesVersion = String(game.gameOptions?.gameOptionArray?.find((o) => o?.gameOptionId === 'rulesVersion')?.gameOptionValue ?? '').toUpperCase();
   const teamName = (side: 'home' | 'away') => String((side === 'home' ? game.teamHome : game.teamAway)?.teamName ?? '').trim() || (side === 'home' ? 'Home' : 'Away');
   if (key === 'brilliantcoaching' || key === 'cheeringfans') {
     if (palette === 'neutral') {
-      const both = key === 'brilliantcoaching'
-        ? reports.some((r) => String(r.reportId ?? '') === 'extraReRoll' && r.homeGainsReRoll === true && r.awayGainsReRoll === true)
-        : reports.some((r) => String(r.reportId ?? '') === 'cheeringFans' && Array.isArray(r.teamIdsAdditionalAssist) && r.teamIdsAdditionalAssist.length >= 2);
+      if (key === 'brilliantcoaching') {
+        // Owner 10-21: "Both players receive an extra reroll" on a bb2025 tie. Upstream (Astra 10-21): bb2020 and
+        // bb2025 both send `teamId` and a TIE is `teamId: null` - bb2025 then gives BOTH teams the drive reroll
+        // (KickoffExtraReRollMessage bb2025: "Both teams gain a Re-Roll only available for this drive"), bb2020 gives
+        // neither ("Neither team gains a Re-Roll"). bb2016 carries homeGainsReRoll / awayGainsReRoll instead.
+        const extra = reports.find((r) => String(r.reportId ?? '') === 'extraReRoll');
+        const bothFlags = !!extra && extra.homeGainsReRoll === true && extra.awayGainsReRoll === true;
+        const tie = !!extra && (extra.teamId == null || extra.teamId === '') && extra.homeGainsReRoll == null;
+        const bothGain = bothFlags || (tie && rulesVersion === 'BB2025');
+        return { side: 'neutral', text: bothGain ? 'Both players receive an extra reroll' : 'No winner' };
+      }
+      const both = reports.some((r) => String(r.reportId ?? '') === 'cheeringFans' && Array.isArray(r.teamIdsAdditionalAssist) && r.teamIdsAdditionalAssist.length >= 2);
       return { side: 'neutral', text: both ? 'Both teams win' : 'No winner' };
     }
     return { side: palette, text: `${teamName(palette)} wins` };
