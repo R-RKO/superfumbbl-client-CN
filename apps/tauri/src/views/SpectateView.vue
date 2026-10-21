@@ -11448,6 +11448,7 @@ onMounted(async () => {
     // the valid ≤1/empty target squares then render as clickable markers. Handled before the normal o66 click
     // dispatch since quickSnap is its own kickoff mini-turn (no block/blitz/stats interaction).
     if (gameStore.game.value?.turnMode === 'quickSnap'
+        && gameStore.myTurn.value // owner 10-21: the kicking coach never selects a Quick Snap mover
         && gameStore.state.quickSnapPhase?.players.some((p) => p.playerId === playerId)) {
       selectedQuickSnap.value = selectedQuickSnap.value === playerId ? null : playerId;
       return;

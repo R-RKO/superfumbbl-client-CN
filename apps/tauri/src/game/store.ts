@@ -23913,6 +23913,13 @@ function computeQuickSnapPhase(g: GameJson) {
   const team = myPlayTeam(g) as { teamId?: string; playerArray?: { playerId: string }[] } | undefined;
   if (!team) { state.quickSnapPhase = null; return; }
   const side: 'home' | 'away' = team.teamId === (g.teamHome as { teamId?: string }).teamId ? 'home' : 'away';
+  // Owner 10-21: Quick Snap belongs to the RECEIVING side (the server flips homePlaying to it on entry,
+  // StepApplyKickoffResult.handleQuickSnap). The kicking coach gets no candidates, no selection, no targets.
+  if (!isMyTurn(g)) {
+    if (state.quickSnapPhase) state.quickSnapPhase = null;
+    quickSnapStart = null; quickSnapAllowance = null; quickSnapExhausted = null; clearQuickSnapInFlight();
+    return;
+  }
   const dataById = new Map((g.fieldModel?.playerDataArray ?? []).map((d) => [d.playerId, d] as const));
   if (!quickSnapStart) { // pin turn-start coords ONCE on entry
     quickSnapStart = new Map();
@@ -26834,7 +26841,7 @@ export const gameStore = {
     // ONE admission gate for Modern and Classic: candidate membership, upstream square legality, the
     // authoritative allowance, and the in-flight latch all decided in the shared controller.
     const decision = decideQuickSnapMove({
-      armed: !!play.active && (g.turnMode ?? '') === QUICK_SNAP_TURN_MODE,
+      armed: !!play.active && (g.turnMode ?? '') === QUICK_SNAP_TURN_MODE && isMyTurn(g), // owner 10-21: never the kicking coach
       candidates: state.quickSnapPhase.players,
       allowance: state.quickSnapPhase.allowed === null
         ? null
