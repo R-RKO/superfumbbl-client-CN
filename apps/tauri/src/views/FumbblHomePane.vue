@@ -18,6 +18,9 @@ import {
   HOME_ZOOM_MIN,
   HOME_ZOOM_STEP,
   clampHomeZoom,
+  detectHomeHistory,
+  fumbblHomeHistory,
+  homeHistoryKey,
   homeFocus,
   homeJoinWatch,
   homeSurface,
@@ -120,6 +123,17 @@ async function openInBrowser(): Promise<void> {
   }
 }
 
+/** Owner 10-21: Back / Forward for the site, as in a browser. Only on a shell that has the command (1.0.258+); always
+ *  enabled - the webview does not say whether there is anywhere to go (a step with nowhere to go does nothing). */
+const historyAvailable = ref(false);
+function onHistoryKey(event: KeyboardEvent): void {
+  if (!historyAvailable.value || !showing.value || event.defaultPrevented) return;
+  const direction = homeHistoryKey(event);
+  if (!direction) return;
+  event.preventDefault();
+  void fumbblHomeHistory(direction);
+}
+
 /** Owner 10-08: keep the site open in the floating window while another blade, a game or a replay is on screen. */
 function toggleFloating(): void {
   ui.fumbblFloating = !ui.fumbblFloating;
@@ -128,6 +142,7 @@ function toggleFloating(): void {
 
 onMounted(() => {
   mounted = true;
+  window.addEventListener('keydown', onHistoryKey);
   if (!host.value) return;
   release = homeSurface.attach('pane', host.value, {
     // Owner 10-06: the client walkthrough (main webview) runs with the site hidden, so its cards are never under it.
@@ -147,6 +162,7 @@ onMounted(() => {
         // Owner 10-09: pressing the page's "Join the Draw" turns floating on. The watch belongs to the app, not to
         // this pane (Astra R2): it only has to be started once the shell is known to have the site.
         .then(() => startHomeJoinWatch());
+      void detectHomeHistory().then((ok) => { if (mounted) historyAvailable.value = ok; });
       return listenForTour();
     },
   });
@@ -154,6 +170,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mounted = false;
+  window.removeEventListener('keydown', onHistoryKey);
   // Leaving the blade straight after pressing "Join the Draw" is the natural gesture: ask once more now, rather than
   // waiting for the watch's next turn - the floating window then appears at once.
   if (shell.value === 'available') void homeJoinWatch.poll();
@@ -180,6 +197,24 @@ onBeforeUnmount(() => {
        ran under the shell's version / signed-in text). Above the pane element, never over it: the site's bounds are
        the pane's own rect, so the native webview never covers it and the occlusion probe never sees it. -->
   <div v-if="shell === 'available'" class="fumbbl-home-top">
+    <!-- Owner 10-21: Back / Forward through the site's history, as in a browser (also Alt+Left / Alt+Right). Left of
+         the strip; absent on a shell without the command. -->
+    <div v-if="historyAvailable" class="fumbbl-home-history">
+      <button
+        type="button"
+        class="history-step"
+        data-testid="fumbbl-history-back"
+        title="Go back a page on FUMBBL"
+        @click="fumbblHomeHistory('back')"
+      >‹ Back</button>
+      <button
+        type="button"
+        class="history-step"
+        data-testid="fumbbl-history-forward"
+        title="Go forward a page on FUMBBL"
+        @click="fumbblHomeHistory('forward')"
+      >Forward ›</button>
+    </div>
     <!-- Owner 10-08: keep the site (and a Gamefinder queue in it) open in a small movable window while watching a game
          or a replay. In this strip, never over the site. -->
     <!-- Owner 10-09: no explanatory line beside the button ("Delete this"); the button's title carries it. -->
@@ -296,7 +331,9 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-2, var(--ui-surface));
   border-bottom: 1px solid var(--ui-border);
 }
-.fumbbl-home-top .float-toggle {
+.fumbbl-home-history { display: flex; gap: 6px; margin-right: auto; }
+.fumbbl-home-top .float-toggle,
+.fumbbl-home-top .history-step {
   flex: none;
   height: 22px;
   padding: 0 10px;

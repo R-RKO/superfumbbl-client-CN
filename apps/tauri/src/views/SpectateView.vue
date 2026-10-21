@@ -55,9 +55,11 @@ import { ROLL_FAILED_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTr
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
+import { multiBlockDieButtonState, multiBlockDieClick, type MultiBlockDieRow } from '../game/multiBlockDieButton';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import D6Face from '../components/D6Face.vue';
 import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
+import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
 import { rankPanelInputPending, rankPanelPhaseToken, storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
 import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue';
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
@@ -2953,17 +2955,22 @@ const bpMultiSelectHintText = computed(() => armedRerollHintText(
 // Resolve synchronous multi-block per target; rerolls re-present before the coach makes the plain die choice.
 const mbrDieMode = ref<{ targetId: string; kind: 'pro' | 'consummate' } | null>(null);
 watch(() => gameStore.state.multiBlockResolution?.seq, () => { mbrDieMode.value = null; }); // a fresh dialog clears the arm
-function multiBlockPickDie(targetId: string, dieIndex: number, pickable: boolean) {
-  if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
-  if (mbrTumbles.value[targetId]) return; // owner 10-13: a rerolled target's dice are inert while they tumble
-  const dm = mbrDieMode.value;
-  if (dm && dm.targetId === targetId) { // armed Pro/Consummate → re-roll THIS die (sel=-1; the fresh dialog drives the pick)
-    gameStore.sendMultiBlockChoiceForTarget(targetId, -1, dm.kind === 'pro' ? 'Pro' : 'Consummate Professional', dieIndex);
+/** Astra r1 P1: one rule for a multi-block die's read-only / disabled state (an armed Pro / Consummate reroll opens
+ *  the opponent's-choice row too) - see multiBlockDieButton.ts. */
+function mbrDieState(row: MultiBlockDieRow & { tumbleKey: string }): { readonly: boolean; disabled: boolean } {
+  return multiBlockDieButtonState(row, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrRowTumble(row) });
+}
+function multiBlockPickDie(row: MultiBlockDieRow, dieIndex: number) {
+  if (!gameStore.state.multiBlockResolution) return;
+  // owner 10-13: a rerolled target's dice are inert while they tumble
+  const click = multiBlockDieClick(row, dieIndex, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrTumbles.value[row.targetId] });
+  if (!click) return; // the defender's choice → read-only
+  if (click.kind === 'reroll') { // armed Pro/Consummate → re-roll THIS die (sel=-1; the fresh dialog drives the pick)
+    gameStore.sendMultiBlockChoiceForTarget(row.targetId, -1, click.source, click.dieIndex);
     mbrDieMode.value = null;
     return;
   }
-  if (!pickable) return; // non-pickable = the defender's choice → read-only
-  gameStore.sendMultiBlockChoiceForTarget(targetId, dieIndex); // plain pick resolves this target
+  gameStore.sendMultiBlockChoiceForTarget(row.targetId, click.dieIndex); // plain pick resolves this target
 }
 // A per-target re-roll button. team/mascot/brawler fire immediately; Pro/Consummate arm a die-select (unless 1 die).
 function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' | 'pro' | 'consummate', diceLen: number) {
@@ -3648,13 +3655,18 @@ let lonerFailedCueRaf = 0;
  *  card / bar, injury pill, reroll / captain toast - as their real footprints in the pill's own coordinate space. */
 const LONER_CUE_PANE_SELECTOR = '.block-partial, .multi-block-resolution, .reroll-bar, .reroll-menu, .ko-toast, .reroll-toast';
 const LONER_CUE_CENTRE_PANES = '.block-partial, .multi-block-resolution, .reroll-bar, .reroll-menu';
-function lonerCuePanes(): CueRect[] {
+/** Owner 10-21: the Tentacles pill keeps the Loner pill's placement rule - the same panes, plus the Loner pill itself
+ *  (one-directional: the Loner pill never yields to it, so two pills can never chase each other down the board). */
+const TENTACLES_CUE_PANE_SELECTOR = '.block-partial, .multi-block-resolution, .reroll-bar, .reroll-menu, .ko-toast, .reroll-toast, .loner-failed-cue';
+/** The panes a below-the-token cue must clear, in the cue's own coordinate space (`self` = the cue, never its own pane). */
+function lonerCuePanes(self: HTMLElement | null = lonerFailedCueEl.value, selector = LONER_CUE_PANE_SELECTOR): CueRect[] {
   const host = pitchHost.value;
-  const frame = (lonerFailedCueEl.value?.offsetParent as HTMLElement | null) ?? host;
+  const frame = (self?.offsetParent as HTMLElement | null) ?? host;
   if (!host || !frame) return [];
   const fr = frame.getBoundingClientRect();
   const panes: CueRect[] = [];
-  for (const el of Array.from(host.querySelectorAll(LONER_CUE_PANE_SELECTOR))) {
+  for (const el of Array.from(host.querySelectorAll(selector))) {
+    if (el === self) continue;
     const r = el.getBoundingClientRect();
     // owner 10-20: pushed past a block chooser / multi-block panel / reroll card, the pill centres on that pane
     if (r.width > 0 && r.height > 0) panes.push({ left: r.left - fr.left, top: r.top - fr.top, right: r.right - fr.left, bottom: r.bottom - fr.top,
@@ -3699,6 +3711,41 @@ watch(() => gameStore.state.lonerFailedCue?.seq, (seq) => {
   follow();
 });
 onBeforeUnmount(() => cancelAnimationFrame(lonerFailedCueRaf));
+
+// Owner 10-21: "a red toast for when tentacles fails and a green toast for when it succeeds" - its OWN pill below the
+// HOLDER's token (store: state.tentaclesCue, which owns the lifetime: its own timer, cleared on reset / seek / catch-up /
+// game change), so the next frame's toasts can never displace it. Same placement rule as the Loner pill (placeLonerCue:
+// below the token, pushed under any pane up there, flipped above at the viewport's bottom edge); RAF-follows the token.
+const tentaclesCuePos = reactive({ x: 0, y: 0, ready: false });
+const tentaclesCueEl = ref<HTMLElement | null>(null);
+let tentaclesCueRaf = 0;
+watch(() => gameStore.state.tentaclesCue?.seq, (seq) => {
+  cancelAnimationFrame(tentaclesCueRaf);
+  tentaclesCuePos.ready = false;
+  const cue = gameStore.state.tentaclesCue;
+  if (!cue || seq == null) return;
+  // the Tentacles icon still fades over the holder (both outcomes), at the holder's live square
+  const live = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === cue.holderId)?.playerCoordinate;
+  renderer?.playSkillIconFade(live && live[0] >= 0 && live[0] < 26 && live[1] >= 0 && live[1] < 15 ? [live[0], live[1]] : cue.square, 'Tentacles');
+  const follow = () => {
+    if (gameStore.state.tentaclesCue?.seq !== seq) { tentaclesCuePos.ready = false; return; }
+    const p = renderer?.playerScreenPos(cue.holderId);
+    if (p && renderer) {
+      const baseY = p.y + TILE_H * 0.5 * renderer.cameraScale() + LONER_CUE_GAP_PX;
+      const el = tentaclesCueEl.value;
+      const size = el ? { width: el.offsetWidth, height: el.offsetHeight } : { width: 360, height: 30 };
+      const frame = (el?.offsetParent as HTMLElement | null) ?? pitchHost.value;
+      const viewport = frame ? { width: frame.clientWidth, height: frame.clientHeight, flipBottom: p.y - TILE_H * 1.3 * renderer.cameraScale() - LONER_CUE_GAP_PX } : undefined;
+      const placed = placeLonerCue(p.x, baseY, size, lonerCuePanes(el, TENTACLES_CUE_PANE_SELECTOR), LONER_CUE_GAP_PX, viewport);
+      tentaclesCuePos.x = placed.x;
+      tentaclesCuePos.y = placed.y;
+      tentaclesCuePos.ready = true;
+    }
+    tentaclesCueRaf = requestAnimationFrame(follow);
+  };
+  follow();
+});
+onBeforeUnmount(() => cancelAnimationFrame(tentaclesCueRaf));
 
 // Owner 09-28 (S7 v3): the dice/turnover lifecycle (deferred-show timers, presentation epoch, opponent-hold
 // re-validation, splash-showing feed, occurrence-correlated teardown) lives in a pure controller so the store -> view ->
@@ -9946,9 +9993,10 @@ function cancelViewMatchPresentation() {
   riotousRookiesSplashTimer = negatraitCueTimer = 0;
   stallerSplashTimer = fallOverHideTimer = toastTimer = infoNoticeTimer = 0;
   for (const frame of [negatraitCueRaf, skillToastRaf, koToastRaf, fallOverRaf,
-    rerollSplashTokenRaf, followupRaf, lonerFailedCueRaf]) cancelAnimationFrame(frame);
-  negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = lonerFailedCueRaf = 0;
+    rerollSplashTokenRaf, followupRaf, lonerFailedCueRaf, tentaclesCueRaf]) cancelAnimationFrame(frame);
+  negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = lonerFailedCueRaf = tentaclesCueRaf = 0;
   lonerFailedCuePos.ready = false;
+  tentaclesCuePos.ready = false;
   for (const timer of sendOffTimers) clearTimeout(timer);
   sendOffTimers = [];
   masterChefSplashVisible.value = false;
@@ -10133,7 +10181,16 @@ function confirmArmedGaze(): boolean {
 /** A button INSIDE one of the client's confirmation panels has keyboard focus (Astra review 10-04). */
 function focusedPromptButton(target: EventTarget | null): boolean {
   // Owner 10-15 (Astra confirmlock-3): the Bloodlust decision card is a covered confirmation card too.
-  return target instanceof HTMLElement && target.tagName === 'BUTTON' && !!target.closest('.pitch-confirm-panel, .bloodlust-card');
+  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON') return false;
+  if (target.closest('.pitch-confirm-panel, .bloodlust-card')) return true;
+  // Astra 10-21 (room-name toggle): the waiting card's own buttons (Cancel, Show/Hide room name) keep their native
+  // Enter / Space activation - Enter on them used to open chat instead. r2: never while a confirmation holds the keys.
+  return !!target.closest('.waiting-card-actions') && !confirmationKeysHeld();
+}
+/** Any client confirmation is up (End Turn / End Activation, setup, the kick-off card, every covered card): it owns
+ *  Enter / Space. */
+function confirmationKeysHeld(): boolean {
+  return pitchHeldByConfirmation() || !!setupConfirm.value || !!kickConfirmCard.value || confirmCardLocked();
 }
 /** Astra review 10-04: while an End Activation / End Turn confirmation is up, the pitch takes no clicks - a click
  *  on a receiver used to nominate (or send) the throw UNDER the open prompt, and Space then confirmed the end. */
@@ -10223,8 +10280,9 @@ function lockedConfirm(): boolean {
  *  merely left focused by a mouse click (End Turn, a quick-bar action) does not match :focus-visible, so the common
  *  "click End Turn, press Space" flow still confirms. */
 function keyboardFocusedOutsideButton(target: EventTarget | null): boolean {
-  if (!pitchHeldByConfirmation() && !setupConfirm.value && !kickConfirmCard.value && !confirmCardLocked()) return false; // owner 10-13: the kick card too; 10-15: every covered card
-  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel, .bloodlust-card')) return false;
+  if (!confirmationKeysHeld()) return false; // owner 10-13: the kick card too; 10-15: every covered card
+  // Astra 10-21 r2: the waiting card's buttons never take a key from an open confirmation either.
+  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel, .bloodlust-card, .waiting-card-actions')) return false;
   // Astra pass 3 (10-04): :focus-visible is a per-browser heuristic. Ownership is decided by a recorded fact: the
   // focused button is the one the coach last pressed with the pointer (mouse focus) or it is not (keyboard focus).
   return target !== lastPointerFocusedButton;
@@ -14544,19 +14602,9 @@ function sendChat() {
     <!-- Bug report JLeav 10-08: the Esc game menu (App.vue .modal-backdrop, z 100) opened BEHIND this overlay (z 200)
          and could not be reached. While the game menu or Settings is open the overlay steps below them. -->
     <div v-if="gameStore.state.waitingForMatch" class="conn-closed-overlay" :class="{ 'under-app-menu': ui.gameMenuOpen || ui.settingsOpen }" role="alertdialog" aria-modal="true">
-      <div class="conn-closed-card">
-        <h2 v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for {{ gameStore.state.waitingForMatch.opponentCoach }}</h2>
-        <h2 v-else>Waiting for the other coach</h2>
-        <p class="conn-closed-status">
-          <span class="conn-spinner" aria-hidden="true"></span>
-          <span v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for <strong>{{ gameStore.state.waitingForMatch.opponentCoach }}</strong> to join<span v-if="gameStore.state.waitingForMatch.gameName"> “{{ gameStore.state.waitingForMatch.gameName }}”</span>… Are they afraid? 👀</span>
-          <span v-else-if="gameStore.state.waitingForMatch.gameName">You're in “{{ gameStore.state.waitingForMatch.gameName }}” — the game starts as soon as the other coach joins the <em>same</em> game name.</span>
-          <span v-else>Waiting for the game to start — you'll drop in when your match is ready.</span>
-        </p>
-        <p class="hint" v-if="gameStore.state.waitingForMatch.teamName">Playing as {{ gameStore.state.waitingForMatch.coach }} with {{ gameStore.state.waitingForMatch.teamName }}.</p>
-        <div class="conn-closed-actions">
-          <button type="button" @click="gameStore.disconnect()">Cancel</button>
-        </div>
+      <div v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.card }" class="conn-closed-card">
+        <!-- Owner 10-21: the room name is hidden until "Show room name" (bottom-right of the card) is pressed. -->
+        <WaitingMatchCardBody :wait="gameStore.state.waitingForMatch" :locked="confirmationKeysHeld()" @cancel="gameStore.disconnect()" />
       </div>
     </div>
 
@@ -16448,6 +16496,12 @@ function sendChat() {
         <div v-if="gameStore.state.lonerFailedCue && lonerFailedCuePos.ready" :key="'loner-' + gameStore.state.lonerFailedCue.seq"
           ref="lonerFailedCueEl" class="loner-failed-cue" :style="{ left: lonerFailedCuePos.x + 'px', top: lonerFailedCuePos.y + 'px' }">{{ gameStore.state.lonerFailedCue.text }}</div>
 
+        <!-- Owner 10-21: the Tentacles roll's outcome - green "held" / red "escaped" pill BELOW the holder's token
+             (store: state.tentaclesCue; its own surface, so the next frame's toasts never replace it). -->
+        <div v-if="gameStore.state.tentaclesCue && tentaclesCuePos.ready" :key="'tentacles-' + gameStore.state.tentaclesCue.seq"
+          ref="tentaclesCueEl" class="tentacles-cue" :data-tone="gameStore.state.tentaclesCue.held ? 'held' : 'escaped'" data-testid="tentacles-cue"
+          :style="{ left: tentaclesCuePos.x + 'px', top: tentaclesCuePos.y + 'px' }">{{ gameStore.state.tentaclesCue.text }}</div>
+
         <!-- #58 SYNCHRONOUS_MULTI_BLOCK: a ring on every selectable (dice-decorated) block target + a bright SELECTED
              ring on the 1-2 chosen. pointer-events:none so the click passes to the token (onPlayerClick → toggle). -->
         <div v-for="(m, i) in multiBlockMarkers" :key="'mb-' + i" class="mb-target" :class="{ selected: m.selected }"
@@ -16956,10 +17010,10 @@ function sendChat() {
               <button v-for="(d, i) in mbrDiceShown(row)" :key="i" class="bp-die"
                 :class="{ 'bp-die-art': settings.order66, 'bp-die-tumbling': !!mbrRowTumble(row)?.tumbling.includes(i), 'mbr-picked': row.selectedIndex === i }"
                 :data-armed="mbrDieMode?.targetId === row.targetId"
-                :data-readonly="!multiBlockDialogMine || row.isOwnChoice !== true || (!row.pickable && mbrDieMode?.targetId !== row.targetId)"
-                :disabled="!!mbrRowTumble(row) || !multiBlockDialogMine || (mbrDieMode?.targetId !== row.targetId && (row.isOwnChoice !== true || !row.pickable))"
+                :data-readonly="mbrDieState(row).readonly"
+                :disabled="mbrDieState(row).disabled"
                 :title="mbrDieMode?.targetId === row.targetId ? 'Reroll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
-                @click="multiBlockPickDie(row.targetId, i, row.isOwnChoice === true && row.pickable)">
+                @click="multiBlockPickDie(row, i)">
                 <img v-if="settings.order66" :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />
                 <template v-else>{{ blockFaceLabel(d) }}</template>
               </button>
@@ -19965,6 +20019,29 @@ function sendChat() {
   box-shadow: 0 6px 20px #000b, 0 0 16px color-mix(in srgb, var(--ui-skill-trait) 35%, transparent);
   animation: loner-failed-cue-in var(--p-2000) ease-in-out forwards;
 }
+/* Owner 10-21: the Tentacles outcome pill - the Loner pill's shape, green (--ui-success) when the holder holds, red
+   (--ui-danger) when the mover gets away. Reads for the store's hold (TENTACLES_CUE_HOLD_MS = --p-3000). */
+.tentacles-cue {
+  position: absolute;
+  z-index: 40;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 9px;
+  font-family: 'Nuffle', system-ui, sans-serif;
+  font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+  color: #fff;
+  text-shadow: 0 2px 5px #000d;
+  --tentacles-tone: var(--ui-success);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--tentacles-tone) 80%, #000), color-mix(in srgb, var(--tentacles-tone) 45%, #000));
+  border: 2px solid var(--tentacles-tone);
+  box-shadow: 0 6px 20px #000b, 0 0 16px color-mix(in srgb, var(--tentacles-tone) 35%, transparent);
+  animation: loner-failed-cue-in var(--p-3000) ease-in-out forwards;
+}
+.tentacles-cue[data-tone="held"] { --tentacles-tone: var(--ui-success); }
+.tentacles-cue[data-tone="escaped"] { --tentacles-tone: var(--ui-danger); }
 @keyframes loner-failed-cue-in {
   0% { opacity: 0; transform: translate(-50%, 8px); }
   12% { opacity: 1; transform: translate(-50%, 0); }
@@ -22140,9 +22217,11 @@ function sendChat() {
 .bp-die.bp-die-selected { border-color: var(--ui-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 55%, transparent); }
 .bp-die.bp-die-choice { border-color: #f5c542; box-shadow: 0 0 0 3px #f5c54299, 0 0 12px #f5c54288; opacity: 1; }
 .bp-die:hover { border-color: #5a8ad0; }
-/* Uphill phase-one and nonchooser dice are informational: dimmed with no hover affordance. */
-.bp-die[data-readonly="true"]:not(.bp-die-choice) { opacity: 0.72; cursor: not-allowed; }
-.bp-die[data-readonly="true"].bp-die-choice { cursor: default; }
+/* Uphill phase-one and nonchooser dice are informational: dimmed with no hover affordance. Owner 10-21: "The dialog
+   should simply be inert and the cursor can remain our standard one." - inert via the disabled attribute (its tooltip stays), never not-allowed. */
+.bp-die:disabled { cursor: default; }
+.bp-die[data-readonly="true"] { cursor: default; }
+.bp-die[data-readonly="true"]:not(.bp-die-choice) { opacity: 0.72; }
 .bp-die[data-readonly="true"]:hover:not(.bp-die-choice) { border-color: #1a1a1a; }
 .bp-decline { border-color: #7a6a3a; color: #e6d9b0; }
 /* Owner P2 (o66): FACE-ART die-pick — the block-die art in place of the POW!/Push text (matches the
@@ -22192,7 +22271,7 @@ function sendChat() {
 .bp-sub { font-size: max(var(--ui-min-text-size, 12px), 0.6rem); line-height: 1; color: #cfd6e0; letter-spacing: 0.02em; text-shadow: 0 1px 2px #000; }
 .bp-hint { font-size: max(var(--ui-min-text-size, 12px), 0.72rem); color: #cfd6e0; }
 .bp-multi-select { display: flex; align-items: center; gap: 6px; }
-.bp-multi-select .bp-opt:disabled { opacity: 0.5; cursor: not-allowed; }
+.bp-multi-select .bp-opt:disabled { opacity: 0.5; cursor: default; }
 /* #58 SYNCHRONOUS multi-block resolution surface — one dice row per target (mirrors .block-partial's gold-trim
    dialog; reuses .bp-die for the block-face art). Centred high so both target rows stay visible. */
 .multi-block-resolution {

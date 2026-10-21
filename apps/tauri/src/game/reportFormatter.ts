@@ -312,8 +312,15 @@ function coachName(game: GameJson | null, teamId: unknown): string {
 }
 
 function rulesVersion(game: GameJson | null): string | undefined {
-  return game?.gameOptions.gameOptionArray
-    .find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  return game?.gameOptions?.gameOptionArray
+    ?.find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue;
+}
+
+/** Did a ReportTentaclesShadowingRoll {skill:'Tentacles'} HOLD the mover? Upstream bb2020 / bb2025 TentaclesBehaviour:
+ *  the HOLDER (defenderId) rolls, `successful` = held. bb2016: the MOVER rolls to escape, `successful` = escaped. No /
+ *  unknown rulesVersion option reads as bb2025 (the live default). Shared by the log line and the store's pill. */
+export function tentaclesRollHeld(successful: unknown, game: GameJson | null): boolean {
+  return rulesVersion(game) === 'BB2016' ? successful === false : successful === true;
 }
 
 function playerStateResult(value: unknown): string {
@@ -555,6 +562,10 @@ function regenerationRow(r: Report, g: GameJson | null): { head: string; dice: s
   if (r.successful === true) return { head: `${pn(g, r.playerId)} regenerates and returns to the reserves.`, dice: rollWithTarget(r) };
   if (r.successful === false) return { head: `${pn(g, r.playerId)} ${FAILS} to regenerate.`, dice: rollWithTarget(r) };
   return null;
+}
+/** Owner 10-21: the log line for a Badly Hurt result the apothecary fixed up (the player returns to the reserves). */
+function apothecaryBenchSentence(name: string): string {
+  return `${name} is fixed up by the apothecary and returns to the bench.`;
 }
 /** A player whose field coordinate is a dugout box (upstream FieldCoordinate.isBoxCoordinate: x outside 0..25), or who
  *  has no coordinate in the model. */
@@ -1132,7 +1143,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     // Owner 10-15 (both styles), the same pattern as a failed shadow. Upstream bb2020/bb2025 TentaclesBehaviour: the
     // HOLDER (defenderId) rolls and `successful` means they hold the mover; bb2016 has the mover roll to escape, so
     // there `successful` means the hold failed.
-    const held = rulesVersion(g) === 'BB2016' ? r.successful === false : r.successful === true;
+    const held = tentaclesRollHeld(r.successful, g);
     return held
       ? `${holder} holds ${target} with ${r.skill ?? 'Tentacles'}: ${hiddenTag('rolls ')}${rolls}${min}`
       : `${holder} ${FAILS} to hold ${target} with ${r.skill ?? 'Tentacles'}: ${hiddenTag('rolls ')}${rolls}${min}`;
@@ -1500,6 +1511,9 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   apothecaryRoll: (r, g) => {
     const casualty = Array.isArray(r.casualtyRoll) ? (r.casualtyRoll as number[]) : [];
     const name = pn(g, r.playerId);
+    // An empty casualty roll is always a decline (upstream StepApothecary DO_NOT_USE_APOTHECARY). Astra r1 P2: never read
+    // the model here - BB2020 runs Regeneration in the same step after the decline, and its success sets RESERVE too.
+    // The bench sentence (owner 10-21) comes only from apothecaryChoice with playerState 9.
     if (!casualty.length) return `${name} is not treated by the apothecary.`;
     const version = rulesVersion(g);
     // BB2020/25 use the injury line's casualtyResultLabel ("Seriously Hurt (MNG)"); BB2016 keeps its label.
@@ -1530,6 +1544,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     if ((Number(r.playerState) & 0xff) === 4) {
       return `${name} is treated by the apothecary. They are only stunned.`;
     }
+    // Owner 10-21: USE on a Badly Hurt result (no casualty reroll, StepApothecary.java:528-537) sends the player to RESERVE.
+    if ((Number(r.playerState) & 0xff) === 9) return apothecaryBenchSentence(name);
     return `${name}'s apothecary result: ${playerStateResult(r.playerState)}.`;
   },
   // Corner direction is D3, other direction is D6, and the wire carries no corner flag.

@@ -13,7 +13,8 @@ export interface FullscreenKeyEvent {
 
 const TEXT_ENTRY = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
 
-function isTextEntry(target: unknown): boolean {
+/** The event's target is a text field (chat, notes, settings): keyboard shortcuts that mean something there step aside. */
+export function isTextEntry(target: unknown): boolean {
   const el = target as { closest?: (selector: string) => unknown } | null | undefined;
   return typeof el?.closest === 'function' && !!el.closest(TEXT_ENTRY);
 }

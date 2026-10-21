@@ -920,6 +920,34 @@ pub fn parse_join_report(raw: &str) -> Option<JoinReport> {
     Some(JoinReport { count, load, queue })
 }
 
+// --- Back / Forward (owner 10-21: "Back/forward button to the FUMBBL.com page ... like they can in a web browser") ------
+
+/// The script fumbbl_home_history evals for `direction` ("back" | "forward"); anything else is refused. A constant: no
+/// caller text ever reaches the site. A CROSS-DOCUMENT step is an ordinary main-frame navigation, so it goes through the
+/// same layer-1 `on_navigation` filter (and layer 2) as a click: an entry off fumbbl.com - e.g. the about:blank boot or
+/// park document - is refused there like any other link. A SAME-DOCUMENT step (a #fragment or pushState entry) fires no
+/// NavigationStarting and is not seen by that hook; it never leaves the current fumbbl.com document. A step with nowhere
+/// to go is a no-op in the engine.
+pub fn history_script(direction: &str) -> Result<&'static str, String> {
+    match direction {
+        "back" => Ok("history.back()"),
+        "forward" => Ok("history.forward()"),
+        _ => Err("unknown history direction".into()),
+    }
+}
+
+/// fumbbl_home_history's refusal while a main-frame navigation of the Home webview is in flight.
+pub const HISTORY_LOADING_ERROR: &str = "fumbbl-home-loading";
+/// A navigation still "in flight" after this long is treated as over (LATCHES FAIL OPEN: a lost NavigationCompleted
+/// must never leave Back / Forward refused for good).
+pub const NAV_IN_FLIGHT_MAX: Duration = Duration::from_secs(15);
+
+/// True while a navigation that started at `started` (layer 1 allowed it; cleared when its page load finishes) should
+/// still refuse a history step at `now`.
+pub fn navigation_in_flight(started: Option<Instant>, now: Instant) -> bool {
+    matches!(started, Some(at) if now.saturating_duration_since(at) < NAV_IN_FLIGHT_MAX)
+}
+
 // --- commands (registered in every build so shell-api.json is one list; the bodies are live only when AVAILABLE) -----
 
 /// Feature detection for the page: false on a public build or a shell built without the `fumbbl-home` feature (and an
@@ -1081,6 +1109,24 @@ pub async fn fumbbl_home_focus_region(app: tauri::AppHandle, webview: tauri::Web
     {
         let _ = (app, script);
         Ok(FocusReport::because("loading"))
+    }
+}
+
+/// Back / Forward in the Home webview (`direction` "back" | "forward"; history_script). The docked pane and the floating
+/// window are the same webview, so this serves both. Fails while the webview does not exist, is booting, parked or
+/// stopped (BLOCKED_ERROR) - the caller treats every failure as "nothing to do".
+#[tauri::command]
+pub async fn fumbbl_home_history(app: tauri::AppHandle, webview: tauri::Webview, direction: String) -> Result<(), String> {
+    caller_is_main(&webview)?;
+    let script = history_script(&direction)?;
+    #[cfg(feature = "fumbbl-home")]
+    {
+        live::history(&app, script)
+    }
+    #[cfg(not(feature = "fumbbl-home"))]
+    {
+        let _ = (app, script);
+        Err("the Home pane is not available in this build".into())
     }
 }
 
@@ -1328,6 +1374,46 @@ mod live {
         unpark(); // an explicit navigation is the site being wanted again
         navigate_home(app, url);
         Ok(())
+    }
+
+    /// Back / Forward (fumbbl_home_history): only while a site document is loaded - never on the boot page, while parked
+    /// or stopped (on_navigation would refuse those steps anyway; this says so to the caller instead).
+    pub fn history(app: &tauri::AppHandle, script: &'static str) -> Result<(), String> {
+        if guard_tripped() {
+            return Err(BLOCKED_ERROR.into());
+        }
+        let Some(webview) = app.get_webview(HOME_LABEL) else {
+            return Err("Home webview unavailable".into());
+        };
+        if BOOTING.load(Ordering::SeqCst) || PARKED.load(Ordering::SeqCst) {
+            return Err("Home webview unavailable".into());
+        }
+        // Astra 10-21 (P2): BOOTING ends before the first site navigation and never covers later loads; a page that is
+        // still loading refuses the step instead of racing it.
+        if nav_in_flight() {
+            return Err(HISTORY_LOADING_ERROR.into());
+        }
+        webview.eval(script).map_err(|e| e.to_string())
+    }
+
+    /// When the main-frame navigation layer 1 last allowed started; None once its page load has finished.
+    static NAV_STARTED: Mutex<Option<Instant>> = Mutex::new(None);
+
+    fn note_nav_started() {
+        if let Ok(mut started) = NAV_STARTED.lock() {
+            *started = Some(Instant::now());
+        }
+    }
+
+    fn note_nav_finished() {
+        if let Ok(mut started) = NAV_STARTED.lock() {
+            *started = None;
+        }
+    }
+
+    fn nav_in_flight() -> bool {
+        // A poisoned lock fails OPEN: history is a convenience, never worth a permanent refusal.
+        NAV_STARTED.lock().map(|started| navigation_in_flight(*started, Instant::now())).unwrap_or(false)
     }
 
     pub fn tour_eval(app: &tauri::AppHandle, script: String, arms: bool) -> Result<(), String> {
@@ -1622,7 +1708,10 @@ mod live {
                     TourNav::NotTour => {}
                 }
                 match navigation_decision(url) {
-                    NavDecision::Allow => true,
+                    NavDecision::Allow => {
+                        note_nav_started(); // fumbbl_home_history waits for this load (cleared on Finished)
+                        true
+                    }
                     NavDecision::Upgrade(https) => {
                         // Counted: an https URL that redirects back to http would otherwise loop forever.
                         bounce(&nav_app, https);
@@ -1692,6 +1781,7 @@ mod live {
             .on_page_load(move |webview, payload| {
                 note_park_loaded(payload.url());
                 if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    note_nav_finished();
                     // Navigation keeps the coach's zoom and colorblind filter.
                     apply_zoom(&webview);
                     if is_fumbbl_url(payload.url()) {
@@ -1984,6 +2074,37 @@ mod tests {
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn history_accepts_only_back_and_forward() {
+        assert_eq!(history_script("back"), Ok("history.back()"));
+        assert_eq!(history_script("forward"), Ok("history.forward()"));
+        for bad in ["", "Back", "FORWARD", " back", "back ", "go", "reload", "history.back()", "-1"] {
+            assert!(history_script(bad).is_err(), "{bad:?} must be refused");
+        }
+        // The command validates before touching the webview, and is main-only like every Home command.
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        let command = &src[src.find("pub async fn fumbbl_home_history(").unwrap()..];
+        let command = &command[..command.find("\n}\n").unwrap()];
+        assert!(command.contains("caller_is_main(&webview)?;\n    let script = history_script(&direction)?;"));
+        // The about:blank boot/park entry a Back could reach is refused by layer 1.
+        assert_eq!(navigation_decision(&u("about:blank")), NavDecision::Block);
+    }
+
+    #[test]
+    fn history_is_refused_while_a_navigation_is_in_flight_and_the_latch_fails_open() {
+        let t0 = Instant::now();
+        assert!(!navigation_in_flight(None, t0), "no navigation: history may step");
+        assert!(navigation_in_flight(Some(t0), t0), "a load just started: refused");
+        assert!(navigation_in_flight(Some(t0), t0 + NAV_IN_FLIGHT_MAX - Duration::from_millis(1)));
+        assert!(!navigation_in_flight(Some(t0), t0 + NAV_IN_FLIGHT_MAX), "a lost completion never refuses for good");
+        // Wiring: layer 1's Allow arm starts it, the page load's Finished clears it, history() refuses on it.
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        let shipped = &src[..src.find("#[cfg(test)]\nmod tests").unwrap()];
+        assert!(shipped.contains("NavDecision::Allow => {\n                        note_nav_started();"));
+        assert!(shipped.contains("PageLoadEvent::Finished) {\n                    note_nav_finished();"));
+        assert!(shipped.contains("if nav_in_flight() {\n            return Err(HISTORY_LOADING_ERROR.into());"));
     }
 
     #[test]

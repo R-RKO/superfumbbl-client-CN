@@ -15,6 +15,9 @@
  */
 import { reactive } from 'vue';
 import { ui } from './ui';
+import { lastAppPatchStatus, type AppPatchStatus } from './appPatch';
+import { isTextEntry } from './fullscreenKeys';
+import { parseVersion } from './updateCheck';
 
 export interface PaneRect {
   x: number;
@@ -622,6 +625,63 @@ export type HomeSurface = ReturnType<typeof createHomeSurface>;
 
 /** The app's one driver. */
 export const homeSurface: HomeSurface = createHomeSurface();
+
+// --- Back / Forward (owner 10-21: "Can we add a Back/forward button to the FUMBBL.com page that allows users to navigate
+// back or forth in history like they can in a web browser?") ---------------------------------------------------------
+
+export type HomeHistoryDirection = 'back' | 'forward';
+
+/** The first shell with fumbbl_home_history. An older shell has no such command: the buttons are not shown there. */
+export const HOME_HISTORY_SHELL_MIN = '1.0.258';
+
+/** True when `shellVersion` (x.y.z) is HOME_HISTORY_SHELL_MIN or newer; false for anything unreadable. */
+export function shellSupportsHomeHistory(shellVersion: string | null | undefined): boolean {
+  const shell = parseVersion(shellVersion ?? '');
+  const min = parseVersion(HOME_HISTORY_SHELL_MIN)!;
+  if (!shell) return false;
+  for (let i = 0; i < 3; i++) { if (shell[i]! !== min[i]!) return shell[i]! > min[i]!; }
+  return true;
+}
+
+/** Whether this shell has Back / Forward: its version from the status App.vue keeps (lastAppPatchStatus), else asked of
+ *  the shell directly (app_patch_status - every shell since 1.0.163, whatever the edition). Never throws. */
+export async function detectHomeHistory(): Promise<boolean> {
+  const known = lastAppPatchStatus.value?.shellVersion;
+  if (known) return shellSupportsHomeHistory(known);
+  if (!inTauri()) return false;
+  try {
+    const { invoke } = await ipc();
+    return shellSupportsHomeHistory((await invoke<AppPatchStatus>('app_patch_status'))?.shellVersion);
+  } catch {
+    return false;
+  }
+}
+
+/** One step back / forward in the site's history (the docked pane and the floating window are the same webview). The
+ *  webview does not report whether there is anywhere to go, so a refusal - nowhere to go, no site loaded, an older
+ *  shell - is only logged. Never throws. */
+export async function fumbblHomeHistory(direction: HomeHistoryDirection): Promise<void> {
+  if (direction !== 'back' && direction !== 'forward') {
+    console.warn('[fumbbl-home] unknown history direction', direction);
+    return;
+  }
+  try {
+    const { invoke } = await ipc();
+    await invoke('fumbbl_home_history', { direction });
+  } catch (error) {
+    console.warn('[fumbbl-home] history step refused', direction, error);
+  }
+}
+
+/** Alt+Left / Alt+Right, as in a browser: back / forward. Not while typing in a field, not with another modifier, not
+ *  for a held key. */
+export function homeHistoryKey(e: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; repeat?: boolean; isComposing?: boolean; target?: unknown }): HomeHistoryDirection | null {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat || e.isComposing) return null;
+  if (isTextEntry(e.target)) return null;
+  if (e.key === 'ArrowLeft') return 'back';
+  if (e.key === 'ArrowRight') return 'forward';
+  return null;
+}
 
 // --- colorblind correction (owner 10-06: "Colorblind mode isn't being applied to this page") -------------------------
 

@@ -13,6 +13,8 @@ import { FUMBBL_SITE, settings } from '../game/settings';
 import { gameStore } from '../game/store';
 import { fumbblLobbyGames } from '../game/jnlpRouting';
 import WaitingVsBanner from '../components/WaitingVsBanner.vue';
+import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
+import { PAD_FOCUS_PRIORITY, vPadFocus } from '../game/cardFocus';
 import {
   clearFumbblTeamCache, projectWaitingBanner, resolveBannerTeams, waitingBanner, type FumbblTeamInfo,
 } from '../game/waitingVsBanner';
@@ -118,19 +120,9 @@ onBeforeUnmount(() => {
     <div v-if="gameStore.state.waitingForMatch && !joinWindowOpen" class="waiting-board-overlay" role="alertdialog" aria-modal="true">
       <!-- Owner 10-09: the match-up sits directly above the waiting box, on top of the scrim (never shaded by it). -->
       <WaitingVsBanner v-if="banner" :model="banner" inline />
-      <div class="waiting-board-card">
-        <h2 v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for {{ gameStore.state.waitingForMatch.opponentCoach }}</h2>
-        <h2 v-else>Waiting for the other coach</h2>
-        <p class="waiting-board-status">
-          <span class="waiting-board-spinner" aria-hidden="true"></span>
-          <span v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for <strong>{{ gameStore.state.waitingForMatch.opponentCoach }}</strong> to join<span v-if="gameStore.state.waitingForMatch.gameName"> “{{ gameStore.state.waitingForMatch.gameName }}”</span>… Are they afraid? 👀</span>
-          <span v-else-if="gameStore.state.waitingForMatch.gameName">You're in “{{ gameStore.state.waitingForMatch.gameName }}” — the game starts as soon as the other coach joins the <em>same</em> game name.</span>
-          <span v-else>Waiting for the game to start — you'll drop in when your match is ready.</span>
-        </p>
-        <p v-if="gameStore.state.waitingForMatch.teamName" class="hint">Playing as {{ gameStore.state.waitingForMatch.coach }} with {{ gameStore.state.waitingForMatch.teamName }}.</p>
-        <div class="waiting-board-actions">
-          <button type="button" @click="gameStore.disconnect()">Cancel</button>
-        </div>
+      <div v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.card }" class="waiting-board-card">
+        <!-- Owner 10-21: the room name is hidden until "Show room name" (bottom-right of the card) is pressed. -->
+        <WaitingMatchCardBody :wait="gameStore.state.waitingForMatch" @cancel="gameStore.disconnect()" />
       </div>
     </div>
   </div>
@@ -149,12 +141,5 @@ onBeforeUnmount(() => {
   max-width: 380px; background: var(--ui-surface-2); border: 1px solid #6a2b2b; border-radius: 12px;
   padding: 22px 26px; box-shadow: 0 16px 44px #000c; color: var(--ui-text); text-align: center;
 }
-.waiting-board-card h2 { margin: 0 0 0.6rem; font-family: 'Nuffle', system-ui, sans-serif; color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.3rem); }
-.waiting-board-card p { margin: 0.5rem 0 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.92rem); line-height: 1.5; }
-.waiting-board-status { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
-.waiting-board-actions { display: flex; gap: 10px; justify-content: center; margin-top: 1.1rem; }
-.waiting-board-actions button { border-radius: 6px; padding: 0.5rem 1.2rem; cursor: pointer; font-weight: 600; background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); }
-.waiting-board-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #e8918c55; border-top-color: #e8918c; animation: waiting-board-spin 0.8s linear infinite; flex: none; }
-@keyframes waiting-board-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .waiting-board-spinner { animation: none; } }
+/* The card's body (title, status line, Cancel + the room-name toggle) is WaitingMatchCardBody - shared with SpectateView. */
 </style>

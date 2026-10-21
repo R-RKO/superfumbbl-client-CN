@@ -66,7 +66,7 @@ import { createThrownCrowdProjection, reduceThrownCrowdProjection } from './thro
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isCrowdSquare, thrownCrowdLanding, type BloodSpotRelocation, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createGameSession } from './gameSessionFactory';
 import { serverVersionBlock } from './serverVersionGate';
-import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore } from './reportFormatter';
+import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, tentaclesRollHeld } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
 import { upstreamLinesText, upstreamLogLines, type UpstreamLogLine } from './upstreamLog';
 import type { GraphicalLine, LogLineTokens } from './reportFormatter';
@@ -1437,6 +1437,11 @@ const legacyState = reactive({
   /** Owner 10-20: "<Player> fails their loner roll!" - a trait-brown splash BELOW the player's token (the server's
    *  failed `reRoll` {reRollSource: 'Loner'} report: the team reroll is lost). Not seat-gated; Modern view only. */
   lonerFailedCue: null as { playerId: string; text: string; roll: number | null; seq: number } | null,
+  /** Owner 10-21: the Tentacles roll's outcome as its OWN pill below the HOLDER's token (never the shared skillUsed /
+   *  showToast slot the next frame's toasts overwrite) - green "<Holder> holds <Mover> in place with their tentacles!"
+   *  when held, red "<Holder> fails to hold <Mover> with their tentacles!" when the mover gets away. Raised from the
+   *  server's tentaclesShadowingRoll {skill:'Tentacles'} report; not seat-gated; Modern view only; never a latch. */
+  tentaclesCue: null as { holderId: string; holderName: string; moverId: string; moverName: string; held: boolean; square: [number, number]; text: string; seq: number } | null,
   rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
@@ -1510,7 +1515,7 @@ const spectatorConnectionKeys = new Set<PropertyKey>([
   'devLog', 'wireLogFile', 'demoMode',
 ] satisfies (keyof typeof legacyState)[]);
 const spectatorTransientKeys = new Set<PropertyKey>([
-  'actionDice', 'actionDiceQueue', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'teamCaptainSplash', 'lonerFailedCue', 'blockResultStamp',
+  'actionDice', 'actionDiceQueue', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'teamCaptainSplash', 'lonerFailedCue', 'tentaclesCue', 'blockResultStamp',
   'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
   'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
   'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
@@ -2559,6 +2564,32 @@ function showLonerFailedSplash(playerId: string, roll: number | null = null) {
   if (lonerFailedCueClearTimer) cancelGameTimeout(lonerFailedCueClearTimer);
   state.lonerFailedCue = { playerId, text: `${playerName(g, playerId)} fails their loner roll!`, roll, seq: (state.lonerFailedCue?.seq ?? 0) + 1 };
   lonerFailedCueClearTimer = scheduleGameTimeout(() => { state.lonerFailedCue = null; lonerFailedCueClearTimer = null; }, presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
+}
+
+/** Owner 10-21: the Tentacles outcome pill's read (presentationMs-scaled), cleared by its own timer only. */
+const TENTACLES_CUE_HOLD_MS = 3000;
+let tentaclesCueClearTimer: ReturnType<typeof setTimeout> | null = null;
+function clearTentaclesCue(): void {
+  if (tentaclesCueClearTimer) cancelGameTimeout(tentaclesCueClearTimer);
+  tentaclesCueClearTimer = null;
+  state.tentaclesCue = null;
+}
+/** Raise a fresh Tentacles pill (a reroll's report raises another). The clear is per cue: a timer only clears the cue
+ *  whose seq it was scheduled for. Never during catch-up. */
+function showTentaclesCue(g: GameJson, holderId: string, moverId: string, held: boolean, square: [number, number]): void {
+  if (playback.catchingUp) return;
+  if (tentaclesCueClearTimer) cancelGameTimeout(tentaclesCueClearTimer);
+  const holderName = playerName(g, holderId);
+  const moverName = playerName(g, moverId);
+  const seq = (state.tentaclesCue?.seq ?? 0) + 1;
+  state.tentaclesCue = {
+    holderId, holderName, moverId, moverName, held, square: [square[0], square[1]], seq,
+    text: held ? `${holderName} holds ${moverName} in place with their tentacles!` : `${holderName} fails to hold ${moverName} with their tentacles!`,
+  };
+  tentaclesCueClearTimer = scheduleGameTimeout(() => {
+    if (state.tentaclesCue?.seq === seq) state.tentaclesCue = null;
+    tentaclesCueClearTimer = null;
+  }, presentationMs(TENTACLES_CUE_HOLD_MS));
 }
 
 /** Weather Mage uses the existing compact splash rail; the authoritative result report supplies the reveal. */
@@ -6848,7 +6879,7 @@ function clearCatchupTransients(): void {
   rerollStageTimers = [];
   if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
-  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); state.reRollPrompt = null; state.skillChoice = null;
+  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
     if (pregameCineQueue[i]?.kind === 'prayer') pregameCineQueue.splice(i, 1);
   }
@@ -8552,6 +8583,9 @@ function isAlwaysVisibleEffectReport(r: Record<string, unknown>): boolean {
   // Astra 10-16: only the values upstream narrates. The cancel line is the store's own (activationCancelReport).
   if (id === 'playerAction') return !!playerActionDescription(r.playerAction);
   if (id === 'playerActionCancelled') return true;
+  // Owner 10-21: the apothecary's own outcome ("<P> is fixed up by the apothecary and returns to the bench." / the KO
+  // turned Stunned) is part of the match narrative; without it a Badly Hurt reroll read as the last word.
+  if (id === 'apothecaryChoice') return true;
   return id === 'playerEvent' && typeof r.message === 'string' && r.message.trim().length > 0;
 }
 
@@ -10177,35 +10211,26 @@ function applyFrameContents(frame: QueuedFrame) {
   if (stagedKickoffCatches.size > 0) {
     for (const staged of stagedKickoffCatches.values()) if (staged.playerId) addKickoffCatchArm(staged, publishCatchRing(staged.playerId));
   } else if (catchReport?.playerId) publishCatchRing(String(catchReport.playerId))();
-  // Owner 09-09: TENTACLES hold — ReportTentaclesShadowingRoll{skill:'Tentacles', defenderId = the tentacled player,
-  // successful = the MOVER escaped} (upstream TentaclesBehaviour). A failed escape raises the skill pill on the
-  // tentacled player ("used Tentacles", icon fade) AND a second pill on the held mover (actingPlayer), like Horns
-  // on both ends of a block. Presentation only; a re-roll produces its own report.
-  // Owner 10-05: an ESCAPE (successful = the mover got away) reads "<Holder>'s tentacles fail to hold strong!" on the
-  // holder - the owner's wording - instead of the generic "uses Tentacles!" pill (that generic skillUse toast is
-  // skipped for Tentacles whenever this report is in the frame, so this block owns both outcomes).
+  // Owner 10-21: TENTACLES - ReportTentaclesShadowingRoll{skill:'Tentacles', defenderId = the tentacled HOLDER}. The mover
+  // is the acting player. `successful` is the HOLDER's roll (upstream bb2020 / bb2025 TentaclesBehaviour: a success sets
+  // heldInPlace and puts the mover back on coordinateFrom; ffb-client TentaclesShadowingMessage "holds his opponent
+  // successfully" / "failed to hold"). g1955197 #2660 (roll 1, successful:false) is followed by the mover's dodge and
+  // onward move - the mover got away. bb2016 (replays) rolls the MOVER's escape instead (successful = escaped); the
+  // rulesVersion game option decides (reportFormatter.tentaclesRollHeld, shared with the log line; absent = bb2025).
+  // One pill per roll, its own surface below the holder: "<Holder> holds <Mover> in place with their tentacles!" /
+  // "<Holder> fails to hold <Mover> with their tentacles!". The generic skillUse toast stays skipped for Tentacles
+  // whenever this report is in the frame, and no second pill rides the mover. A reroll's report raises a fresh pill.
   {
     const tentacles = reports.find((r) => String(r.reportId) === 'tentaclesShadowingRoll'
       && String((r as { skill?: unknown }).skill ?? '') === 'Tentacles' && typeof (r as { successful?: unknown }).successful === 'boolean');
     if (tentacles) {
-      const escaped = (tentacles as { successful?: unknown }).successful === true;
       const g = game.value;
-      const squareOf = (id: string): [number, number] | null => {
-        const c = g.fieldModel.playerDataArray.find((d) => d.playerId === id)?.playerCoordinate;
-        return c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
-      };
+      const held = tentaclesRollHeld((tentacles as { successful?: unknown }).successful, g);
       const holderId = String((tentacles as { defenderId?: unknown }).defenderId ?? '');
       const moverId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-      const holderSq = holderId ? squareOf(holderId) : null;
-      const moverSq = !escaped && moverId && moverId !== holderId ? squareOf(moverId) : null;
-      if (holderSq) {
-        state.skillUsed = {
-          playerId: holderId, skill: 'Tentacles', square: holderSq, name: playerName(g, holderId),
-          toast: escaped ? `${playerName(g, holderId)}'s tentacles fail to hold strong!` : `${playerName(g, holderId)} used Tentacles!`,
-          also: moverSq ? { playerId: moverId, square: moverSq, toast: `${playerName(g, moverId)} is held by Tentacles!` } : undefined,
-          seq: (state.skillUsed?.seq ?? 0) + 1,
-        };
-      }
+      const c = holderId ? g.fieldModel.playerDataArray.find((d) => d.playerId === holderId)?.playerCoordinate : undefined;
+      const holderSq: [number, number] | null = c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
+      if (holderSq && moverId && moverId !== holderId) showTentaclesCue(g, holderId, moverId, held, holderSq);
     }
   }
   // Owner 09-10: FOUL APPEARANCE — ReportFoulAppearanceRoll{playerId = the ATTACKER rolling to overcome it, defenderId =
@@ -10760,7 +10785,7 @@ function applyFrameContents(frame: QueuedFrame) {
         }
       }
       if (isSkillUse || isSkillDecline) {
-        // Owner 10-05: the Tentacles roll report owns its toast (hold / "fail to hold strong") - no generic pill over it
+        // Owner 10-05 / 10-21: the Tentacles roll report owns its pill (state.tentaclesCue) - no generic pill over it
         if (isSkillUse && declinedSkillNorm === 'tentacles' && reports.some((x) => String(x.reportId) === 'tentaclesShadowingRoll')) continue;
         const cue = skillUsePresentation(report, raw, visibleBlockContext, playerName(game.value, String(pid)));
         if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
@@ -12335,7 +12360,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); } // Astra 10-20 (P2-3)
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
       playback.timer = null;
@@ -13347,7 +13372,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
+  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
@@ -13405,7 +13430,7 @@ function clearCollapsedReplayPresentation(preserveConnection = false): void {
   turnStartClearTimer = null;
   turnToastTimer = null;
   rerollSplashClearTimer = null;
-  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; rerollableRollByPlayer.clear();
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   pendingKickoffVictimSplash = null;
   pendingWinnerKickoff = null;
@@ -13478,7 +13503,7 @@ function clearLeaveGameResidualState(): void {
   turnStartTimer = null;
   turnStartClearTimer = null;
   rerollSplashClearTimer = null;
-  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; rerollableRollByPlayer.clear();
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   rerollStageTimers = [];
   injuryPlaying = false; injuryPresentingSet.clear();
@@ -16268,7 +16293,7 @@ export function installApothecaryTestHarness(
     dispose() {
       clearApothecaryResult();
       clearRerollSplash();
-      clearTeamCaptainSplash(); clearLonerFailedCue();
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue();
       injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); // owner 10-20
       state.riotousRookiesSplash = priorRiotous;
       state.turnStart = priorTurnStart;
@@ -26054,7 +26079,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // caps stacking, so no separate throttle is needed here.
       const muteAtThisSpeed = replay.speed >= 4;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
       if (!wasCatchingUp && muteAtThisSpeed) setSoundsSuppressed(true);
       try {
         if (command.netCommandId === NetCommandId.SERVER_MODEL_SYNC) {
@@ -26118,7 +26143,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); // Astra 10-20 (P2-3)
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); // Astra 10-20 (P2-3)
       if (!wasCatchingUp) setSoundsSuppressed(true);
       try {
         commands.forEach((command, index) => {
@@ -29339,7 +29364,8 @@ export const gameStore = {
     // P0 #2: and only once per activation - a second End / Esc / right-click while the first cancel is in flight, or
     // after the server already ended the activation, sends nothing.
     if (!cancelPermitted()) {
-      log('system', cancelInFlight ? 'play: END MOVE already sent - waiting for the server' : 'play: deselect (nothing declared, nothing sent)');
+      // Owner 10-21: deselecting a merely selected player logs nothing at all ("It should be entirely suppressed").
+      if (cancelInFlight) log('system', 'play: END MOVE already sent - waiting for the server');
       return;
     }
     const endSent = sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
