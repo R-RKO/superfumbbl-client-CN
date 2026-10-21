@@ -1,0 +1,262 @@
+import { FUMBBL_SITE, type CoachBadgeStyle } from './settings';
+
+/**
+ * Play screen coach card (owner 10-20): the coach's FUMBBL Overall record, win %, CR and status title.
+ *
+ * Traffic budget (owner): THREE requests at most, all to fumbbl.com, never per-game or per-team data:
+ *   1. GET /api/coach/search/<name>  -> [{ id, name }]          (exact, case-insensitive name match)
+ *   2. GET /api/coach/get/<id>       -> { id, name, rating }    (`rating` is the status title; by NAME it 404s in text)
+ *   3. GET /~<name>                  -> coach page HTML          (only the `.rankings` Overall block is read)
+ * One fetch per coach name per session (cached here), re-fetched only on an explicit Refresh. Fail-soft at every
+ * step: a failed request leaves whatever the others returned, and `fetchFumbblCoachProfile` never throws.
+ *
+ * Server-derived: every number shown is one FUMBBL sent, or the win % computed from the record FUMBBL sent.
+ */
+
+export interface FumbblCoachRecord { w: number; d: number; l: number }
+
+export interface FumbblOverallRanking {
+  title?: string;
+  cr?: number;
+  record?: FumbblCoachRecord;
+  winPct?: number;
+}
+
+export interface FumbblCoachProfile extends FumbblOverallRanking {
+  /** FUMBBL's spelling of the name when a request returned it, else the name as set in Settings */
+  name: string;
+  id?: number;
+}
+
+export type CoachProfileFetch = (url: string) => Promise<Pick<Response, 'ok' | 'status' | 'text'>>;
+
+// ---- title -> badge slug ----
+
+export const COACH_TITLE_SLUGS = {
+  'rookie': 'rookie',
+  'experienced': 'experienced',
+  'veteran': 'veteran',
+  'emerging star': 'emerging-star',
+  'star': 'star',
+  'super star': 'super-star',
+  'mega star': 'mega-star',
+  'legend': 'legend',
+} as const;
+export type CoachTitleSlug = typeof COACH_TITLE_SLUGS[keyof typeof COACH_TITLE_SLUGS];
+
+/** "Super Star" / " super  STAR " -> "super-star"; anything not one of FUMBBL's eight titles -> undefined. */
+export function coachTitleSlug(title: string | undefined | null): CoachTitleSlug | undefined {
+  if (typeof title !== 'string') return undefined;
+  const key = title.trim().replace(/\s+/g, ' ').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(COACH_TITLE_SLUGS, key)
+    ? COACH_TITLE_SLUGS[key as keyof typeof COACH_TITLE_SLUGS]
+    : undefined;
+}
+
+/** Original badge art - never FUMBBL imagery: public/badges/coach (realistic, the default) or public/badges/coach-retro
+ *  (pixel art), per the coachBadgeStyle setting (owner 10-20). */
+export function coachTitleBadgeUrl(title: string | undefined | null, style: CoachBadgeStyle = 'realistic'): string | undefined {
+  const slug = coachTitleSlug(title);
+  if (!slug) return undefined;
+  return style === 'retro' ? `/badges/coach-retro/${slug}-retro.png` : `/badges/coach/${slug}.png`; // -retro suffix: the app patch flattens image names across folders
+}
+
+// ---- pure parsers ----
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+function positiveId(value: unknown): number | undefined {
+  const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** /api/coach/search returns every coach whose name CONTAINS the query; only the exact (case-insensitive) one counts. */
+export function pickFumbblCoachSearchMatch(payload: unknown, name: string): { id: number; name: string } | undefined {
+  if (!Array.isArray(payload)) return undefined; // "No such coach found." and other text bodies
+  const wanted = name.trim().toLowerCase();
+  if (!wanted) return undefined;
+  for (const entry of payload) {
+    const row = asObject(entry);
+    const id = positiveId(row?.id);
+    const rowName = nonEmpty(row?.name);
+    if (id !== undefined && rowName && rowName.toLowerCase() === wanted) return { id, name: rowName };
+  }
+  return undefined;
+}
+
+export function parseFumbblCoachGet(payload: unknown): { id?: number; name?: string; title?: string } {
+  const data = asObject(payload);
+  if (!data) return {};
+  const out: { id?: number; name?: string; title?: string } = {};
+  const id = positiveId(data.id);
+  if (id !== undefined) out.id = id;
+  const name = nonEmpty(data.name);
+  if (name) out.name = name;
+  const title = nonEmpty(data.rating);
+  if (title) out.title = title;
+  return out;
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', sol: '/', frasl: '/', percnt: '%', num: '#',
+  colon: ':', comma: ',', period: '.', lpar: '(', rpar: ')', hyphen: '-', dash: '-', ndash: '–', mdash: '—',
+};
+
+function codePoint(n: number): string {
+  return Number.isInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+}
+
+/** Decimal (&#47;), hex (&#x2F;) and the common named entities; an unknown named entity is left as written. */
+export function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));/g, (whole, dec?: string, hex?: string, name?: string) => {
+    if (dec !== undefined) return codePoint(Number(dec)) || whole;
+    if (hex !== undefined) return codePoint(parseInt(hex, 16)) || whole;
+    return NAMED_ENTITIES[(name ?? '').toLowerCase()] ?? whole;
+  });
+}
+
+function decodeText(html: string): string {
+  return decodeHtmlEntities(html.replace(/<[^>]*>/g, ''))
+    .replace(/[\s ]+/g, ' ')
+    .trim();
+}
+
+/** Text of the first `<div class="... <cls> ...">`'s inner html up to the next `</div>` - the ranking cells hold no nested divs. */
+function divText(chunk: string, classPattern: string): string | undefined {
+  const re = new RegExp(`<div\\b[^>]*\\bclass\\s*=\\s*["'](?:[^"']*\\s)?${classPattern}(?:\\s[^"']*)?["'][^>]*>([\\s\\S]*?)</div>`, 'i');
+  const match = re.exec(chunk);
+  return match?.[1] !== undefined ? decodeText(match[1]) : undefined;
+}
+
+/** The value cell of `<div class="statrow <stat>">`. */
+function statValue(chunk: string, stat: string): string | undefined {
+  const re = new RegExp(`<div\\b[^>]*\\bclass\\s*=\\s*["'](?:[^"']*\\s)?statrow\\s+(?:[^"']*\\s)?${stat}(?:\\s[^"']*)?["'][^>]*>([\\s\\S]*?)(?=<div\\b[^>]*\\bclass\\s*=\\s*["'][^"']*\\bstatrow\\b|$)`, 'i');
+  const row = re.exec(chunk)?.[1];
+  return row ? divText(row, 'value') : undefined;
+}
+
+function parseNumber(text: string | undefined): number | undefined {
+  if (!text) return undefined;
+  const match = /-?\d[\d,]*(?:\.\d+)?/.exec(text);
+  if (!match) return undefined;
+  const n = Number(match[0].replace(/,/g, ''));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+export function parseCoachRecord(text: string | undefined): FumbblCoachRecord | undefined {
+  const match = text ? /^\s*(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(text) : null;
+  return match ? { w: Number(match[1]), d: Number(match[2]), l: Number(match[3]) } : undefined;
+}
+
+/** FUMBBL's formula: a draw is half a win. 20/12/16 -> 54. */
+export function computeWinPct(record: FumbblCoachRecord | undefined): number | undefined {
+  if (!record) return undefined;
+  const games = record.w + record.d + record.l;
+  return games > 0 ? Math.round(((record.w + 0.5 * record.d) / games) * 100) : undefined;
+}
+
+/** The Overall `.ranking` of the coach page's `.rankings` block; {} when the block (or the Overall entry) is absent. */
+export function parseFumbblCoachOverall(html: unknown): FumbblOverallRanking {
+  if (typeof html !== 'string') return {};
+  const start = /<div\b[^>]*\bclass\s*=\s*["']rankings["'][^>]*>/i.exec(html);
+  if (!start) return {};
+  const after = html.slice(start.index + start[0].length);
+  // The block ends where the coach content starts; cap it so a malformed page cannot drag the whole document in.
+  const endMatch = /<div\b[^>]*\bclass\s*=\s*["']coachcontent["']/i.exec(after);
+  const block = after.slice(0, endMatch ? endMatch.index : 20_000);
+  const chunks = block.split(/<div\b[^>]*\bclass\s*=\s*["']ranking["'][^>]*>/i).slice(1);
+  const overall = chunks.find((chunk) => divText(chunk, 'title')?.toLowerCase() === 'overall');
+  if (!overall) return {};
+
+  const out: FumbblOverallRanking = {};
+  const title = divText(overall, 'level');
+  if (title) out.title = title;
+  const cr = parseNumber(statValue(overall, 'CR'));
+  if (cr !== undefined) out.cr = cr;
+  const record = parseCoachRecord(statValue(overall, 'record'));
+  if (record) out.record = record;
+  const winPct = parseNumber(statValue(overall, 'winp')) ?? computeWinPct(record);
+  if (winPct !== undefined) out.winPct = winPct;
+  return out;
+}
+
+// ---- fetch (fail-soft, cached per session) ----
+
+/** A body FUMBBL sent: JSON when it parses, else the raw text ("No such coach found."). undefined on any failure. */
+async function getBody(fetchFn: CoachProfileFetch, url: string, json: boolean): Promise<unknown> {
+  try {
+    const response = await fetchFn(url);
+    if (!response.ok) return undefined;
+    const text = await response.text();
+    if (!json) return text;
+    try { return JSON.parse(text); } catch { return text; }
+  } catch {
+    return undefined;
+  }
+}
+
+const cache = new Map<string, Promise<FumbblCoachProfile>>();
+const cacheKey = (name: string): string => name.trim().toLowerCase();
+
+export function clearFumbblCoachProfileCache(): void { cache.clear(); }
+
+async function loadProfile(name: string, fetchFn: CoachProfileFetch): Promise<FumbblCoachProfile> {
+  const profile: FumbblCoachProfile = { name };
+  try {
+    const encoded = encodeURIComponent(name);
+    // The coach page is addressed by name, so it runs alongside the search -> get chain.
+    const pageRequest = getBody(fetchFn, `${FUMBBL_SITE}/~${encoded}`, false);
+    const match = pickFumbblCoachSearchMatch(await getBody(fetchFn, `${FUMBBL_SITE}/api/coach/search/${encoded}`, true), name);
+    let apiTitle: string | undefined;
+    if (match) {
+      profile.id = match.id;
+      profile.name = match.name;
+      const got = parseFumbblCoachGet(await getBody(fetchFn, `${FUMBBL_SITE}/api/coach/get/${match.id}`, true));
+      // The id came from the exact search hit, so get-by-id's name is canonical (a renamed coach shows the new name).
+      if (got.name && (got.id === undefined || got.id === match.id)) profile.name = got.name;
+      apiTitle = got.title;
+    }
+    const overall = parseFumbblCoachOverall(await pageRequest);
+    const title = overall.title ?? apiTitle;
+    if (title) profile.title = title;
+    if (overall.cr !== undefined) profile.cr = overall.cr;
+    if (overall.record) profile.record = overall.record;
+    if (overall.winPct !== undefined) profile.winPct = overall.winPct;
+  } catch {
+    // fail-soft: whatever was gathered so far
+  }
+  return profile;
+}
+
+/**
+ * The coach card's data. Cached per (case-insensitive) name for the session; `force` re-fetches (the Refresh
+ * button). Never throws, never retries: a failure is cached like any result until the next forced refresh.
+ */
+export function fetchFumbblCoachProfile(
+  name: string,
+  fetchFn: CoachProfileFetch,
+  options: { force?: boolean } = {},
+): Promise<FumbblCoachProfile> {
+  const trimmed = name.trim();
+  if (!trimmed) return Promise.resolve({ name: '' });
+  const key = cacheKey(trimmed);
+  const cached = cache.get(key);
+  if (cached && !options.force) return cached;
+  const request = loadProfile(trimmed, fetchFn);
+  cache.set(key, request);
+  return request;
+}
+
+/** "Record 20/12/16 · 54 % · CR 1624" - only the parts FUMBBL sent (or the win % computed from the record). */
+export function coachProfileStatParts(profile: FumbblOverallRanking | null | undefined): string[] {
+  if (!profile) return [];
+  const parts: string[] = [];
+  if (profile.record) parts.push(`Record ${profile.record.w}/${profile.record.d}/${profile.record.l}`);
+  if (profile.winPct !== undefined) parts.push(`${profile.winPct} %`);
+  if (profile.cr !== undefined) parts.push(`CR ${profile.cr}`);
+  return parts;
+}

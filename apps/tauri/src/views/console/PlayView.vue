@@ -33,6 +33,8 @@ import PostGamePanel from '../../components/PostGamePanel.vue';
 import { loadPostGameSnapshot, postGameSnapshotKeys } from '../../game/postGameCache';
 import { postGameKey, type PostGameSnapshot } from '../../game/postGameProjection';
 import CreateGameModal from './play/CreateGameModal.vue';
+import CoachCard from './play/CoachCard.vue';
+import { fetchFumbblCoachProfile, type FumbblCoachProfile } from '../../game/fumbblCoachProfile';
 import { EXAMPLE_GAME_ID, exampleSnapshot } from '../../game/clientTourExample';
 import { FORK_EDITION } from '../../game/edition';
 
@@ -100,7 +102,21 @@ function openLobby(): void {
 }
 async function refreshAll(): Promise<void> {
   openLobby();
+  void refreshCoachProfile(true);
   await refreshActive();
+}
+
+// ---- Coach card (owner 10-20): FUMBBL Overall record, win %, CR and status title. Three requests, once per coach
+// name per session (game/fumbblCoachProfile.ts caches), again only on Refresh; fail-soft, never polled. ----
+const coachProfile = ref<FumbblCoachProfile | null>(null);
+let coachProfileLoad = 0;
+async function refreshCoachProfile(force = false): Promise<void> {
+  const name = coach.value;
+  const load = ++coachProfileLoad;
+  if (!name) { coachProfile.value = null; return; }
+  if (coachProfile.value && coachProfile.value.name.toLowerCase() !== name.toLowerCase()) coachProfile.value = null;
+  const profile = await fetchFumbblCoachProfile(name, inTauri ? (tauriFetch as typeof fetch) : fetch, { force });
+  if (load === coachProfileLoad) coachProfile.value = profile;
 }
 // Resume: open the password lobby, then spend the join on that game once the socket is ready.
 const pendingResume = ref<FumbblActiveGame | null>(null);
@@ -191,8 +207,8 @@ void EXAMPLE_GAME_ID;
 function onDetailsKey(event: KeyboardEvent): void { if (event.key === 'Escape') closeDetails(); }
 
 // Owner 09-25: no auto-refresh — the Refresh button re-queries on demand.
-onMounted(() => { void refreshActive(); void refreshRecent(); void refreshDetailsKeys(); });
-watch(coach, () => { void refreshActive(); void refreshRecent(); });
+onMounted(() => { void refreshActive(); void refreshRecent(); void refreshDetailsKeys(); void refreshCoachProfile(); });
+watch(coach, () => { void refreshActive(); void refreshRecent(); void refreshCoachProfile(); });
 
 // ---- Loaded JNLP card ----
 const ownTeam = computed<TeamPreview | null>(() => {
@@ -420,6 +436,7 @@ function crestFailed(url: string | null): void {
   <main class="play-view" aria-label="FUMBBL Play">
     <header class="play-head">
       <h1 id="play-title">Play</h1>
+      <CoachCard :name="coach" :profile="coachProfile" />
       <div class="head-actions">
         <!-- Owner 09-25: Super FUMBBL games keep their own button (fork edition), as before. -->
         <button v-if="FORK_EDITION" class="bevel super-button" type="button" @click="createGameOpen = true">

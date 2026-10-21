@@ -6556,6 +6556,11 @@ type PreparedPlayerConnection = {
   onJoinAccepted?: () => void;
 };
 let lastConnect: { mode: 'spectator'; params: SpectateParams } | { mode: 'player'; params: PlayerParams } | null = null;
+/** Owner 10-20 (Astra r4): the game server THIS game came from, kept apart from the reconnect credentials (`lastConnect`
+ *  is null for an official FUMBBL JNLP / password join, whose one-time token is never kept). Set when a live / spectate
+ *  socket is opened and from the download address of a server replay; cleared by disconnect() (every reset / new game
+ *  goes through it) and by a file replay. */
+let gameConnectionUrl: string | null = null;
 /** Auto-reconnect state (capped retries); `reconnecting` stays true until a game arrives so a pre-game close is treated as a drop-to-retry, not a fresh-join failure. */
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
@@ -6736,6 +6741,11 @@ let onTheBallReceivedModelRevision = 0;
 let onTheBallAppliedPhaseIdentity = 0;
 let onTheBallAppliedModelRevision = 0;
 
+/** Owner 10-20 (game-load rank panel, Astra r4): an OBSERVABLE catch-up signal. `playback.catchingUp` stays a plain
+ *  (non-reactive) read for every existing caller; its setter bumps this counter on each start/end transition, and a
+ *  replay seek bumps it too, so a watcher sees a catch-up even when the flag is restored before it runs. */
+const catchUpRev = ref(0);
+let playbackCatchingUpFlag = false;
 const playback = {
   queue: [] as QueuedFrame[],
   timer: null as ReturnType<typeof setTimeout> | null,
@@ -6744,7 +6754,12 @@ const playback = {
   /** Owner 07-06: PACING GATE — wall-clock until which the drain is HELD (no drain, no fast-forward) so a gating cine displays before the next frames apply. 0 = none. Spectator-only. */
   holdUntil: 0,
   /** Owner 07-08: JOIN/SWITCH CATCH-UP — a whole-history backlog fast-forwards (near-zero gap, holds ignored, sounds/cines suppressed) so the board jumps to LIVE; cleared at the live tail. */
-  catchingUp: false,
+  get catchingUp(): boolean { return playbackCatchingUpFlag; },
+  set catchingUp(on: boolean) {
+    if (on === playbackCatchingUpFlag) return;
+    playbackCatchingUpFlag = on;
+    catchUpRev.value++;
+  },
 };
 
 const kickElectionController = new KickElectionController({
@@ -26085,6 +26100,18 @@ export const gameStore = {
   canPlayerEndTurn,
   hasGame: computed(() => game.value != null),
   playbackCatchingUp: computed(() => playback.catchingUp),
+  /** Owner 10-20 (game-load rank panel): the catch-up flag read LIVE. `playback` is a plain object, so the computed
+   *  above has no reactive dependency and keeps its first value; this getter never caches. */
+  isPlaybackCatchingUp: (): boolean => playback.catchingUp,
+  /** Owner 10-20 (Astra r4): bumps on every catch-up start / end and on every replay seek (reactive). */
+  catchUpSignal: computed(() => catchUpRev.value),
+  /** Owner 10-20 (game-load rank panel, Astra r3): the game server THIS game came from - the live / spectate connect URL,
+   *  or the server-replay download URL. null for a file replay (origin unverifiable), the demo, or no game. */
+  gameServerUrl: (): string | null => {
+    if (replay.active) return replay.source === 'server' ? gameConnectionUrl : null;
+    if (state.demoMode) return null;
+    return gameConnectionUrl;
+  },
   /** View-to-store completion bridge for the seq-keyed throw-a-rock impact gate. */
   notifyRockImpact,
   /** Renderer completion releases only the matching presentation event and must fire at visual end. */
@@ -27476,6 +27503,7 @@ export const gameStore = {
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
     } else this.disconnect();
     lastConnect = { mode: 'spectator', params }; // remember for a Reconnect after a drop
+    gameConnectionUrl = params.url; // owner 10-20: the game's origin (game-load rank panel)
     state.demoMode = false;
     // B9-12 G6: fresh game — clear the previous game's log so lines don't pile up.
     if (!retainedHistory) clearLogKeepingChatForRejoin();
@@ -27728,6 +27756,7 @@ export const gameStore = {
     replay.error = null;
     replay.active = true;
     replay.source = 'server';
+    gameConnectionUrl = params.url;
     state.sessionState = 'connecting';
     const abort = new AbortController();
     replayAbort = abort;
@@ -27798,6 +27827,7 @@ export const gameStore = {
     return replayController?.activationBackward() ?? false;
   },
   replaySeek(cursor: number): void {
+    catchUpRev.value++; // owner 10-20 (Astra r4): a seek is a catch-up of the same game (the rank panel steps aside)
     replayAutoPlayer?.pause();
     replayController?.seek(cursor);
   },
@@ -27849,6 +27879,7 @@ export const gameStore = {
     // A FUMBBL JNLP token is one-time. Never retain its params for reconnect; the coach must
     // load a newly issued JNLP after any socket loss.
     lastConnect = officialFumbbl ? null : { mode: 'player', params };
+    gameConnectionUrl = params.url; // owner 10-20 (Astra r4): the game's origin, kept even when lastConnect is not
     state.demoMode = false;
     clearLogKeepingChatForRejoin();
     state.joinError = null;
@@ -30671,6 +30702,7 @@ export const gameStore = {
   },
 
   disconnect() {
+    gameConnectionUrl = null; // owner 10-20: the next game sets its own origin
     recentPlayerJoinAt.clear(); // Keithabix 10-18: rejoin evidence belongs to this connection
     settleAllInjuryPillBeats(false); // owner 10-12 / Astra item 2: leaving (or a new join) never sounds the old game's injury
     clearOfficialRejoinTarget(); // S44: leaving on purpose (or any other join starting) drops the official rejoin target

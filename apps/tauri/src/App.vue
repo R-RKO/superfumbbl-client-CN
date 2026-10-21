@@ -3441,6 +3441,18 @@ onBeforeUnmount(() => {
             <p class="hint">How long the target marker stays on a blitzed player. The blitzer keeps its own marker for the turn either way.</p>
           </fieldset>
 
+          <!-- Owner 10-20: the coach rank badges on the Play screen coach card and the game-load rank panel. -->
+          <fieldset class="settings-group">
+            <legend>Coach rank badges</legend>
+            <label class="row">
+              <span>Coach rank badges</span>
+              <select v-model="settings.coachBadgeStyle">
+                <option value="realistic">Realistic</option>
+                <option value="retro">Retro</option>
+              </select>
+            </label>
+          </fieldset>
+
           <AssetPackSettings :live-game="gameStore.game.value" />
         </section>
 

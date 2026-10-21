@@ -72,6 +72,9 @@ const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm m
 const REBINDABLE_ACTION: Record<RebindableKey, ControlActionId> = { confirmKey: 'confirm', rosterKey: 'roster', logExpandKey: 'logExpand' };
 
 // Owner 10-04: each client confirmation prompt has its own on/off line (confirmationSettings.ts; all default on).
+/** Owner 10-20: coach rank badge art set. */
+export type CoachBadgeStyle = 'realistic' | 'retro';
+
 export interface AppSettings extends ConfirmationSettings {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
@@ -474,6 +477,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Visual treatment for every D6 surface. Brushed metal is the install default;
    *  the original black set remains available as a local presentation choice. */
   d6FaceVariant: 'brushed-metal' | 'black' | 'team'; // owner 10-13: 'team' = blue home / red away D6s (d6.ts)
+  /** Owner 10-20: the coach rank badge art (Play coach card, game-load rank panel) - the realistic set
+   *  (public/badges/coach) or the retro pixel-art set (public/badges/coach-retro). */
+  coachBadgeStyle: CoachBadgeStyle;
   /** Owner 2026-07-06: PER-AURA shading, each surfaced independently —
    *  'always' every emitter, 'selected' only the selected player, 'off' none.
    *  Colours are friendly/opposition (home = friendly): Disturbing Presence =
@@ -799,6 +805,7 @@ const DEFAULTS: AppSettings = {
   blitzTargetMarker: 'turn',
   preClickBlockDice: true,
   d6FaceVariant: 'brushed-metal',
+  coachBadgeStyle: 'realistic',
   auraDisturbingPresence: 'selected',
   auraPickMeUp: 'selected',
   casualtySplash: false, // owner 2026-07-08: casualty splash defaults OFF (the red toast remains)
@@ -1141,6 +1148,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.blitzTargetMarker = raw.blitzTargetMarker === 'fumbbl' ? 'fumbbl' : 'turn';
     merged.preClickBlockDice = raw.preClickBlockDice !== false; // owner 10-15: on unless the user turned it off
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' || raw.d6FaceVariant === 'team' ? raw.d6FaceVariant : 'brushed-metal';
+    merged.coachBadgeStyle = raw.coachBadgeStyle === 'retro' ? 'retro' : 'realistic'; // owner 10-20: realistic unless retro was chosen
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.hideZeroRerolls = raw.hideZeroRerolls === true; // owner 10-13: off unless the user turned it on
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on

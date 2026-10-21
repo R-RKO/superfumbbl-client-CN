@@ -57,6 +57,8 @@ import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import D6Face from '../components/D6Face.vue';
+import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
+import { storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
 import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue';
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
 import BlockDieFace from '../components/BlockDieFace.vue';
@@ -3491,6 +3493,20 @@ watch(() => gameStore.state.riotousRookiesSplash?.seq, () => {
   riotousRookiesSplashTimer = window.setTimeout(() => (riotousRookiesSplashVisible.value = false), presentationMs(4200));
 });
 onBeforeUnmount(() => clearTimeout(riotousRookiesSplashTimer));
+
+// Owner 10-20: GAME-LOAD RANK PANEL - both coaches' FUMBBL rank cards (local left on a coach seat, else home left)
+// once per game load after the board is up; skipped while catching up like every splash; once per game per session
+// (no re-show on reconnect or replay seek). Never a latch: pointer-events none, a click / key dismisses it, else it
+// clears after presentationMs(6000). Data: game/fumbblCoachProfile.ts (same session cache as the Play card, <= 6
+// fumbbl.com requests per load). Logic in game/gameLoadRankPanel.ts.
+const gameLoadRank = useGameLoadRankPanel({
+  ...storeRankPanelDeps(gameStore),
+  boardReady: () => rendererReady.value > 0,
+  fetchFn: () => (inTauri ? (tauriFetch as typeof fetch) : fetch),
+  durationMs: () => presentationMs(6000),
+});
+const gameLoadRankPanel = gameLoadRank.panel;
+onBeforeUnmount(() => gameLoadRank.stop());
 
 // #136 (owner, GAP-WAVE-2): opponent-left connection notice. The store surfaces state.opponentLeft = {coach, seq}
 // when a player leaves the game and clears it when that coach joins again (or on a fresh game / disconnect).
@@ -16664,6 +16680,9 @@ function sendChat() {
           :style="{ left: fallOverPos.x + 'px', top: fallOverPos.y + 'px' }">
           <span class="fall-toast-type">Falls over!</span>
         </div>
+
+        <!-- Owner 10-20: game-load rank panel (both coaches' FUMBBL rank cards); pointer-events none, never a latch. -->
+        <GameLoadRankPanel :panel="gameLoadRankPanel" />
 
         <!-- Turn-boundary occupancy stack. The banner row is always reserved while the notifier is live,
              so the simultaneous turnover/turn-start + incoming-coach toast cannot cover each other. -->
