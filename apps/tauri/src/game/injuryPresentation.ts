@@ -29,6 +29,10 @@ export interface InjuryEvent {
   casualty?: { tier: string; label: string; stat: string | null } | null;
   /** Owner 07-03 / 10-13: CROWD-PUSH injury (injuryType crowdpush/crowdpushForSpp/ktmCrowd): the crowd stomp overlaps the injury presentation. The server has already taken him off the pitch, so it never needs `square`. */
   crowdSurf?: boolean;
+  /** Owner 10-20 (Astra round 4 P2): a thrown / kicked / swooping team-mate's crowd injury - the crowd square his
+   *  flight's report put him on (the token, stamp, stomp and blood square): his pill's presentation anchor. Absent =
+   *  the pill keeps its `square` anchor. Set by the store (flightCrowdLandingFresh). */
+  pillSquare?: [number, number];
   /** Owner 07-04: THROW-A-ROCK injury (injuryType throwARock) — rock-throw cinematic plays BEFORE the injury anim. */
   rockThrow?: boolean;
   /** A stalling rock hit whose authoritative armour roll held. It gets an impact toast, never an invented injury tier. */

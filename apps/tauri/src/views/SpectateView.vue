@@ -61,6 +61,7 @@ import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
 import BlockDieFace from '../components/BlockDieFace.vue';
 import BlockChooserCopy from '../components/BlockChooserCopy.vue';
+import { placeLonerCue, LONER_CUE_GAP_PX, LONER_RETUMBLE_DELAY_MS, type CueRect } from '../game/lonerCueLayout';
 import EligibleRosterPicker from '../components/EligibleRosterPicker.vue';
 import ChatDock from '../components/ChatDock.vue';
 import { useChatOverInducements } from '../game/chatOverInducements';
@@ -2741,15 +2742,27 @@ watch(() => gameStore.spectatorPublishedPosition.value, (position) => {
   stopBlockTumble();
   disposeBlockDice3d();
 });
+/** Owner 10-20: a card resent after a failed Loner (lonerRetumble) shows its dice settled through the team reroll
+ *  toast's beat, then EVERY die tumbles like a fresh card and lands back on the resent (original) faces. */
+let bpLonerRetumbleTimer = 0;
 watch(() => gameStore.state.blockPartial?.tumbleKey, (key) => {
   stopBlockTumble();
+  window.clearTimeout(bpLonerRetumbleTimer);
+  bpLonerRetumbleTimer = 0;
   if (key && !gameStore.playbackCatchingUp.value) bpReplaySeekFallback = false;
   const bp = gameStore.state.blockPartial;
   if (gameStore.spectatorPublishedPosition.value?.snap || !key || !bp || bp.dice.length === 0 || gameStore.playbackCatchingUp.value || settings.spectatorClean || bpReducedMotion.value) return;
   const durationMs = presentationMs(settings.blockTumbleMs ?? 250);
-  bpTumbleRun.start(key, bp.dice, blockTumbleIndices(bp), durationMs, BLOCK_TUMBLE_STEP_MS);
-  void presentBlockDice3d(key, [...bp.dice], durationMs);
+  const tumble = () => {
+    const now = gameStore.state.blockPartial;
+    if (!now || now.tumbleKey !== key) return;
+    bpTumbleRun.start(key, now.dice, blockTumbleIndices(now), durationMs, BLOCK_TUMBLE_STEP_MS);
+    void presentBlockDice3d(key, [...now.dice], durationMs);
+  };
+  if (bp.lonerRetumble) bpLonerRetumbleTimer = window.setTimeout(tumble, presentationMs(LONER_RETUMBLE_DELAY_MS));
+  else tumble();
 });
+onBeforeUnmount(() => window.clearTimeout(bpLonerRetumbleTimer));
 watch(() => gameStore.state.blockPartial, (bp) => {
   if (!bp) {
     stopBlockTumble();
@@ -3005,7 +3018,15 @@ watch(() => (gameStore.state.multiBlockResolution?.rolls ?? []).map((r) => `${r.
       });
       mbrTumbleRuns.set(targetId, run);
     }
-    run.start(row.tumbleKey, row.dice, row.rerolledDice, presentationMs(settings.blockTumbleMs ?? 250), BLOCK_TUMBLE_STEP_MS);
+    const start = (r: typeof row, tumbleRun: BlockTumbleRun) => tumbleRun.start(r.tumbleKey, r.dice, r.rerolledDice ?? [], presentationMs(settings.blockTumbleMs ?? 250), BLOCK_TUMBLE_STEP_MS);
+    if (row.lonerRetumble) {
+      // owner 10-20: a failed Loner - the row's dice tumble after the reroll toast's beat, onto the resent faces
+      const key = row.tumbleKey, tumbleRun = run;
+      window.setTimeout(() => {
+        const now = gameStore.state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
+        if (now && now.tumbleKey === key && mbrTumbleRuns.get(targetId) === tumbleRun) start(now, tumbleRun);
+      }, presentationMs(LONER_RETUMBLE_DELAY_MS));
+    } else start(row, run);
   }
 }, { immediate: true });
 function mbrRowTumble(row: { targetId: string; tumbleKey: string }): BlockTumbleFrame | null {
@@ -3123,7 +3144,7 @@ watch(
   () => gameStore.state.throwAnim?.seq,
   () => {
     const t = gameStore.state.throwAnim;
-    if (t && renderer) renderer.playThrow(t.kind, modernThrowOrigin(t), t.to, t.thrownId, t.sound); // #92 Inc-2: arc sound at the throw release beat
+    if (t && renderer) renderer.playThrow(t.kind, modernThrowOrigin(t), t.to, t.thrownId, t.sound, t.landing); // #92 Inc-2: arc sound at the throw release beat; owner 10-20: off-pitch TTM landing
   },
 );
 
@@ -3615,6 +3636,68 @@ watch(() => gameStore.state.negatraitCue?.seq, () => {
 });
 onBeforeUnmount(() => { cancelAnimationFrame(negatraitCueRaf); clearTimeout(negatraitCueTimer); });
 
+// Owner 10-20: "<Player> fails their loner roll!" - a trait-brown splash BELOW the player's token. The store owns its
+// lifetime (state.lonerFailedCue: raised from the server's failed Loner report, cleared after its read / on reset,
+// seek, catch-up and game change); the view only RAF-follows the token so pan / zoom never strands it.
+const lonerFailedCuePos = reactive({ x: 0, y: 0, ready: false });
+const lonerFailedCueEl = ref<HTMLElement | null>(null);
+let lonerFailedCueRaf = 0;
+/** Owner 10-20 (R-3 / P2-1): the panes the Loner pill must sit BELOW - block chooser, multi-block panel, reroll prompt
+ *  card / bar, injury pill, reroll / captain toast - as their real footprints in the pill's own coordinate space. */
+const LONER_CUE_PANE_SELECTOR = '.block-partial, .multi-block-resolution, .reroll-bar, .reroll-menu, .ko-toast, .reroll-toast';
+const LONER_CUE_CENTRE_PANES = '.block-partial, .multi-block-resolution, .reroll-bar, .reroll-menu';
+function lonerCuePanes(): CueRect[] {
+  const host = pitchHost.value;
+  const frame = (lonerFailedCueEl.value?.offsetParent as HTMLElement | null) ?? host;
+  if (!host || !frame) return [];
+  const fr = frame.getBoundingClientRect();
+  const panes: CueRect[] = [];
+  for (const el of Array.from(host.querySelectorAll(LONER_CUE_PANE_SELECTOR))) {
+    const r = el.getBoundingClientRect();
+    // owner 10-20: pushed past a block chooser / multi-block panel / reroll card, the pill centres on that pane
+    if (r.width > 0 && r.height > 0) panes.push({ left: r.left - fr.left, top: r.top - fr.top, right: r.right - fr.left, bottom: r.bottom - fr.top,
+      ...(el.matches(LONER_CUE_CENTRE_PANES) ? { centre: true } : {}) });
+  }
+  // The action die + FAILED plate (drawn on the canvas): centred half a tile right of the roll square's anchor, the
+  // die 0.7 tile above it, the plate down to +48 px (the reroll toast's own die-cluster geometry above).
+  const scale = renderer?.cameraScale() ?? 1;
+  for (const roll of gameStore.state.actionDice?.rolls ?? []) {
+    const a = renderer?.squareToCanvas(roll.square);
+    if (!a) continue;
+    const cx = a.x + TILE_W * 0.5 * scale;
+    const dieCentre = a.y - TILE_H * 0.7 * scale;
+    panes.push({ left: cx - TILE_W * 0.6 * scale, right: cx + TILE_W * 0.6 * scale, top: dieCentre - TILE_H * 0.5 * scale, bottom: dieCentre + 48 * scale });
+  }
+  return panes;
+}
+watch(() => gameStore.state.lonerFailedCue?.seq, (seq) => {
+  cancelAnimationFrame(lonerFailedCueRaf);
+  lonerFailedCuePos.ready = false;
+  const cue = gameStore.state.lonerFailedCue;
+  if (!cue || seq == null) return;
+  const follow = () => {
+    if (gameStore.state.lonerFailedCue?.seq !== seq) { lonerFailedCuePos.ready = false; return; }
+    const p = renderer?.playerScreenPos(cue.playerId);
+    if (p && renderer) {
+      // the square's anchor is its centre: half a tile down plus a small gap sits the pill under the token's feet;
+      // any pane up there pushes it further down, below that pane (re-evaluated every frame at the current zoom)
+      const baseY = p.y + TILE_H * 0.5 * renderer.cameraScale() + LONER_CUE_GAP_PX;
+      const el = lonerFailedCueEl.value;
+      const size = el ? { width: el.offsetWidth, height: el.offsetHeight } : { width: 260, height: 30 };
+      const frame = (el?.offsetParent as HTMLElement | null) ?? pitchHost.value;
+      // Astra r2 P3-1: stay inside the board viewport - flip above the token when below would leave it
+      const viewport = frame ? { width: frame.clientWidth, height: frame.clientHeight, flipBottom: p.y - TILE_H * 1.3 * renderer.cameraScale() - LONER_CUE_GAP_PX } : undefined;
+      const placed = placeLonerCue(p.x, baseY, size, lonerCuePanes(), LONER_CUE_GAP_PX, viewport);
+      lonerFailedCuePos.x = placed.x;
+      lonerFailedCuePos.y = placed.y;
+      lonerFailedCuePos.ready = true;
+    }
+    lonerFailedCueRaf = requestAnimationFrame(follow);
+  };
+  follow();
+});
+onBeforeUnmount(() => cancelAnimationFrame(lonerFailedCueRaf));
+
 // Owner 09-28 (S7 v3): the dice/turnover lifecycle (deferred-show timers, presentation epoch, opponent-hold
 // re-validation, splash-showing feed, occurrence-correlated teardown) lives in a pure controller so the store -> view ->
 // renderer contract is testable without mounting this view. The view only computes the camera/pickup wait and forwards
@@ -4077,7 +4160,9 @@ watch(
       for (const ev of current) {
         // Owner 10-20: a pill whose armour dice are on the pitch renders directly below them (where the BREAKS text was)
         const under = ev.armourDice && ev.square ? renderer.armourPillAnchor(ev.square) : null;
-        const p = under ?? (ev.square ? renderer.screenPosOf(ev.square) : null) ?? renderer.playerScreenPos(ev.playerId, ev.square);
+        // Owner 10-20 (Astra round 4 P2): a thrown team-mate's crowd injury pill rides his crowd square
+        const square = renderer.injuryPillSquare(ev);
+        const p = under ?? (square ? renderer.screenPosOf(square) : null) ?? renderer.playerScreenPos(ev.playerId, ev.square);
         if (p) koToastPositions[ev.playerId] = { x: p.x, y: p.y, below: !!under };
       }
       koToastRaf = requestAnimationFrame(follow);
@@ -4129,7 +4214,7 @@ let rerollMenuRaf = 0;
 // reroll, auto-reroll, headless) ⇒ style helper below returns undefined ⇒ CSS default (top:76px) fallback.
 const rerollCardLastSeen = reactive({ x: 0, y: 0, h: 0, at: 0 }); // h = the card's height, so the splash lands BELOW it (owner 09-14)
 const REROLL_SPLASH_ANCHOR_WINDOW_MS = 2500;
-// Owner W25: an inducement-use message (Weather Mage, a failed Loner's team-reroll follow-up — both carry
+// Owner W25: an inducement-use message (Weather Mage; formerly a failed Loner's follow-up, now its own cue — they carry
 // `.text` but NO `playerId`, a match-level announcement rather than a specific player's action) screen-centers
 // on the .turnover-splash vertical band (top:40%, the fleet's established full-screen-splash precedent) rather
 // than anchoring near the reroll-prompt card. Horizontal centering (left:50% + translateX(-50%)) is already the
@@ -4726,6 +4811,12 @@ watch(
     const sq = playerSquareById(gu.playerId);
     if (sq) renderer.playSkillIconFade(sq, 'Grab');
   },
+);
+
+// Owner 10-20: a thrown team-mate's crowd-injury blood spot is drawn on his crowd square (store bloodSpotRelocations).
+watch(
+  () => gameStore.state.bloodSpotRelocations,
+  (list) => renderer?.setBloodSpotRelocations(list),
 );
 
 // Owner 2026-07-03 / 10-13: crowd stomp on a surfed player. His held token lies one
@@ -7868,8 +7959,10 @@ watch(() => gameStore.state.snapshotEpoch, async () => {
   await nextTick();
   if (!renderer) return;
   seedRendererBoardMarks(renderer, gameStore.state);
+  // Owner 10-20 (Astra P2-2): a snapshot is authoritative - no thrown player stays drawn on a crowd square past it.
+  const crowdRetired = renderer.retireTtmCrowdLandings();
   // 09-14: the game watcher below already rebuilt for this exact snap publication — one rebuild per snap.
-  if (!snapshotTickNeedsRebuild(gameStore.spectatorPublishedPosition.value, lastSnapRestoredPublication)) return;
+  if (!crowdRetired && !snapshotTickNeedsRebuild(gameStore.spectatorPublishedPosition.value, lastSnapRestoredPublication)) return;
   renderer.refresh();
 });
 // Owner 2026-07-14 (#10 part 2): the store's "recovering" latch → the renderer keeps the stun X on those players.
@@ -9810,8 +9903,9 @@ function cancelViewMatchPresentation() {
   riotousRookiesSplashTimer = negatraitCueTimer = 0;
   stallerSplashTimer = fallOverHideTimer = toastTimer = infoNoticeTimer = 0;
   for (const frame of [negatraitCueRaf, skillToastRaf, koToastRaf, fallOverRaf,
-    rerollSplashTokenRaf, followupRaf]) cancelAnimationFrame(frame);
-  negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = 0;
+    rerollSplashTokenRaf, followupRaf, lonerFailedCueRaf]) cancelAnimationFrame(frame);
+  negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = lonerFailedCueRaf = 0;
+  lonerFailedCuePos.ready = false;
   for (const timer of sendOffTimers) clearTimeout(timer);
   sendOffTimers = [];
   masterChefSplashVisible.value = false;
@@ -11206,6 +11300,7 @@ onMounted(async () => {
   renderer.movementPendingProbe = movementStepsPending; // owner 09-23: the planner swallows clicks while steps are still pending
   bindArmourDiceShowing(() => renderer?.armourDiceShowing() ?? false); // owner 09-15: the injury toast waits for 'ARMOR BREAKS!' to retire
   renderer.injuryTokenHoldsProbe = () => gameStore.state.injuryTokenHolds; // owner 10-10: the token waits for its armour roll + pill
+  renderer.setBloodSpotRelocations(gameStore.state.bloodSpotRelocations); // owner 10-20: a mount after the relocation
   renderer.stunDecorationHoldsProbe = () => gameStore.stunDecorationHolds.value; // owner 10-12: the stunned decoration waits for the pill
   turfCatalog.options = renderer.turfOptions();
   // if a persisted turf is no longer available, fall back to the first option
@@ -16304,6 +16399,10 @@ function sendChat() {
         <div v-if="negatraitCue" class="negatrait-cue" :class="{ fail: !negatraitCue.successful }"
           :style="{ left: negatraitCue.x + 'px', top: negatraitCue.y + 'px' }">{{ negatraitCue.text }}</div>
 
+        <!-- Owner 10-20: failed Loner roll - a trait-brown pill BELOW the player's token (store: state.lonerFailedCue). -->
+        <div v-if="gameStore.state.lonerFailedCue && lonerFailedCuePos.ready" :key="'loner-' + gameStore.state.lonerFailedCue.seq"
+          ref="lonerFailedCueEl" class="loner-failed-cue" :style="{ left: lonerFailedCuePos.x + 'px', top: lonerFailedCuePos.y + 'px' }">{{ gameStore.state.lonerFailedCue.text }}</div>
+
         <!-- #58 SYNCHRONOUS_MULTI_BLOCK: a ring on every selectable (dice-decorated) block target + a bright SELECTED
              ring on the 1-2 chosen. pointer-events:none so the click passes to the token (onPlayerClick → toggle). -->
         <div v-for="(m, i) in multiBlockMarkers" :key="'mb-' + i" class="mb-target" :class="{ selected: m.selected }"
@@ -19797,6 +19896,32 @@ function sendChat() {
   border-color: rgba(255, 120, 120, 0.6);
   box-shadow: 0 2px 10px rgba(120, 0, 0, 0.6);
   opacity: 1;
+}
+/* Owner 10-20: failed Loner roll - BELOW the token, in the TRAIT colour (--ui-skill-trait, the skill lists' trait
+   brown). Reads for the store's hold (LONER_FAILED_SPLASH_HOLD_MS = the reroll toast's --p-2000). */
+.loner-failed-cue {
+  position: absolute;
+  z-index: 40;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 9px;
+  font-family: 'Nuffle', system-ui, sans-serif;
+  font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+  color: #fff;
+  text-shadow: 0 2px 5px #000d;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--ui-skill-trait) 80%, #000), color-mix(in srgb, var(--ui-skill-trait) 45%, #000));
+  border: 2px solid var(--ui-skill-trait);
+  box-shadow: 0 6px 20px #000b, 0 0 16px color-mix(in srgb, var(--ui-skill-trait) 35%, transparent);
+  animation: loner-failed-cue-in var(--p-2000) ease-in-out forwards;
+}
+@keyframes loner-failed-cue-in {
+  0% { opacity: 0; transform: translate(-50%, 8px); }
+  12% { opacity: 1; transform: translate(-50%, 0); }
+  85% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, 0); }
 }
 .negatrait-cue.opponent-reactive-pill {
   z-index: 54;

@@ -143,4 +143,6 @@ export function buildBlockDecision(game: GameJson | null, dp: Record<string, unk
 }
 /** `rerolledDice` (owner 10-13, the reroll re-tumble): set on a card the server resent after a block reroll - the die
  *  indexes the reroll replaced, or [] after a failed use (nothing tumbles). Absent on a fresh roll (every die tumbles). */
-export type BlockDecisionProjection = ReturnType<typeof buildBlockDecision> & { rerolledDice?: number[] };
+/** `lonerRetumble` (owner 10-20): the card was resent after a FAILED Loner - the server rolled nothing; every die tumbles
+ *  again (after the team reroll toast's beat) and lands back on the resent, original faces. */
+export type BlockDecisionProjection = ReturnType<typeof buildBlockDecision> & { rerolledDice?: number[]; lonerRetumble?: true };

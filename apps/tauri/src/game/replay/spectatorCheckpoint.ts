@@ -13,7 +13,7 @@ import { INJURY_RESULT_NAMES } from '../skillUseCardPresentation';
 import { pushPresentation, type PendingPush } from '../pushPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, type SkillDecisionProjection } from '../skillDecisionProjection';
 import { buildBlockDecision, createBlockContext, reduceBlockContext, type BlockContextProjection, type BlockDecisionProjection } from '../blockDecisionProjection';
-import { blockRerollOutcome, rerolledBlockDiceIndices } from '../blockRerollTumble';
+import { allBlockDiceIndices, blockRerollOutcome, rerolledBlockDiceIndices } from '../blockRerollTumble';
 import { createTeamCaptainRowQueue } from '../teamCaptainLogOrder';
 import { createInjuryOutcomeProjection, reduceInjuryOutcomes, type InjuryOutcomeProjection } from '../injuryOutcomeProjection';
 import { createCasualtyRollProjection, reduceCasualtyRollProjection, type CasualtyRollProjection } from '../casualtyRollProjection';
@@ -38,6 +38,7 @@ import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWe
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationContext } from '../turnPresentation';
 import { ballProjectilePresentation, createBallProjectileContext, type BallProjectileContext } from '../ballProjectilePresentation';
 import { blastinStaleRerollDialog } from '../blastinSecondBeat';
+import { createThrownCrowdProjection, reduceThrownCrowdProjection, validThrownCrowdProjection, type ThrownCrowdProjection } from '../thrownCrowdBlood';
 
 export interface SpectatorIdentity {
   sessionId: string;
@@ -125,6 +126,9 @@ export interface DurableProjection {
   skillDecision: SkillDecisionProjection;
   board: BoardProjection;
   drive: DriveProjection;
+  /** Owner 10-20 (Astra P2-1): thrown team-mates' crowd-injury blood relocations (thrownCrowdBlood.ts). Optional so
+   *  checkpoints written before it existed still validate. */
+  thrownCrowd?: ThrownCrowdProjection;
 }
 export interface SpectatorCheckpoint {
   model: GameJson;
@@ -208,6 +212,7 @@ export function seedSpectatorCheckpoint(snapshot: GameJson, cursor: SpectatorCur
       ballProjectile: createBallProjectileContext(),
       pendingDecision: decision(model, cursor, null), gazeVictimIds: [], recoveringIds: [], blitz: reduceBlitzProjection(null, model, { attackerId: null, defenderId: null }),
       drive: reduceDriveProjection(null, [], model),
+      thrownCrowd: createThrownCrowdProjection(),
       heldTeamMate: reduceHeldTeamMate(null, new Map(), model), fumblerooskie: null, dodgySnackPlayers: [],
       block: createBlockContext(),
       actionRolls: createActionRollProjection(),
@@ -361,6 +366,8 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   // owner 10-15: Graphical-only rows ride along without counting against the 500 ordinary rows (logLanes.trimLogRows)
   projection.log = trimLogRows(projection.log, 500, (row) => (row.graphicalOnly === true ? 'graphical' : row.upstreamOnly === true ? 'upstream' : false));
   projection.drive = reduceDriveProjection(projection.drive, reports, next.model);
+  projection.thrownCrowd = reduceThrownCrowdProjection(projection.thrownCrowd ?? createThrownCrowdProjection(), command as Record<string, unknown>,
+    ((previous.model.fieldModel.bloodspotArray ?? []) as unknown[]).length);
   projection.heldTeamMate = reduceHeldTeamMate(projection.heldTeamMate, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])), next.model);
   projection.fumblerooskie = reduceFumblerooskie(projection.fumblerooskie, reports, next.model);
   projection.dodgySnackPlayers = reduceDodgySnackPlayers(projection.dodgySnackPlayers, reports, next.model);
@@ -404,7 +411,9 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   if (blockCard) {
     const outcome = blockRerollOutcome(reports);
     if (outcome) {
-      blockCard.rerolledDice = outcome.rolled ? rerolledBlockDiceIndices({
+      // owner 10-20: a failed Loner re-tumbles every die onto the faces the server resent (its original roll)
+      if (outcome.lonerFailed) blockCard.lonerRetumble = true;
+      blockCard.rerolledDice = outcome.lonerFailed ? allBlockDiceIndices(blockCard.dice.length) : outcome.rolled ? rerolledBlockDiceIndices({
         previous: priorBlockCard?.dice ?? null, next: blockCard.dice, rerolledFaces: outcome.faces, source: outcome.source,
       }) : [];
     } else if (projection.block.rollOccurrence === priorBlockRollOccurrence && priorBlockCard?.rerolledDice) {
@@ -491,7 +500,10 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     || !Array.isArray(model.teamHome.playerArray) || !Array.isArray(model.teamAway.playerArray)
     || !Array.isArray(model.fieldModel.playerDataArray)) fail(2);
   const p = value.durableProjection;
-  if (!keys(p, ['version', 'provenance', 'followup', 'pendingPushes', 'movementOccurrence', 'kickoffWeather', 'turnPresentation', 'ballProjectile', 'reportDedupe', 'logContext', 'upstreamLog', 'log', 'pendingDecision', 'reRollCard', 'blockCard', 'apothecaryCard', 'casualtyRolls', 'injuryOutcomes', 'apothecaryResult', 'gazeVictimIds', 'recoveringIds', 'blitz', 'block', 'endGame', 'endGameHud', 'actionRolls', 'skillDecision', 'board', 'heldTeamMate', 'fumblerooskie', 'dodgySnackPlayers', 'drive'])) fail(3);
+  const projectionKeys = ['version', 'provenance', 'followup', 'pendingPushes', 'movementOccurrence', 'kickoffWeather', 'turnPresentation', 'ballProjectile', 'reportDedupe', 'logContext', 'upstreamLog', 'log', 'pendingDecision', 'reRollCard', 'blockCard', 'apothecaryCard', 'casualtyRolls', 'injuryOutcomes', 'apothecaryResult', 'gazeVictimIds', 'recoveringIds', 'blitz', 'block', 'endGame', 'endGameHud', 'actionRolls', 'skillDecision', 'board', 'heldTeamMate', 'fumblerooskie', 'dodgySnackPlayers', 'drive'];
+  // owner 10-20: `thrownCrowd` is optional (checkpoints written before it existed)
+  if (!keys(p, [...projectionKeys]) && !keys(p, [...projectionKeys, 'thrownCrowd'])) fail(3);
+  if ('thrownCrowd' in p && !validThrownCrowdProjection(p.thrownCrowd)) fail(3);
   if (!object(p.drive) || !keys(p.drive, ['offenseIsHome', 'provenance']) || typeof p.drive.offenseIsHome !== 'boolean' || !oneOf(DRIVE_PROVENANCES, p.drive.provenance)) fail(4);
   if (!strings(p.dodgySnackPlayers)) fail(5);
   const held = p.heldTeamMate;
@@ -689,11 +701,12 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     // owner 10-13: `choosingTeamId` (the dice owner) is optional so checkpoints written before it existed still validate
     // owner 10-13: `rerolledDice` (the reroll re-tumble) is optional too: absent on a fresh roll and in older checkpoints
     const cardKeys = ['dice', 'nrOfDice', ...bools, ...labels];
-    const optionalCardKeys = ['choosingTeamId', 'rerolledDice'];
+    const optionalCardKeys = ['choosingTeamId', 'rerolledDice', 'lonerRetumble'];
     const cardKeySet = object(blockCard) ? Object.keys(blockCard) : [];
     if (!object(blockCard) || cardKeys.some((k) => !cardKeySet.includes(k)) || cardKeySet.some((k) => !cardKeys.includes(k) && !optionalCardKeys.includes(k))
       || ('choosingTeamId' in blockCard && !nullableString((blockCard as { choosingTeamId?: unknown }).choosingTeamId))
       || ('rerolledDice' in blockCard && !validRerolledDice((blockCard as { rerolledDice?: unknown }).rerolledDice, blockCard.dice))
+      || ('lonerRetumble' in blockCard && (blockCard as { lonerRetumble?: unknown }).lonerRetumble !== true)
       || !numbers(blockCard.dice) || !finite(blockCard.nrOfDice)
       || !bools.every((k) => typeof blockCard[k] === 'boolean') || !labels.every((k) => nullableString(blockCard[k]))) fail(40);
   }

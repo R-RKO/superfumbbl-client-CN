@@ -6,7 +6,7 @@ import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZ
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { CROWD_STOMP_FANS, CROWD_STOMP_STAGGER_MS, PIPELINE_TIMINGS } from './blockPipeline';
-import { isSurfLanding, surfLandingSquare, surfOutward } from './crowdSurf';
+import { isCrowdSquare, surfLandingSquare, surfOutward } from './crowdSurf';
 import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSide, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 import { RING_TYPE_COLORS, ringTypeForName } from './positionTypes';
 import { displayDiceSide, playerServerSide, type ServerSide } from './diceSide';
@@ -304,16 +304,25 @@ const BLOOD_DECAL_URLS: string[] = Object.entries(
 const BLOOD_DECAL_FILL = 0.94;
 /** The on-pitch squares that carry a CASUALTY blood spot (FFB BloodSpot.injury = the victim's PlayerState: base 6
  *  Badly Hurt, 7 Serious Injury, 8 RIP; a knock-out's spot, base 5, is not a casualty). */
-export function bloodDecalSpots(spots: readonly { coordinate?: [number, number] | null; injury?: unknown }[] | null | undefined): { x: number; y: number }[] {
+export function bloodDecalSpots(
+  spots: readonly { coordinate?: [number, number] | null; injury?: unknown }[] | null | undefined,
+  relocations: readonly BloodSpotRelocation[] = [],
+): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
-  for (const spot of spots ?? []) {
+  (spots ?? []).forEach((spot, index) => {
     const base = Number(spot?.injury ?? 0) & 0xff;
-    if (base < 6 || base > 8) continue;
-    if (!isOnPitch(spot?.coordinate ?? null)) continue;
-    out.push({ x: spot.coordinate![0], y: spot.coordinate![1] });
-  }
+    if (base < 6 || base > 8) return;
+    if (!isOnPitch(spot?.coordinate ?? null)) return;
+    // Owner 10-20: a thrown team-mate's crowd injury bleeds on the square he went out on (BloodSpotRelocation)
+    const moved = relocations.find((r) => r.index === index && r.from[0] === spot.coordinate![0] && r.from[1] === spot.coordinate![1] && isCrowdSquare(r.to));
+    out.push(moved ? { x: moved.to[0], y: moved.to[1] } : { x: spot.coordinate![0], y: spot.coordinate![1] });
+  });
   return out;
 }
+/** Owner 10-20 ("Blood splatter should go on the outside sideline square"): the server names the LAST IN-BOUNDS square
+ *  for the blood spot of a thrown / kicked / swooping team-mate's crowd injury (g1954978 #1443: [9,14]); Modern draws
+ *  that ONE spot (bloodspotArray[index], still on `from`) on his crowd square `to` instead. Presentation only. */
+export interface BloodSpotRelocation { index: number; from: [number, number]; to: [number, number] }
 /** Stable per-square variant + mirror, so a tile's splatter never changes between refreshes. */
 export function bloodDecalVariant(x: number, y: number, variants: number): { variant: number; flip: boolean } {
   const hash = Math.abs(Math.imul(x * 73856093 ^ y * 19349663, 2654435761) | 0);
@@ -671,6 +680,11 @@ const TTM_SCATTER_CLASSIC_SEG_MS = 150;
 /** A thrown player whose flight / bounce has ended on screen keeps being drawn on its landing square until the model
  *  catches up with it (the coordinate frame waits behind the flight / hop in the store), for at most this long. */
 const TTM_LANDING_HOLD_CAP_MS = 2000;
+/** Owner 10-20: a flight that ended OFF the pitch (the server's report put him in the crowd: playThrow `landing`) keeps
+ *  him drawn there while the model still has him on the square he was thrown from - the crowd injury's apothecary
+ *  offer keeps the server's removal back until it is answered (g1954978: 16 s). Woken by any coordinate change of his
+ *  in the model (the removal to the box), a new flight, the renderer reset - and at the latest by this cap. */
+const TTM_CROWD_LANDING_CAP_MS = 60000;
 
 /** Shared server-derived active-player signal; intentionally independent of seat. */
 export function activePlayerAuraVisible(activePlayerId: string | null): boolean {
@@ -1407,7 +1421,7 @@ interface CrowdStompRun { landing: [number, number]; fans: Container[]; startedA
 const CROWD_STOMP_VICTIM_GRACE_MS = 250;
 /** Where a hold draws its token: the surf landing square of a crowd push, else his last pitch square. */
 export function injuryTokenHoldDrawSquare(hold: InjuryTokenHold): [number, number] {
-  return hold.surf && isSurfLanding(hold.surf) ? hold.surf : hold.square;
+  return hold.surf && isCrowdSquare(hold.surf) ? hold.surf : hold.square;
 }
 /** The holds that are DRAWN for this model: the player is off the pitch in it, his square is a pitch square and nobody
  *  stands on it in the model (two tokens never share a square because of a hold), one per player and per square.
@@ -1457,6 +1471,15 @@ const RAIL_AWAY_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif', fontSize: 18, fontWeight: 'bold',
   fill: 0x5a8fe0, stroke: { color: 0x04101c, width: 2 },
 });
+/** Owner 10-07: the TOUCHBACK / OUT OF BOUNDS plate's pop (over the depth scale, settling at ~1 square) and fade, at
+ *  `stampElapsed` ms into its `stampMs` hold. Shared by the ball's stamp and (owner 10-20) a thrown player's. */
+function popBallOutStamp(plate: Container, stampElapsed: number, stampScale: number, stampMs: number): void {
+  plate.visible = true;
+  const pop = Math.min(1, stampElapsed / presentationMs(140));
+  plate.scale.set(stampScale * (1.3 - 0.3 * pop));
+  const fadeStart = stampMs - presentationMs(200);
+  plate.alpha = stampElapsed <= fadeStart ? 1 : Math.max(0, 1 - (stampElapsed - fadeStart) / Math.max(1, stampMs - fadeStart));
+}
 /** Owner 10-07: TOUCHBACK / OUT OF BOUNDS stamp lettering - pitch-glyph scale (owner: "not much larger than a pitch
  *  square"), two short centred lines, Nuffle white on the band; rastered at 4x with mipmaps like the other glyphs. */
 export const BALL_OUT_STAMP_FONT_PX = 9;
@@ -2624,6 +2647,9 @@ export class PitchRenderer {
    *  ball flying in from the corner (a token-layer sprite) passes over it. The dugout's players, halos and markers
    *  stay in dugoutLayer above the pitch tokens, as before. */
   private dugoutGroundLayer = new Container();
+  /** Owner 10-20 (Astra R-5): a RELOCATED blood decal on a crowd square (bloodDecalSpots) - above the dugout floor /
+   *  stand ground art that covers the squares off the pitch, still under every token. On-pitch decals stay in bloodLayer. */
+  private crowdBloodLayer = new Container();
   /** Owner 10-05: "Kickoff ball and trail should pass over the players in dugout." While a kick-off ball is in
    *  the air (fly-in, apex hang, descent and its bounce) its sprite rides here, above the dugout players and their
    *  skill markings; it returns to the token layer (normal depth sorting with the players) when it has landed. */
@@ -5989,6 +6015,7 @@ export class PitchRenderer {
       this.crosshairLayer, // controller P2a: pad crosshair rails, over turf + ground overlays, under tokens
       this.marksLayer, // owner 2026-07-04f: persistent square marks (under tokens)
       this.dugoutGroundLayer, // owner 10-05: dugout floor + band text, under the tokens (and the kick-off ball)
+      this.crowdBloodLayer, // owner 10-20: a thrown team-mate's crowd-injury blood on his crowd square, over the dugout floor
       this.tokenLayer,
       this.pathLayer,
       this.dugoutLayer,
@@ -6280,6 +6307,24 @@ export class PitchRenderer {
    *  refresh reads the current list, so a hold the store has dropped is gone with the next refresh
    *  (syncInjuryTokenHolds forces one). Pacing only: nothing here is clickable, plannable or part of the model. */
   injuryTokenHoldsProbe: (() => readonly InjuryTokenHold[]) | null = null;
+  /** Owner 10-20: blood spots drawn off the server's square (bloodDecalSpots); set by the view from the store. */
+  private bloodSpotRelocations: readonly BloodSpotRelocation[] = [];
+  setBloodSpotRelocations(list: readonly BloodSpotRelocation[] | null | undefined): void {
+    const next = (list ?? []).map((r) => ({ index: r.index, from: [r.from[0], r.from[1]] as [number, number], to: [r.to[0], r.to[1]] as [number, number] }));
+    if (JSON.stringify(next) === JSON.stringify(this.bloodSpotRelocations)) return;
+    this.bloodSpotRelocations = next;
+    if (this.game) this.refresh();
+  }
+  /** Test / rig inspection: world-stack order of the blood containers and each one's decal count. */
+  bloodLayerProbe(): { blood: number; dugoutGround: number; crowdBlood: number; tokens: number; bloodDecals: number; crowdDecals: number } {
+    const at = (layer: Container) => this.world.children.indexOf(layer);
+    return { blood: at(this.bloodLayer), dugoutGround: at(this.dugoutGroundLayer), crowdBlood: at(this.crowdBloodLayer), tokens: at(this.tokenLayer),
+      bloodDecals: this.bloodLayer.children.length, crowdDecals: this.crowdBloodLayer.children.length };
+  }
+  /** Test / rig inspection: the squares the Modern blood decals are drawn on this refresh. */
+  bloodDecalSquaresProbe(): [number, number][] {
+    return bloodDecalSpots((this.game?.fieldModel.bloodspotArray ?? []) as { coordinate?: [number, number]; injury?: unknown }[], this.bloodSpotRelocations).map((spot) => [spot.x, spot.y]);
+  }
   /** The players drawn on the pitch by the hold in the last refresh (the dugout skips exactly these). */
   private injuryHeldDrawn = new Set<string>();
   private drawInjuryHeldTokens(
@@ -6462,6 +6507,7 @@ export class PitchRenderer {
     this.destroyPlayerMarkLabelNodes();
     for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
     for (const c of this.bloodLayer.removeChildren()) c.destroy(); // owner 10-03: a new game starts with a clean pitch
+    for (const c of this.crowdBloodLayer.removeChildren()) c.destroy(); // owner 10-20 (Astra P3): and clean stands
     // reset movement/ball baselines so the new game doesn't tween from stale squares
     this.lastSquares.clear();
     this.lastBallSquare = null; this.lastBallOnPitch = false; this.ballEverRendered = false;
@@ -7087,9 +7133,10 @@ export class PitchRenderer {
     // itself for the remainder of the match." Modern draws the Codex splatter art flat on the tile from the server's
     // bloodspotArray (which only grows during a game) - casualties only (BH / SI / RIP), not knock-outs.
     for (const child of this.bloodLayer.removeChildren()) child.destroy();
+    for (const child of this.crowdBloodLayer.removeChildren()) child.destroy();
     if (this.bloodDecalsEnabled && this.modernPitchPresentation && this.bloodTextures.length > 0 && !this.boardCleared) {
       const seenSquares = new Set<string>();
-      for (const spot of bloodDecalSpots(this.game.fieldModel.bloodspotArray as { coordinate?: [number, number]; injury?: unknown }[])) {
+      for (const spot of bloodDecalSpots(this.game.fieldModel.bloodspotArray as { coordinate?: [number, number]; injury?: unknown }[], this.bloodSpotRelocations)) {
         const key = `${spot.x},${spot.y}`;
         if (seenSquares.has(key)) continue; // one splatter per tile, however many fell there
         seenSquares.add(key);
@@ -7106,7 +7153,7 @@ export class PitchRenderer {
         decal.height = height * BLOOD_DECAL_FILL;
         decal.position.set(anchor.x, anchor.y);
         decal.alpha = 0.92;
-        this.bloodLayer.addChild(decal);
+        (isOnPitch([spot.x, spot.y]) ? this.bloodLayer : this.crowdBloodLayer).addChild(decal);
       }
     }
     // App19: Classic/default keeps the upstream blood decals.
@@ -14851,6 +14898,7 @@ export class PitchRenderer {
       flash.g.scale.set(flash.scale * live);
     }
     this.ballOutFlight?.reproject(); // the ball-out stand-in + TOUCHBACK / OUT OF BOUNDS stamp (elapsed time kept)
+    this.thrownOutStamp?.reproject(); // owner 10-20: a thrown player's OUT OF BOUNDS stamp
     // The kicking coach's aim markers are rebuilt only on pointer move: rebuild them from the last hovered square.
     const hover = this.kickPickLock ?? this.kickHoverLast;
     if (hover && this.kickPickSquares && this.kickScatterMarker && !this.kickScatterMarker.destroyed) {
@@ -16540,7 +16588,8 @@ export class PitchRenderer {
   }
 
   screenPosOf(square: [number, number]): { x: number; y: number } | null {
-    if (!this.app || !isOnPitch(square)) return null;
+    // owner 10-20: a crowd square too (a thrown team-mate's injury pill rides it: injuryPillSquare)
+    if (!this.app || (!isOnPitch(square) && !isCrowdSquare(square))) return null;
     const tp = this.tokenPos(square[0], square[1]);
     const scale = this.world.scale.x;
     return {
@@ -16821,7 +16870,7 @@ export class PitchRenderer {
   playCrowdSurf(square: [number, number], playerId?: string | null): void {
     this.retireCrowdStomp();
     if (!this.app) return;
-    const landing = isSurfLanding(square) ? square : surfLandingSquare(square);
+    const landing = isCrowdSquare(square) ? square : surfLandingSquare(square);
     if (!landing) return;
     const [ox, oy] = surfOutward(landing);
     const scale = depthScale(Math.min(Math.max(landing[0], 0), PITCH_COLS - 1), Math.min(Math.max(landing[1], 0), PITCH_ROWS - 1));
@@ -16859,7 +16908,7 @@ export class PitchRenderer {
       if (now >= total || this.app !== app) { cleanup(); return; }
       // no fans on an empty square: the victim's held token must still be drawn (a short grace covers the first refresh)
       if (run.playerId) {
-        if (this.injuryHeldDrawn.has(run.playerId)) victimSeen = true;
+        if (this.injuryHeldDrawn.has(run.playerId) || this.ttmCrowdLandingShown(run.playerId)) victimSeen = true;
         else if (victimSeen || now >= presentationMs(CROWD_STOMP_VICTIM_GRACE_MS)) { this.retireCrowdStomp(run); return; }
       }
       if (!ringsDone && now >= IN_MS) {
@@ -20518,9 +20567,71 @@ export class PitchRenderer {
    *  the flight in the store) and for at most TTM_LANDING_HOLD_CAP_MS past the end; Modern only. Any other model square
    *  (the landing itself, or a newer authoritative coordinate) ends it at once. */
   private ttmLandingHeld(armedAt: [number, number] | null | undefined, landing: [number, number], model: [number, number] | null, pastEndMs: number): boolean {
-    if (!this.modernPitchPresentation || pastEndMs >= TTM_LANDING_HOLD_CAP_MS) return false;
+    if (!this.modernPitchPresentation || pastEndMs >= (isOnPitch(landing) ? TTM_LANDING_HOLD_CAP_MS : TTM_CROWD_LANDING_CAP_MS)) return false;
     if (!model || (model[0] === landing[0] && model[1] === landing[1])) return false;
     return !!armedAt && armedAt[0] === model[0] && armedAt[1] === model[1];
+  }
+  /** Owner 10-20 (Astra P2-2, rounds 2 + 3): an authoritative snapshot (reconnect / same-game resync) draws the model as
+   *  it is. Each crowd landing is revalidated against it first:
+   *   - STILL CURRENT (the snapshot keeps him on the square he was thrown from - the server has not moved him - and he
+   *     is still IN THE AIR, or FALLING with the apothecary dialog naming him: the crowd injury waits on its answer):
+   *     kept as it is - the flight, the stamp and the landing hold (round 3: never back on the pitch under an open card);
+   *   - SUPERSEDED, flight over: retired now - fail open, the cap alone is not enough - with its OUT OF BOUNDS stamp;
+   *   - SUPERSEDED, still in the air: left to finish (its stamp still pops at the landing) with its landing hold given up
+   *     (armedAt cleared: ttmLandingHeld never holds it), so it retires as soon as it has come down.
+   *  True when something was retired now (the caller redraws). */
+  private ttmCrowdLandingCurrent(playerId: string, armedAt: [number, number] | null | undefined): boolean {
+    const data = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+    const at = data?.playerCoordinate;
+    if (!data || !armedAt || !at || at[0] !== armedAt[0] || at[1] !== armedAt[1]) return false;
+    const base = (data.playerState ?? 0) & 0xff;
+    if (base === PlayerStateBase.IN_THE_AIR) return true;
+    if (base !== PlayerStateBase.FALLING) return false;
+    const dialog = this.game?.dialogParameter as { dialogId?: unknown; playerId?: unknown; playerIds?: unknown } | null | undefined;
+    if (!dialog || !/apothecar/i.test(String(dialog.dialogId ?? ''))) return false;
+    const named = [dialog.playerId, ...(Array.isArray(dialog.playerIds) ? dialog.playerIds : [])].filter((id) => id != null).map(String);
+    return named.includes(playerId);
+  }
+  retireTtmCrowdLandings(): boolean {
+    let retired = false;
+    let flying = false;
+    let kept = false;
+    const now = performance.now();
+    for (const [id, tt] of [...this.pendingTtmThrow]) {
+      if (isOnPitch(tt.to)) continue;
+      if (this.ttmCrowdLandingCurrent(id, tt.armedAt)) { kept = true; continue; }
+      if (now - tt.start < this.ttmFlightMs()) {
+        flying = true;
+        this.pendingTtmThrow.set(id, { ...tt, armedAt: null });
+        continue;
+      }
+      this.pendingTtmThrow.delete(id);
+      this.moveTweens.delete(id);
+      this.lastSquares.delete(id);
+      retired = true;
+    }
+    if (this.thrownOutStamp && !flying && !kept) { this.thrownOutStamp.cleanup(); this.thrownOutStamp = null; retired = true; }
+    return retired;
+  }
+  /** Owner 10-20 (Astra round 4 P2): the square an injury pill is anchored on. A crowd injury of a player drawn on a
+   *  crowd square right now (his flight's off-pitch landing, or his injury token hold's surf landing) rides that square
+   *  - it survives a snapshot that reset the store's memory; then the store's own crowd square (`pillSquare`); else the
+   *  injury square. */
+  injuryPillSquare(pill: { playerId: string; square?: [number, number] | null; crowdSurf?: boolean; pillSquare?: [number, number] | null }): [number, number] | null {
+    if (pill.crowdSurf) {
+      const tt = this.pendingTtmThrow.get(pill.playerId);
+      if (tt && !isOnPitch(tt.to)) return [tt.to[0], tt.to[1]];
+      const hold = this.injuryTokenHoldsNow().find((h) => h.playerId === pill.playerId);
+      if (hold?.surf && isCrowdSquare(hold.surf)) return [hold.surf[0], hold.surf[1]];
+    }
+    return pill.pillSquare ?? pill.square ?? null;
+  }
+  /** Owner 10-20: is `playerId` drawn on the off-pitch landing of his ended flight right now (ttmLandingHeld)? */
+  private ttmCrowdLandingShown(playerId: string): boolean {
+    const tt = this.pendingTtmThrow.get(playerId);
+    if (!tt || isOnPitch(tt.to)) return false;
+    const pastEnd = performance.now() - tt.start - this.ttmFlightMs();
+    return pastEnd >= 0 && this.ttmLandingHeld(tt.armedAt, tt.to, this.modelSquareOf(playerId), pastEnd);
   }
   /** Astra (MAJOR 2): the landing hold's WAKE. refresh() is the only place that draws the hold, and nothing guarantees
    *  another refresh (token reuse can skip it), so the movement ticker retires an ended flight / bounce whose hold no
@@ -20567,7 +20678,7 @@ export class PitchRenderer {
    *   - `throwBomb` / `throwARock` / `throwKeg` → arc a CREATED projectile sprite from→to (no field token
    *     exists for these) via a self-contained ticker (like playExplosion). The terminal bombExplosion is a
    *     separate wire animation and fires on its own. */
-  playThrow(kind: ThrowKind, from: [number, number], to: [number, number], thrownId?: string, sound?: string): void {
+  playThrow(kind: ThrowKind, from: [number, number], to: [number, number], thrownId?: string, sound?: string, landing?: [number, number] | null): void {
     // #92 Inc-2: fire the throw sound at the RELEASE beat — every kind launches its arc from this call. Name
     // relayed from the store/view (ffb-pitch stays sound-agnostic; I play the name I'm given, not a mapping).
     if (sound) this.onCue?.(sound);
@@ -20589,6 +20700,17 @@ export class PitchRenderer {
         }
         break;
       case 'throwTeamMate':
+        // Owner 10-20 ("change the animation to end at the last scatter square, even if it's off-pitch"): a thrown
+        // player the server's report put in the crowd flies on to that off-pitch square (`landing`: crowdSurf.ts
+        // thrownCrowdLanding, beyond the animation's last in-bounds `to`) and stays drawn there (ttmLandingHeld; the injury token hold's surf landing
+        // once the model takes him off the pitch). Modern only; Classic flies to `to` as before.
+        if (this.modernPitchPresentation && landing && isCrowdSquare(landing) && isOnPitch(to)) {
+          // and the ball's OUT OF BOUNDS plate pops next to him as he comes down there
+          const active = thrownId ? this.pendingTtmThrow.get(thrownId) : undefined;
+          const flown = active ? performance.now() - active.start : Infinity;
+          this.playThrownOutStamp([to[0], to[1]], [landing[0], landing[1]], this.ttmFlightMs() - (flown < this.ttmFlightMs() ? flown : 0));
+          to = [landing[0], landing[1]];
+        }
         if (thrownId) {
           // BB2025 sends TWO wire throwTeamMate Animations for one throw: the long flight, then
           // (same or next command) a short landing-settle hop for the SAME thrownId. Restarting
@@ -20749,13 +20871,7 @@ export class PitchRenderer {
         }
       }
       const stampElapsed = elapsed - travelMs;
-      if (stampElapsed >= 0 && !plate.destroyed) {
-        plate.visible = true;
-        const pop = Math.min(1, stampElapsed / presentationMs(140));
-        plate.scale.set(stampScale * (1.3 - 0.3 * pop)); // pop over the depth scale, settling at ~1 square
-        const fadeStart = stampMs - presentationMs(200);
-        plate.alpha = stampElapsed <= fadeStart ? 1 : Math.max(0, 1 - (stampElapsed - fadeStart) / Math.max(1, stampMs - fadeStart));
-      }
+      if (stampElapsed >= 0 && !plate.destroyed) popBallOutStamp(plate, stampElapsed, stampScale, stampMs);
       if (elapsed >= travelMs + Math.max(stampMs, exit ? fadeMs : 0)) { settledNaturally = true; cleanup(); }
     };
     this.ballOutHideWhileOut = !!exit;
@@ -20790,6 +20906,57 @@ export class PitchRenderer {
   private retireBallOut(): void {
     this.ballOutFlight?.cleanup();
     this.ballOutFlight = null;
+    this.thrownOutStamp?.cleanup(); // owner 10-20: and a thrown player's OUT OF BOUNDS stamp
+    this.thrownOutStamp = null;
+  }
+
+  /** Owner 10-20 ("Surface the 'Out Of Bounds' token next to the player the same way we do for the ball in this case"):
+   *  the ball's OUT OF BOUNDS plate (buildBallOutStamp / popBallOutStamp, same anchor rule: stampAnchorSquare on the
+   *  edge crossed from his last in-bounds square to his crowd square) pops when his flight comes down there (`delayMs`
+   *  from now) and fades after the ball's >= 450 ms hold. Effects layer, own ticker: retired with the ball-out cue (a
+   *  seek / snap / game change), by a newer one, or when its hold is over. */
+  private thrownOutStamp: { cleanup: () => void; reproject: () => void } | null = null;
+  private playThrownOutStamp(last: [number, number], exit: [number, number], delayMs: number): void {
+    this.thrownOutStamp?.cleanup();
+    this.thrownOutStamp = null;
+    if (this.destroyed || !this.app) return;
+    const app = this.app;
+    const startAt = performance.now() + Math.max(0, delayMs);
+    const stampMs = Math.max(450, presentationMs(1200));
+    // Round 2 P2-2: next to HIM - half a square from his crowd square back towards the pitch (a full-distance swoop can
+    // end several squares beyond the edge; the ball's edge-crossing anchor would leave the plate at the sideline).
+    const stampSquare: [number, number] = [exit[0] + 0.5 * Math.sign(last[0] - exit[0]), exit[1] + 0.5 * Math.sign(last[1] - exit[1])];
+    const plate = this.buildBallOutStamp('OUT OF BOUNDS');
+    plate.label = 'thrownOutStamp';
+    (plate as Container & { __stampSquare?: [number, number] }).__stampSquare = stampSquare;
+    plate.zIndex = 99500;
+    plate.visible = false;
+    let stampScale = 1;
+    const place = () => {
+      const at = fractionalSquareAnchor(stampSquare[0], stampSquare[1]);
+      stampScale = depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(stampSquare[0]))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(stampSquare[1]))));
+      plate.position.set(at.x, at.y);
+      if (!plate.visible) plate.scale.set(stampScale);
+    };
+    place();
+    this.effectsLayer.addChild(plate);
+    let cleanup: () => void = () => {};
+    const tick = () => {
+      if (this.app !== app) { cleanup(); return; }
+      const elapsed = performance.now() - startAt;
+      if (elapsed < 0 || plate.destroyed) return;
+      popBallOutStamp(plate, elapsed, stampScale, stampMs);
+      if (elapsed >= stampMs) cleanup();
+    };
+    const run = { cleanup: () => cleanup(), reproject: () => { if (!plate.destroyed) { place(); tick(); } } };
+    this.thrownOutStamp = run;
+    cleanup = this.registerEffectTicker(app, tick, [plate], () => { if (this.thrownOutStamp === run) this.thrownOutStamp = null; });
+  }
+  /** Test / rig inspection: the thrown player's OUT OF BOUNDS stamp on screen (null when none). */
+  thrownOutStampProbe(): { visible: boolean; alpha: number; x: number; y: number; square: [number, number] | null } | null {
+    const plate = this.effectsLayer.children.find((child) => child.label === 'thrownOutStamp' && !child.destroyed);
+    return plate ? { visible: plate.visible, alpha: plate.alpha, x: plate.position.x, y: plate.position.y,
+      square: (plate as Container & { __stampSquare?: [number, number] }).__stampSquare ?? null } : null;
   }
 
   /** The model ball is not drawn while the ball-out stand-in flies, nor while the server keeps the ball out of

@@ -7,7 +7,7 @@ import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverA
 import { apothecaryChoiceOutcomeClaim, apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, regenerationFixUpClaims, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
 import { injuryPresentation, armourPresentation, skipsArmourDiceOnCasualty, type InjuryEvent } from './injuryPresentation';
-import { rerollPresentation } from './rerollPresentation';
+import { rerollPresentation, isFailedLonerGateReport, lonerGatedUse } from './rerollPresentation';
 export { reportedAutomaticRerollSkill } from './rerollPresentation';
 import { presentStages } from './replay/presentationStages';
 import { actionRollPresentation, dodgeUsedBreakTackle, type ActionRollCue } from './actionRollPresentation';
@@ -31,7 +31,8 @@ import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseH
 import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
 import { blockProCompositeOptions, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption } from './blockDecisionProjection';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
-import { blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
+import { allBlockDiceIndices, blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
+import { LONER_RETUMBLE_DELAY_MS } from './lonerCueLayout';
 import { createTeamCaptainRowQueue, teamCaptainKept } from './teamCaptainLogOrder';
 import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
 import { casualtyRollLabel, casualtyRollBase, injuryTypeName, createCasualtyRollProjection, reduceCasualtyRollProjection, casualtyRollFor } from './casualtyRollProjection';
@@ -61,7 +62,8 @@ import {
   type ServerCommand,
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
-import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isSurfLanding, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
+import { createThrownCrowdProjection, reduceThrownCrowdProjection } from './thrownCrowdBlood';
+import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isCrowdSquare, thrownCrowdLanding, type BloodSpotRelocation, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createGameSession } from './gameSessionFactory';
 import { serverVersionBlock } from './serverVersionGate';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore } from './reportFormatter';
@@ -688,6 +690,9 @@ const legacyState = reactive({
     /** Owner 10-07: a throw-in after a ball-out flies from here in the stands (Modern); `from` stays the server square (Classic). */
     fromPoint?: [number, number];
     sound?: string; // #92 Inc-2: the arc sound the view relays to renderer.playThrow → onCue at RELEASE (⚖ ffb-pitch sound-agnostic)
+    /** Owner 10-20: a Throw Team-Mate the server's report put in the crowd - the off-pitch square his flight ends on
+     *  (Modern; `to` stays the animation's last in-bounds square). See flightCrowdLandingFresh. */
+    landing?: [number, number];
   } | null,
   /** Owner 07-08 (case 419): TRICKSTER relocate (wire `animation{trickster,...}`) — renderer SLIDES the token from→to, no arc. */
   trickster: null as { playerId: string; from: [number, number]; to: [number, number]; seq: number } | null,
@@ -774,7 +779,7 @@ const legacyState = reactive({
              singleSkull: string | null; singleSkullLabel: string | null;
              /** Owner 10-13: changes when this target's dice are rerolled (stable across the dialog's other resends);
               *  the card tumbles `rerolledDice` on each change. Null rerolledDice = the target's first roll (no tumble). */
-             tumbleKey: string; rerolledDice: number[] | null }[];
+             tumbleKey: string; rerolledDice: number[] | null; /** owner 10-20: see blockPartial.lonerRetumble */ lonerRetumble?: true }[];
     seq: number;
   } | null,
   /** BB2025 Multiple Block, uphill target: the server's `opponentBlockSelectionProperties` dialog asks MY team (the
@@ -933,6 +938,9 @@ const legacyState = reactive({
     /** Owner 10-13: the die indexes a reroll replaced (rerolledBlockDiceIndices): the surface tumbles ONLY these and
      *  the kept dice stay settled. Null = the block's first roll (every die tumbles). */
     rerolledDice?: number[] | null;
+    /** Owner 10-20: resent after a FAILED Loner - every die tumbles again, after the reroll toast's beat, onto the
+     *  resent (original) faces. Absent otherwise. */
+    lonerRetumble?: true;
     teamRR: boolean; pro: boolean; brawler: boolean; consummate: boolean; consummateLabel: string | null;
     singleBlockDie: string | null; singleBlockDieLabel: string | null;
     multiBlockDice: string | null; multiBlockDiceLabel: string | null;
@@ -1250,6 +1258,10 @@ const legacyState = reactive({
   apothecaryAnim: null as { playerId: string; square: [number, number] | null; outcome: 'stay' | 'reserves' | 'building'; side: 'home' | 'away'; medic: boolean; seq: number } | null,
   /** Owner 07-03 / 10-13: crowd stomp trigger (pushed OUT OF BOUNDS) → renderer.playCrowdSurf, overlapping the crowd-push injury presentation; `square` = the surf landing (off the pitch) his held token lies on. */
   crowdSurf: null as { square: [number, number]; side: 'home' | 'away'; seq: number; playerId?: string } | null,
+  /** Owner 10-20 ("Blood splatter should go on the outside sideline square"): blood spots of thrown / kicked / swooping
+   *  team-mates' crowd injuries, drawn (Modern) on the crowd square instead of the server's last in-bounds square
+   *  (renderer setBloodSpotRelocations / bloodDecalSpots). Presentation only; reset with the game. */
+  bloodSpotRelocations: [] as BloodSpotRelocation[],
   /** THROW-A-ROCK cinematic. A miss still arcs to the named target square, then reports MISS without injury. */
   rockThrow: null as { square: [number, number]; miss: boolean; seq: number } | null,
   /** Owner 07-04: INTERACTIVE team-setup phase — non-null while MY setup turn (reserve box, zone shading, Done/Concede). Home-relative coords (server transforms away). */
@@ -1421,6 +1433,9 @@ const legacyState = reactive({
    *  teamCaptainRoll (the team reroll was kept), shown once the rerolled action is resolved. Its own slot, so it sits
    *  under the reroll toast instead of replacing it. Modern view only. */
   teamCaptainSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; teamId: string; text: string; skill: 'Team Captain'; playerId?: string; seq: number } | null,
+  /** Owner 10-20: "<Player> fails their loner roll!" - a trait-brown splash BELOW the player's token (the server's
+   *  failed `reRoll` {reRollSource: 'Loner'} report: the team reroll is lost). Not seat-gated; Modern view only. */
+  lonerFailedCue: null as { playerId: string; text: string; roll: number | null; seq: number } | null,
   rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
@@ -1494,7 +1509,7 @@ const spectatorConnectionKeys = new Set<PropertyKey>([
   'devLog', 'wireLogFile', 'demoMode',
 ] satisfies (keyof typeof legacyState)[]);
 const spectatorTransientKeys = new Set<PropertyKey>([
-  'actionDice', 'actionDiceQueue', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'teamCaptainSplash', 'blockResultStamp',
+  'actionDice', 'actionDiceQueue', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'teamCaptainSplash', 'lonerFailedCue', 'blockResultStamp',
   'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
   'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
   'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
@@ -1531,6 +1546,8 @@ const state = new Proxy(legacyState, {
       // Snap publishes only: a per-event bump here re-ran the view's snapshot rebuild (renderer.refresh()) after
       // every presented event and destroyed each walk tween a millisecond in (09-14 root cause of "no animations").
       if (key === 'snapshotEpoch') return position.snapshotEpoch;
+      // Owner 10-20 (Astra P2-1): the crowd-injury blood relocations are durable checkpoint state (thrownCrowdBlood.ts).
+      if (key === 'bloodSpotRelocations') return position.checkpoint.durableProjection.thrownCrowd?.relocations ?? spectatorNeutralState.bloodSpotRelocations;
       // A block-choice frame clears the durable offer before its selected die can
       // be read. The occurrence-keyed review reveal briefly owns this one HUD key.
       if (key === 'blockPartial' && Object.prototype.hasOwnProperty.call(spectatorTransientState, key)) {
@@ -1586,6 +1603,30 @@ let actionDiceClearEpoch = 0;
  *  and BEFORE the batch reaches reactive state - so its show waiter exists before any watcher (the view's dice drain,
  *  which reports the show synchronously) can possibly run. Allocate id -> register waiter -> publish, one step. */
 const actionDicePublicationHooks = new WeakMap<object, (batch: ActionDiceBatchState) => void>();
+/** Owner 10-20 (Astra r3): per player, the action roll a reroll offer would be FOR - that player's latest first roll
+ *  the server left rerollable: a failed one, or one it may offer a reroll for without failing (Breathe Fire NO_EFFECT /
+ *  PRONE: `rerollOfferNotFailed`). Recorded from the reports as each frame is read (any reader, catch-up included); a
+ *  passed roll the server cannot offer a reroll for retires the player's entry, a rerolled result consumes it. A
+ *  failed Loner re-tumbles exactly this roll back onto its own value and flags (read when the re-tumble is SCHEDULED,
+ *  so a later roll can never stand in for it). */
+type RerollableRoll = { playerId: string; square: [number, number]; value: number; failed: boolean; cause?: string; needed?: number; rerollOfferNotFailed?: boolean };
+const rerollableRollByPlayer = new Map<string, RerollableRoll>();
+function noteRerollableRoll(playerId: string, cue: ActionRollCue | null): void {
+  if (!playerId || !cue) return;
+  if (cue.reRolled) { rerollableRollByPlayer.delete(playerId); return; }
+  if (cue.die) {
+    const die = cue.die;
+    if (die.cause === 'reroll') return; // a reroll report's own roll (Pro, Loner): not the action's
+    if (die.failed || die.rerollOfferNotFailed) {
+      rerollableRollByPlayer.set(playerId, { playerId, square: [die.square[0], die.square[1]], value: die.value, failed: !!die.failed,
+        ...(die.cause ? { cause: die.cause } : {}), ...(die.needed !== undefined ? { needed: die.needed } : {}), ...(die.rerollOfferNotFailed ? { rerollOfferNotFailed: true } : {}) });
+    } else rerollableRollByPlayer.delete(playerId);
+  } else if (cue.modal) {
+    const m = cue.modal;
+    if (!m.ok) rerollableRollByPlayer.set(playerId, { playerId, square: [m.square[0], m.square[1]], value: m.roll, failed: true, cause: m.kind, ...(m.needed !== undefined ? { needed: m.needed } : {}) });
+    else rerollableRollByPlayer.delete(playerId);
+  }
+}
 function publishActionDice(rolls: ActionDiceBatchState['rolls'], dieKeys?: string[]): void {
   const batch: ActionDiceBatchState = { rolls, seq: ++actionDiceBatchSeq, ...(dieKeys && dieKeys.length === rolls.length ? { dieKeys } : {}) };
   const hook = actionDicePublicationHooks.get(rolls);
@@ -1639,6 +1680,7 @@ function clearActionDice(): void {
   ttmLandingHold.drop(); // its show waiter goes with the dice below: the dropped card re-surfaces from the live dialog
   state.actionDice = null;
   state.actionDiceQueue = [];
+  rerollableRollByPlayer.clear();
   actionDiceClearEpoch += 1;
   actionDiceShownWaiters.clear();
   actionDiceShownReports.clear();
@@ -2118,7 +2160,7 @@ function clearRerollSplash(): void {
 // any TRR use surfaces the splash (dodge/GFI/pickup included). Skill-source rerolls keep the glow-only read.
 /** Owner 09-14: a Leader re-roll is a team re-roll in all but name — it gets the splash too ("<Coach> uses their Leader reroll!"). */
 const isLeaderReroll = (raw: string | undefined) => String(raw ?? '').replace(/[^a-z]/gi, '').toLowerCase() === 'leader';
-const rerollSplashWanted = (isTeam: boolean, raw?: string) => isTeam || !!raw; // owner 09-19: EVERY re-roll rides the re-roll toast (team, Leader, Pro, Dodge/Sure Feet/…) — one surface, not icon-fade for skills and a splash for TRR
+const rerollSplashWanted = (isTeam: boolean, raw?: string) => (isTeam || !!raw) && String(raw ?? '').replace(/[^a-z]/gi, '').toLowerCase() !== 'loner'; // owner 10-20: the Loner gate (after a working Mascot the only reroll report) is never a reroll source to toast - the Mascot toast is the use, the Loner cue its verdict; // owner 09-19: EVERY re-roll rides the re-roll toast (team, Leader, Pro, Dodge/Sure Feet/…) — one surface, not icon-fade for skills and a splash for TRR
 // Owner 07-08 (rev 2/9): FAIL→REROLL staging is STRICTLY SERIAL — the wire delivers fail+spend+result in ONE burst; we show failed die (full display), pause, reroll splash, pause, re-rolled die. Spectator pacing only (holdPlayback no-ops in play). Beats owner-tuned on feel.
 const FAIL_BEAT_MS = 750; // owner 10-16: 1220 -> 750 (the failed dodge read was too long); owner 2026-07-08: −1/3 (was 1830)
 // Owner C3 pt.2: a SUCCESSFUL roll reads ~half the fail beat (owner-tuned to 560); tune here if the feel is off.
@@ -2399,22 +2441,61 @@ function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = t
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
-/** Owner 08-19: a FAILED LONER roll on a team re-roll — the re-roll is LOST (wire: ReportReRoll's
- * gating roll>0 + successful=false). Rides the same splash rail, sequenced to pop AFTER the
- * "uses a Team Re-Roll" splash clears (never overlapping); server-stated fields only. */
-function showLonerFailedSplash(playerId: string) {
+/** Owner 10-20: "bring the Loner reroll splash back ... a splash below the player when the loner check fails that is
+ *  brown and matches the color of traits. It should say '<Player> fails their loner roll!'". The server's failed Loner
+ *  report (rerollPresentation lonerPid / lonerRoll) names the player and the roll; the team reroll is lost. Sequenced by
+ *  the callers to pop when the "uses a team reroll" toast clears (never overlapping it); reads LONER_FAILED_SPLASH_HOLD_MS
+ *  and clears itself. Not seat-gated (both coaches, spectators); never during catch-up. */
+const LONER_FAILED_SPLASH_HOLD_MS = 2000; // = REROLL_SPLASH_HOLD_MS, the old rail splash's read
+let lonerFailedCueClearTimer: ReturnType<typeof setTimeout> | null = null;
+/** Owner 10-20 (correction): "when a team reroll is attempted and the Loner roll fails, the dice of the ORIGINAL roll
+ *  tumble again and land back on their original result, then the Loner pill surfaces." Modern only (Classic keeps its
+ *  dice as before). The Loner check's own roll is never shown as a die there. */
+function lonerRetumbleApplies(): boolean {
+  return settings.uiMode !== 'classic';
+}
+function lonerGateDieHidden(report: Record<string, unknown>): boolean {
+  return lonerRetumbleApplies() && isFailedLonerGateReport(report);
+}
+/** The re-tumble's tumble + landing read before the pill comes up (the action die's pop-in + tumble, 380 ms, inside
+ *  the viewer-visible floor). */
+const LONER_RETUMBLE_LAND_MS = 450;
+/** The roll a failed Loner re-tumbles, captured when the re-tumble is scheduled: the player's rerollable roll, only
+ *  while it is still on the player's square. Null = nothing re-tumbles (never an invented value). */
+function captureLonerOriginalRoll(model: GameJson | null | undefined, playerId: string): RerollableRoll | null {
+  if (!lonerRetumbleApplies() || !model || !playerId) return null;
+  const roll = rerollableRollByPlayer.get(playerId);
+  const coordinate = model.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
+  if (!roll || !coordinate || coordinate[0] !== roll.square[0] || coordinate[1] !== roll.square[1]) return null;
+  return { ...roll, square: [roll.square[0], roll.square[1]] };
+}
+/** Astra r4 / r5: the roll a failed Loner re-tumbles, snapshotted at that player's Loner-gated use (lonerGatedUse). */
+type LonerOriginalAtUse = { playerId: string; roll: RerollableRoll | null };
+/** The snapshot taken at the use, when it is this player's; otherwise a capture now (no use report in the frame). */
+function lonerOriginalFor(atUse: LonerOriginalAtUse | null, model: GameJson | null | undefined, playerId: string): RerollableRoll | null {
+  return atUse && atUse.playerId === playerId ? atUse.roll : captureLonerOriginalRoll(model, playerId);
+}
+/** Re-tumble the captured original roll in place (renderer: a rerolled result tumbles the persisted die at its square)
+ *  onto its OWN value with its own presentation flags. A Breathe Fire result the server left rerollable without failing
+ *  is taken by a Breathe Fire rerolled result only (`breatheFireReroll`). True when a die was re-tumbled. */
+function presentLonerRetumble(roll: RerollableRoll | null): boolean {
+  if (!roll || playback.catchingUp || !lonerRetumbleApplies()) return false;
+  publishActionDice([{ square: [roll.square[0], roll.square[1]], value: roll.value, failed: roll.failed, rerollSkill: 'Team ReRoll', rerollTeam: true,
+    ...(roll.cause ? { cause: roll.cause } : {}), ...(roll.needed !== undefined ? { needed: roll.needed } : {}),
+    ...(roll.rerollOfferNotFailed ? { rerollOfferNotFailed: true, breatheFireReroll: true } : {}) }]);
+  return true;
+}
+function clearLonerFailedCue(): void {
+  if (lonerFailedCueClearTimer) cancelGameTimeout(lonerFailedCueClearTimer);
+  lonerFailedCueClearTimer = null;
+  state.lonerFailedCue = null;
+}
+function showLonerFailedSplash(playerId: string, roll: number | null = null) {
   const g = game.value;
-  if (!g || !playerId) return;
-  const isHome = g.teamHome.playerArray.some((p) => p.playerId === playerId);
-  const side: 'home' | 'away' = isHome ? 'home' : 'away';
-  const team = isHome ? g.teamHome : g.teamAway;
-  const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
-  if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
-  state.rerollSplash = {
-    side, coach: (team.coach as string | null) ?? '', logo, source: 'Loner', isTeam: false,
-    text: `${playerName(g, playerId)} is a Loner — reroll lost!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
-  };
-  rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
+  if (!g || !playerId || playback.catchingUp) return;
+  if (lonerFailedCueClearTimer) cancelGameTimeout(lonerFailedCueClearTimer);
+  state.lonerFailedCue = { playerId, text: `${playerName(g, playerId)} fails their loner roll!`, roll, seq: (state.lonerFailedCue?.seq ?? 0) + 1 };
+  lonerFailedCueClearTimer = scheduleGameTimeout(() => { state.lonerFailedCue = null; lonerFailedCueClearTimer = null; }, presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
 }
 
 /** Weather Mage uses the existing compact splash rail; the authoritative result report supplies the reveal. */
@@ -4009,7 +4090,7 @@ function armInjuryTokenHold(playerId: string, square: readonly number[], priorSt
   const playerState = (priorState & ~0xff) | PlayerStateBase.PRONE;
   // Owner 10-13: a crowd push lands him one square off the pitch (surf); a re-arm from the same square keeps it.
   const prior = state.injuryTokenHolds.find((hold) => hold.playerId === playerId);
-  const landing = isSurfLanding(surf) ? surf
+  const landing = isCrowdSquare(surf) ? surf
     : prior?.surf && prior.square[0] === square[0] && prior.square[1] === square[1] ? prior.surf : null;
   state.injuryTokenHolds = [...state.injuryTokenHolds.filter((hold) => hold.playerId !== playerId),
     { playerId, square: [square[0]!, square[1]!], playerState, ...(landing ? { surf: [landing[0]!, landing[1]!] as [number, number] } : {}) }];
@@ -4338,20 +4419,68 @@ function crowdInjuredInReports(reports: readonly Record<string, unknown>[], play
 /** Astra 10-13: the last in-bounds square of a thrown / kicked team-mate's flight - the `endCoordinate` of the wire's
  *  throwTeamMate / kickTeamMate animation (upstream StepInitScatterPlayer: scatterResult.getLastValidCoordinate()),
  *  which reaches the client a sync BEFORE the crowd injury. Kept for a few arming passes only (flightLandingFresh). */
-const flightLandings = new Map<string, { square: [number, number]; pass: number }>();
+/*  Owner 10-20: with it, `crowd` = the off-pitch square the server's own report says he left the pitch onto
+ *  (crowdSurf.ts thrownCrowdLanding: the same frame's scatterPlayer / swoopPlayer report, or the swoopPlayer report of
+ *  an earlier frame - the Swoop Distance reroll window sits between the distance roll and the flight - whose start is
+ *  the flight's start), null when the report puts him on the pitch or there is none. */
+const flightLandings = new Map<string, { square: [number, number]; crowd: [number, number] | null; pass: number }>();
 let flightLandingPass = 0;
 const FLIGHT_LANDING_PASSES = 3;
+/** Owner 10-20: the last swoopPlayer report not yet followed by a flight (consumed by the next flight; reset with the
+ *  flight landings). */
+let swoopReportForFlight: { start: [number, number]; end: [number, number]; outOfBounds: boolean } | null = null;
 function noteFlightLanding(cmd: Record<string, unknown> | null | undefined): void {
-  const anim = (cmd as { animation?: { animationType?: unknown; thrownPlayerId?: unknown; endCoordinate?: unknown } | null } | null | undefined)?.animation;
+  const reports = ((cmd as { reportList?: { reports?: Record<string, unknown>[] } | null } | null | undefined)?.reportList?.reports ?? []);
+  const swoop = reports.find((report) => String(report.reportId) === 'swoopPlayer');
+  if (swoop && Array.isArray(swoop.startCoordinate) && Array.isArray(swoop.endCoordinate)) {
+    const [start, end] = [swoop.startCoordinate as number[], swoop.endCoordinate as number[]];
+    swoopReportForFlight = { start: [Number(start[0]), Number(start[1])], end: [Number(end[0]), Number(end[1])], outOfBounds: swoop.outOfBounds === true };
+  }
+  const anim = (cmd as { animation?: { animationType?: unknown; thrownPlayerId?: unknown; startCoordinate?: unknown; endCoordinate?: unknown } | null } | null | undefined)?.animation;
   if (!anim || !['throwTeamMate', 'kickTeamMate'].includes(String(anim.animationType ?? '')) || anim.thrownPlayerId == null) return;
+  const priorSwoop = swoopReportForFlight;
+  swoopReportForFlight = null;
   const end = anim.endCoordinate as readonly number[] | null | undefined;
-  if (isPitchSquare(end)) flightLandings.set(String(anim.thrownPlayerId), { square: [end[0]!, end[1]!], pass: flightLandingPass });
+  if (!isPitchSquare(end)) return;
+  const start = anim.startCoordinate as readonly number[] | null | undefined;
+  const swoopLine = priorSwoop && start && priorSwoop.start[0] === start[0] && priorSwoop.start[1] === start[1] ? priorSwoop : null;
+  const crowd = thrownCrowdLanding(end, reports, swoopLine);
+  flightLandings.set(String(anim.thrownPlayerId), { square: [end[0]!, end[1]!], crowd, pass: flightLandingPass });
 }
-function flightLandingFresh(playerId: string): [number, number] | null {
+function flightLandingEntry(playerId: string): { square: [number, number]; crowd: [number, number] | null } | null {
   const hit = flightLandings.get(playerId);
   if (!hit) return null;
   if (flightLandingPass - hit.pass > FLIGHT_LANDING_PASSES) { flightLandings.delete(playerId); return null; }
-  return hit.square;
+  return hit;
+}
+function flightLandingFresh(playerId: string): [number, number] | null {
+  return flightLandingEntry(playerId)?.square ?? null;
+}
+/** Owner 10-20 ("Blood splatter should go on the outside sideline square"): the live applier's fold of
+ *  thrownCrowdBlood.ts -> state.bloodSpotRelocations. A published spectator position reads its checkpoint's own durable
+ *  fold instead (Astra P2-1: playback, seek and return-to-live agree). Reset with the game (resetPlayback). */
+let liveThrownCrowd = createThrownCrowdProjection();
+function noteThrownCrowdBloodSpots(cmd: Record<string, unknown> | null | undefined, model: GameJson | null | undefined): void {
+  if (!cmd || !model) return;
+  const changes = ((cmd as { modelChangeList?: { modelChangeArray?: { modelChangeId?: string }[] } | null }).modelChangeList?.modelChangeArray ?? []);
+  const added = changes.filter((change) => change.modelChangeId === 'fieldModelAddBloodSpot').length;
+  // the model has applied this frame: its spots were appended in wire order behind the ones it had before
+  const before = Math.max(0, ((model.fieldModel.bloodspotArray ?? []) as unknown[]).length - added);
+  const next = reduceThrownCrowdProjection(liveThrownCrowd, cmd, before);
+  if (next.relocations !== liveThrownCrowd.relocations) state.bloodSpotRelocations = next.relocations.map((r) => ({ index: r.index, from: [r.from[0], r.from[1]], to: [r.to[0], r.to[1]] }));
+  liveThrownCrowd = next;
+}
+/** Owner 10-20 (Astra round 4 P2): a crowd injury of a thrown / kicked / swooping team-mate (no pushback naming him)
+ *  is presented on his crowd square: the pill's anchor (InjuryEvent.pillSquare). Anything else keeps its anchor. */
+function notePillCrowdSquare(event: InjuryEvent, reports: readonly Record<string, unknown>[]): void {
+  if (!event.crowdSurf || crowdPushedInReports(reports, event.playerId)) return;
+  const landing = flightCrowdLandingFresh(event.playerId);
+  if (landing) event.pillSquare = [landing[0], landing[1]];
+}
+/** Owner 10-20: the off-pitch square a thrown / kicked / swooping player's flight ends on (Modern: Classic keeps the
+ *  nearest-edge surf and its flight to the last in-bounds square). */
+function flightCrowdLandingFresh(playerId: string): [number, number] | null {
+  return settings.uiMode === 'classic' ? null : flightLandingEntry(playerId)?.crowd ?? null;
 }
 /** @internal The ONE arming rule, shared by the live applier and the live-review publication (Astra P2 10-10: review
  *  had its own approximation and lost both crowd pushes). Who does this model transition + its reports take off the
@@ -4369,6 +4498,7 @@ export function injuryTokenHoldArms(
   eventPending: (playerId: string) => boolean,
   squareOf: (playerId: string) => readonly number[] | null = () => null,
   lastValidOf: (playerId: string) => readonly number[] | null = () => null,
+  crowdLandingOf: (playerId: string) => readonly number[] | null = () => null,
 ): { playerId: string; square: [number, number]; priorState: number; surf?: [number, number] | null }[] {
   if (INJURY_TOKEN_HOLD_BOARD_RESET_MODES.has(String(model.turnMode ?? ''))) return [];
   const arms: { playerId: string; square: [number, number]; priorState: number; surf?: [number, number] | null }[] = [];
@@ -4395,8 +4525,12 @@ export function injuryTokenHoldArms(
     // of several squares): a wrong guess lands him one square along the edge, and a corner can go either way.
     // Astra 10-13: a thrown / kicked team-mate's crowd injury lands him off the NEAREST edge from his last in-bounds
     // square - the thrower is no pusher (the renderer does not slide him across the pitch from an interior square).
+    // Owner 10-20: unless the server's own report says where he left the pitch (the crowd square his flight ended on:
+    // crowdSurf.ts thrownCrowdLanding - a scatter's first square out, a swoop's endpoint as sent): then he lies there.
+    const exit = crowdInjured ? crowdLandingOf(data.playerId) : null;
+    const reported = isCrowdSquare(exit) ? exit : null;
     const surf = crowdPushed && data.playerId !== actingId ? surfLandingSquare(held, pusher)
-      : crowdInjured ? surfLandingSquare(held, null) : null;
+      : crowdInjured ? (reported ? [reported[0], reported[1]] as [number, number] : surfLandingSquare(held, null)) : null;
     arms.push({ playerId: data.playerId, square: held, priorState: beforeStates.get(data.playerId) ?? PlayerStateBase.PRONE, ...(surf ? { surf } : {}) });
   }
   return arms;
@@ -4409,7 +4543,7 @@ function armInjuryTokenHoldsForTransition(
   squareOf?: (playerId: string) => readonly number[] | null,
 ): void {
   if (playback.catchingUp) return;
-  for (const arm of injuryTokenHoldArms(model, before, beforeStates, reports, injuryEventPendingFor, squareOf, flightLandingFresh)) armInjuryTokenHold(arm.playerId, arm.square, arm.priorState, arm.surf);
+  for (const arm of injuryTokenHoldArms(model, before, beforeStates, reports, injuryEventPendingFor, squareOf, flightLandingFresh, flightCrowdLandingFresh)) armInjuryTokenHold(arm.playerId, arm.square, arm.priorState, arm.surf);
 }
 /** The model-moved-on wakes (see the hold's header). Runs on every applied frame / published position. */
 function reconcileInjuryTokenHolds(model: GameJson | null): void {
@@ -4449,6 +4583,8 @@ function resetCasualtySppPacing(): void {
   lingeringPillSettlers.clear(); pillPoppedAt.clear(); apothecaryElectionsSeen.clear(); // owner 10-20
   clearInjuryTokenHolds(); // owner 10-10: the pump that would have released them is void from here
   flightLandings.clear(); // Astra 10-13: no flight of an earlier game / position lands a later crowd injury
+  liveThrownCrowd = { ...liveThrownCrowd, swoop: null, flights: [], exits: [] }; // owner 10-20: nor moves a later blood spot
+  swoopReportForFlight = null; // owner 10-20: nor a swoop distance roll of one
   injuryEscorts.clear();
   casualtyPresentationsOutstanding = 0;
   pendingCasualtySpp = [];
@@ -4969,10 +5105,20 @@ function scheduleCrowdStomp(event: InjuryEvent, inMs: number, generation: number
   const fire = () => {
     if (generation !== casualtySppGeneration) return;
     const hold = state.injuryTokenHolds.find((candidate) => candidate.playerId === event.playerId);
-    if (!hold?.surf) return;
-    state.crowdSurf = { square: [hold.surf[0], hold.surf[1]], side: event.side, seq: (state.crowdSurf?.seq ?? 0) + 1, playerId: event.playerId };
+    const square = hold?.surf ?? thrownCrowdLandingDrawn(event.playerId);
+    if (!square) return;
+    state.crowdSurf = { square: [square[0], square[1]], side: event.side, seq: (state.crowdSurf?.seq ?? 0) + 1, playerId: event.playerId };
   };
   if (inMs > 0) scheduleGameTimeout(fire, inMs); else fire();
+}
+
+/** Owner 10-20: a thrown team-mate the server put in the crowd whose removal waits behind an apothecary offer (g1954978
+ *  #1442: crowdpush injury + useApothecary; the model keeps him on his pre-throw square until #1443) is drawn by the
+ *  renderer on his flight's off-pitch landing (renderer ttmLandingHeld), not by an injury token hold. That square, while
+ *  the model still has him on the pitch; null otherwise (off the pitch with no hold = nothing to stomp on). */
+function thrownCrowdLandingDrawn(playerId: string): [number, number] | null {
+  const data = game.value?.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+  return data && isPitchSquare(data.playerCoordinate) ? flightCrowdLandingFresh(playerId) : null;
 }
 
 /** Wire `injuryType` is a {name} object or bare string — pull the name for classification. */
@@ -5608,6 +5754,7 @@ async function pauseSpectatorView(): Promise<void> {
             for (const report of playedReports) {
               const pid = String(report.defenderId ?? report.playerId ?? '');
               const event = pid && !armed.has(pid) ? injuryPresentation(report, position.model, coordinates.get(pid), false) : null;
+              if (event) notePillCrowdSquare(event, playedReports); // owner 10-20
               if (!event) continue;
               armed.add(pid);
               // Astra 10-12: an occurrence resolved before (rewind, then forward again) is not armed a second time.
@@ -5838,13 +5985,21 @@ async function pauseSpectatorView(): Promise<void> {
       const rerollCue = rerollPresentation(reports);
       const reroll = rerollCue?.isBlockReroll ? null : rerollCue;
       // Owner 09-19: a re-roll SKILL no longer raises the skill-use icon + pill — the re-roll toast is the one surface.
+      // Astra r5: snapshotted at THAT player's Loner-gated use, after the frame's earlier rolls went by
+      let lonerAtUse: LonerOriginalAtUse | null = null;
+      const lonerUse = lonerGatedUse(reports);
+      let reportIndex = -1;
       for (const report of reports) {
+        reportIndex++;
         const pid = String(report.playerId ?? '');
+        if (lonerUse && reportIndex === lonerUse.index) lonerAtUse = { playerId: lonerUse.playerId, roll: captureLonerOriginalRoll(position.model, lonerUse.playerId) };
         const coordinate = position.model.fieldModel.playerDataArray.find((player) => player.playerId === pid)?.playerCoordinate;
         const cue = skillUsePresentation(report, coordinate, position.durableProjection.block, playerName(position.model, pid));
         if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
         const rollCoordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? coordinate;
         const roll = actionRollPresentation(report, reports, position.model, rollCoordinate, true, reroll);
+        noteRerollableRoll(pid, roll); // owner 10-20 (Astra r3): the roll a reroll offer would be for
+        if (roll?.die && lonerGateDieHidden(report)) roll.die = null; // owner 10-20: the Loner check is no action die
         if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
         if (dodgeUsedBreakTackle(report) && coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15) { // owner 09-14: Break Tackle toast on review too
           const name = playerName(position.model, pid);
@@ -5855,7 +6010,7 @@ async function pauseSpectatorView(): Promise<void> {
         const dice = rolls.flatMap((roll) => roll.die ? [roll.die] : []);
         for (const roll of rolls) {
           if (roll.trait) state.negatraitCue = { ...roll.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
-          if (roll.modal) state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
+          if (roll.modal) { state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 }; }
         }
         if (dice.length) publishActionDice(dice);
         // Owner 10-13: the landing die of a held TTM landing card is the hold's wake (see the publication above).
@@ -5864,7 +6019,13 @@ async function pauseSpectatorView(): Promise<void> {
       };
       const hasFail = firstRolls.some((roll) => roll.die?.failed || roll.modal?.ok === false || roll.trait?.successful === false);
       const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
-      const resultBeat = reroll ? presentationMs(reroll.proFailed || reroll.lonerFailed ? REROLL_SPLASH_HOLD_MS : rerollSplashWanted(reroll.isTeam, reroll.raw) ? REROLL_BEAT_MS : 300) : 0;
+      const resultBeat = reroll ? presentationMs(reroll.proFailed ? REROLL_SPLASH_HOLD_MS : rerollSplashWanted(reroll.isTeam, reroll.raw) ? REROLL_BEAT_MS : 300) : 0;
+      // owner 10-20: a failed Loner - the original die re-tumbles where a rerolled result would land (resultBeat), then
+      // the pill comes up once it has landed and the toast has cleared (never before)
+      const lonerOriginal = reroll?.lonerFailed ? lonerOriginalFor(lonerAtUse, position.model, reroll.lonerPid ?? reroll.pid) : null;
+      const lonerPillBeat = reroll?.lonerFailed
+        ? Math.max(rerollSplashWanted(reroll.isTeam, reroll.raw) || reroll.proFailed ? presentationMs(REROLL_SPLASH_HOLD_MS) - resultBeat : 0, presentationMs(LONER_RETUMBLE_LAND_MS))
+        : 0;
       if (reports.some((report) => report.reportId === 'steadyFootingRoll' && report.successful === true)) playSound('angel');
       const wireSound = event.command.sound as string | null | undefined;
       const projectileOwnsWireSound = !!projectile && (
@@ -5883,23 +6044,33 @@ async function pauseSpectatorView(): Promise<void> {
       const reviewRerollPin = transitionRerollPin;
       transitionRerollPin = null;
       if (reviewRerollPin && rerolledRolls.length === 0) releaseRerollResultPin(reviewRerollPin.seq);
+      // Astra r6: a failed Loner rerolled nothing, so a rerolled result in its frame belongs to an EARLIER use (a Dodge
+      // skill reroll before the Rush that the Loner's team reroll was for). It is shown first, before the frame's first
+      // rolls, so the Loner re-tumble is the last die published for the square and settles on the original roll.
+      const earlierRerolls = !!reroll?.lonerFailed && rerolledRolls.length > 0;
+      const showRerolledRolls = () => {
+        showRolls(rerolledRolls);
+        // Astra round 4: live review pins the held failed die for the accepted reroll's result as live play does
+        // (raised below, before the first stage); it is released shortly after the result has been shown.
+        if (reviewRerollPin && rerolledRolls.length > 0) {
+          const pin = reviewRerollPin;
+          scheduleGameTimeout(() => releaseRerollResultPin(pin.seq), presentationMs(REROLL_RESULT_PIN_TAIL_MS));
+        }
+      };
       const staged = await presentStages([
-        { delayBefore: 0, present: () => showRolls(firstRolls) },
+        { delayBefore: 0, present: () => { if (earlierRerolls) showRerolledRolls(); showRolls(firstRolls); } },
         { delayBefore: failBeat, present: () => {
           if (rerollCue?.proFailed) showProFailedSplash(rerollCue.pid);
           else if (reroll && rerollSplashWanted(reroll.isTeam, reroll.raw)) showRerollSplash(reroll.pid, reroll.source, reroll.isTeam, reroll.raw, reroll.proRescuedBy);
         } },
         { delayBefore: resultBeat, present: () => {
-          if (reroll?.lonerFailed) showLonerFailedSplash(reroll.pid);
-          showRolls(rerolledRolls);
-          // Astra round 4: live review pins the held failed die for the accepted reroll's result as live play does
-          // (raised below, before the first stage); it is released shortly after the result has been shown.
-          if (reviewRerollPin && rerolledRolls.length > 0) {
-            const pin = reviewRerollPin;
-            scheduleGameTimeout(() => releaseRerollResultPin(pin.seq), presentationMs(REROLL_RESULT_PIN_TAIL_MS));
-          }
+          if (!earlierRerolls) showRerolledRolls();
+          if (reroll?.lonerFailed) presentLonerRetumble(lonerOriginal); // owner 10-20: the roll captured above - published last
         } },
-        ...(reroll?.lonerFailed ? [{ delayBefore: presentationMs(REROLL_SPLASH_HOLD_MS), present: () => {} }] : []),
+        ...(reroll?.lonerFailed ? [
+          { delayBefore: lonerPillBeat, present: () => showLonerFailedSplash(reroll.lonerPid ?? reroll.pid, reroll.lonerRoll) },
+          { delayBefore: presentationMs(LONER_FAILED_SPLASH_HOLD_MS), present: () => {} },
+        ] : []),
       ], signal);
       if (!staged) { if (reviewRerollPin) releaseRerollResultPin(reviewRerollPin.seq); return; }
       if (projectile) {
@@ -5955,9 +6126,11 @@ async function pauseSpectatorView(): Promise<void> {
         if (projectile.fireball) state.fireballAnim = {
           square: projectile.fireball.square, sound: projectile.fireball.sound, seq: (state.fireballAnim?.seq ?? 0) + 1,
         };
-        if (projectile.throw) state.throwAnim = {
-          ...projectile.throw, seq: (state.throwAnim?.seq ?? 0) + 1,
-        };
+        if (projectile.throw) {
+          // owner 10-20: the off-pitch landing of a Throw Team-Mate (noted by this event's publication)
+          const landing = projectile.throw.kind === 'throwTeamMate' && projectile.throw.thrownId ? flightCrowdLandingFresh(projectile.throw.thrownId) : null;
+          state.throwAnim = { ...projectile.throw, seq: (state.throwAnim?.seq ?? 0) + 1, ...(landing ? { landing } : {}) };
+        }
         if (projectile.trickster) state.trickster = {
           ...projectile.trickster, seq: (state.trickster?.seq ?? 0) + 1,
         };
@@ -6128,6 +6301,7 @@ async function pauseSpectatorView(): Promise<void> {
         const injury = injuryPresentation(report, position.model, coordinate, reports.some((r) => r.reportId === 'foul'));
         if (!injury || injured.has(pid)) continue;
         injured.add(pid);
+        notePillCrowdSquare(injury, reports); // owner 10-20 (Astra round 5): a thrown team-mate's pill on his crowd square
         if (injury.isCasualty) casualtyPresentationsOutstanding++;
         injuryEventOccurrence.set(injury, event.command); // owner 10-12: its pill resolves this occurrence's beat only
         if (armourCuePids.has(pid) && modernInjuryTiming()) { armourCueEvents.add(injury); injury.armourDice = true; } // owner 10-20: his pill pops with (and below) his armour dice (Modern; Astra P2-6)
@@ -6596,7 +6770,7 @@ function clearCatchupTransients(): void {
   rerollStageTimers = [];
   if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
-  clearRerollSplash(); clearTeamCaptainSplash(); state.reRollPrompt = null; state.skillChoice = null;
+  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
     if (pregameCineQueue[i]?.kind === 'prayer') pregameCineQueue.splice(i, 1);
   }
@@ -9767,6 +9941,7 @@ function applyFrameContents(frame: QueuedFrame) {
     const event = injuryPresentation(report, game.value, failedMovementDestination(playerId) ?? preCoords.get(playerId), foulInFrame);
     if (!event || injuredThisFrame.has(playerId)) continue;
     injuredThisFrame.add(playerId);
+    notePillCrowdSquare(event, reports); // owner 10-20: a thrown team-mate's pill on his crowd square
     if (!playback.catchingUp) {
       if (event.isCasualty) casualtyPresentationsOutstanding++;
       if (Array.isArray(report.armorRoll) && report.armorRoll.length === 2 && skipsArmourDiceOnCasualty(settings.skipArmourDiceOnCasualty, report, game.value)) armourSkippedEvents.add(event); // owner 10-14
@@ -9783,6 +9958,7 @@ function applyFrameContents(frame: QueuedFrame) {
   }
   // Owner 10-10: whoever this frame took off the pitch with his injury still to be presented keeps his token there.
   flightLandingPass++; noteFlightLanding(cmd); // Astra 10-13: a thrown / kicked team-mate's last in-bounds square
+  noteThrownCrowdBloodSpots(cmd, game.value); // owner 10-20: his blood spot goes on his crowd square
   armInjuryTokenHoldsForTransition(game.value, preCoords, preStates, reports, failedMovementDestination);
   reconcileInjuryTokenHolds(game.value);
   reconcileInjuryPillBeats(game.value); // owner 10-12: a player no longer STUNNED has no decoration to wait for
@@ -10248,7 +10424,8 @@ function applyFrameContents(frame: QueuedFrame) {
             });
           } else if (!pacedPass) {
             const seq = (state.throwAnim?.seq ?? 0) + 1;
-            state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound };
+            const landing = kind === 'throwTeamMate' && thrownId ? flightCrowdLandingFresh(thrownId) : null; // owner 10-20
+            state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound, ...(landing ? { landing } : {}) };
             // Owner 10-13: the landing reroll card waits for this flight (ttmLandingHold).
             if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, ttmThrowMs(settings.uiMode === 'classic'));
             // Owner 10-13 ("Players knocked down should resolve at the point of impact"): like a thrown bomb, nothing
@@ -10335,7 +10512,10 @@ function applyFrameContents(frame: QueuedFrame) {
     }
   }
   // Owner 2026-07-06 / 2026-07-08: a RE-ROLL was spent — surface it for ANY source (Team Re-Roll / Pro / Brawler / Leader / skill rerolls…), not just TRR. A blockReRoll splashes immediately (the block cine paces that family); a plain reRoll is handed to the action-dice pass below, which STAGES it behind the failed die so the fail → reroll → new result sequence is readable.
-  let pendingActionReroll: { pid: string; source: string; isTeam: boolean; raw: string; lonerFailed: boolean; proRescuedBy: string | null } | null = null;
+  let pendingActionReroll: { pid: string; source: string; isTeam: boolean; raw: string; lonerFailed: boolean; lonerPid: string | null; lonerRoll: number | null; proRescuedBy: string | null } | null = null;
+  /** Astra r4: a toast already announced this use in this frame - the reroll toast, or the working Mascot's (raised
+   *  above, it reads REROLL_SPLASH_HOLD_MS). A failed Loner's re-tumble waits for its beat and the pill for its clear. */
+  const useToastShown = (isTeam: boolean, raw: string) => rerollSplashWanted(isTeam, raw) || mascotBeatEndsAt > 0;
   // Owner 10-20: a KEPT team reroll (successful teamCaptainRoll) splashes once the rerolled action is resolved - never
   // between the roll and its rerolled result. Block: after the chosen result (pendingBlockTeamCaptain, released by the
   // blockChoice frame, bounded by a fail-open). Action: the staging below schedules it after the rerolled die
@@ -10389,22 +10569,39 @@ function applyFrameContents(frame: QueuedFrame) {
         // Failed Pro is a gate result: the server did not grant a reroll. Its dedicated
         // coach-facing failure card must not be replaced by the generic "uses Pro" card.
         if (proFailed) holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS));
-        else {
+        else if (rerollSplashWanted(isTeam, rawSource)) {
           showRerollSplash(rrPid, source, isTeam, rawSource, rerollCue.proRescuedBy);
           holdPlayback(presentationMs(REROLL_BEAT_MS));
         }
         if (lonerFailed) {
-          // Pop when the "uses a Team Re-Roll" splash clears (same rail = never overlapping), hold its own beat.
-          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rrPid), presentationMs(REROLL_SPLASH_HOLD_MS)));
-          holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS) * 2);
+          // Owner 10-20: the Loner cue (below the player) pops when the "uses a team reroll" toast clears (never
+          // overlapping it) and reads its own LONER_FAILED_SPLASH_HOLD_MS. No toast (a Mascot's Loner): at once.
+          const lonerPid = rerollCue.lonerPid ?? rrPid;
+          const lonerRoll = rerollCue.lonerRoll;
+          // Astra r4: never before the card's delayed re-tumble (the view's LONER_RETUMBLE_DELAY_MS) has landed
+          const lonerAt = Math.max(useToastShown(isTeam, rawSource) ? presentationMs(REROLL_SPLASH_HOLD_MS) : 0,
+            presentationMs(LONER_RETUMBLE_DELAY_MS + LONER_RETUMBLE_LAND_MS));
+          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid, lonerRoll), lonerAt));
+          holdPlayback(lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
           // owner 10-20 / Astra round 4: a kept reroll's captain splash waits until this Loner splash has cleared
-          if (pendingBlockTeamCaptain) pendingBlockTeamCaptain.notBefore = Date.now() + presentationMs(REROLL_SPLASH_HOLD_MS) * 2;
+          if (pendingBlockTeamCaptain) pendingBlockTeamCaptain.notBefore = Date.now() + lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS);
         }
       // Owner 10-10 (Astra P2): a failed Pro granted NO reroll (bb2025 RollMechanic.useReRoll returns false). Its failure
       // card above is the whole presentation - it must never become the pending "uses Pro to reroll!" cue, which the
       // staging below would show over that card. Same guard and beat as the block path.
-      } else if (proFailed) holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS));
-      else pendingActionReroll = { pid: rrPid, source, isTeam, raw: rawSource, lonerFailed, proRescuedBy: rerollCue.proRescuedBy };
+      } else if (proFailed) {
+        // Astra 10-20 (P2-2): a Pro-TRR fallback whose Loner roll then fails - the Loner cue follows the Pro card
+        // (as it follows the reroll toast) and reads its own beat.
+        if (lonerFailed) {
+          const lonerPid = rerollCue.lonerPid ?? rrPid;
+          const lonerRoll = rerollCue.lonerRoll;
+          // owner 10-20: the original die re-tumbles after the Pro card's beat, the pill once the card has cleared
+          const original = captureLonerOriginalRoll(game.value, lonerPid); // Astra r3: captured now, presented later
+          rerollStageTimers.push(scheduleGameTimeout(() => presentLonerRetumble(original), presentationMs(REROLL_BEAT_MS)));
+          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid, lonerRoll), presentationMs(REROLL_SPLASH_HOLD_MS)));
+          holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS + LONER_FAILED_SPLASH_HOLD_MS));
+        } else holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS));
+      } else pendingActionReroll = { pid: rrPid, source, isTeam, raw: rawSource, lonerFailed, lonerPid: rerollCue.lonerPid, lonerRoll: rerollCue.lonerRoll, proRescuedBy: rerollCue.proRescuedBy };
     }
   }
   // Owner 2026-07-08: STEADY FOOTING save — the BB2025 skill lets a player who would be Knocked Down/Fall Over roll a D6; on a 6 they stay standing (no turnover). The wire sends `steadyFootingRoll` {successful, roll:6}. A SUCCESS plays the "angel" sting (placeholder sound — silent until the owner supplies angel.ogg or an override). The die + skill toast already surface via the action-dice / skillUse paths.
@@ -10417,9 +10614,15 @@ function applyFrameContents(frame: QueuedFrame) {
     // Owner 2026-07-08: split this frame's action dice into the FIRST rolls and the RE-ROLLED results so a fail→reroll→result burst can be staged sequentially.
     const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollOfferNotFailed?: boolean; breatheFireReroll?: boolean }[] = [];
     const reRolledRolls: typeof firstRolls = [];
+    // Astra r5: snapshotted at THAT player's Loner-gated use, after the frame's earlier rolls went by
+    let lonerAtUse: LonerOriginalAtUse | null = null;
+    const lonerUse = lonerGatedUse(reports);
+    let reportIndex = -1;
     for (const report of reports) {
+      reportIndex++;
       const pid = report.playerId;
       const reportId = String(report.reportId);
+      if (lonerUse && reportIndex === lonerUse.index) lonerAtUse = { playerId: lonerUse.playerId, roll: captureLonerOriginalRoll(game.value, lonerUse.playerId) };
       visibleActionRollProjection = reduceActionRollProjection(visibleActionRollProjection, [report], game.value);
       // R-A1/R-A5: the server reported a skillUse answer consumed (yes OR no) — mark the instance answered so the still-live dialog's card stops re-arming. Unconditional on reportId (a declined non-standFirm skill would fail the isSkillUse/isSkillDecline gate below and `continue` past it, so record BEFORE that).
       if (String(report.reportId) === 'skillUse' && skillDialogMatches(dialogAtFrameStart, pid, report.skill)) {
@@ -10438,6 +10641,7 @@ function applyFrameContents(frame: QueuedFrame) {
         ?? (typeof pid === 'string' ? preCoords.get(pid) : null) ?? undefined;
       if (isActionRoll) {
         const cue = actionRollPresentation(report, reports, game.value, raw, !play.active || !myPlayIds(game.value).has(String(pid)), pendingActionReroll);
+        noteRerollableRoll(String(pid ?? ''), cue); // owner 10-20 (Astra r3): the roll a reroll offer would be for
         if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
         if (cue?.modal) {
           const modal = cue.modal;
@@ -10446,7 +10650,8 @@ function applyFrameContents(frame: QueuedFrame) {
           const stagedCatch = reportId === 'catchRoll' ? stagedKickoffCatches.get(report) : undefined;
           if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal); else publishModal();
         }
-        if (cue?.die) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
+        // owner 10-20: a failed Loner gate's roll is the Loner check, not the action's - never an on-pitch die (Modern)
+        if (cue?.die && !lonerGateDieHidden(report)) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
         // Owner 09-14: Break Tackle gets the same skill-use toast as every other skill (icon pop + "<name> uses
         // Break Tackle!") — keyed off the successful dodge's modifier, since upstream sends no skillUse report for it.
         if (dodgeUsedBreakTackle(report) && raw && raw[0] >= 0 && raw[0] < 26 && raw[1] >= 0 && raw[1] < 15) {
@@ -10501,6 +10706,8 @@ function applyFrameContents(frame: QueuedFrame) {
       pushDice(firstRolls);
       const firstBatch = state.actionDice !== diceBeforeFirst ? state.actionDice : null;
       const rr = pendingActionReroll;
+      // Astra r3: the roll a failed Loner re-tumbles is captured with the frame, never read when the timer fires
+      const lonerOriginal = rr.lonerFailed ? lonerOriginalFor(lonerAtUse, game.value, rr.lonerPid ?? rr.pid) : null;
       // Owner 10-09: a movement roll rescued by the reroll - the path goes on, so the frames behind this one (the next
       // squares) are held on EVERY seat until the reroll has been shown, with short beats (RESCUED_MOVE_ROLL_HOLD).
       // The hold is the receive queue's own (rescuedMoveHoldUntil): its timer is the wake, it cannot outlive its beats.
@@ -10599,14 +10806,21 @@ function applyFrameContents(frame: QueuedFrame) {
           rerollStageTimers.push(scheduleGameTimeout(() => releaseRerollResultPin(pin.seq),
             failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
         }
-        // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
-        // reroll splash clears (splash deprecated → after the fail beat + breath) and holds its own read beat.
+        // Owner 10-20: FAILED LONER - no rerolled result follows; the Loner cue (below the player) pops when the
+        // reroll toast clears (no toast: after the fail beat + breath) and holds its own read beat.
         if (rr.lonerFailed) {
-          const lonerAt = failBeat + (rerollSplashWanted(rr.isTeam, rr.raw) ? presentationMs(REROLL_SPLASH_HOLD_MS) : resultBeat);
-          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rr.pid), lonerAt));
-          holdPlayback(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS));
-          // owner 10-20 / Astra P2-4: after the Loner splash has CLEARED (it reads REROLL_SPLASH_HOLD_MS)
-          scheduleTeamCaptain(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS + TEAM_CAPTAIN_AFTER_RESULT_MS));
+          // owner 10-20: the original die re-tumbles where the rerolled result would have landed; the pill follows its
+          // landing and the toast's clear
+          // Astra r4: a Mascot's toast (raised with the frame) paces it like the reroll toast does
+          const mascotPaced = !rerollSplashWanted(rr.isTeam, rr.raw) && mascotBeatEndsAt > 0;
+          const retumbleAt = mascotPaced ? Math.max(failBeat, presentationMs(REROLL_BEAT_MS)) : failBeat + resultBeat;
+          const lonerAt = Math.max(rerollSplashWanted(rr.isTeam, rr.raw) ? failBeat + presentationMs(REROLL_SPLASH_HOLD_MS) : mascotPaced ? presentationMs(REROLL_SPLASH_HOLD_MS) : 0,
+            retumbleAt + presentationMs(LONER_RETUMBLE_LAND_MS));
+          rerollStageTimers.push(scheduleGameTimeout(() => presentLonerRetumble(lonerOriginal), retumbleAt));
+          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rr.lonerPid ?? rr.pid, rr.lonerRoll), lonerAt));
+          holdPlayback(lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
+          // owner 10-20 / Astra P2-4: after the Loner cue has CLEARED (it reads LONER_FAILED_SPLASH_HOLD_MS)
+          scheduleTeamCaptain(lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS + TEAM_CAPTAIN_AFTER_RESULT_MS));
         }
         // nothing rerolled to anchor on (and no Loner verdict): after the use's beats
         if (reRolledRolls.length === 0) scheduleTeamCaptain(failBeat + resultBeat + presentationMs(TEAM_CAPTAIN_AFTER_RESULT_MS));
@@ -10616,19 +10830,30 @@ function applyFrameContents(frame: QueuedFrame) {
       else stage(0);
     } else {
       const rerollUse = pendingActionReroll;
+      // Astra r3: captured with the frame (presentRerollUse may run later, behind a kick-off catch)
+      const lonerOriginal = rerollUse?.lonerFailed ? lonerOriginalFor(lonerAtUse, game.value, rerollUse.lonerPid ?? rerollUse.pid) : null;
       const presentRerollUse = () => {
         if (!rerollUse) return;
         // owner 10-20: the kept reroll's captain splash after the use (and its Loner verdict) has read
-        scheduleTeamCaptain(presentationMs((rerollUse.lonerFailed ? REROLL_SPLASH_HOLD_MS * 2 : REROLL_BEAT_MS) + TEAM_CAPTAIN_AFTER_RESULT_MS));
-        if (rerollSplashWanted(rerollUse.isTeam, rerollUse.raw)) showRerollSplash(rerollUse.pid, rerollUse.source, rerollUse.isTeam, rerollUse.raw, rerollUse.proRescuedBy);
-        // Owner 08-19: FAILED LONER with no same-frame dice (the fail landed in an earlier frame):
-        // splash shown → pill after the splash clears; no splash → pill immediately.
+        const splashed = rerollSplashWanted(rerollUse.isTeam, rerollUse.raw);
+        // owner 10-20: re-tumble at the use's beat, the pill after the landing (and the toast's clear)
+        const toasted = useToastShown(rerollUse.isTeam, rerollUse.raw); // Astra r4: the Mascot's toast paces it too
+        const retumbleAt = toasted ? presentationMs(REROLL_BEAT_MS) : 0;
+        const lonerAt = Math.max(toasted ? presentationMs(REROLL_SPLASH_HOLD_MS) : 0, retumbleAt + presentationMs(LONER_RETUMBLE_LAND_MS));
+        scheduleTeamCaptain(rerollUse.lonerFailed ? lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS + TEAM_CAPTAIN_AFTER_RESULT_MS)
+          : presentationMs(REROLL_BEAT_MS + TEAM_CAPTAIN_AFTER_RESULT_MS));
+        // owner 10-20: a historical (catch-up) use presents nothing - the staged branch above never did either
+        if (playback.catchingUp) return;
+        if (splashed) showRerollSplash(rerollUse.pid, rerollUse.source, rerollUse.isTeam, rerollUse.raw, rerollUse.proRescuedBy);
+        // Owner 10-20: FAILED LONER with no same-frame dice (g1953777 #1245: the failed die was an earlier frame):
+        // toast shown -> the Loner cue when it clears; no toast -> the cue at once. It reads its own beat.
         if (rerollUse.lonerFailed) {
-          const lonerPid = rerollUse.pid;
-          const splashed = rerollSplashWanted(rerollUse.isTeam, rerollUse.raw);
-          if (splashed) rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid), presentationMs(REROLL_SPLASH_HOLD_MS)));
-          else showLonerFailedSplash(lonerPid);
-          holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS) * (splashed ? 2 : 1));
+          const lonerPid = rerollUse.lonerPid ?? rerollUse.pid;
+          const lonerRoll = rerollUse.lonerRoll;
+          if (retumbleAt > 0) rerollStageTimers.push(scheduleGameTimeout(() => presentLonerRetumble(lonerOriginal), retumbleAt));
+          else presentLonerRetumble(lonerOriginal);
+          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid, lonerRoll), lonerAt));
+          holdPlayback(lonerAt + presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
         }
       };
       // Owner 10-08 (Astra P2): a reroll spent on a kick-off catch whose dice still wait behind the flight is announced
@@ -11973,7 +12198,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); } // Astra 10-20 (P2-3)
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
       playback.timer = null;
@@ -12876,6 +13101,8 @@ function resetPlayback() {
   penaltyShootoutPresentationState = { ...EMPTY_PENALTY_SHOOTOUT_PRESENTATION };
   state.ballDirection = null; // #141: no stale punt/swoop direction across games / reconnects
   state.swoopDestination = null; // owner 10-19: nor a stale Swoop distance result
+  state.bloodSpotRelocations = []; // owner 10-20: nor a blood spot of an earlier game's crowd landing
+  liveThrownCrowd = createThrownCrowdProjection();
   lastSentPushKey = ''; // g330 #11: fresh game — drop the stale-push guard
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
   state.freeSelectPassConfirm = null; // owner 10-20: nor its pending "Throw to ...?" card
@@ -12966,7 +13193,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearApothecaryFixUps();
+  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
@@ -13024,6 +13251,7 @@ function clearCollapsedReplayPresentation(preserveConnection = false): void {
   turnStartClearTimer = null;
   turnToastTimer = null;
   rerollSplashClearTimer = null;
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   pendingKickoffVictimSplash = null;
   pendingWinnerKickoff = null;
@@ -13096,6 +13324,7 @@ function clearLeaveGameResidualState(): void {
   turnStartTimer = null;
   turnStartClearTimer = null;
   rerollSplashClearTimer = null;
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   rerollStageTimers = [];
   injuryPlaying = false; injuryPresentingSet.clear();
@@ -15861,7 +16090,7 @@ export function installApothecaryTestHarness(
     dispose() {
       clearApothecaryResult();
       clearRerollSplash();
-      clearTeamCaptainSplash();
+      clearTeamCaptainSplash(); clearLonerFailedCue();
       injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); // owner 10-20
       state.riotousRookiesSplash = priorRiotous;
       state.turnStart = priorTurnStart;
@@ -16476,6 +16705,8 @@ export function installTouchdownPacingTestHarness(
   receive(cmd: Record<string, unknown>): void;
   /** A reconnect: the SERVER_GAME_STATE handler's reset + snapshot seed (resetPlayback, then the snapshot model). */
   snapshot(game: GameJson): void;
+  /** Owner 10-20: the snapshot tick the SERVER_GAME_STATE handler runs after its seed (forceSnapshotTick: snapshotEpoch). */
+  snapshotTick(): void;
   serverPush(cmd: Record<string, unknown>): void;
   queuedFrames(): number;
   /** The #67 presentation FIFO is fully drained: nothing queued, nothing on screen, the pump stopped. */
@@ -16515,6 +16746,7 @@ export function installTouchdownPacingTestHarness(
   return {
     receive(cmd) { enqueueSync(structuredClone(cmd)); },
     snapshot(snapshotGame) { resetPlayback(); game.value = structuredClone(snapshotGame); seedActingPlayer(game.value); },
+    snapshotTick() { forceSnapshotTick(); },
     serverPush(cmd) { handleServerPush(structuredClone(cmd)); },
     queuedFrames: () => playback.queue.length,
     presentationIdle: () => presentation.queue.length === 0 && !presentation.running && !presentation.presenting,
@@ -21053,7 +21285,8 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
   // tumble); a fresh roll tumbles all (null).
   const reroll = pendingBlockReroll;
   pendingBlockReroll = null;
-  const rerolledDice = !reroll ? null : !reroll.rolled ? [] : rerolledBlockDiceIndices({
+  // owner 10-20: after a failed Loner (Modern) every die tumbles again onto the faces the server resent - its original roll
+  const rerolledDice = !reroll ? null : reroll.lonerFailed && lonerRetumbleApplies() ? allBlockDiceIndices(card.dice.length) : !reroll.rolled ? [] : rerolledBlockDiceIndices({
     previous: reroll.previous, next: card.dice, rerolledFaces: reroll.faces, source: reroll.source, ownIndices: reroll.own,
   });
   lastSurfacedBlockDice = [...card.dice];
@@ -21081,6 +21314,7 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
     ...card,
     tumbleKey: `${blockChoiceEpoch}:${JSON.stringify(dp.blockRoll)}`,
     rerolledDice,
+    ...(reroll?.lonerFailed && lonerRetumbleApplies() ? { lonerRetumble: true as const } : {}),
     mine: !readOnly,
     pro: card.pro && !proWithheld,
     proComposite: readOnly || proWithheld ? [] : blockProCompositeOptions(dp.dialogId, dp),
@@ -21109,7 +21343,8 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
   const freshDialog = dp !== lastMultiBlockDialog;
   lastMultiBlockDialog = dp;
   const outcome = freshDialog ? blockRerollOutcome(reports) : null;
-  const rerolledTargets = new Set(outcome?.rolled
+  const lonerRetumble = !!outcome?.lonerFailed && lonerRetumbleApplies(); // owner 10-20: the original dice tumble again
+  const rerolledTargets = new Set(outcome?.rolled || lonerRetumble
     ? reports.filter((r) => String(r.reportId) === 'blockRoll' && r.defenderId != null).map((r) => String(r.defenderId))
     : []);
   const blockerSkillValues = playerById(game.value, blockerId)?.skillDisplayValuesMap;
@@ -21142,7 +21377,7 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
     const tumble = !prevRow
       ? { tumbleKey: `mb:${++multiBlockTumbleSeq}`, rerolledDice: null }
       : rerolledHere
-        ? { tumbleKey: `mb:${++multiBlockTumbleSeq}`, rerolledDice: rerolledBlockDiceIndices({
+        ? { tumbleKey: `mb:${++multiBlockTumbleSeq}`, ...(lonerRetumble ? { lonerRetumble: true as const } : {}), rerolledDice: lonerRetumble ? allBlockDiceIndices(dice.length) : rerolledBlockDiceIndices({
           previous: prevRow.dice, next: dice, rerolledFaces: outcome!.faces, source: outcome!.source,
           wire: { reRolledDice: wireDice, proIndex: typeof r.proIndex === 'number' ? r.proIndex : null },
         }) }
@@ -25634,7 +25869,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // caps stacking, so no separate throttle is needed here.
       const muteAtThisSpeed = replay.speed >= 4;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
+      clearTeamCaptainSplash(); clearLonerFailedCue(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
       if (!wasCatchingUp && muteAtThisSpeed) setSoundsSuppressed(true);
       try {
         if (command.netCommandId === NetCommandId.SERVER_MODEL_SYNC) {
@@ -25698,7 +25933,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); // Astra 10-20 (P2-3)
+      clearTeamCaptainSplash(); clearLonerFailedCue(); // Astra 10-20 (P2-3)
       if (!wasCatchingUp) setSoundsSuppressed(true);
       try {
         commands.forEach((command, index) => {

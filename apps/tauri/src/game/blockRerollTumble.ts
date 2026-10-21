@@ -79,6 +79,10 @@ export interface BlockRerollOutcome {
   rolled: boolean;
   faces: number[] | null;
   source: string | null;
+  /** Owner 10-20: the use chain ended on a FAILED Loner roll (`reRoll` {reRollSource: 'Loner', successful: false}):
+   *  nothing was rerolled (the server resent the unchanged roll), yet the original dice tumble again and land back on
+   *  their own faces before the Loner pill. Present only when true. */
+  lonerFailed?: true;
 }
 
 function isRerollReport(r: Record<string, unknown>): boolean {
@@ -131,10 +135,12 @@ export function blockRerollOutcome(reports: readonly Record<string, unknown>[]):
   }
   const last = chain[chain.length - 1]!;
   const isMascot = String(last.reportId) === 'mascotUsed';
+  const lonerFailed = String(last.reportId) === 'reRoll' && String(last.reRollSource) === 'Loner' && last.successful === false;
   return {
     rolled: rerollReportVerdict(last),
     faces: null,
     source: isMascot ? 'Team Mascot' : String(last.reRollSource),
+    ...(lonerFailed ? { lonerFailed: true as const } : {}),
   };
 }
 
