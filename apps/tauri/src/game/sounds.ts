@@ -84,8 +84,8 @@ export const SOUND_CATALOG: SoundEntry[] = [
   // (or, for the waypoint, swapped) in Settings › Sound via settings.soundStyles.
   { id: 'plannerWaypoint', label: 'Planner: waypoint plotted', file: 'plannerWaypoint.wav' },
   { id: 'actionCancel', label: 'Action cancelled', file: 'actionCancel.wav' },
-  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left', file: 'turnClockMinute.wav' },
-  { id: 'turnClockCountdown', label: 'Turn clock: last 10 seconds', file: 'turnClockCountdown.wav' },
+  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left, and 10 to 6 s', file: 'turnClockMinute.wav' },
+  { id: 'turnClockCountdown', label: 'Turn clock: last 5 seconds', file: 'turnClockCountdown.wav' },
   { id: 'rollFailed', label: 'Failed roll', file: 'rollFailed.wav' },
 ];
 

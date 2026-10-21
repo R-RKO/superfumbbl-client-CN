@@ -1188,8 +1188,8 @@ const waypointSound = computed({
 });
 const UI_CUE_TOGGLES = [
   { id: 'actionCancel', label: 'Cancel an action' },
-  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left' },
-  { id: 'turnClockCountdown', label: 'Turn clock: last 10 seconds' },
+  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left, and 10 to 6 s' },
+  { id: 'turnClockCountdown', label: 'Turn clock: last 5 seconds' },
   { id: 'rollFailed', label: 'Failed dice roll' },
 ] as const;
 function uiCueOn(id: string): boolean { return settings.soundStyles[id] !== SOUND_STYLE_OFF; }

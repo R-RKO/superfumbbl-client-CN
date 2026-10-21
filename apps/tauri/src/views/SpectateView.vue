@@ -14033,7 +14033,8 @@ const turnClockCueReading = computed<{ key: string | null; seconds: number | nul
 });
 watch(() => [turnClockCueReading.value.key, turnClockCueReading.value.seconds, turnClockCueReading.value.sample] as const, ([key, seconds, sample]) => {
   const cue = turnClockCues.reading(key, seconds, gameStore.myTurn.value, sample);
-  if (cue === 'minute') playSound('turnClockMinute');
+  // Owner 10-21: the minute tone also warns on each of the last 10..6 s; the countdown tone takes 5..1.
+  if (cue === 'minute' || cue === 'warning') playSound('turnClockMinute');
   else if (cue === 'countdown') playSound('turnClockCountdown');
 });
 // Render raw SERVER_GAME_TIME snapshots; without a running flag, local extrapolation lies during pauses.

@@ -48,10 +48,12 @@ export const REROLL_SUCCESS_AFTER_FAIL_CUE_MS = 150;
 
 /** Seconds left on the clock when the one-minute warning sounds. */
 export const TURN_CLOCK_MINUTE_S = 60;
-/** The last-seconds countdown sounds once on each of these remaining values (10, 9, ... 1). */
-export const TURN_CLOCK_COUNTDOWN_FROM_S = 10;
+/** Owner 10-21: the warning tone (the minute sound) repeats once on each remaining second 10 .. 6, then the last-seconds
+ *  countdown sounds once on each of 5, 4, ... 1. */
+export const TURN_CLOCK_WARNING_FROM_S = 10;
+export const TURN_CLOCK_COUNTDOWN_FROM_S = 5;
 
-export type TurnClockCue = 'minute' | 'countdown' | null;
+export type TurnClockCue = 'minute' | 'warning' | 'countdown' | null;
 
 /**
  * The cue for a turn-clock change from `prev` to `next` whole seconds remaining. Only a falling clock on my own turn
@@ -62,6 +64,7 @@ export type TurnClockCue = 'minute' | 'countdown' | null;
 export function turnClockCue(prev: number | null | undefined, next: number, myTurn: boolean): TurnClockCue {
   if (!myTurn || prev == null || !Number.isFinite(prev) || !Number.isFinite(next) || next >= prev) return null;
   if (next >= 1 && next <= TURN_CLOCK_COUNTDOWN_FROM_S) return 'countdown';
+  if (next > TURN_CLOCK_COUNTDOWN_FROM_S && next <= TURN_CLOCK_WARNING_FROM_S) return 'warning';
   if (prev > TURN_CLOCK_MINUTE_S && next <= TURN_CLOCK_MINUTE_S) return 'minute';
   return null;
 }
@@ -71,7 +74,7 @@ export function turnClockCue(prev: number | null | undefined, next: number, myTu
  * numeric fallback (240 s before any server snapshot) made the first REAL reading - e.g. 0:59 after a reconnect - cue,
  * and a re-snapping clock (11 -> 10 -> 11 -> 10) counted the same second twice. Here:
  * - the first authoritative reading of a turn (or after the reading was lost: `seconds` null) only initialises;
- * - each threshold is consumed once per turn: the minute once, each countdown second 10..1 once (seconds already at
+ * - each threshold is consumed once per turn: the minute once, each warning / countdown second 10..1 once (seconds already at
  *   or below the reading that initialised the turn count as consumed);
  * - a new `turnKey` (game / half / turn numbers) starts over. Only `myTurn` readings cue.
  * Astra confirmation 10-19 (P2): the model's turn changes before the server's clock does - the sample on hand when the
@@ -99,13 +102,13 @@ export function createTurnClockCueTracker(): {
         prev = seconds;
         minuteDone = seconds <= TURN_CLOCK_MINUTE_S;
         countdownDone.clear();
-        for (let s = Math.max(1, Math.ceil(seconds)); s <= TURN_CLOCK_COUNTDOWN_FROM_S; s += 1) countdownDone.add(s);
+        for (let s = Math.max(1, Math.ceil(seconds)); s <= TURN_CLOCK_WARNING_FROM_S; s += 1) countdownDone.add(s);
         return null;
       }
       const cue = turnClockCue(prev, seconds, myTurn);
       prev = seconds;
       let out: TurnClockCue = null;
-      if (cue === 'countdown' && !countdownDone.has(seconds)) { countdownDone.add(seconds); out = 'countdown'; }
+      if ((cue === 'countdown' || cue === 'warning') && !countdownDone.has(seconds)) { countdownDone.add(seconds); out = cue; }
       else if (cue === 'minute' && !minuteDone) out = 'minute';
       if (seconds <= TURN_CLOCK_MINUTE_S) minuteDone = true;
       return out;
