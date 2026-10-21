@@ -1052,6 +1052,11 @@ const ACTION_DIE_HOLD_MS = 750; // owner 10-14: 1150 -> 750 for EVERY action die
 const ACTION_DIE_OUT_MS = 300;
 /** The on-pitch action d6 edge in world px (buildD6's S); the 3D cube parks at this size times the node's world scale. */
 const ACTION_DIE_SIZE = 28;
+/** Owner 10-20: the armour roll's vertical stack in its node's local units (x its depth scale): the "ARMOR BREAKS!"
+ *  stencil above the dice (its 18-unit plate ends above the 0.6 x 28 = 16.8-unit dice), the dice centred on 0, the
+ *  broken underline at 12..15, and the injury result pill's top just below that (renderer.armourPillAnchor). */
+export const ARMOUR_STENCIL_Y = -21;
+export const ARMOUR_PILL_Y = 18;
 interface ActionDieRecord {
   /** Owner 09-15: an ARMOUR roll (with its 'ARMOR BREAKS!' stencil) — the injury result waits for it to retire. */
   armour?: boolean;
@@ -16577,10 +16582,11 @@ export class PitchRenderer {
     node.addChild(d1, d2);
     if (broken) {
       node.addChild(new Graphics().roundRect(-27, 12, 54, 3, 1.5).fill({ color: 0xff5555, alpha: 0.95 }));
-      // Owner 2026-07-08: a broken armour gets a red "ARMOR BREAKS!" stencil (the FAILED look),
-      // sat below the dice, so the break reads loud — not just the subtle underline.
+      // Owner 2026-07-08: a broken armour gets a red "ARMOR BREAKS!" stencil (the FAILED look), so the break reads
+      // loud — not just the subtle underline. Owner 10-20: it sits ABOVE the dice now (the injury result pill takes its
+      // old place below them): stencil, dice, pill, top to bottom, nothing overlapping.
       const tag = this.buildStencilTag('ARMOR BREAKS!');
-      tag.position.set(0, 26);
+      tag.position.set(0, ARMOUR_STENCIL_Y);
       node.addChild(tag);
     }
     node.position.set(tp.x, anchor.y - TILE_H * 0.95 * scale);
@@ -16590,6 +16596,21 @@ export class PitchRenderer {
     this.effectsLayer.addChild(node);
     this.anchorEffect(node, x, y, true, true);
     this.addActionDie({ node, baseScale: scale, start: performance.now(), armour: true });
+  }
+
+  /** Owner 10-20 ("the casualty result should always render below the Armor dice ... place the pill in [the BREAKS
+   *  text's old] place"): the board-overlay point (the same space as screenPosOf) directly BELOW the armour dice on
+   *  `square` - the top-centre for the injury result pill. Built from the same geometry as showArmorRoll's node (its
+   *  square column, its height above the token, its depth scale) and the live camera transform, so it tracks pans /
+   *  zooms every frame and stays put after the dice have faded. */
+  armourPillAnchor(square: [number, number]): { x: number; y: number } | null {
+    if (!this.app || !isOnPitch(square)) return null;
+    const [x, y] = square;
+    const tp = this.tokenPos(x, y);
+    const scale = depthScale(x, y);
+    const localY = squareAnchor(x, y).y - TILE_H * 0.95 * scale + ARMOUR_PILL_Y * scale;
+    const ws = this.world.scale.x;
+    return { x: this.world.position.x + tp.x * ws, y: this.world.position.y + localY * ws };
   }
 
   /** Owner 09-15: is an armour roll (dice + 'ARMOR BREAKS!' stencil) still on screen? The store gates the KO /

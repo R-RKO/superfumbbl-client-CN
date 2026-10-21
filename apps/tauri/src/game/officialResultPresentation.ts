@@ -113,8 +113,9 @@ export interface ApothecaryFixUpCue {
   playerId: string;
   player: string;
   side: 'home' | 'away';
-  /** Where the server put the player: Reserves (the bench), or left on the pitch Stunned. */
-  outcome: 'bench' | 'stunned';
+  /** Where the server put the player: Reserves (the bench), left on the pitch Stunned, or (Astra r2 P2-4: after the
+   *  coach's Original / Rerolled choice) a casualty the treatment did not undo. */
+  outcome: 'bench' | 'stunned' | 'casualty';
   /** Owner 10-18: who fixed them up - the Apothecary, or their own Regeneration. */
   kind: 'apothecary' | 'regeneration';
   text: string;
@@ -122,7 +123,11 @@ export interface ApothecaryFixUpCue {
 
 /** What an `apothecaryChoice` report claims for a player: Reserves (9) or Stunned (4). Owner 10-18: a successful
  *  `regenerationRoll` claims Reserves (9) the same way (`kind: 'regeneration'`); the rail and the model check are shared. */
-export interface ApothecaryFixUpClaim { playerId: string; reported: 4 | 9; kind: 'apothecary' | 'regeneration' }
+export interface ApothecaryFixUpClaim {
+  playerId: string; reported: 4 | 5 | 6 | 7 | 8 | 9; kind: 'apothecary' | 'regeneration';
+  /** Astra r2 P2-4: the server's serious-injury result of a casualty outcome (the model's playerResult), else null. */
+  serious?: string | null;
+}
 export type ApothecaryFixUpVerdict = 'agrees' | 'pending' | 'contradicted';
 
 /** Owner 10-09: the server resolved the apothecary by itself - no `apothecaryChoice` dialog, nothing to choose.
@@ -186,16 +191,19 @@ export function apothecaryFixUpVerdict(game: GameJson, claim: ApothecaryFixUpCla
   const base = stateBase(data?.playerState);
   if (base === null) return 'contradicted';
   if (base === claim.reported) {
-    if (claim.reported === 9) return 'agrees';
+    if (claim.reported !== 4) return 'agrees';
     const square = data?.playerCoordinate;
     return square && square[0]! >= 0 && square[0]! < 26 && square[1]! >= 0 && square[1]! < 15 ? 'agrees' : 'pending';
   }
   return base >= 4 && base <= 9 ? 'contradicted' : 'pending';
 }
 
+const CASUALTY_RESULT: Record<number, string> = { 5: 'Knocked Out', 6: 'Badly Hurt', 7: 'Seriously Injured', 8: 'Dead' };
 export function apothecaryFixUpCue(game: GameJson, claim: ApothecaryFixUpClaim): ApothecaryFixUpCue {
   const player = playerName(game, claim.playerId);
-  const outcome = claim.reported === 9 ? 'bench' : 'stunned';
+  const outcome = claim.reported === 9 ? 'bench' : claim.reported === 4 ? 'stunned' : 'casualty';
+  // Astra r2 P2-4: a casualty outcome names the server's own result; it never says which alternative was kept.
+  const result = claim.serious && claim.serious.trim() ? claim.serious.trim() : CASUALTY_RESULT[claim.reported] ?? '';
   return {
     playerId: claim.playerId, player, outcome, kind: claim.kind,
     side: game.teamHome.playerArray.some((entry) => entry.playerId === claim.playerId) ? 'home' : 'away',
@@ -203,8 +211,28 @@ export function apothecaryFixUpCue(game: GameJson, claim: ApothecaryFixUpClaim):
       ? `${player} regenerates and returns to the reserves!`
       : outcome === 'bench'
         ? `The Apothecary fixes up ${player} and they return to the bench!`
-        : `The Apothecary fixes up ${player} and they stay on the pitch, Stunned!`,
+        : outcome === 'stunned'
+          ? `The Apothecary fixes up ${player} and they stay on the pitch, Stunned!`
+          : claim.reported >= 7
+            ? `The Apothecary could not save ${player}: ${result}`
+            : `The Apothecary patches up ${player}: ${result}`,
   };
+}
+
+/** Astra r2 P2-4: the outcome of a treatment the coach settled with the Original / Rerolled choice (the
+ *  `apothecaryChoice` DIALOG - the server writes no apothecaryChoice report on that branch). Read from the model only:
+ *  the player's final state + the server's serious-injury result. null while he is not in a final state yet. The
+ *  coach's private pick is never named (identical alternatives cannot be told apart, and the line does not try). */
+export function apothecaryChoiceOutcomeClaim(game: GameJson, playerId: string): ApothecaryFixUpClaim | null {
+  const data = game.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
+  const base = stateBase(data?.playerState);
+  if (base === null || base < 4 || base > 9) return null;
+  const side = game.teamHome.playerArray.some((entry) => entry.playerId === playerId) ? 'home'
+    : game.teamAway.playerArray.some((entry) => entry.playerId === playerId) ? 'away' : null;
+  if (!side) return null;
+  const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
+  const serious = results.find((entry) => entry.playerId === playerId)?.seriousInjury;
+  return { playerId, reported: base as ApothecaryFixUpClaim['reported'], kind: 'apothecary', serious: typeof serious === 'string' ? serious : null };
 }
 
 /** The lines that are true in this very frame (`game` = the model AFTER it). When in doubt, none. */

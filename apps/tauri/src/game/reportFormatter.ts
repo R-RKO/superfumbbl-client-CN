@@ -167,13 +167,19 @@ export function joinGraphicalRows(previous: GraphicalLine, next: GraphicalLine):
 /** Owner 10-16: the Graphical rows as displayed - an entry whose row joins the previous entry's row (the coach's
  *  block-die choice onto the dice row) is folded into a copy of that entry and dropped. Entries are never mutated
  *  (consumers track rows by identity); the Text style, which never calls this, keeps every entry. */
-export function composeGraphicalJoins<T extends { g?: GraphicalLine | null }>(entries: readonly T[]): T[] {
+export function composeGraphicalJoins<T extends { g?: GraphicalLine | null; action?: { kind?: string | null } | null }>(entries: readonly T[]): T[] {
   const out: T[] = [];
   for (const entry of entries) {
-    const last = out[out.length - 1];
-    if (entry.g?.joinPrevious && last?.g && last.g.join === entry.g.joinPrevious) {
-      out[out.length - 1] = { ...last, g: joinGraphicalRows(last.g, entry.g) };
-      continue;
+    if (entry.g?.joinPrevious) {
+      // Owner 10-20: a Team Captain row the log moved after the rerolled block dice (teamCaptainLogOrder) stays after
+      // them; the coach's choice still joins the dice row behind it
+      let at = out.length - 1;
+      while (at >= 0 && out[at]!.action?.kind === 'teamCaptain') at--;
+      const target = at >= 0 ? out[at] : undefined;
+      if (target?.g && target.g.join === entry.g.joinPrevious) {
+        out[at] = { ...target, g: joinGraphicalRows(target.g, entry.g) };
+        continue;
+      }
     }
     out.push(entry);
   }

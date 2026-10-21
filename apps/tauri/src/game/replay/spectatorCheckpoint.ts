@@ -14,6 +14,7 @@ import { pushPresentation, type PendingPush } from '../pushPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, type SkillDecisionProjection } from '../skillDecisionProjection';
 import { buildBlockDecision, createBlockContext, reduceBlockContext, type BlockContextProjection, type BlockDecisionProjection } from '../blockDecisionProjection';
 import { blockRerollOutcome, rerolledBlockDiceIndices } from '../blockRerollTumble';
+import { createTeamCaptainRowQueue } from '../teamCaptainLogOrder';
 import { createInjuryOutcomeProjection, reduceInjuryOutcomes, type InjuryOutcomeProjection } from '../injuryOutcomeProjection';
 import { createCasualtyRollProjection, reduceCasualtyRollProjection, type CasualtyRollProjection } from '../casualtyRollProjection';
 import { apothecaryDecisionFromModel, buildApothecaryResult, type ApothecaryResultProjection, type ApothecaryDecisionProjection } from '../apothecaryDecisionProjection';
@@ -298,7 +299,10 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   const hint = reports.find((r) => ['block', 'blockChoice', 'blockRoll'].includes(String(r.reportId)) && typeof r.defenderId === 'string');
   if (hint) setBlockDefenderHint(String(hint.defenderId), projection.logContext);
   const injuries = new Set<string>();
-  for (const report of reports) {
+  // Owner 10-20: a Team Captain roll's rows follow the rerolled result (teamCaptainLogOrder), as the live log does
+  const captainRows = createTeamCaptainRowQueue(reports);
+  for (const [reportIndex, report] of reports.entries()) {
+    captainRows.before(reportIndex);
     const signature = JSON.stringify(report);
     // A local receive occurrence is authoritative when no server identity is available.
     // Never collapse reports across two distinct unnumbered events.
@@ -325,7 +329,11 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver'].includes(id)
       || (id === 'playerAction' && !!playerActionDescription(report.playerAction)) // Astra 10-16: the declaration shows in replays too
       || (id === 'playerEvent' && typeof report.message === 'string' && report.message.trim())) {
-      projection.log.push(...lines.map((line, index) => ({ ...line, u: index === 0 ? upstream : [], receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
+      if (lines.length && captainRows.anchorOf(reportIndex) !== null) {
+        // the captain's upstream lines stay at the wire position (FUMBBL-only entry); its rows wait for the result's
+        upstreamOnly();
+        captainRows.defer(reportIndex, () => projection.log.push(...lines.map((line) => ({ ...line, u: [], receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } }))));
+      } else projection.log.push(...lines.map((line, index) => ({ ...line, u: index === 0 ? upstream : [], receivedWallAt: event.receivedWallAt, ingressOrder: event.ingressOrder ?? event.cursor.sequence, source: { ...event.cursor } })));
       noteActivationLogged(activationOfRows, lines.length); // owner 10-16: the same count the live log keeps (never the declaration's own row)
       if (!lines.length) upstreamOnly(); // FUMBBL-only rows never count as displayed rows of the activation
     } else if (['pushback', 'skillUse', 'skillUseOtherPlayer'].includes(id)) {
@@ -336,6 +344,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
       upstreamOnly();
     }
   }
+  captainRows.end();
   // Owner 10-13 (reroll re-tumble, Astra): the card before this frame and its roll occurrence, for rerolledDice below.
   const priorBlockCard = projection.blockCard;
   const priorBlockRollOccurrence = projection.block.rollOccurrence;

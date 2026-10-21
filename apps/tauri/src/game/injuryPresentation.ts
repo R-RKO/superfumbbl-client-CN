@@ -17,6 +17,13 @@ export interface InjuryEvent {
   injuryBase: number;
   /** Owner 07-08: server-resolved casualty RESULT string (e.g. "Dead (RIP)") — the server applied the casualty table; the toast maps it by keyword. Null for plain Badly Hurt / KO. */
   seriousInjury?: string | null;
+  /** Owner 10-20 (Astra P1-5): the server's SECOND casualty of a Decay player (report `seriousInjuryDecay` /
+   *  `injuryDecay`), shown on the pill with the first. Null when the report has none. */
+  seriousInjuryDecay?: string | null;
+  injuryDecay?: number | null;
+  /** Owner 10-20: this event's own armour dice are on the pitch (its pill pops with them and sits directly below them,
+   *  renderer.armourPillAnchor). Set by the store; absent = the pill keeps its token-square anchor. */
+  armourDice?: boolean;
   /** #64: split injury taxonomy — `injuryRoll` = the INJURY-ROLL result (STUNNED/KO/CASUALTY); `casualty` = the D16 CASUALTY-ROLL tier/label (+D6 stat for a Lasting Injury). Display-only, derived from injuryBase + seriousInjury. */
   injuryRoll: string;
   casualty?: { tier: string; label: string; stat: string | null } | null;
@@ -74,9 +81,12 @@ export function injuryPresentation(report: Record<string, unknown>, game: GameJs
     : casualty && base >= 7 && typeof modelSerious === 'string' ? modelSerious : null;
   const square: [number, number] | null = coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15 ? [coordinate[0]!, coordinate[1]!] : null;
   const rockThrow = kind.includes('rock') && !!square;
+  const seriousInjuryDecay = typeof report.seriousInjuryDecay === 'string' && report.seriousInjuryDecay.trim() ? report.seriousInjuryDecay : null;
+  const decayBase = Number(report.injuryDecay ?? 0);
+  const injuryDecay = decayBase >= 4 && decayBase <= RESERVE_BASE ? decayBase : null;
   return { type: INJURY_LABELS[base] ?? 'INJURED', injuryRoll: injuryRollLabel(base), casualty: casualty ? casualtyTierLabel(seriousInjury, base) : null,
     player: player?.playerName ?? '', playerId, side, logoUrl: (team.roster as { logoUrl?: string }).logoUrl ?? null,
-    teamName: team.teamName ?? '', square, foul, isCasualty: casualty, injuryBase: base, seriousInjury,
+    teamName: team.teamName ?? '', square, foul, isCasualty: casualty, injuryBase: base, seriousInjury, seriousInjuryDecay, injuryDecay,
     crowdSurf: kind.includes('crowd'), rockThrow, rockImpactOnly: rockThrow && !armorBroke, bitten: kind.includes('bitten') && !!square };
 }
 

@@ -4,7 +4,8 @@ declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 import { installMouseEntropy } from '../game/mouseEntropy';
 import { composeGraphicalJoins } from '../game/reportFormatter';
-import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
+import { casualtyPillLines, decayPillLine } from '../game/injuryPillText';
+import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
 import { allBlockDiceIndices, BlockTumbleRun, handBlockTumbleTo3d, type BlockTumbleFrame } from '../game/blockRerollTumble';
@@ -4009,12 +4010,9 @@ watchDecisionSurface(
 const STUNNED_BASE = 0x04; // PlayerStateBase.STUNNED
 const KO_BASE = 0x05; // PlayerStateBase.KNOCKED_OUT
 const DEAD_BASE = 0x08; // PlayerStateBase.DEAD — the crowd's skull-dice cheer
-const injuryIsKo = computed(() => gameStore.state.injurySplash?.injuryBase === KO_BASE);
 // Owner 09-15: a crowd-surfed player whose injury roll was STUNNED returns to the reserves — a yellow pill, not the
 // red casualty toast that "is Badly Hurt!" used to paint on it.
 const RESERVE_BASE = 0x09; // PlayerStateBase.RESERVE
-const injuryIsReserves = computed(() => gameStore.state.injurySplash?.injuryBase === RESERVE_BASE);
-const injuryIsRockImpact = computed(() => gameStore.state.injurySplash?.rockImpactOnly === true);
 // Owner 2026-07-07: a CASUALTY (Badly Hurt / Seriously Hurt / Dead — anything worse than a KO)
 // now reads as a TOKEN-BOUND toast at the injured square (like the KO toast + fend/sidestep/stand
 // firm skill toasts), NOT the full-width banner.
@@ -4026,61 +4024,62 @@ const injuryIsCasualty = computed(() => {
 // "Dead (RIP)"); map it (by keyword, tolerant of the "(-ST)" stat suffix) to the injury phrasing.
 // A plain Badly Hurt (state casualty, no result string) falls back to "is Badly Hurt!".
 // Owner 10-05: the toast is TWO centred lines - "<Player> is" / "<Casualty>" - the injury always on the second line.
-function injuryPhraseLines(splash: { player: string; seriousInjury?: string | null; injuryBase: number }): [string, string] {
-  const who = splash.player || 'The player';
-  const s = (splash.seriousInjury ?? '').toLowerCase();
-  if (s.includes('rip') || s.includes('dead') || s.includes('killed')) return [`${who} is`, 'KILLED!'];
-  if (s.includes('knee')) return [`${who} has`, 'smashed their knee!'];
-  if (s.includes('arm')) return [`${who} has`, 'broken their arm!'];
-  if (s.includes('hip')) return [`Call Lifeline! ${who} has`, 'dislocated their hip!'];
-  if (s.includes('shoulder')) return [`${who} has`, 'broken their shoulder!'];
-  if (s.includes('head') || s.includes('eye') || s.includes('concussion') || s.includes('skull') || s.includes('neck'))
-    return [`${who} receives a`, 'Head Injury!'];
-  if (s.includes('niggling') || s.includes('(ni)')) return [`${who} receives a`, 'Niggling Injury!'];
-  if (s.includes('seriously hurt') || s.includes('mng')) return [`${who} is`, 'Seriously Hurt!'];
-  if (splash.injuryBase === DEAD_BASE) return [`${who} is`, 'KILLED!']; // DEAD state, no result string
-  return [`${who} is`, 'Badly Hurt!']; // no lasting-injury string → the coarse casualty
-}
-// Owner 10-09: the toast also states the effect the server reported for a lasting injury - "smashed their knee! (-MA)".
-// The tag is read from the server's own result string ("Smashed Knee (-MA)"); a result with no stat tag adds nothing.
-function injuryStatTag(seriousInjury: string | null | undefined): string {
-  const match = /\(\s*(-\s*(?:MA|ST|AG|PA|AV))\s*\)/i.exec(seriousInjury ?? '');
-  return match ? `(${match[1]!.replace(/\s+/g, '').toUpperCase()})` : '';
-}
-const casualtyPhraseLines = computed<[string, string] | null>(() => {
-  const splash = gameStore.state.injurySplash;
-  if (!splash) return null;
-  const [lead, casualty] = injuryPhraseLines(splash);
-  const tag = injuryStatTag(splash.seriousInjury);
-  return [lead, tag ? `${casualty} ${tag}` : casualty];
-});
+// (owner 10-20: the pill copy lives in game/injuryPillText.ts - injuryPhraseLines / injuryStatTag / casualtyPillLines)
 // Owner 2026-07-07: injury display — every injury also gets a token-bound toast at the injured
 // square (KO / casualty / stun), and a CASUALTY additionally KEEPS its full-width splash banner
 // (owner: the casualty splash returns + the red toast over the square). KO/stun are toast-only;
 // a tag-mode stun uses the lightweight stun tag.
-const koToastPos = reactive({ x: 0, y: 0, ready: false });
+// Owner 10-20 (Astra P1-2 / P1-4): one token-bound pill PER injured player (several victims of one frame show theirs
+// together; a pill persisted for an apothecary decision is never replaced by another player's). Each is anchored to
+// its own injury square and RAF-follows pan / zoom; the pulse and the crowd's reaction fire once per new pill.
+type InjuryPillView = {
+  key: string; pill: NonNullable<typeof gameStore.state.injurySplash>;
+  casualty: boolean; reserves: boolean; rock: boolean; ko: boolean;
+  lines: [string, string] | null; decay: string | null;
+};
+const injuryPillViews = computed<InjuryPillView[]>(() => gameStore.state.injuryPills.map((pill) => ({
+  key: pill.playerId, pill,
+  casualty: pill.isCasualty === true, reserves: pill.injuryBase === RESERVE_BASE,
+  rock: pill.rockImpactOnly === true, ko: pill.injuryBase === KO_BASE,
+  lines: pill.isCasualty === true ? casualtyPillLines(pill) : null,
+  decay: pill.isCasualty === true ? decayPillLine(pill) : null,
+})));
+/** `below`: the point is directly below his armour dice (renderer.armourPillAnchor) - the pill's top sits there; else
+ *  the token square (the pill floats 58 px above it, as before: crowd push, rock, the pill-only paths). */
+const koToastPositions = reactive<Record<string, { x: number; y: number; below: boolean }>>({});
 let koToastRaf = 0;
+const pillsGreeted = new WeakSet<object>();
 watch(
-  () => gameStore.state.injurySplash,
-  (ev) => {
+  () => gameStore.state.injuryPills.slice(),
+  (pills) => {
     cancelAnimationFrame(koToastRaf);
-    koToastPos.ready = false;
-    if (!ev || !renderer) return;
-    if (ev.square) renderer.playInjuryPulse(ev.square); // queue 5: pulse at the injury square
-    // Owner 2026-07-06: the crowd reacts — the OPPOSING team's fans cheer the victim's
-    // misfortune. A DEATH gets the FUMBBL skull dice; a landed FOUL gets "GET STOMPED"
-    // (e.g. an Away player fouled → a Home-side fan shouts it).
-    const cheeringSide = otherSide(playerSide(ev.playerId));
-    if (ev.injuryBase === DEAD_BASE) renderer.crowdSkullQuip(cheeringSide);
-    if (ev.foul) renderer.crowdQuip('GET STOMPED', cheeringSide);
+    for (const id of Object.keys(koToastPositions)) if (!pills.some((pill) => pill.playerId === id)) delete koToastPositions[id];
+    if (!renderer) return;
+    for (const ev of pills) {
+      const raw = toRaw(ev);
+      if (pillsGreeted.has(raw)) continue;
+      pillsGreeted.add(raw);
+      if (ev.square) renderer.playInjuryPulse(ev.square); // queue 5: pulse at the injury square
+      // Owner 2026-07-06: the crowd reacts — the OPPOSING team's fans cheer the victim's
+      // misfortune. A DEATH gets the FUMBBL skull dice; a landed FOUL gets "GET STOMPED"
+      // (e.g. an Away player fouled → a Home-side fan shouts it).
+      const cheeringSide = otherSide(playerSide(ev.playerId));
+      if (ev.injuryBase === DEAD_BASE) renderer.crowdSkullQuip(cheeringSide);
+      if (ev.foul) renderer.crowdQuip('GET STOMPED', cheeringSide);
+    }
     // Owner 2026-07-08: anchor the injury toast to the injury SQUARE (same as the injury pulse /
     // die markers), not the token — a KO'd/removed player's token drifts off, so pin where it
     // happened. RAF still re-reads each frame so it tracks board pan/zoom. Falls back to the token
     // only when the injury square is unknown.
     const follow = () => {
-      if (!gameStore.state.injurySplash || !renderer) { koToastPos.ready = false; return; }
-      const p = (ev.square ? renderer.screenPosOf(ev.square) : null) ?? renderer.playerScreenPos(ev.playerId, ev.square);
-      if (p) { koToastPos.x = p.x; koToastPos.y = p.y; koToastPos.ready = true; }
+      const current = gameStore.state.injuryPills;
+      if (!current.length || !renderer) return;
+      for (const ev of current) {
+        // Owner 10-20: a pill whose armour dice are on the pitch renders directly below them (where the BREAKS text was)
+        const under = ev.armourDice && ev.square ? renderer.armourPillAnchor(ev.square) : null;
+        const p = under ?? (ev.square ? renderer.screenPosOf(ev.square) : null) ?? renderer.playerScreenPos(ev.playerId, ev.square);
+        if (p) koToastPositions[ev.playerId] = { x: p.x, y: p.y, below: !!under };
+      }
       koToastRaf = requestAnimationFrame(follow);
     };
     follow();
@@ -4196,6 +4195,18 @@ const rerollSplashAnchorStyle = computed(() => {
   // No card on this screen → the acting player's token; CSS default (top:76px band) only if neither resolves.
   if (rerollSplashTokenPos.ready) return { left: `${rerollSplashTokenPos.x}px`, top: `${Math.max(0, rerollSplashTokenPos.y - 46)}px` };
   return undefined;
+});
+// Owner 10-20: the Team Captain splash ("<Captain> leads the way - team reroll kept!") sits one toast BELOW the reroll
+// toast on the same rail: the reroll toast's anchor while it is up (else the last one it used), one row lower; with no
+// anchor at all, the CSS default (one row under the reroll toast's default band).
+const lastRerollToastAnchor = ref<{ left?: string; top?: string } | null>(null);
+watch(rerollSplashAnchorStyle, (style) => { if (style && gameStore.state.rerollSplash) lastRerollToastAnchor.value = { ...style }; });
+const TEAM_CAPTAIN_TOAST_ROW_PX = 48;
+const teamCaptainSplashStyle = computed(() => {
+  if (!gameStore.state.teamCaptainSplash) return undefined;
+  const base = (gameStore.state.rerollSplash ? rerollSplashAnchorStyle.value : undefined) ?? lastRerollToastAnchor.value;
+  if (!base?.top) return base?.left ? { left: base.left } : undefined;
+  return { ...(base.left ? { left: base.left } : {}), top: `calc(${base.top} + ${TEAM_CAPTAIN_TOAST_ROW_PX}px)` };
 });
 // Owner 08-18 (B&C screenshot: the DIRECTION re-roll card sat on top of the destination squares + the
 // direction arrow). The reroll card is anchored to the ACTING player's token, which for a Ball & Chain
@@ -9808,7 +9819,7 @@ function cancelViewMatchPresentation() {
   negatraitCue.value = null;
   stallerSplash.value = null;
   toast.visible = false;
-  koToastPos.ready = false;
+  for (const id of Object.keys(koToastPositions)) delete koToastPositions[id];
   fallOverPos.ready = false;
   fallOverVisible.value = false;
   rerollSplashTokenPos.ready = false;
@@ -16522,28 +16533,31 @@ function sendChat() {
         <!-- Owner 2026-07-08 (queue 3): KNOCKOUT toast — bound to the injured
              player's TOKEN (RAF-follow via renderer.playerScreenPos), so it reads
              right at the square where the KO occurred. -->
-        <div v-if="gameStore.state.injurySplash && koToastPos.ready" class="ko-toast"
-          :class="{ 'is-casualty': injuryIsCasualty, 'is-reserves': injuryIsReserves }"
-          :data-side="gameStore.state.injurySplash.side"
-          :style="{ left: koToastPos.x + 'px', top: (koToastPos.y - 58) + 'px' }">
+        <template v-for="view in injuryPillViews" :key="view.key">
+        <div v-if="koToastPositions[view.key]" class="ko-toast"
+          :class="{ 'is-casualty': view.casualty, 'is-reserves': view.reserves }"
+          :data-side="view.pill.side"
+          :style="{ left: koToastPositions[view.key]!.x + 'px', top: (koToastPositions[view.key]!.y - (koToastPositions[view.key]!.below ? 0 : 58)) + 'px' }">
           <!-- Owner 2026-07-08: a CASUALTY names the specific injury (server-resolved result);
                KO keeps the compact K.O. + name. -->
-          <template v-if="injuryIsRockImpact">
-            <span class="ko-toast-phrase">{{ gameStore.state.injurySplash.player }} is hit by a rock!</span>
+          <template v-if="view.rock">
+            <span class="ko-toast-phrase">{{ view.pill.player }} is hit by a rock!</span>
           </template>
-          <template v-else-if="injuryIsCasualty && casualtyPhraseLines">
-            <!-- owner 10-05: two centred lines, the casualty always on the second -->
+          <template v-else-if="view.casualty && view.lines">
+            <!-- owner 10-05: two centred lines, the casualty always on the second; owner 10-20 (Astra P1-5): a Decay
+                 player's second server-reported casualty on a third -->
             <span class="ko-toast-phrase ko-toast-lines"
-              :aria-label="casualtyPhraseLines.join(' ')"><span class="ko-toast-lead">{{ casualtyPhraseLines[0] }}</span><span class="ko-toast-casualty">{{ casualtyPhraseLines[1] }}</span></span>
+              :aria-label="[...view.lines, view.decay ?? ''].join(' ').trim()"><span class="ko-toast-lead">{{ view.lines[0] }}</span><span class="ko-toast-casualty">{{ view.lines[1] }}</span><span v-if="view.decay" class="ko-toast-casualty ko-toast-decay">{{ view.decay }}</span></span>
           </template>
-          <template v-else-if="injuryIsReserves">
-            <span class="ko-toast-phrase">{{ gameStore.state.injurySplash.player }} returns to reserves</span>
+          <template v-else-if="view.reserves">
+            <span class="ko-toast-phrase">{{ view.pill.player }} returns to reserves</span>
           </template>
           <template v-else>
-            <span class="ko-toast-type">{{ injuryIsKo ? 'K.O.' : gameStore.state.injurySplash.type }}</span>
-            <span class="ko-toast-player">{{ gameStore.state.injurySplash.player }}</span>
+            <span class="ko-toast-type">{{ view.ko ? 'K.O.' : view.pill.type }}</span>
+            <span class="ko-toast-player">{{ view.pill.player }}</span>
           </template>
         </div>
+        </template>
 
         <!-- Owner 2026-07-08: FALLS OVER toast — a failed Dodge / Rush knocks the player
              over. One token-anchored toast for both causes (no emoji), reads + clears fast. -->
@@ -16640,6 +16654,13 @@ function sendChat() {
           <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? `${gameStore.state.rerollSplash.coach} uses ${gameStore.state.rerollSplash.source}!` }}</span>
+        </div>
+        <!-- Owner 10-20: the Team Captain splash - the reroll toast's look, one row below it (a kept team reroll). -->
+        <div v-if="gameStore.state.teamCaptainSplash" :key="'tc-' + gameStore.state.teamCaptainSplash.seq"
+          class="reroll-toast team-captain-toast" :data-side="gameStore.state.teamCaptainSplash.side" :style="teamCaptainSplashStyle" data-testid="team-captain-splash">
+          <img v-if="rerollToastIconKind({ skill: gameStore.state.teamCaptainSplash.skill, isTeam: false }, settings.skillDisplay === 'icons') === 'skill'" class="reroll-toast-icon" :src="skillIconUrl(gameStore.state.teamCaptainSplash.skill, effectiveIconStyle)" alt="" />
+          <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.teamCaptainSplash.side, gameStore.state.teamCaptainSplash.logo)" alt="" />
+          <span class="reroll-toast-text">{{ gameStore.state.teamCaptainSplash.text }}</span>
         </div>
         <!-- Owner 10-09: the server-resolved apothecary line. The reroll toast's look on its OWN rail and position
              (a match announcement, one band below the centred reroll announcements), so neither can cover or
@@ -20926,6 +20947,7 @@ function sendChat() {
   100% { opacity: 0; transform: translate(-50%, -4px); }
 }
 .reroll-toast.apo-fixup-toast { top: calc(40% + 56px); }
+.reroll-toast.team-captain-toast { top: calc(76px + 48px); } /* owner 10-20: one row under the reroll toast's default band */
 .reroll-toast[data-side='home'] {
   background: linear-gradient(120deg, #0c1e7af2, #0a1030e8);
   border-color: #3a5be0cc;
