@@ -114,8 +114,9 @@ export interface ApothecaryFixUpCue {
   player: string;
   side: 'home' | 'away';
   /** Where the server put the player: Reserves (the bench), left on the pitch Stunned, or (Astra r2 P2-4: after the
-   *  coach's Original / Rerolled choice) a casualty the treatment did not undo. */
-  outcome: 'bench' | 'stunned' | 'casualty';
+   *  coach's Original / Rerolled choice) a casualty the treatment did not undo. Owner 10-21: 'failed' = a failed
+   *  Regeneration roll (the player stays in the casualty box; the view paints it fail red). */
+  outcome: 'bench' | 'stunned' | 'casualty' | 'failed';
   /** Owner 10-18: who fixed them up - the Apothecary, or their own Regeneration. */
   kind: 'apothecary' | 'regeneration';
   text: string;
@@ -127,6 +128,11 @@ export interface ApothecaryFixUpClaim {
   playerId: string; reported: 4 | 5 | 6 | 7 | 8 | 9; kind: 'apothecary' | 'regeneration';
   /** Astra r2 P2-4: the server's serious-injury result of a casualty outcome (the model's playerResult), else null. */
   serious?: string | null;
+  /** Owner 10-21 ("Let's change regen so it pops with a red pill if it fails"): a FAILED regenerationRoll. `reported`
+   *  is then the casualty the injury report named (informational); the model check is 'still a casualty'. */
+  outcome?: 'failed';
+  /** The regenerationRoll's own reRolled flag (a failed roll can be rerolled in the multi-block apothecary step). */
+  reRolled?: boolean;
 }
 export type ApothecaryFixUpVerdict = 'agrees' | 'pending' | 'contradicted';
 
@@ -162,20 +168,32 @@ export function apothecaryFixUpClaims(
 /** Owner 10-18 ("Can we add a pill toast for when a regen is successful?"): a `regenerationRoll` with `successful: true`
  *  claims Reserves for its player. Upstream writes it in the INJURY frame itself (g1951999 #702: injury report +
  *  regenerationRoll + state 9 + the box coordinate in one serverModelSync), so the line is true at once - the store
- *  only holds it behind that player's casualty pill. A failed roll claims nothing (the pill already told the story). */
+ *  only holds it behind that player's casualty pill.
+ *  Owner 10-21 ("Let's change regen so it pops with a red pill if it fails"): a FAILED roll claims 'still a casualty'
+ *  (`outcome: 'failed'`; g1951158 #677: injury + failed regenerationRoll + state 6 + the box coordinate, one frame).
+ *  The LAST roll per player in the frame is the claim: a reroll (reRolled:true) speaks for its final result only. */
 export function regenerationFixUpClaims(
   reports: readonly Record<string, unknown>[],
   game: GameJson,
 ): ApothecaryFixUpClaim[] {
-  const claims: ApothecaryFixUpClaim[] = [];
+  const last = new Map<string, ApothecaryFixUpClaim>();
+  const casualty = new Map<string, number>();
   for (const report of reports) {
-    if (String(report.reportId) !== 'regenerationRoll' || report.successful !== true) continue;
+    if (String(report.reportId) === 'injury') {
+      const injury = Number(report.injury);
+      if (injury >= 5 && injury <= 8) casualty.set(String(report.defenderId ?? ''), injury);
+      continue;
+    }
+    if (String(report.reportId) !== 'regenerationRoll' || typeof report.successful !== 'boolean') continue;
     const playerId = String(report.playerId ?? '');
-    if (!playerId || claims.some((claim) => claim.playerId === playerId)) continue;
+    if (!playerId) continue;
     if (![...game.teamHome.playerArray, ...game.teamAway.playerArray].some((player) => player.playerId === playerId)) continue;
-    claims.push({ playerId, reported: 9, kind: 'regeneration' });
+    last.delete(playerId);
+    last.set(playerId, report.successful
+      ? { playerId, reported: 9, kind: 'regeneration' }
+      : { playerId, reported: (casualty.get(playerId) ?? 6) as ApothecaryFixUpClaim['reported'], kind: 'regeneration', outcome: 'failed', reRolled: report.reRolled === true });
   }
-  return claims;
+  return [...last.values()];
 }
 
 /** The report alone is NOT the player's destination, and it is not always in the same frame as it either:
@@ -190,6 +208,10 @@ export function apothecaryFixUpVerdict(game: GameJson, claim: ApothecaryFixUpCla
   const data = game.fieldModel.playerDataArray.find((entry) => entry.playerId === claim.playerId);
   const base = stateBase(data?.playerState);
   if (base === null) return 'contradicted';
+  // Owner 10-21: a failed Regeneration is true while the model holds him as a casualty (5..8: upstream leaves the
+  // state + casualty-box square untouched on a failure); Reserves (a reroll / apothecary undid it) contradicts it;
+  // anything else (still Prone on his square, the injury not applied yet) waits.
+  if (claim.outcome === 'failed') return base >= 5 && base <= 8 ? 'agrees' : base === 9 || base === 4 ? 'contradicted' : 'pending';
   if (base === claim.reported) {
     if (claim.reported !== 4) return 'agrees';
     const square = data?.playerCoordinate;
@@ -201,14 +223,14 @@ export function apothecaryFixUpVerdict(game: GameJson, claim: ApothecaryFixUpCla
 const CASUALTY_RESULT: Record<number, string> = { 5: 'Knocked Out', 6: 'Badly Hurt', 7: 'Seriously Injured', 8: 'Dead' };
 export function apothecaryFixUpCue(game: GameJson, claim: ApothecaryFixUpClaim): ApothecaryFixUpCue {
   const player = playerName(game, claim.playerId);
-  const outcome = claim.reported === 9 ? 'bench' : claim.reported === 4 ? 'stunned' : 'casualty';
+  const outcome = claim.outcome === 'failed' ? 'failed' : claim.reported === 9 ? 'bench' : claim.reported === 4 ? 'stunned' : 'casualty';
   // Astra r2 P2-4: a casualty outcome names the server's own result; it never says which alternative was kept.
   const result = claim.serious && claim.serious.trim() ? claim.serious.trim() : CASUALTY_RESULT[claim.reported] ?? '';
   return {
     playerId: claim.playerId, player, outcome, kind: claim.kind,
     side: game.teamHome.playerArray.some((entry) => entry.playerId === claim.playerId) ? 'home' : 'away',
     text: claim.kind === 'regeneration'
-      ? `${player} regenerates and returns to the reserves!`
+      ? outcome === 'failed' ? `${player} does not regenerate from their injury.` : `${player} regenerates and returns to the reserves!`
       : outcome === 'bench'
         ? `The Apothecary fixes up ${player} and they return to the bench!`
         : outcome === 'stunned'

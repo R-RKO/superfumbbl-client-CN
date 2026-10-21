@@ -1446,7 +1446,7 @@ const legacyState = reactive({
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
    *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
-  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned' | 'casualty'; kind: 'apothecary' | 'regeneration'; text: string; seq: number } | null,
+  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned' | 'casualty' | 'failed'; kind: 'apothecary' | 'regeneration'; text: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
 /** Owner 10-11: the automatic (spectator / replay / review) field flip under Settings > Spectator and replay view.
@@ -2682,6 +2682,8 @@ let apothecaryFixUpInjuryPoll: ReturnType<typeof setTimeout> | null = null;
  *  would discard the NEXT regeneration line at once (`??=`). */
 function dropApothecaryFixUpQueue(): void {
   apothecaryFixUpQueue = [];
+  // Astra r1 10-21: a held failed-Regeneration claim goes with the discarded queue (it is no longer news).
+  for (const [playerId, pending] of [...pendingApothecaryFixUps]) if (isFailedRegeneration(pending.claim)) pendingApothecaryFixUps.delete(playerId);
   if (apothecaryFixUpInjuryPoll) cancelGameTimeout(apothecaryFixUpInjuryPoll);
   apothecaryFixUpInjuryPoll = null;
   apothecaryFixUpInjuryWaitSince = null;
@@ -2694,8 +2696,41 @@ interface PendingApothecaryFixUp {
   claim: ApothecaryFixUpClaim; gameId: string; turn: string; commandNr: number | null;
   /** The acting player when the report arrived ('' = none, e.g. a kick-off event injury). */
   actingId: string;
+  /** Astra r1 10-21: wall-clock when the claim was raised (a failed Regeneration never outlives its moment). */
+  raisedAt: number;
+  /** Astra r2/r3 10-21: his OWN apothecary dialog held it on the last frame seen (its expiry is the persisted pill's
+   *  cap while that dialog holds it and on the frame that releases it - never once another dialog takes over). */
+  apothecaryHeld?: boolean;
 }
 const APOTHECARY_DIALOG_IDS = new Set(['useApothecary', 'useApothecaries', 'apothecaryChoice']);
+/** Owner 10-21: a FAILED, not-yet-rerolled Regeneration is not final while a dialog that can still change it - for
+ *  THIS player - is open (StepApothecaryMultiple offers a team reroll / Plague Doctor for it; the apothecary can still
+ *  treat him). It waits (pending) until that dialog closes - a reroll's own report then replaces it, so only the final
+ *  result shows. Astra r1 10-21: any other dialog (another player's Dodge reroll, ...) does not hold it. */
+function dialogDecidesRegenerationFor(dialog: unknown, playerId: string): boolean {
+  const d = (dialog ?? null) as Record<string, unknown> | null;
+  if (!d) return false;
+  switch (String(d.dialogId ?? '')) {
+    case 'reRoll': return String(d.playerId ?? '') === playerId && String(d.reRolledAction ?? '').toLowerCase() === 'regeneration';
+    case 'reRollRegenerationMultiple': return Array.isArray(d.playerIds) && d.playerIds.map(String).includes(playerId);
+    case 'useInducement': case 'useApothecary': case 'apothecaryChoice': return String(d.playerId ?? '') === playerId;
+    case 'useApothecaries': return Array.isArray(d.injuryDescriptions)
+      && d.injuryDescriptions.some((entry) => String((entry as { playerId?: unknown } | null)?.playerId ?? '') === playerId);
+    default: return false;
+  }
+}
+const isFailedRegeneration = (claim: ApothecaryFixUpClaim): boolean => claim.kind === 'regeneration' && claim.outcome === 'failed';
+const regenerationFailUndecided = (claim: ApothecaryFixUpClaim, dialog: unknown): boolean =>
+  isFailedRegeneration(claim) && !claim.reRolled && dialogDecidesRegenerationFor(dialog, claim.playerId);
+/** Astra r1 10-21: a held failed-Regeneration claim expires after this long (the casualty-pill wait cap), checked
+ *  BEFORE the hold, so a stale red pill can never surface once its moment has passed. */
+const FAILED_REGENERATION_CLAIM_MAX_MS = APOTHECARY_FIX_UP_INJURY_WAIT_MAX_MS;
+/** Astra r2 10-21: held by HIS OWN apothecary dialog, the claim lives as long as his persisted casualty pill may
+ *  (INJURY_PILL_PERSIST_CAP_MS, 60 s) - a coach who takes 20 s to decline still gets the red pill. */
+const failedRegenerationClaimMaxMs = (extended: boolean): number =>
+  extended ? INJURY_PILL_PERSIST_CAP_MS : FAILED_REGENERATION_CLAIM_MAX_MS;
+const apothecaryDialogFor = (dialog: unknown, playerId: string): boolean =>
+  APOTHECARY_DIALOG_IDS.has(String((dialog as { dialogId?: unknown } | null)?.dialogId ?? '')) && dialogDecidesRegenerationFor(dialog, playerId);
 /** Astra r2 P2-4: players whose Original / Rerolled apothecary choice dialog was open (their outcome line is due). */
 const apothecaryChoicesOpen = new Map<string, { gameId: string; turn: string; stateAtOpen: number; actingId: string }>();
 let apothecaryFixUpQueue: ApothecaryFixUpClaim[] = [];
@@ -2818,6 +2853,8 @@ function pumpApothecaryFixUps(): void {
   state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, kind: cue.kind, text: cue.text, seq: ++apothecaryFixUpSeq };
   // Owner 10-20 ("When that happens, the casualty pill toast should disappear and be replaced by the Apothecary
   // toast"): his casualty pill, still up (persisted while the coach decided, or within its own beat), goes now.
+  // Owner 10-21: a Regeneration line - success or the failed red pill - never replaces it: it FOLLOWS the casualty
+  // pill (waited for above), which keeps what the injury was; the red pill only adds that Regeneration did not undo it.
   const replaced = cue.kind === 'apothecary' ? state.injuryPills.find((pill) => pill.playerId === cue.playerId) : undefined;
   if (replaced) {
     hideInjuryPill(replaced);
@@ -2845,7 +2882,8 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
   const gameId = String((g as { gameId?: unknown }).gameId ?? 'unknown');
   const turn = apothecaryFixUpTurnKey(g);
   const actingId = String(g.actingPlayer?.playerId ?? '');
-  const apothecaryDialogOpen = APOTHECARY_DIALOG_IDS.has(String(g.dialogParameter?.dialogId ?? ''));
+  const dialogId = String(g.dialogParameter?.dialogId ?? '');
+  const apothecaryDialogOpen = APOTHECARY_DIALOG_IDS.has(dialogId);
   const claims = [...apothecaryFixUpClaims(reports, g), ...regenerationFixUpClaims(reports, g)];
   // Astra r2 P2-4: a treatment settled by the coach's Original / Rerolled choice (the apothecaryChoice DIALOG) gets its
   // outcome line once the dialog has closed and the model holds his final state. Bounded: the game / turn changing
@@ -2873,11 +2911,25 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
     claims.push(outcome);
   }
   const ready: ApothecaryFixUpClaim[] = [];
+  const now = Date.now();
   for (const [playerId, pending] of [...pendingApothecaryFixUps]) {
-    if (pending.commandNr !== null && commandNr !== null && commandNr <= pending.commandNr) continue; // its own frame again
     const drop = () => pendingApothecaryFixUps.delete(playerId);
+    // Astra r1 10-21: a failed Regeneration is dropped during catch-up (historical) and once its moment has passed -
+    // the turn / activation moved on or the wall-clock cap ran out - BEFORE any hold can keep it.
+    if (isFailedRegeneration(pending.claim)) {
+      // Astra r3 10-21: the 60 s cap only while HIS apothecary dialog holds it, or on the frame it releases it
+      // (no other regeneration dialog of his took over); the flag tracks the current frame only, never sticky.
+      const ownApothecary = apothecaryDialogFor(g.dialogParameter, playerId);
+      const extended = ownApothecary || (pending.apothecaryHeld === true && !dialogDecidesRegenerationFor(g.dialogParameter, playerId));
+      pending.apothecaryHeld = ownApothecary;
+      const sequenceMoved = pending.turn !== turn || pending.actingId !== actingId;
+      if (playback.catchingUp || pending.gameId !== gameId || now - pending.raisedAt >= failedRegenerationClaimMaxMs(extended)
+        || (sequenceMoved && !dialogDecidesRegenerationFor(g.dialogParameter, playerId))) { drop(); continue; }
+    }
+    if (pending.commandNr !== null && commandNr !== null && commandNr <= pending.commandNr) continue; // its own frame again
     if (claims.some((claim) => claim.playerId === playerId) || pending.gameId !== gameId) { drop(); continue; }
     const verdict = apothecaryFixUpVerdict(g, pending.claim);
+    if (verdict === 'agrees' && regenerationFailUndecided(pending.claim, g.dialogParameter)) continue; // owner 10-21: not final yet
     if (verdict === 'agrees') { drop(); ready.push(pending.claim); continue; }
     const sequenceOver = !apothecaryDialogOpen && (pending.turn !== turn || pending.actingId !== actingId);
     if (verdict === 'contradicted' || sequenceOver) drop();
@@ -2886,10 +2938,15 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
     const key = `fixup:${claim.kind}:${gameId}:${commandNr ?? 'unknown'}:${claim.playerId}`;
     if (apothecaryAutoReturnSeen.has(key)) continue;
     apothecaryAutoReturnSeen.add(key);
+    // Astra r1 10-21: a failed Regeneration raised during catch-up is history - suppressed at the source, never held.
+    if (playback.catchingUp && isFailedRegeneration(claim)) continue;
     const verdict = apothecaryFixUpVerdict(g, claim);
-    if (verdict === 'agrees') ready.push(claim);
-    else if (verdict === 'pending') {
-      pendingApothecaryFixUps.set(claim.playerId, { claim, gameId, turn, commandNr, actingId });
+    if (verdict === 'agrees' && !regenerationFailUndecided(claim, g.dialogParameter)) ready.push(claim);
+    else if (verdict !== 'contradicted') {
+      pendingApothecaryFixUps.set(claim.playerId, {
+        claim, gameId, turn, commandNr, actingId, raisedAt: now,
+        apothecaryHeld: isFailedRegeneration(claim) && apothecaryDialogFor(g.dialogParameter, claim.playerId),
+      });
     }
   }
   if (!ready.length || playback.catchingUp) return;
@@ -16159,6 +16216,8 @@ export function installApothecaryTestHarness(
   splash(): typeof state.rerollSplash;
   /** Owner 10-09: the Modern fix-up line, on its own rail. */
   fixUp(): typeof state.apothecaryFixUp;
+  /** Owner 10-21: the casualty pills on screen (a failed Regeneration's red pill follows its player's pill). */
+  injuryPills(): typeof state.injuryPills;
   /** Put a toast on the reroll rail through the real Mascot path, to prove the two rails do not collide. */
   showMascotToast(): void;
   /** What the Modern view reports: a full-width centre banner is on screen. */
@@ -16269,6 +16328,7 @@ export function installApothecaryTestHarness(
     autoReturn: () => state.apothecaryAutoReturn,
     splash: () => state.rerollSplash,
     fixUp: () => state.apothecaryFixUp,
+    injuryPills: () => state.injuryPills,
     setCentreBanner(on) { gameStore.setCentreBannerVisible(on); },
     setStaleBannerState() {
       state.riotousRookiesSplash = { coach: 'Coach', amount: 3, rolls: [3], seq: (state.riotousRookiesSplash?.seq ?? 0) + 1 };

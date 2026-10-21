@@ -16867,7 +16867,7 @@ function sendChat() {
              (a match announcement, one band below the centred reroll announcements), so neither can cover or
              replace the other. The key never repeats: each line mounts a fresh element and replays the entry. -->
         <div v-if="gameStore.state.apothecaryFixUp" :key="'apo-fix-' + gameStore.state.apothecaryFixUp.seq"
-          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" :data-kind="gameStore.state.apothecaryFixUp.kind" data-testid="apothecary-fix-up">
+          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" :data-kind="gameStore.state.apothecaryFixUp.kind" :data-outcome="gameStore.state.apothecaryFixUp.outcome" data-testid="apothecary-fix-up">
           <img class="reroll-toast-icon" :src="gameStore.state.apothecaryFixUp.kind === 'regeneration' ? regenerationIconUrl : apothecaryIconUrl" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.apothecaryFixUp.text }}</span>
         </div>
@@ -21199,6 +21199,13 @@ function sendChat() {
   100% { opacity: 0; transform: translate(-50%, -4px); }
 }
 .reroll-toast.apo-fixup-toast { top: calc(40% + 56px); }
+/* Owner 10-21: a failed Regeneration reads fail red whichever side it is (the fail-pill red of .negatrait-cue.fail);
+   the attribute selector outranks [data-side='home'] (declared below) on specificity. */
+.reroll-toast.apo-fixup-toast[data-outcome='failed'] {
+  background: linear-gradient(120deg, rgba(150, 26, 26, 0.95), rgba(70, 10, 10, 0.92));
+  border-color: rgba(255, 120, 120, 0.6);
+  box-shadow: 0 6px 20px #000b, 0 0 16px rgba(120, 0, 0, 0.6);
+}
 .reroll-toast.team-captain-toast { top: calc(76px + 48px); } /* owner 10-20: one row under the reroll toast's default band */
 .reroll-toast[data-side='home'] {
   background: linear-gradient(120deg, #0c1e7af2, #0a1030e8);
