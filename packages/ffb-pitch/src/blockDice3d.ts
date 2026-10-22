@@ -74,6 +74,11 @@ export interface BlockDiceRuntime {
   updateFaceTextures(urls: readonly string[]): Promise<void>;
   /** Owner 10-06: tint the die BODY (every glb material that is not a face material) for the block die surface. */
   setSurface?(surface: BlockDieSurface): void;
+  /** Perf (JLeav 1.0.261): move the live canvas + WebGL context into a new host (the block card is re-mounted per
+   *  block) instead of building a new context, programs and textures for every block. */
+  attach?(host: HTMLElement, slots?: () => readonly BlockDiceSlot[]): void;
+  /** Take the canvas out of the DOM and stop observing the host; the context and its GPU resources stay alive. */
+  detach?(): void;
   dispose(): void;
 }
 
@@ -131,6 +136,13 @@ export interface BlockDiceRow {
   updateFaceTextures(urls: readonly string[]): Promise<void>;
   /** Owner 10-06: the block die surface — body tint (the face art itself comes through updateFaceTextures). */
   setSurface(surface: BlockDieSurface): void;
+  /** Perf (JLeav 1.0.261): re-home the parked row in the next block card's dice host (same context, no rebuild).
+   *  The next play() starts from a clean slate (no carried "previous results"). */
+  attach(host: HTMLElement, slots?: () => readonly BlockDiceSlot[]): void;
+  /** Park the row between blocks: animation cancelled, canvas out of the DOM, GPU resources kept for the next block. */
+  detach(): void;
+  /** The host the canvas currently sits in (null while parked). */
+  readonly host: HTMLElement | null;
   dispose(): void;
 }
 
@@ -143,14 +155,42 @@ class BlockDiceRowController implements BlockDiceRow {
   private animationDuration = 0;
   private lastFrameAt = 0;
   private disposed = false;
+  host: HTMLElement | null;
 
   constructor(
     private readonly runtime: BlockDiceRuntime,
     private readonly scheduler: BlockDiceScheduler,
     private readonly onSettled?: () => void,
     private readonly onFailure?: (error: unknown) => void,
+    host: HTMLElement | null = null,
   ) {
     this.canvas = runtime.canvas;
+    this.host = host;
+  }
+
+  attach(host: HTMLElement, slots?: () => readonly BlockDiceSlot[]): void {
+    if (this.disposed) return;
+    try {
+      this.cancelAnimation();
+      this.previousResults = null;
+      this.runtime.attach?.(host, slots);
+      this.host = host;
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  detach(): void {
+    if (this.disposed) return;
+    this.cancelAnimation();
+    this.previousResults = null;
+    this.host = null;
+    try {
+      this.runtime.stopActions();
+      this.runtime.detach?.();
+    } catch (error) {
+      this.fail(error);
+    }
   }
 
   play(results: readonly number[], durationMs: number, changedIndices?: readonly number[]): void {
@@ -268,7 +308,7 @@ export async function createBlockDiceRow(host: HTMLElement, options: BlockDiceRo
   const onFailure = options.onFailure ?? (() => undefined);
   try {
     const runtime = await (options.runtimeFactory ?? createThreeBlockDiceRuntime)(host, onFailure, options.slots);
-    return new BlockDiceRowController(runtime, options.scheduler ?? browserScheduler, options.onSettled, onFailure);
+    return new BlockDiceRowController(runtime, options.scheduler ?? browserScheduler, options.onSettled, onFailure, host);
   } catch (error) {
     onFailure(error);
     throw error;
@@ -305,11 +345,133 @@ export const WHITE_BODY_TINTS: Readonly<Record<string, { color: string; metalnes
 };
 const WHITE_BODY_FALLBACK = { color: BLOCK_DIE_SURFACE_COLOURS.white.fill, metalness: 0.1, roughness: 0.5 };
 
+/** Perf (JLeav 1.0.261): the delivered face art is 1254 px square; the cube face never draws above ~110 device px, so
+ *  the GPU copy is capped here (mipmapped, so the sampled level is the same). 11 full-size uploads per block were
+ *  ~68 MB of texture traffic on every block roll. */
+export const BLOCK_DICE_FACE_MAX_PX = 512;
+/** Face textures kept per row (3 face sets: plain, home, away). Older unused sets are released. */
+export const BLOCK_DICE_FACE_CACHE_MAX = 15;
+
+export interface BlockFaceTextureCache<T> {
+  /** The texture for `url`: the cached one (no load), else a single shared load. */
+  get(url: string): Promise<T | null>;
+  /** The textures now on the dice (never evicted), then trims the cache to its limit. */
+  setApplied(applied: ReadonlySet<T>): void;
+  /** Astra r2: the newest REQUESTED face set: never evicted or released while it is wanted, even before it is applied. */
+  want(urls: readonly string[]): void;
+  /** Astra r1: drop `urls` (a superseded face set) except those in `keep` or on the dice. A settled texture is released
+   *  now; a load still in flight is released when it completes. */
+  drop(urls: readonly string[], keep: ReadonlySet<string>): void;
+  /** How many urls are cached (settled or loading). */
+  readonly size: number;
+  dispose(): void;
+}
+
+/** Perf (JLeav 1.0.261): url -> texture cache for the block-dice faces, least recently used first. A url is loaded
+ *  once per row lifetime; textures in use are never released; a load still in flight is never evicted. */
+export function createBlockFaceTextureCache<T>(options: {
+  load(url: string): Promise<T | null>;
+  release(texture: T): void;
+  max?: number;
+}): BlockFaceTextureCache<T> {
+  const max = options.max ?? BLOCK_DICE_FACE_CACHE_MAX;
+  const pending = new Map<string, Promise<T | null>>();
+  const settled = new Map<string, T | null>();
+  let applied: ReadonlySet<T> = new Set<T>();
+  let wanted: ReadonlySet<string> = new Set<string>();
+  let disposed = false;
+  const evict = () => {
+    for (const url of [...pending.keys()]) {
+      if (pending.size <= max) break;
+      if (!settled.has(url) || wanted.has(url)) continue;
+      const texture = settled.get(url) ?? null;
+      if (texture && applied.has(texture)) continue;
+      pending.delete(url);
+      settled.delete(url);
+      if (texture) options.release(texture);
+    }
+  };
+  return {
+    get(url) {
+      const cached = pending.get(url);
+      if (cached) {
+        pending.delete(url);
+        pending.set(url, cached);
+        return cached;
+      }
+      const load = options.load(url);
+      pending.set(url, load);
+      load.then((texture) => {
+        if (disposed || pending.get(url) !== load) { if (texture) options.release(texture); return; }
+        settled.set(url, texture);
+        evict(); // Astra r1: a late settle never leaves the cache above its limit
+      }, () => { if (pending.get(url) === load) pending.delete(url); });
+      return load;
+    },
+    want(urls) {
+      wanted = new Set(urls);
+    },
+    drop(urls, keep) {
+      for (const url of urls) {
+        if (keep.has(url) || wanted.has(url) || !pending.has(url)) continue;
+        const texture = settled.get(url);
+        if (texture && applied.has(texture)) continue;
+        pending.delete(url); // an in-flight load now finds itself superseded and releases its texture on completion
+        if (settled.has(url)) {
+          settled.delete(url);
+          if (texture) options.release(texture);
+        }
+      }
+    },
+    setApplied(next) {
+      applied = next;
+      evict();
+    },
+    get size() { return pending.size; },
+    dispose() {
+      disposed = true;
+      for (const texture of settled.values()) if (texture) options.release(texture);
+      settled.clear();
+      pending.clear();
+      applied = new Set<T>();
+    },
+  };
+}
+
+/** Decode a face image off the main thread (ImageBitmap) at most BLOCK_DICE_FACE_MAX_PX on its longest side; null
+ *  when the platform has no fetch/createImageBitmap or the decode fails (the caller then uses the plain loader). */
+async function decodeFaceBitmap(url: string, maxPx = BLOCK_DICE_FACE_MAX_PX): Promise<ImageBitmap | null> {
+  if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const full = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' });
+    const longest = Math.max(full.width, full.height);
+    if (longest <= maxPx) return full;
+    const scale = maxPx / longest;
+    try {
+      return await createImageBitmap(full, {
+        resizeWidth: Math.max(1, Math.round(full.width * scale)),
+        resizeHeight: Math.max(1, Math.round(full.height * scale)),
+        resizeQuality: 'high',
+        premultiplyAlpha: 'none',
+      });
+    } finally {
+      full.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function createThreeBlockDiceRuntime(
-  host: HTMLElement,
+  initialHost: HTMLElement,
   onFailure: (error: unknown) => void,
-  slots?: () => readonly BlockDiceSlot[],
+  initialSlots?: () => readonly BlockDiceSlot[],
 ): Promise<BlockDiceRuntime> {
+  let host: HTMLElement | null = initialHost;
+  let slots = initialSlots;
   const { THREE, gltf } = await loadSharedBlockDiceModel();
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
@@ -318,7 +480,7 @@ async function createThreeBlockDiceRuntime(
   const canvas = renderer.domElement;
   canvas.className = 'bp-dice-3d-canvas';
   canvas.setAttribute('aria-hidden', 'true');
-  host.prepend(canvas);
+  initialHost.prepend(canvas);
 
   const scene = new THREE.Scene();
   // Owner 09-08: the scene is laid out in CSS PIXELS of the host (x right, y down via negative world y) so each
@@ -369,15 +531,43 @@ async function createThreeBlockDiceRuntime(
     scene.add(holder);
     return { holder, object, mixer: new THREE.AnimationMixer(object) };
   });
-  const externalTextures = new Set<import('three').Texture>();
+  // Face textures by url: a parked row keeps them on the GPU, so the next block (or the other side's set) re-faces the
+  // dice without a decode or an upload.
+  const releaseFace = (texture: import('three').Texture) => {
+    const image = texture.image as { close?: () => void } | null;
+    texture.dispose();
+    image?.close?.();
+  };
+  const faces = createBlockFaceTextureCache<import('three').Texture>({
+    load: async (url) => {
+      const bitmap = await decodeFaceBitmap(url);
+      const texture = bitmap
+        ? new THREE.Texture(bitmap as unknown as HTMLImageElement)
+        : await new THREE.TextureLoader().loadAsync(url);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;
+      texture.needsUpdate = true;
+      return texture;
+    },
+    release: releaseFace,
+  });
   let count = 1;
   let disposed = false;
   let textureGeneration = 0;
+  let appliedTextureGeneration = 0;
+  let latestFaceUrls: ReadonlySet<string> = new Set();
+  // Astra r1 (draw gate): the canvas draws only while it sits in a host, holds the CURRENT block's results (set by a
+  // play/settle since the last attach) and no face update is pending. Parked, freshly re-homed, or waiting on a face
+  // set, it stays blank, so neither the previous block's dice nor its faces can show through the PNG buttons. The
+  // first draw also uploads the face art the row shows, never the GLB's embedded faces first.
+  let hasResults = false;
+  const canDraw = () => !disposed && host != null && hasResults && appliedTextureGeneration === textureGeneration;
+  const draw = () => { if (canDraw()) renderer.render(scene, camera); };
 
   /** Fallback slots when the host supplies none: 60 px dice on a 7 px gap, left-packed like the button row. */
   const fallbackSlots = (): BlockDiceSlot[] => {
     const size = 60 * BLOCK_DICE_SLOT_FILL;
-    return Array.from({ length: count }, (_u, i) => ({ cx: 30 + i * 67, cy: Math.max(1, host.clientHeight) / 2, size }));
+    return Array.from({ length: count }, (_u, i) => ({ cx: 30 + i * 67, cy: Math.max(1, host?.clientHeight ?? 0) / 2, size }));
   };
   const layout = () => {
     const current = (slots?.() ?? []).slice(0, count);
@@ -390,7 +580,7 @@ async function createThreeBlockDiceRuntime(
     });
   };
   const resize = () => {
-    if (disposed) return;
+    if (disposed || !host) return;
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
     renderer.setSize(width, height, false);
@@ -400,10 +590,10 @@ async function createThreeBlockDiceRuntime(
     camera.bottom = -height;
     camera.updateProjectionMatrix();
     layout();
-    renderer.render(scene, camera);
+    draw();
   };
   const observer = new ResizeObserver(resize);
-  observer.observe(host);
+  observer.observe(initialHost);
 
   const fail = (event: Event) => {
     event.preventDefault();
@@ -440,6 +630,7 @@ async function createThreeBlockDiceRuntime(
   const runtime: BlockDiceRuntime = {
     canvas,
     setCount(nextCount) {
+      hasResults = true; // only play()/settle() set the count: the dice now carry the current block's results
       count = Math.max(1, Math.min(3, nextCount));
       dice.forEach((die, index) => { die.holder.visible = index < count; });
       resize(); // re-reads the button slots — the buttons are re-rendered for the new count by the host
@@ -477,7 +668,32 @@ async function createThreeBlockDiceRuntime(
       dice.slice(0, count).forEach((die) => die.mixer.update(deltaSeconds));
     },
     render() {
-      if (!disposed) renderer.render(scene, camera);
+      draw();
+    },
+    attach(nextHost, nextSlots) {
+      if (disposed) return;
+      if (host !== nextHost) {
+        observer.disconnect();
+        host = nextHost;
+        observer.observe(nextHost);
+      }
+      slots = nextSlots ?? slots;
+      // the previous block's results are void: blank until this card's play/settle (and its faces) arrive
+      hasResults = false;
+      dice.forEach((die) => die.mixer.stopAllAction());
+      renderer.clear();
+      if (canvas.parentElement !== nextHost) nextHost.prepend(canvas);
+      resize();
+    },
+    detach() {
+      if (disposed) return;
+      dice.forEach((die) => die.mixer.stopAllAction());
+      observer.disconnect();
+      host = null;
+      // Blank the preserved buffer; nothing draws while parked (canDraw needs a host and fresh results).
+      hasResults = false;
+      renderer.clear();
+      canvas.remove();
     },
     setSurface(surface) {
       for (const material of ownedMaterials) {
@@ -501,31 +717,32 @@ async function createThreeBlockDiceRuntime(
     async updateFaceTextures(urls) {
       if (urls.length !== 5) throw new Error(`Expected five block-face URLs, got ${urls.length}`);
       const generation = ++textureGeneration;
-      const loader = new THREE.TextureLoader();
-      const loaded = await Promise.allSettled(urls.map((url) => loader.loadAsync(url)));
-      if (disposed || generation !== textureGeneration) {
-        loaded.forEach((result) => { if (result.status === 'fulfilled') result.value.dispose(); });
+      latestFaceUrls = new Set(urls);
+      faces.want(urls); // Astra r2: the newest set survives every trim until it is applied
+      const loaded = await Promise.allSettled(urls.map((url) => faces.get(url)));
+      if (disposed) return;
+      if (generation !== textureGeneration) {
+        // Astra r1: a superseded set is dropped (what the newest set or the dice still use stays cached)
+        faces.drop(urls, latestFaceUrls);
         return;
       }
-      externalTextures.forEach((texture) => texture.dispose());
-      externalTextures.clear();
+      const applied = new Set<import('three').Texture>();
       loaded.forEach((result, faceIndex) => {
         const texture = result.status === 'fulfilled' ? result.value : null;
-        if (texture) {
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.flipY = false;
-          texture.needsUpdate = true;
-          externalTextures.add(texture);
-        }
+        if (texture) applied.add(texture);
         for (const name of faceMaterials[faceIndex]!) {
           const material = materialForName(name);
           if (!material) continue;
           const next = texture ?? embeddedTextures.get(name) ?? null;
+          // Only a change of map PRESENCE / colour space changes the shader; a plain swap reuses the program.
+          const reprogram = (material.map == null) !== (next == null) || material.map?.colorSpace !== next?.colorSpace;
           material.map = next;
           material.emissiveMap = next; // the GLB's emissive slot carries the symbol too — a swapped face must not ghost the old art
-          material.needsUpdate = true;
+          if (reprogram) material.needsUpdate = true;
         }
       });
+      faces.setApplied(applied);
+      appliedTextureGeneration = generation;
     },
     dispose() {
       if (disposed) return;
@@ -537,7 +754,7 @@ async function createThreeBlockDiceRuntime(
         die.mixer.stopAllAction();
         die.mixer.uncacheRoot(die.object);
       });
-      externalTextures.forEach((texture) => texture.dispose());
+      faces.dispose();
       embeddedTextures.forEach((texture) => texture.dispose());
       ownedMaterials.forEach((material) => material.dispose());
       ownedGeometries.forEach((geometry) => geometry.dispose());
@@ -546,6 +763,8 @@ async function createThreeBlockDiceRuntime(
       canvas.remove();
     },
   };
-  runtime.setCount(1);
+  // construction-time layout only (not a block's results, so nothing draws)
+  dice.forEach((die, index) => { die.holder.visible = index < count; });
+  resize();
   return runtime;
 }

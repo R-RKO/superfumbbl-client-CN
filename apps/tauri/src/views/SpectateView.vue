@@ -6,6 +6,8 @@ import { installMouseEntropy } from '../game/mouseEntropy';
 import { composeGraphicalJoins } from '../game/reportFormatter';
 import { casualtyPillLines, decayPillLine } from '../game/injuryPillText';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch, watchEffect } from 'vue';
+import { createBlockDiceRowProvider } from '../game/blockDiceRowProvider';
+import { anchorRef } from '../game/anchorRef'; // perf 1.0.261: per-frame screen anchors trigger only on a real move
 import { FORK_EDITION } from '../game/edition';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
 import { allBlockDiceIndices, BlockTumbleRun, handBlockTumbleTo3d, type BlockTumbleFrame } from '../game/blockRerollTumble';
@@ -723,7 +725,7 @@ let unregisterKickElection: (() => void) | null = null;
 let unregisterApothecaryElection: (() => void) | null = null;
 let kickElectionRaf = 0;
 const kickElectionIconFailed = ref(false);
-const kickElectionTargets = ref<Array<{
+const kickElectionTargets = anchorRef<Array<{
   key: string;
   choice: 'normal' | 'kick';
   raw: [number, number];
@@ -861,7 +863,10 @@ function refreshSeatTint() {
   if (!renderer) { seatTint.value = null; return; }
   const c = renderer.seatColors();
   const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
-  seatTint.value = { home: hex(c.home.trim), away: hex(c.away.trim) };
+  const next = { home: hex(c.home.trim), away: hex(c.away.trim) };
+  // Perf (1.0.261): re-read on every game change; keep the object when the colours are the same (the log's v-memo keys on it).
+  if (seatTint.value?.home === next.home && seatTint.value?.away === next.away) return;
+  seatTint.value = next;
 }
 /**
  * SEAT MAPPING (the whole point of tagging the TEAM rather than a colour):
@@ -2644,7 +2649,7 @@ const bpDiceHost = ref<HTMLElement | null>(null);
 const bpDice3dLive = ref(false);
 const bpReducedMotion = ref(false);
 let bpDice3d: BlockDiceRow | null = null;
-let bpDice3dLoading: Promise<BlockDiceRow | null> | null = null;
+let bpDice3dModule: Awaited<ReturnType<typeof loadBlockDice3d>> | null = null;
 let bpDice3dFailed = false;
 let bpDice3dGeneration = 0;
 let bpDice3dPresentedKey: string | null = null;
@@ -2666,7 +2671,26 @@ function blockDice3dEligible(): boolean {
   return settings.order66 && settings.blockDice3d && !settings.spectatorClean && !gameStore.playbackCatchingUp.value
     && !bpReducedMotion.value && !bpReplaySeekFallback && !bpDice3dFailed && blockDiceWebGlAvailable();
 }
+// Astra round 2: the row is handed out only when ready to draw (built + this card's faces + this card's host); callers
+// flip bpDice3dLive (hiding the PNG dice) only after it resolves. See blockDiceRowProvider.ts.
+const bpDice3dProvider = createBlockDiceRowProvider<BlockDiceRow>({
+  current: () => bpDice3d,
+  host: () => bpDiceHost.value,
+  build: () => loadBlockDice3dRow(),
+  rehome: (row, host) => {
+    if (!bpDice3dModule) return Promise.resolve(row);
+    // A parked row (perf 1.0.261) moves into the current card's host. The card's side picks the face set (owner
+    // 10-13); cached sets apply in a microtask, a new set decodes first - like a fresh row, which also awaits its faces.
+    row.attach(host, blockDiceSlotsOf(bpDice3dModule, host));
+    return row.updateFaceTextures(PitchRenderer.blockFaceUrls(blockPartialSide.value)).then(() => {
+      if (bpDice3d !== row || row.host !== host) return null;
+      row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value));
+      return row;
+    });
+  },
+});
 function disposeBlockDice3d(resetFailure = false) {
+  bpDice3dProvider.reset();
   bpDice3dLifecycle++;
   bpDice3dGeneration++;
   bpDice3d?.dispose();
@@ -2677,6 +2701,29 @@ function disposeBlockDice3d(resetFailure = false) {
     bpDice3dPresentedKey = null;
     bpReplaySeekFallback = false;
   }
+}
+/** Perf (JLeav 1.0.261): the block card unmounts after every block, and the 3D row used to be disposed with it, so
+ *  EVERY block built a fresh WebGL context, recompiled its shaders and re-uploaded ~68 MB of face textures (a 600-900 ms
+ *  stall on the coach's machine, right as the roll is presented). The row is now PARKED between cards (canvas out of the
+ *  DOM, context and textures kept) and re-homed in the next card's dice host by ensureBlockDice3d. The resets are the
+ *  ones a card clear always made (failure latch, presented key, replay-seek fallback). */
+function parkBlockDice3d() {
+  bpDice3dProvider.reset();
+  bpDice3dLifecycle++;
+  bpDice3dGeneration++;
+  bpDice3d?.detach();
+  bpDice3dLive.value = false;
+  bpDice3dFailed = false;
+  bpDice3dPresentedKey = null;
+  bpReplaySeekFallback = false;
+}
+/** The die-button slots of `host`, read on every resize/count change (owner 09-08: cubes sit on the .bp-die buttons). */
+function blockDiceSlotsOf(module: NonNullable<typeof bpDice3dModule>, host: HTMLElement) {
+  return () => {
+    const hostRect = host.getBoundingClientRect();
+    const buttons = Array.from(host.querySelectorAll<HTMLElement>('.bp-die')).map((b) => b.getBoundingClientRect());
+    return module.blockDiceSlotsFromRects(hostRect, buttons);
+  };
 }
 function failBlockDice3d(_error: unknown) {
   const wasLive = bpDice3dLive.value;
@@ -2692,25 +2739,23 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
   const generation = ++bpDice3dGeneration;
   try {
     const module = await loadBlockDice3d();
+    bpDice3dModule = module;
     if (generation !== bpDice3dGeneration || !blockDice3dEligible() || bpDiceHost.value !== host) return null;
     const row = await module.createBlockDiceRow(host, {
       onFailure: failBlockDice3d,
       onSettled: () => { if (bpDice3dLive.value) stopBlockTumble(); },
       // Owner 09-08: the cubes sit exactly on the `.bp-die` buttons (60 px boxes, 7 px gap) — never their own spacing.
-      slots: () => {
-        const hostRect = host.getBoundingClientRect();
-        const buttons = Array.from(host.querySelectorAll<HTMLElement>('.bp-die')).map((b) => b.getBoundingClientRect());
-        return module.blockDiceSlotsFromRects(hostRect, buttons);
-      },
+      slots: blockDiceSlotsOf(module, host),
     });
     if (generation !== bpDice3dGeneration || !blockDice3dEligible() || bpDiceHost.value !== host) {
       row.dispose();
       return null;
     }
     bpDice3d = row;
-    row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value)); // owner 10-06: body tint for the block die surface (10-13: the chooser's side)
+    // Faces first: the row's first draw then uploads the art it shows, never the GLB's embedded faces (perf 1.0.261).
     await row.updateFaceTextures(PitchRenderer.blockFaceUrls(blockPartialSide.value));
     if (generation !== bpDice3dGeneration || bpDice3d !== row) return null;
+    row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value)); // owner 10-06: body tint for the block die surface (10-13: the chooser's side)
     return row;
   } catch (error) {
     if (generation === bpDice3dGeneration) failBlockDice3d(error);
@@ -2718,12 +2763,7 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
   }
 }
 function ensureBlockDice3d(): Promise<BlockDiceRow | null> {
-  if (bpDice3d) return Promise.resolve(bpDice3d);
-  if (bpDice3dLoading) return bpDice3dLoading;
-  const pending = loadBlockDice3dRow();
-  bpDice3dLoading = pending;
-  void pending.finally(() => { if (bpDice3dLoading === pending) bpDice3dLoading = null; });
-  return pending;
+  return bpDice3dProvider.ensure();
 }
 async function presentBlockDice3d(key: string, results: readonly number[], durationMs: number) {
   if (bpDice3dPresentedKey === key) return;
@@ -2774,7 +2814,7 @@ onBeforeUnmount(() => window.clearTimeout(bpLonerRetumbleTimer));
 watch(() => gameStore.state.blockPartial, (bp) => {
   if (!bp) {
     stopBlockTumble();
-    disposeBlockDice3d(true);
+    parkBlockDice3d();
     return;
   }
   const lifecycle = bpDice3dLifecycle;
@@ -3578,7 +3618,7 @@ watch(
 );
 
 // Render the store's sequenced negatrait result over the player; the view bounds its lifetime.
-const negatraitCue = ref<{ x: number; y: number; text: string; successful: boolean } | null>(null);
+const negatraitCue = anchorRef<{ x: number; y: number; text: string; successful: boolean } | null>(null);
 let negatraitCueRaf = 0;
 let negatraitCueTimer = 0;
 watch(() => gameStore.state.negatraitCue?.seq, () => {
@@ -5416,7 +5456,7 @@ watch(
 // a DOM overlay anchored NEAR the block square but OFFSET so the square (and the
 // gold aura) stay visible. Tracked per-frame while visible so camera glides/zooms
 // don't detach it; clamped with the context menu's bottom-safe convention.
-const followupPos = ref<{ x: number; y: number } | null>(null);
+const followupPos = anchorRef<{ x: number; y: number } | null>(null);
 let followupRaf = 0;
 function trackFollowupChip() {
   cancelAnimationFrame(followupRaf);
@@ -5465,7 +5505,7 @@ const shadowingPick = computed(() => {
   const p = gameStore.state.playerPick;
   return p && p.key.split(':')[1] === 'shadowing' && p.eligibleIds.length > 0 ? p : null;
 });
-const shadowingPos = ref<{ x: number; y: number } | null>(null);
+const shadowingPos = anchorRef<{ x: number; y: number } | null>(null);
 let shadowingRaf = 0;
 function trackShadowingPill() {
   cancelAnimationFrame(shadowingRaf);
@@ -5522,7 +5562,7 @@ const tentaclerId = computed(() => {
   cand.sort((a, b) => (Number(b.strength) - Number(a.strength)) || (Number(a.playerNr) - Number(b.playerNr)));
   return cand[0]!.playerId;
 });
-const tentaclesPos = ref<{ x: number; y: number } | null>(null);
+const tentaclesPos = anchorRef<{ x: number; y: number } | null>(null);
 let tentaclesRaf = 0;
 function trackTentaclesPill() {
   cancelAnimationFrame(tentaclesRaf);
@@ -5566,7 +5606,7 @@ function answerTentacles(use: boolean) {
 // Anchor the authoritative partial-reroll controls to the ACTUAL block-dice square instead of a fixed screen %, so it never
 // drifts away from the dice on an off-centre block. Tracked per-frame while visible
 // (camera zoom/glide safe); null → the CSS fallback position (centred).
-const blockRerollPos = ref<{ x: number; y: number } | null>(null);
+const blockRerollPos = anchorRef<{ x: number; y: number } | null>(null);
 let blockRerollRaf = 0;
 function trackBlockReroll() {
   cancelAnimationFrame(blockRerollRaf);
@@ -5639,7 +5679,7 @@ watch(
 // only for the opponent's pick (decider-team ≠ mine, Side-Step-safe) and self-clears on every exit path, so this
 // never shows on your OWN picks and clears when the pick resolves. Anchored at the block-dice square (same square-
 // finder as the reroll cluster), offset a little further below so it sits under the dice glyphs.
-const oppDecidingPos = ref<{ x: number; y: number } | null>(null);
+const oppDecidingPos = anchorRef<{ x: number; y: number } | null>(null);
 let oppDecidingRaf = 0;
 function trackOppDeciding() {
   cancelAnimationFrame(oppDecidingRaf);
@@ -6660,13 +6700,13 @@ watch(() => {
   if (def && !o66PendingPunt.value) o66PendingPunt.value = def;
 }, { immediate: true });
 // The confirm card follows the renderer's camera-live cone centre; goes NULL (card hidden) the instant teardown runs.
-const puntConeAnchor = ref<{ x: number; y: number } | null>(null);
+const puntConeAnchor = anchorRef<{ x: number; y: number } | null>(null);
 type PuntScreenDirection = 'up' | 'down' | 'left' | 'right';
 type PuntDirectionChoice = { direction: PuntScreenDirection; arrow: string; square: [number, number] };
 const puntDirectionArrow: Record<PuntScreenDirection, string> = { up: '▲', down: '▼', left: '◀', right: '▶' };
 // Owner ② (08-13): the at-punter direction picker maps the server's offered aims into live screen space.
-const puntReaimAnchor = ref<{ x: number; y: number } | null>(null);
-const puntDirectionChoices = ref<PuntDirectionChoice[]>([]);
+const puntReaimAnchor = anchorRef<{ x: number; y: number } | null>(null);
+const puntDirectionChoices = anchorRef<PuntDirectionChoice[]>([]);
 function selectPuntDirection(square: [number, number]) {
   if (guardConfirmCard()) return; // owner 10-15: no re-aim under an open confirmation card
   o66PendingPunt.value = square;
@@ -7175,7 +7215,7 @@ onBeforeUnmount(() => gameStore.setCentreBannerVisible(false));
 // Quick Snap selects an owned player, highlights upstream-legal adjacent empty squares, and moves via CLIENT_SETUP_PLAYER.
 const selectedQuickSnap = ref<string | null>(null);
 // Owner 10-05: each DOM hit target covers the WHOLE tile (the renderer's projected square bounds), not a 26 px dot.
-const quickSnapTargets = ref<{ x: number; y: number; w: number; h: number; coord: [number, number] }[]>([]);
+const quickSnapTargets = anchorRef<{ x: number; y: number; w: number; h: number; coord: [number, number] }[]>([]);
 let quickSnapRaf = 0;
 /** Shared controller projection — the very squares the store's send gate would accept (Classic uses the same call). */
 function quickSnapValidTargets(): [number, number][] {
@@ -7373,7 +7413,7 @@ function pushBlitzTokens() {
 }
 watch(() => [gameStore.state.blitzTokens?.seq, gameStore.state.blitzTokens?.targetId, settings.blitzTargetMarker], pushBlitzTokens);
 // The acting-token target-declaration prompt. Owner 10-08: Gaze left it - no victim is named at declare.
-const o66TargetDeclarePos = ref<{ x: number; y: number } | null>(null);
+const o66TargetDeclarePos = anchorRef<{ x: number; y: number } | null>(null);
 let targetDeclareRaf = 0;
 const targetDeclarePrompt = computed(() => {
   const g = gameStore.game.value;
@@ -7426,7 +7466,7 @@ watch(targetDeclarePrompt, (prompt) => {
 });
 // Owner o66aa: the 2-click target CUE for pass / hand-off / foul — 🏈 over a pass/hand-off target, the armour-
 // break roll over a foul victim. RAF-follows the camera; shown while a pending target awaits its confirm click.
-const o66TargetCue = ref<{ x: number; y: number; label: string; throwRoll?: number; catchRoll?: number; throwDp?: string | null; catchDp?: string | null } | null>(null);
+const o66TargetCue = anchorRef<{ x: number; y: number; label: string; throwRoll?: number; catchRoll?: number; throwDp?: string | null; catchDp?: string | null } | null>(null);
 let targetCueRaf = 0;
 const o66ConfirmedPassDestination = computed(() => {
   const g = gameStore.game.value;
@@ -7720,7 +7760,7 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
 // Field-wide PASS cards are suppressed; this tooltip keeps the same values available at the one square the coach is
 // considering, including 2+. HMP keeps its dedicated any-square ruler/nomination surface.
 const passBombHoverSq = ref<[number, number] | null>(null);
-const passBombHoverTip = ref<{ x: number; y: number; throwRoll: number; catchRoll: number | null } | null>(null);
+const passBombHoverTip = anchorRef<{ x: number; y: number; throwRoll: number; catchRoll: number | null } | null>(null);
 let passHoverTipRaf = 0;
 /*
  * Upstream draws no ruler under HMP (PassLogicModule.java:78-103,138-145;
@@ -7864,7 +7904,7 @@ const jumpBadgeOn = computed(() => {
   const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   return !!actingId && jumpLeaping.value;
 });
-const jumpTogglePos = ref<{ x: number; y: number } | null>(null);
+const jumpTogglePos = anchorRef<{ x: number; y: number } | null>(null);
 let jumpToggleRaf = 0;
 function trackJumpToggle() {
   cancelAnimationFrame(jumpToggleRaf);
@@ -7890,7 +7930,7 @@ watch(jumpBadgeOn, (on) => { if (on) trackJumpToggle(); else { cancelAnimationFr
 // no square picker/new state: the mover keeps walking (`StepInitMoving.java:270-278`), and FieldModel leaves the
 // ball in the vacated square while ballMoving is true (`FieldModel.java:883-892`). The RAF follows that live mover;
 // the model-derived false edge removes it immediately on auto-cancel/activation end.
-const fumblerooskiePos = ref<{ x: number; y: number } | null>(null);
+const fumblerooskiePos = anchorRef<{ x: number; y: number } | null>(null);
 let fumblerooskieRaf = 0;
 function trackFumblerooskie() {
   cancelAnimationFrame(fumblerooskieRaf);
@@ -7920,7 +7960,7 @@ onBeforeUnmount(() => {
 });
 
 // Render selectable/selected synchronous multi-block rings; the store owns selection and auto-commit.
-const multiBlockMarkers = ref<{ x: number; y: number; selected: boolean }[]>([]);
+const multiBlockMarkers = anchorRef<{ x: number; y: number; selected: boolean }[]>([]);
 let multiBlockRaf = 0;
 watch(() => {
   const g = gameStore.game.value;
@@ -8272,7 +8312,7 @@ const playerCardEl = ref<HTMLElement | null>(null);
 const cardPos = ref<{ x: number; y: number } | null>(null);
 const cardSize = ref<{ w: number; h: number } | null>(null);
 const cardDodgePos = ref<{ x: number; y: number } | null>(null);
-const cardDockPos = ref<{ x: number; y: number } | null>(null);
+const cardDockPos = anchorRef<{ x: number; y: number } | null>(null);
 let playerCardDodgeRaf = 0;
 const cardStyle = computed(() => {
   const style: Record<string, string> = {};
@@ -8649,7 +8689,7 @@ const intensiveTrainingFocus = createIntensiveTrainingFocus({
 // The card opens at the pitch centre, which is where the camera just put the player: it steps clear of the token and
 // the arrow (the shared occlusion dodge). Followed only through the camera glide (1.5 s), then left alone; a drag or
 // a press on the card wins.
-const intensiveCardPos = ref<{ x: number; y: number } | null>(null);
+const intensiveCardPos = anchorRef<{ x: number; y: number } | null>(null);
 let intensiveCardRaf = 0;
 function followIntensiveCardPlacement() {
   cancelAnimationFrame(intensiveCardRaf);
@@ -10948,7 +10988,7 @@ function crosshairPlayerId(): string | null {
   if (!t) return null;
   return 'dugoutPlayerId' in t ? t.dugoutPlayerId : playerIdAtSquare(t.square);
 }
-const precisionHint = ref<{ x: number; y: number } | null>(null);
+const precisionHint = anchorRef<{ x: number; y: number } | null>(null);
 let precisionHintRaf = 0;
 function trackPrecisionHint(): void {
   cancelAnimationFrame(precisionHintRaf);
@@ -15287,7 +15327,11 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
+              <!-- Perf (JLeav 1.0.261): the log rows are part of THIS component's render, so every unrelated re-render (each
+                   model sync) rebuilt a vnode per row and segment: the cost grew with the game's log. v-memo skips the subtree
+                   unless something it reads changes; the list below is everything it reads (entries are immutable once
+                   pushed, a new line makes a new logEntries array). Keep it complete when the row template changes. -->
+              <pre ref="logEl" v-memo="[logEntries, upstreamRows, logRowPlateList, settings.logStyle, settings.logTimestamps, settings.logDiceAsNumbers, settings.logNeededAsNumbers, gameStore.mySeat.value, seatTint, appliedPitchView.orientation, appliedPitchView.flipped, logTextStyle]" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
 </span></template><template v-else><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></span></template></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">

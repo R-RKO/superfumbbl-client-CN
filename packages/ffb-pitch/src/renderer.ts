@@ -1975,6 +1975,14 @@ export interface MoveTweenRecord {
   postStepCorrectionKey?: string;
 }
 
+/** Same squares in the same order (perf 1.0.261: setter no-op guards). */
+function sameSquareList(a: readonly Square[], b: readonly Square[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
+  return true;
+}
+
 export class PitchRenderer {
   /** ms per block-die face — UI-7 study Option A (700ms, recommended);
    *  Option B = 1000ms. See docs/dice-timing-study.md. */
@@ -4174,6 +4182,8 @@ export class PitchRenderer {
   private puntReaimHits: { dir: 'ccw' | 'cw'; ax: number; ay: number; bx: number; by: number; radius: number }[] = [];
   private jumpCrosshairSquares: Square[] = [];
   setBncAim(from: Square | null, squares: Square[], kind?: 'bnc' | 'punt'): void {
+    // Perf (1.0.261): the host re-sends the cleared aim on every sync; clearing a clear aim redrew every overlay.
+    if (!from && !this.bncAimFrom && this.bncAimSquares.length === 0) return;
     this.bncAimFrom = from;
     this.bncAimSquares = from ? squares : [];
     // Owner regress 08-12: kind is EXPLICIT-ONLY — punt passes 'punt' (v2 caller); everything else is B&C.
@@ -4233,6 +4243,8 @@ export class PitchRenderer {
    *  (serverMoveSquares while actingPlayer.leaping); [] clears. Visual-only — the leaping click routing
    *  stays in the host. Mirrors setBncAim. */
   setJumpCrosshairs(squares: Square[]): void {
+    // Perf (1.0.261): the host re-sends the same squares on every sync; an unchanged set redrew every overlay.
+    if (sameSquareList(this.jumpCrosshairSquares, squares)) return;
     this.jumpCrosshairSquares = squares;
     this.redrawOverlays();
   }
@@ -5176,6 +5188,9 @@ export class PitchRenderer {
     }
     this.app = app;
     this.initializingApp = null;
+    // Perf (1.0.261): retired label Text is destroyed once the rebuilt generation has rendered (destroyKeepingTextWarm).
+    (app.renderer as { runners?: { postrender?: { add(item: { postrender(): void }): void } } } | undefined)
+      ?.runners?.postrender?.add({ postrender: () => this.flushRetiredTexts() });
     host.appendChild(app.canvas);
     this.hostEl = host;
     if (this.actionDice3dWanted) void this.ensureActionDice3d();
@@ -6115,9 +6130,43 @@ export class PitchRenderer {
   /** Set at the very end of initRenderer (after every asset await and the camera reset); never before. */
   private initComplete = false;
 
+  /** Perf (JLeav 1.0.261): Text nodes of a torn-down generation, detached and kept alive until the next frame has
+   *  rendered. Pixi shares canvas-text textures by key with a reference count that only a RENDER acquires, so
+   *  destroying the old generation before the new one first rendered dropped each count to zero and re-rasterised and
+   *  re-uploaded the very same labels (turn-track digits, "-1" tags, BALL / BH badges) on every model sync. */
+  private retiredTexts: Text[] = [];
+  /** Flushed early past this many (a hidden tab renders no frames). */
+  static readonly RETIRED_TEXT_CAP = 4000;
+  /** `node.destroy({ children: true })`, except that its Text nodes are detached and destroyed after the next render
+   *  (flushRetiredTexts), so the rebuilt generation's identical labels reuse their textures. Containers, Graphics and
+   *  Sprites are destroyed at once, exactly as before. */
+  private destroyKeepingTextWarm(node: Container): void {
+    if (node.destroyed) return;
+    const texts: Text[] = [];
+    const visit = (n: Container) => {
+      if (n instanceof Text) { texts.push(n); return; }
+      for (const child of n.children) visit(child);
+    };
+    visit(node);
+    for (const text of texts) {
+      text.parent?.removeChild(text);
+      this.retiredTexts.push(text);
+    }
+    if (!(node instanceof Text)) node.destroy({ children: true });
+    if (this.retiredTexts.length > PitchRenderer.RETIRED_TEXT_CAP || !this.app || this.destroyed) this.flushRetiredTexts();
+  }
+  /** Destroys the retired Text nodes (postrender, renderer destroy, cap). One re-attached elsewhere is left alone. */
+  private flushRetiredTexts(): void {
+    if (this.retiredTexts.length === 0) return;
+    const texts = this.retiredTexts;
+    this.retiredTexts = [];
+    for (const text of texts) if (!text.destroyed && !text.parent) text.destroy();
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.flushRetiredTexts();
     this.dropProjectionLatch(); // a view change still waiting for a quiet pitch goes with the renderer
     this.pageListenerCleanup?.(); // and the window / document listeners of the pressed-pointer tracker
     PitchRenderer.instances.delete(this);
@@ -6811,7 +6860,7 @@ export class PitchRenderer {
     // Shared textures (iconsets, skill icons, checkers) are NOT destroyed —
     // texture destruction stays opt-in in Pixi's destroy().
     for (const child of this.tokenLayer.removeChildren()) {
-      if (child !== preservedPresentationToken) child.destroy({ children: true });
+      if (child !== preservedPresentationToken) this.destroyKeepingTextWarm(child);
     }
     for (const child of this.kickBallLayer.removeChildren()) {
       if (!child.destroyed) child.destroy({ children: true });
@@ -9021,6 +9070,9 @@ export class PitchRenderer {
    *  adjacent standing opponent of `attackerId` — the block-target preview surfaced
    *  from the classic Block context menu. Pass null to clear. */
   showBlockTargets(attackerId: string | null, onlyTargetId: string | null = null): void {
+    // Perf (1.0.261): only a CLEAR of an already clear preview is skipped (an armed preview's counts follow the model,
+    // so a repeat with an attacker still redraws).
+    if (!attackerId && !this.blockTargetsAttacker && !this.blockTargetsOnly) return;
     this.blockTargetsAttacker = attackerId;
     this.blockTargetsOnly = attackerId ? onlyTargetId : null;
     this.redrawOverlays();
@@ -9261,7 +9313,7 @@ export class PitchRenderer {
       this.movementOverlayNodes.set(key, entry);
       parent.addChild(node);
     } else if (entry.signature !== signature) {
-      for (const child of entry.node.removeChildren()) child.destroy({ children: true });
+      for (const child of entry.node.removeChildren()) this.destroyKeepingTextWarm(child);
       entry.node.addChild(build());
       entry.signature = signature;
     }
@@ -9407,13 +9459,13 @@ export class PitchRenderer {
     if (hoverSquareMarker && !hoverSquareMarker.destroyed) this.overlayLayer.removeChild(hoverSquareMarker);
     this.movementReachLayer.parent?.removeChild(this.movementReachLayer);
     this.movementPathCostLayer.parent?.removeChild(this.movementPathCostLayer);
-    for (const child of this.overlayLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of this.overlayLayer.removeChildren()) this.destroyKeepingTextWarm(child);
     this.blockDiceSprites = []; // clear ticker-visible references before destruction
     this.blockPreviewSquares = [];
     this.blockPreviewDecorKey = null;
     this.kegCrosshairs = []; // clear ticker-visible references before destruction
     this.skillTargetMarks = [];
-    for (const child of this.pathLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of this.pathLayer.removeChildren()) this.destroyKeepingTextWarm(child);
     if (hoverSquareMarker && !hoverSquareMarker.destroyed) this.overlayLayer.addChild(hoverSquareMarker);
     if (this.movementReachLayer.children.length > 0) this.overlayLayer.addChild(this.movementReachLayer);
     if (this.movementPathCostLayer.children.length > 0) this.pathLayer.addChild(this.movementPathCostLayer);
@@ -11419,8 +11471,8 @@ export class PitchRenderer {
    * cross for casualties, red skull for the dead.
    */
   private drawDugouts(): void {
-    for (const child of this.dugoutLayer.removeChildren()) child.destroy({ children: true });
-    for (const child of this.dugoutGroundLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of this.dugoutLayer.removeChildren()) this.destroyKeepingTextWarm(child);
+    for (const child of this.dugoutGroundLayer.removeChildren()) this.destroyKeepingTextWarm(child);
     this.dugoutTokensById.clear();
     this.dugoutCompartmentById.clear();
     this.dugoutLayer.sortableChildren = true;
@@ -11876,7 +11928,7 @@ export class PitchRenderer {
    *  end zone. Columns L→R: #Re-rolls / Turn timer / Score, with the die / hourglass / skull
    *  tokens riding the columns on that team's live values. */
   private drawTurnTrack(): void {
-    for (const child of this.turnTrackLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of this.turnTrackLayer.removeChildren()) this.destroyKeepingTextWarm(child);
     this.turnTrackLayer.sortableChildren = true;
     // gated on dugoutsEnabled so FUMBBL-Classic (which disables the on-pitch dugouts) also
     // hides the on-pitch tracks — classic carries the info in its sidebars.
