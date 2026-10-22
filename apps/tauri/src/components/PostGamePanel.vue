@@ -121,7 +121,7 @@ const dedFansMod = (mod: number) => (mod > 0 ? '+' + mod : String(mod));
 type PgLikelihoodKey = PgLikelihoodRow['key'];
 const DICE_TIP_MARGIN = 8;
 const DICE_TIP_GAP = 7;
-const diceTip = reactive<{ key: PgLikelihoodKey | null; pinned: boolean; left: number; top: number; below: boolean }>({
+const diceTip = reactive<{ key: PgLikelihoodKey | null; pinned: boolean; left: number; top: number; below: boolean; maxHeight?: number | null }>({
   key: null, pinned: false, left: 0, top: 0, below: true,
 });
 const diceTipEl = ref<HTMLElement | null>(null);
@@ -133,12 +133,24 @@ function placeDiceTip(): void {
   if (!el || !diceTipAnchor) return;
   const icon = diceTipAnchor.getBoundingClientRect();
   const box = el.getBoundingClientRect();
+  // the content's own height (a cap set by an earlier placement must not hide that it would now fit)
+  const natural = Math.max(box.height, el.scrollHeight || 0);
   const vw = window.innerWidth, vh = window.innerHeight;
-  // under the icon when it fits, else above it; either way kept inside the window
-  const below = icon.bottom + DICE_TIP_GAP + box.height + DICE_TIP_MARGIN <= vh || icon.top - DICE_TIP_GAP - box.height < DICE_TIP_MARGIN;
+  // Astra 10-22: on the Luck row the title area has a second line ("By turn" under the label) - the popover goes under
+  // the whole title area there, so it never covers (and swallows clicks on) that button
+  const head = diceTipAnchor.parentElement;
+  const bottom = head?.dataset.chart === 'true' ? Math.max(icon.bottom, head.getBoundingClientRect().bottom) : icon.bottom;
+  // under the icon when it fits, else above it. Astra 10-22 r2: when it fits on neither side it takes the roomier one,
+  // capped to that room (its content scrolls), so it is never clamped back over the title area and "By turn"
+  const roomBelow = vh - DICE_TIP_MARGIN - (bottom + DICE_TIP_GAP);
+  const roomAbove = icon.top - DICE_TIP_GAP - DICE_TIP_MARGIN;
+  const fitsBelow = natural <= roomBelow, fitsAbove = natural <= roomAbove;
+  const below = fitsBelow || (!fitsAbove && roomBelow >= roomAbove);
+  const room = Math.max(0, below ? roomBelow : roomAbove);
+  diceTip.maxHeight = fitsBelow || fitsAbove ? null : room;
+  const height = Math.min(natural, room);
   diceTip.below = below;
-  const top = below ? icon.bottom + DICE_TIP_GAP : icon.top - DICE_TIP_GAP - box.height;
-  diceTip.top = Math.max(DICE_TIP_MARGIN, Math.min(top, vh - DICE_TIP_MARGIN - box.height));
+  diceTip.top = below ? bottom + DICE_TIP_GAP : icon.top - DICE_TIP_GAP - height;
   // its left edge starts at the row title (not centred on the icon), so it never spills over the distribution column
   const start = (diceTipAnchor.parentElement ?? diceTipAnchor).getBoundingClientRect().left;
   diceTip.left = Math.max(DICE_TIP_MARGIN, Math.min(start, vw - DICE_TIP_MARGIN - box.width));
@@ -148,7 +160,7 @@ function openDiceTip(key: PgLikelihoodKey, anchor: HTMLElement, pinned: boolean)
   const icon = anchor.getBoundingClientRect();
   diceTipAnchor = anchor;
   diceTip.key = key; diceTip.pinned = pinned;
-  diceTip.left = icon.left; diceTip.top = icon.bottom + DICE_TIP_GAP; diceTip.below = true; // provisional; placed once measured
+  diceTip.left = icon.left; diceTip.top = icon.bottom + DICE_TIP_GAP; diceTip.below = true; diceTip.maxHeight = null; // provisional; placed once measured
   void nextTick(placeDiceTip);
 }
 function closeDiceTip(): void { cancelDiceTipLeave(); diceTip.key = null; diceTip.pinned = false; diceTipAnchor = null; diceTipName.value = null; }
@@ -185,15 +197,15 @@ function onDiceInfoFocus(key: PgLikelihoodKey, event: Event): void {
 }
 function onDiceInfoBlur(key: PgLikelihoodKey, event?: FocusEvent): void {
   if (diceTip.key !== key) return;
-  // owner 10-16: focus moving INTO the popover (its "By turn" button) keeps it open, pinned
+  // owner 10-16: focus moving INTO the popover (its name chips) keeps it open, pinned
   const next = event?.relatedTarget as Node | null | undefined;
   if (next && diceTipEl.value?.contains(next)) { diceTip.pinned = true; return; }
   closeDiceTip();
 }
-/** Owner 10-16 (Astra chart r1 B1): Tab from the Luck "i" goes into its popover's "By turn" button (the popover is
- *  teleported after the pane, so the natural Tab order would skip it and close it). */
-/** The popover's focusable controls in order: the name chips of its lines, then the Luck "By turn" button (Astra 10-17). */
-const diceTipFocusables = (): HTMLElement[] => Array.from(diceTipEl.value?.querySelectorAll<HTMLElement>('.pg-dice-tip-name, .pg-luck-chart-btn') ?? []);
+/** Owner 10-16 (Astra chart r1 B1): Tab from an "i" goes into its popover (the popover is teleported after the pane, so
+ *  the natural Tab order would skip it and close it). Owner 10-22: "By turn" left the popover for the Luck row itself, so
+ *  the popover's focusable controls are only the name chips of its lines (Astra 10-17); with none, Tab is the browser's. */
+const diceTipFocusables = (): HTMLElement[] => Array.from(diceTipEl.value?.querySelectorAll<HTMLElement>('.pg-dice-tip-name') ?? []);
 function onDiceInfoKeydown(key: PgLikelihoodKey, event: KeyboardEvent): void {
   if (event.key !== 'Tab' || event.shiftKey || diceTip.key !== key) return;
   const first = diceTipFocusables()[0];
@@ -202,16 +214,17 @@ function onDiceInfoKeydown(key: PgLikelihoodKey, event: KeyboardEvent): void {
   diceTip.pinned = true;
   first.focus();
 }
-/** Inside the popover (a name chip or "By turn"): Tab moves along its controls; from the last, Tab goes on to the next
- *  row's "i" (closing the popover); from the first, Shift+Tab goes back to the row's own "i". */
-function onLuckChartBtnKeydown(event: KeyboardEvent): void {
+/** Inside the popover (a name chip): Tab moves along the chips; from the last, Tab goes on to the pane's next row control
+ *  after the row's own "i" - the Luck row's "By turn" button, else the next row's "i" - closing the popover; from the
+ *  first, Shift+Tab goes back to the row's own "i". */
+function onDiceTipChipKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Tab') return;
   const controls = diceTipFocusables();
   const at = controls.indexOf(event.currentTarget as HTMLElement);
   if (at < 0) return;
   if (event.shiftKey ? at > 0 : at < controls.length - 1) return; // the next / previous control is the natural Tab stop
-  const icons = Array.from(document.querySelectorAll<HTMLElement>('.pg-dice-gauge-row .pg-dice-info'));
-  const own = diceTipAnchor ? icons.indexOf(diceTipAnchor) : icons.findIndex((el) => el.closest(`[data-row="${diceTip.key}"]`));
+  const icons = Array.from(document.querySelectorAll<HTMLElement>('.pg-dice-gauge-row .pg-dice-info, .pg-dice-gauge-row .pg-luck-chart-btn'));
+  const own = diceTipAnchor ? icons.indexOf(diceTipAnchor) : icons.findIndex((el) => el.classList.contains('pg-dice-info') && el.closest(`[data-row="${diceTip.key}"]`));
   if (own < 0) return;
   event.preventDefault();
   if (event.shiftKey) { icons[own]!.focus(); return; }
@@ -231,11 +244,17 @@ function onDiceTipKeyDown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
   event.stopPropagation(); // Escape closes the popover only, not whatever is behind it
   event.preventDefault();
-  // Astra chart r2: focus inside the popover (its "By turn" button) goes back to the "i" it belongs to
+  // Astra chart r2: focus inside the popover (a name chip) goes back to the "i" it belongs to
   const anchor = diceTipAnchor;
   const inside = !!diceTipEl.value && diceTipEl.value.contains(document.activeElement);
   closeDiceTip();
   if (inside && anchor) { diceTipRefocus = true; try { anchor.focus(); } finally { diceTipRefocus = false; } }
+}
+/** Scrolling the pane or the window closes the popover; Astra 10-22 r3: scrolling the popover's own (capped) content does not. */
+function onDiceTipOuterScroll(event: Event): void {
+  const target = event.target;
+  if (target instanceof Node && diceTipEl.value?.contains(target)) return;
+  closeDiceTip();
 }
 // The document listeners live only while a popover is open.
 function listenForDiceTipDismiss(on: boolean): void {
@@ -243,21 +262,21 @@ function listenForDiceTipDismiss(on: boolean): void {
   if (on) {
     document.addEventListener('pointerdown', onDiceTipPointerDown, true);
     document.addEventListener('keydown', onDiceTipKeyDown, true);
-    window.addEventListener('scroll', closeDiceTip, true);
+    window.addEventListener('scroll', onDiceTipOuterScroll, true);
     window.addEventListener('resize', closeDiceTip);
   } else {
     document.removeEventListener('pointerdown', onDiceTipPointerDown, true);
     document.removeEventListener('keydown', onDiceTipKeyDown, true);
-    window.removeEventListener('scroll', closeDiceTip, true);
+    window.removeEventListener('scroll', onDiceTipOuterScroll, true);
     window.removeEventListener('resize', closeDiceTip);
   }
 }
 watch(() => diceTip.key !== null, listenForDiceTipDismiss, { flush: 'sync' });
 watch([diceModalOpen, diceSide, () => props.showStats], closeDiceTip);
 
-// Owner 10-16: the LUCK CHART - a "By turn" button in the Luck popover opens a subpane inside the dice pane plotting
-// each team's net luck per team turn (dashed) and its running average (solid) - game/luckChart.ts. Escape or its close
-// button returns to the popover; Tab stays inside it while it is open.
+// Owner 10-16: the LUCK CHART - a "By turn" button (owner 10-22: on the Luck row, under its label) opens a subpane inside
+// the dice pane plotting each team's net luck per team turn (dashed) and its running average (solid) - game/luckChart.ts.
+// Escape or its close button hands focus back to that button; Tab stays inside the subpane while it is open.
 const luckChartOpen = ref(false);
 const luckPaneEl = ref<HTMLElement | null>(null);
 const luckHover = ref<number | null>(null);
@@ -282,10 +301,10 @@ function closeLuckChart(back = true): void {
   luckHover.value = null;
   if (!back) return;
   void nextTick(() => {
-    const icon = document.querySelector<HTMLElement>('.pg-dice-gauge-row[data-row="luck"] .pg-dice-info');
-    if (!icon) return;
-    openDiceTip('luck', icon, true);
-    icon.focus();
+    // owner 10-22: back to the control that opened it - the Luck row's "By turn" (the "i" if the button is gone)
+    const back = document.querySelector<HTMLElement>('.pg-dice-gauge-row[data-row="luck"] .pg-luck-chart-btn')
+      ?? document.querySelector<HTMLElement>('.pg-dice-gauge-row[data-row="luck"] .pg-dice-info');
+    back?.focus();
   });
 }
 function onLuckPaneKeydown(event: KeyboardEvent): void {
@@ -594,7 +613,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                            block dice offered); a game cached before that reads "not measured". Owner 10-10: the plain numbers
                            are no longer a line under the gauge - the "i" beside the title opens them in a popover. -->
                       <div v-for="row in side.likelihoods" :key="row.key" class="pg-dice-gauge-row" :data-row="row.key" :data-measured="row.like.measured">
-                        <span class="pg-dice-gauge-head">
+                        <span class="pg-dice-gauge-head" :data-chart="row.key === 'luck' && row.like.measured">
                           <span class="pg-dice-gauge-label">{{ row.label }}</span>
                           <button type="button" class="pg-dice-info" :aria-label="`${row.label} details`"
                             :aria-expanded="diceTip.key === row.key" :aria-describedby="diceTip.key === row.key ? diceTipId(row.key) : undefined"
@@ -602,6 +621,9 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                             @pointerenter="onDiceInfoEnter(row.key, $event)" @pointerleave="onDiceInfoLeave(row.key)"
                             @focus="onDiceInfoFocus(row.key, $event)" @blur="onDiceInfoBlur(row.key, $event)" @keydown="onDiceInfoKeydown(row.key, $event)"
                             @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
+                          <!-- Owner 10-22: the Luck chart's button sits on the row, under the word "Luck" (it was the last line of the
+                               popover). After the "i" in the DOM, so Tab reads the row's title, its details, then "By turn". -->
+                          <button v-if="row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" aria-label="Luck by turn" @click="openLuckChart">By turn</button>
                         </span>
                         <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${row.sentence ?? pgOddsSentence(row.like)}`">
                           <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
@@ -635,14 +657,12 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
       </div>
       <!-- Owner 10-10: the open row's numbers. A sibling of the pane (not inside its scrolling block), fixed to the viewport. -->
       <div v-if="diceModalOpen && showStats && diceTipRow" :id="diceTipId(diceTipRow.key)" ref="diceTipEl" class="skill-tip pg-dice-tip" role="tooltip"
-        :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px' }"
+        :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px', maxHeight: diceTip.maxHeight != null ? diceTip.maxHeight + 'px' : undefined, overflowY: diceTip.maxHeight != null ? 'auto' : undefined }"
         @pointerenter="onDiceTipPointerEnter" @pointerleave="onDiceTipPointerLeave">
         <b class="skill-tip-name">{{ diceTipRow.label }}</b>
         <!-- Owner 10-17: a story line's player names are chips - hover for who it was (#nr position, team), a click (or Enter) pins that detail inline.
-             Astra 10-17: the chips are in the popover's keyboard route (Tab from the "i" reaches the first of them, then "By turn"). -->
-        <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span v-if="stat.parts" class="pg-dice-tip-value"><template v-for="(part, j) in stat.parts" :key="j"><template v-if="typeof part === 'string'">{{ part }}</template><template v-else><button type="button" class="pg-dice-tip-name" :title="pgPlayerDetail(game, part.playerId)" :aria-expanded="diceTipName === `${i}:${j}`" :data-open="diceTipName === `${i}:${j}`" @click.stop="toggleDiceTipName(`${i}:${j}`)" @keydown="onLuckChartBtnKeydown">{{ part.name }}</button><span v-if="diceTipName === `${i}:${j}`" class="pg-dice-tip-name-detail"> ({{ pgPlayerDetail(game, part.playerId) }})</span></template></template></span><span v-else class="pg-dice-tip-value">{{ stat.value }}</span></span>
-        <!-- Owner 10-16: the Luck popover opens the chart of the breaks turn by turn. -->
-        <button v-if="diceTipRow.key === 'luck' && diceTipRow.like.measured" type="button" class="pg-luck-chart-btn" @click="openLuckChart" @keydown="onLuckChartBtnKeydown">By turn</button>
+             Astra 10-17: the chips are in the popover's keyboard route (Tab from the "i" reaches the first of them). -->
+        <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span v-if="stat.parts" class="pg-dice-tip-value"><template v-for="(part, j) in stat.parts" :key="j"><template v-if="typeof part === 'string'">{{ part }}</template><template v-else><button type="button" class="pg-dice-tip-name" :title="pgPlayerDetail(game, part.playerId)" :aria-expanded="diceTipName === `${i}:${j}`" :data-open="diceTipName === `${i}:${j}`" @click.stop="toggleDiceTipName(`${i}:${j}`)" @keydown="onDiceTipChipKeydown">{{ part.name }}</button><span v-if="diceTipName === `${i}:${j}`" class="pg-dice-tip-name-detail"> ({{ pgPlayerDetail(game, part.playerId) }})</span></template></template></span><span v-else class="pg-dice-tip-value">{{ stat.value }}</span></span>
       </div>
     </Teleport>
   </div>
@@ -1085,6 +1105,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-col-single .pg-dice-marker { stroke-width: 3.5; }
 .pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.5em; }
 .pg-dice-col-single .pg-dice-gauge-value[data-average='true'] b { font-size: 1.15em; } /* "about average" is words, not odds: quieter */
+/* Owner 10-22: the Luck and Turns cut short values are sentences on BOTH sides ("25 lucky breaks (25.5 expected)"), so
+   they take one size whether or not that side's result is near its expectation - the quieter "about average" rule above
+   is for the odds rows only. Before this, the side whose luck sat near expected read smaller than the other side's. */
+.pg-dice-col-single .pg-dice-gauge-row[data-row='luck'] .pg-dice-gauge-value b,
+.pg-dice-col-single .pg-dice-gauge-row[data-row='cut'] .pg-dice-gauge-value b { font-size: 1.15em; }
 .pg-dice-col-single .pg-dice-fact { padding: 0.3em 0; gap: 0.1em 1em; }
 .pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
 .pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
@@ -1160,6 +1185,9 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 /* Owner 10-16: the Luck chart button and subpane. Home blue, away red (the seat tints of the pane). */
 .pg-luck-chart-btn { margin-top: 0.3rem; padding: 0.15rem 0.6rem; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface-2); color: var(--ui-text); font: inherit; cursor: pointer; }
 .pg-luck-chart-btn:hover, .pg-luck-chart-btn:focus-visible { border-color: var(--ui-accent, #6d9bff); outline: none; }
+/* Owner 10-22: on the Luck row the button sits under the label, left-aligned with it and small; only that row's head grows. */
+.pg-dice-gauge-head[data-chart='true'] { display: inline-grid; grid-template-columns: auto auto; justify-content: start; align-items: center; column-gap: 0.45em; row-gap: 0.2em; }
+.pg-dice-gauge-head[data-chart='true'] .pg-luck-chart-btn { grid-column: 1 / -1; justify-self: start; margin-top: 0; padding: 0.05rem 0.5rem; font-size: max(var(--ui-min-text-size, 12px), 0.8em); line-height: 1.3; }
 .pg-luck-pane { position: absolute; inset: 8px; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 12px 40px #000c; }
 .pg-luck-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .pg-luck-title { font-size: 1.1em; }

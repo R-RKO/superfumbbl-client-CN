@@ -28,13 +28,14 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
       if (from && onPitch(from)) pendingPushes.set(pid, { from, age: 0 });
     }
     // 2. fire arrows for pending pushes whose player has now moved; age out/clear
-    const arrows: { from: [number, number]; to: [number, number] }[] = [];
+    // Owner 10-22 (Astra r4): each arrow names the PUSHED player so the renderer draws both ends on his token base.
+    const arrows: { from: [number, number]; to: [number, number]; playerId: string }[] = [];
     const arrowedThisFrame = new Set<string>();
     for (const [pid, entry] of [...pendingPushes]) {
       const data = game.fieldModel.playerDataArray.find((d) => d.playerId === pid);
       const to = data?.playerCoordinate ? ([data.playerCoordinate[0], data.playerCoordinate[1]] as [number, number]) : null;
       if (to && onPitch(to) && (to[0] !== entry.from[0] || to[1] !== entry.from[1])) {
-        arrows.push({ from: entry.from, to });
+        arrows.push({ from: entry.from, to, playerId: pid });
         arrowedThisFrame.add(pid);
         lastPushFrom.set(pid, entry.from); // the vacated square, for followupChoice
         pendingPushes.delete(pid);
@@ -58,7 +59,7 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
         if (!cfrom || !onPitch(cfrom) || cfrom[0] !== dest[0] || cfrom[1] !== dest[1]) continue;
         const cto = d.playerCoordinate ? ([d.playerCoordinate[0], d.playerCoordinate[1]] as [number, number]) : null;
         if (cto && onPitch(cto) && (cto[0] !== cfrom[0] || cto[1] !== cfrom[1])) {
-          arrows.push({ from: cfrom, to: cto }); // already vacated → arrow now (loop chains off it)
+          arrows.push({ from: cfrom, to: cto, playerId: cpid }); // already vacated → arrow now (loop chains off it)
           arrowedThisFrame.add(cpid);
           lastPushFrom.set(cpid, cfrom);
         } else {

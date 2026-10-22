@@ -2369,6 +2369,7 @@ watch(() => settings.actionDecorations, (style) => { if (renderer) { renderer.ac
 // Owner 10-03: Settings > Display > blood splatters - repaint the pitch on change.
 watch(() => settings.bloodSplatters, (on) => { if (renderer) { renderer.bloodDecalsEnabled = on; renderer.refresh(); } });
 watch(() => settings.moveBadge, (on) => { if (renderer) { renderer.moveBadgeEnabled = on; renderer.refresh(); } }); // owner 10-21
+watch(() => settings.plannerDiceSeatTint, (on) => { if (renderer) { renderer.plannerDiceSeatTint = on; renderer.refresh(); } }); // owner 10-22
 // Accessibility grid options (owner 2026-07-03 r3): parse the hex colour and push
 // show/width/colour to the renderer whenever any changes.
 function gridColorInt(): number {
@@ -3210,7 +3211,7 @@ watch(
   () => gameStore.state.pushArrows,
   (arrows) => {
     if (!arrows || !renderer || settings.spectatorClean) return;
-    for (const a of arrows) renderer.playPushArrow(a.from, a.to);
+    for (const a of arrows) renderer.playPushArrow(a.from, a.to, a.playerId);
   },
 );
 
@@ -11570,7 +11571,7 @@ onMounted(async () => {
   // Astra review: seed at MOUNT - a saved "off" must hold from the very first paint (applyMarkings only runs from watchers).
   mountedRenderer.bloodDecalsEnabled = settings.bloodSplatters;
   mountedRenderer.moveBadgeEnabled = settings.moveBadge; // owner 10-21: a saved "off" holds from the first paint
-  mountedRenderer.plannerDiceSeatTint = true; // owner 10-22: route / reach dice wear the mover's Home / Away die (Modern only)
+  mountedRenderer.plannerDiceSeatTint = settings.plannerDiceSeatTint; // owner 10-22: opt-in (Settings > Display); default neutral grey
   mountedRenderer.actionDecorationStyle = settings.actionDecorations;
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);

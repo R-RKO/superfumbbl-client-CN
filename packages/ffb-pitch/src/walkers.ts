@@ -51,6 +51,92 @@ export interface WalkerAsset {
   /** Owner 09-05: optional HALF-resolution frames (32 px art per 64-unit frame, exact 2x2 box average, source.resolution 1/2) — drawn
    *  1:1 with nearest sampling at the default zoom so the pixel detail survives; the full frames serve zoom-in. */
   displayFrames?: Texture[][];
+  /** Owner 10-22 ("some player tokens are not centered in their square"): the figure's measured visual centre per
+   *  facing (DIRECTIONS order), in frame UNITS relative to the frame centre, read once at load from each row's IDLE
+   *  frame - so every walk frame of a row shares one anchor and the stride never wobbles. Absent = unreadable art
+   *  (no compensation, the frame centre is used as before). */
+  artCentres?: (ArtCentre | null)[];
+}
+
+/** Owner 10-22: a figure's visual centre inside its frame (frame units, relative to the frame centre). */
+export interface ArtCentre { dx: number; dy: number }
+
+/** Owner 10-22: the visual centre of a figure from its alpha - the MEDIAN opaque column and row (pixel centres).
+ *  The median follows the body mass: a ball and chain, a tail or a raised glove at one side moves it far less than it
+ *  moves the alpha box or the feet span (measured over the 814 bundled sheets: a Loren treeman's trunk sits 3.3
+ *  units left of its frame centre, a fanatic's ball drags its feet span 4.5 units while the body is 1.8 off).
+ *  `pixels` = RGBA rows of a px x px frame, `res` = art px per frame unit. Null when the frame is empty. */
+export function artMassCentre(pixels: ArrayLike<number>, px: number, res = 1): ArtCentre | null {
+  return artMassCentreRect(pixels, px, px, res);
+}
+
+/** Owner 10-22: the visual centre of any single-figure texture (owner-authored sprites, generic pairs), measured once
+ *  per texture from its frame's alpha and cached. Null when the pixels cannot be read (tests, tainted sources). */
+const textureArtCentres = new WeakMap<Texture, ArtCentre | null>();
+export function textureArtCentre(texture: Texture): ArtCentre | null {
+  if (textureArtCentres.has(texture)) return textureArtCentres.get(texture)!;
+  let centre: ArtCentre | null = null;
+  try {
+    const source = texture.source;
+    const res = source?.resolution || 1;
+    const frame = texture.frame;
+    const w = Math.max(1, Math.round(frame.width * res)), h = Math.max(1, Math.round(frame.height * res));
+    const resource = source?.resource as (CanvasImageSource & { getContext?: (k: string, o?: unknown) => CanvasRenderingContext2D | null }) | null;
+    let pixels: Uint8ClampedArray | null = null;
+    const direct = resource?.getContext?.('2d', { willReadFrequently: true });
+    if (direct) pixels = direct.getImageData(Math.round(frame.x * res), Math.round(frame.y * res), w, h).data;
+    else if (resource && globalThis.OffscreenCanvas) {
+      const context = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+      if (context) {
+        context.drawImage(resource, Math.round(frame.x * res), Math.round(frame.y * res), w, h, 0, 0, w, h);
+        pixels = context.getImageData(0, 0, w, h).data;
+      }
+    }
+    if (pixels) centre = artMassCentreRect(pixels, w, h, res);
+  } catch {
+    centre = null;
+  }
+  textureArtCentres.set(texture, centre);
+  return centre;
+}
+
+/** artMassCentre for a w x h frame. */
+export function artMassCentreRect(pixels: ArrayLike<number>, w: number, h: number, res = 1): ArtCentre | null {
+  const cols = new Float64Array(w), rowsCount = new Float64Array(h);
+  let total = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (pixels[(y * w + x) * 4 + 3]! > 0) { cols[x]!++; rowsCount[y]!++; total++; }
+    }
+  }
+  if (total === 0) return null;
+  const median = (hist: Float64Array): number => {
+    // the continuous median of the opaque-pixel distribution (pixel i covers [i, i+1))
+    const half = total / 2;
+    let acc = 0;
+    for (let i = 0; i < hist.length; i++) {
+      const n = hist[i]!;
+      if (n > 0 && acc + n >= half) return i + (half - acc) / n;
+      acc += n;
+    }
+    return hist.length / 2;
+  };
+  const r = res || 1;
+  return { dx: (median(cols) - w / 2) / r, dy: (median(rowsCount) - h / 2) / r };
+}
+
+function measureArtCentres(source: TextureSource, spec: ValidatedWalkSheetSpec): (ArtCentre | null)[] | undefined {
+  const px = framePx(source, spec.frame);
+  const res = source.resolution || 1;
+  const out: (ArtCentre | null)[] = [];
+  let any = false;
+  for (const direction of DIRECTIONS) {
+    const pixels = sourcePixels(source, spec.rows.indexOf(direction), spec.frame);
+    const centre = pixels ? artMassCentre(pixels, px, res) : null;
+    if (centre) any = true;
+    out.push(centre);
+  }
+  return any ? out : undefined;
 }
 
 export interface BundledWalkEntry {
@@ -606,6 +692,7 @@ export async function prepareWalkSheets(
         frames: buildFrames(root, spec),
         spec,
         ...figureFields(measureFigure(root.source, spec.rows.indexOf('S'), spec.frame)),
+        artCentres: measureArtCentres(root.source, spec),
       };
       assets.set(key, asset);
       assetRecords.set(asset, { asset, url: entry.url, root, refs: 0, retired: false });
@@ -677,6 +764,7 @@ export function loadBundledWalkSheets(entries: BundledWalkEntry[]): Promise<void
           frames: buildFrames(root, spec),
           spec,
           ...figureFields(measureFigure(root.source, spec.rows.indexOf('S'), spec.frame)),
+          artCentres: measureArtCentres(root.source, spec),
         };
         bundledAssets.set(key, asset);
         assetRecords.set(asset, { asset, url: entry.url, root, refs: 0, retired: false });
@@ -1049,7 +1137,28 @@ function setWalkerFrame(record: WalkerTokenRecord, column: number): void {
  *  the free-rung exemption apply to it too), squashed by the weather-scaled length. With the anchor on the feet the
  *  head end lands at (-h sin(skew) sy, -h cos(skew) sy), so the cast falls along (ux, uy) when sy = -uy x length and
  *  skew = ux x uy x CAST_SHADOW.skew. Prone: same pose, offset a few units along (ux, uy) instead. */
+/** Owner 10-22: the sprite position that puts the figure's measured visual centre (artCentres, per facing row) on the
+ *  token's anchor line: standing - the body's axis over the token origin (the feet stay on WALKER_FEET_Y_PX, the
+ *  anchor row already sits on the foot row); prone - the lying body's centre on the token origin (rotated +90deg, so
+ *  the art's x runs down the screen and its y runs right-to-left). Scales with the live (snapped) sprite scale. */
+export function walkerSpriteArtPosition(asset: Pick<WalkerAsset, 'artCentres'>, facing: Dir8, prone: boolean, scale: number): { x: number; y: number } {
+  const centre = asset.artCentres?.[directionIndex.get(prone ? PRONE_FACING : facing)!] ?? null;
+  if (prone) return centre ? { x: centre.dy * scale, y: -centre.dx * scale } : { x: 0, y: 0 };
+  return { x: centre ? -centre.dx * scale : 0, y: WALKER_FEET_Y_PX };
+}
+
+function syncArtOffset(record: WalkerTokenRecord): void {
+  const sprite = record.sprite;
+  if (sprite.destroyed) return;
+  const p = walkerSpriteArtPosition(record.asset, record.facing, !!record.prone, sprite.scale.x);
+  if (Math.abs(sprite.position.x - p.x) > 1e-6 || Math.abs(sprite.position.y - p.y) > 1e-6) sprite.position.set(p.x, p.y);
+  const shadow = record.castShadow;
+  if (!record.prone && shadow && !shadow.destroyed
+    && (Math.abs(shadow.position.x - p.x) > 1e-6 || Math.abs(shadow.position.y - p.y) > 1e-6)) shadow.position.set(p.x, p.y);
+}
+
 function syncCastShadow(record: WalkerTokenRecord): void {
+  syncArtOffset(record);
   const shadow = record.castShadow;
   if (!shadow || shadow.destroyed || record.sprite.destroyed) return;
   if (shadow.texture !== record.sprite.texture) shadow.texture = record.sprite.texture;

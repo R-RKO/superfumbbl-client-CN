@@ -48,6 +48,7 @@ import {
   setOrientation,
   setUniformFigures,
   squareAnchor,
+  squareCentreLineX,
   squareEdge,
   squareQuad,
   pitchTextRotation,
@@ -119,6 +120,7 @@ import {
   WALKER_TARGET_FIGURE_PX,
   setTokenVisualNudge,
   tokenVisualNudge,
+  textureArtCentre,
 } from './walkers';
 import {
   blockTargetingSquares,
@@ -1175,11 +1177,55 @@ const KICK_BALL_GROW = 1.5;
 // (tokenPos) — 10px max at the width edges, falling off linearly to 0 at the pitch's
 // width-center. This binds a token's visual centre to the centre of its perspective-
 // distorted wing square instead of leaving it riding the outer perimeter.
-/** Owner 2026-09-04 (supersedes W31's constant 10 px nudge): an upright sprite is centred on the projected
+/* Owner 2026-09-04 (supersedes W31's constant 10 px nudge): an upright sprite is centred on the projected
  *  square by following the trapezoid's slanted midline up to the sprite's visual mid-height. At the wings the
  *  midline drifts ~4.7 px across a 38 px band, so a 31 px figure needs ~2 px — the old fixed 10 px pulled
  *  wing tokens visibly off their squares (probe 09-04: true centre vs nudged position). */
-const TOKEN_CENTRE_HEIGHT_PX = WALKER_TARGET_FIGURE_PX / 2;
+/** Owner 10-22 ("some player tokens are not centered in their square", supersedes the 09-04 mid-height nudge): a
+ *  token's BASE - the feet, the position ring, the ground shadow - stands WALKER_FEET_Y_PX below the token origin.
+ *  The 09-04 nudge shifted the origin INWARD by the midline's drift over half a figure (15.5 px), as if the feet were
+ *  on the origin; with the feet 11 px lower the base landed (15.5 + 11) x slant inside its column - ~2.5 world px on
+ *  the wing columns (measured 10-22: +4.8 / -6.3 screen px at the 2x camera, linear in the column, zero in the centre
+ *  column). The origin now sits on the square's projected centre LINE at the base's depth, so the base is on the
+ *  square's centre in every column, row, orientation and flip (the quad is already oriented and flipped). */
+export const TOKEN_GROUND_Y_PX = WALKER_FEET_Y_PX;
+export function tokenGroundPos(x: number, y: number): { x: number; y: number } {
+  // The square's centre line runs from the far edge's midpoint to the near edge's midpoint (it passes through the
+  // anchor at mid-depth); read it TOKEN_GROUND_Y_PX below the anchor, where the base stands.
+  const anchor = squareAnchor(x, y);
+  return { x: squareCentreLineX(x, y, TOKEN_GROUND_Y_PX), y: anchor.y };
+}
+/** Owner 10-22: the token-local y of a token's base when it is NOT the standing-walker foot line (classic icon ring,
+ *  checker disc centre, chess foot, generic pair, a lying figure's centre), tagged by buildPlayerTokenBody. */
+type GroundTaggedToken = Container & { groundLocalY?: number };
+function tagGround(token: Container, localY: number): void { (token as GroundTaggedToken).groundLocalY = localY; }
+/** Owner 10-22 (Astra r1): how a player's token base sits below its origin, recorded per player when the token is
+ *  built. `depthScaled`: the token is scaled by the row's depthScale (icons, discs, pieces), so the base's depth
+ *  follows the square; walkers keep scale 1. */
+export interface TokenGround { localY: number; k: number; depthScaled: boolean }
+/** The world point every token origin AND every decoration anchored on that token uses: the square's centre line at
+ *  the depth of THIS token's base. Untagged (standing walkers) = tokenGroundPos. Pure in the square, so a tween
+ *  between two squares interpolates the correction with the position (no snap, cadence untouched). */
+export function playerTokenPos(x: number, y: number, ground: TokenGround | undefined): { x: number; y: number } {
+  if (!ground) return tokenGroundPos(x, y);
+  const below = ground.localY * ground.k * (ground.depthScaled ? depthScale(x, y) : 1);
+  return { x: squareCentreLineX(x, y, below), y: squareAnchor(x, y).y };
+}
+/** The TokenGround a freshly built token declares on its square (undefined = the standing-walker default). */
+export function tokenGroundOf(token: Container, square: readonly [number, number]): TokenGround | undefined {
+  const localY = (token as GroundTaggedToken).groundLocalY;
+  if (localY === undefined) return undefined;
+  const depthScaled = !isWalkerToken(token);
+  const scale = token.scale.y || 1;
+  return { localY, k: depthScaled ? scale / (depthScale(square[0], square[1]) || 1) : scale, depthScaled };
+}
+
+/** Owner 10-22 (Astra r1): the position offset that puts a lying single-sprite figure's visual centre (art units,
+ *  relative to the texture centre; anchor 0.5,0.5) on the token's lying point, through the -90deg turn and the
+ *  unequal (sx, sy) squash: local (dx sx, dy sy) turned -90deg lands at (dy sy, -dx sx); the sprite moves by minus that. */
+export function pairProneArtOffset(centre: { dx: number; dy: number } | null, sx: number, sy: number): { x: number; y: number } {
+  return centre ? { x: -centre.dy * sy, y: centre.dx * sx } : { x: 0, y: 0 };
+}
 
 /** Base player-sprite size (classic set) at Strength 3. Other strengths scale off
  *  this; the ball is sized as a fraction of it. */
@@ -2497,7 +2543,7 @@ export class PitchRenderer {
   private pushOptionPulse: Graphics[] = [];
   /** Owner 09-22: the push candidates drawn last refresh (square key → geometry). A candidate that vanishes without
    *  being the chosen one (the coach picked another, or a chain push re-offered) fades out instead of popping off. */
-  private pushCandidateLast = new Map<string, { from: [number, number]; to: [number, number] }>();
+  private pushCandidateLast = new Map<string, { from: [number, number]; to: [number, number]; playerId?: string }>();
   /** Owner 2026-07-03: pulsing crosshair reticles at each push-option square (the
    *  arrow tips) — the "click here" target. Scale + alpha pulse via the ticker.
    *  Shown for players AND spectators (drawn straight off the model). */
@@ -2634,7 +2680,7 @@ export class PitchRenderer {
    *  Astra: OPT-IN (default off) - a view that never wires the setting (Classic) draws no badge at all. */
   moveBadgeEnabled = false;
   /** Owner 10-22: planned-roll dice (route tags, reach rush dice) wear the mover's Home / Away seat die. Astra: OPT-IN
-   *  (default off) - Modern SpectateView sets it; Classic never does and keeps the neutral face byte-identical. */
+   *  (default off) - Modern SpectateView mirrors settings.plannerDiceSeatTint (default off); Classic never sets it. */
   plannerDiceSeatTint = false;
   /** Range shading + selection halo, under the tokens. */
   private overlayLayer = new Container();
@@ -6463,7 +6509,7 @@ export class PitchRenderer {
       const previous = this.lastSquares.get(hold.playerId);
       const carried = carriedTweenPos.get(hold.playerId);
       if (carried) {
-        const dest = this.tokenPos(x, y);
+        const dest = this.tokenPos(x, y, hold.playerId);
         const end = carried.tween.waypoints[carried.tween.waypoints.length - 1];
         const plain = !carried.tween.psStep && !carried.tween.movementIntent && !carried.tween.reconcileKey && !carried.tween.postStepCorrectionKey;
         if (plain && end && Math.abs(end.x - dest.x) < 0.5 && Math.abs(end.y - dest.y) < 0.5) {
@@ -6962,8 +7008,11 @@ export class PitchRenderer {
       // UAT-2026-08-04 F: the setup picker is view-local, so crown its selected ON-PITCH
       // token with the existing player-pick arrow. Reserves remain DOM/dugout-only and
       // intentionally receive no marker here.
+      // Owner 10-22 (Astra r2): register the occupant BEFORE anything anchored on this token (the setup crown below) is
+      // placed, so tokenPos(square) resolves to THIS token's base.
+      this.playersBySquare.set(coordinate.join(','), data.playerId);
       if (this.setupActive && data.playerId === this.setupSelectedPlayerId) {
-        const arrow = this.buildPickArrow(coordinate);
+        const arrow = this.buildPickArrow(coordinate, data.playerId);
         // UAT-08-04 F owner eyeball: the crown floated ~a tile high + read small. Sit it TIGHTER to the
         // token head + slightly LARGER. Applied at the CALL SITE (not inside buildPickArrow) so the
         // server-pick arrow callers (:5666/:5783) stay byte-identical. arrow.scale === the square depth.
@@ -6995,7 +7044,7 @@ export class PitchRenderer {
         const tc = carrier?.playerCoordinate;
         if (isOnPitch(tc ?? null)) {
           const [tx, ty] = tc!;
-          const dest = this.tokenPos(tx, ty);
+          const dest = this.tokenPos(tx, ty, data.playerId);
           const joinX = dest.x;
           const joinY = dest.y + TILE_H * 0.16; // stand IN the square, in FRONT of the thrower (no lift)
           if (!isWalkerToken(token)) token.scale.set(token.scale.x * 0.8); // carried: a touch smaller (classic icons only)
@@ -7006,7 +7055,7 @@ export class PitchRenderer {
           if (from && el < PICKUP_MS && (from[0] !== tx || from[1] !== ty)) {
             // RUN up: the mate walks from its own square into the thrower's square (ground-level
             // step-bob, no hop-onto).
-            const p0 = this.tokenPos(from[0], from[1]);
+            const p0 = this.tokenPos(from[0], from[1], data.playerId);
             this.moveTweens.set(data.playerId, {
               token, waypoints: [{ x: p0.x, y: p0.y }, { x: joinX, y: joinY }],
               style: 'walk', start: this.ttmHeld.start, segmentMs: PICKUP_MS,
@@ -7026,7 +7075,7 @@ export class PitchRenderer {
       // reads — pin the (freshly rebuilt) token at its previous square and do NOT advance lastSquares, so
       // releaseMove()'s redraw still sees the previous→new delta and tweens then.
       if (previous && (previous[0] !== nx || previous[1] !== ny) && deferred) {
-        const p = this.tokenPos(previous[0], previous[1]);
+        const p = this.tokenPos(previous[0], previous[1], data.playerId);
         token.position.set(p.x, p.y);
         continue; // leave lastSquares at `previous`
       }
@@ -7073,7 +7122,7 @@ export class PitchRenderer {
       if (anim && !deferred) {
         let cut = anim.squares.findIndex(([x, y]) => x === nx && y === ny);
         if (cut < 0) cut = anim.squares.length - 1; // model diverged from the plan — step to the plan end
-        const pts = anim.squares.slice(0, cut + 1).map(([x, y]) => this.tokenPos(x, y));
+        const pts = anim.squares.slice(0, cut + 1).map(([x, y]) => this.tokenPos(x, y, data.playerId));
         if (pts.length >= 2) {
           // owner 2026-07-15: honour the user's movement style (was hardcoded 'walk', so slide/hop/trail/hoptrail
           // never applied in o66 play). this.moveStyle is set from settings.moveStyle (SpectateView).
@@ -7084,7 +7133,7 @@ export class PitchRenderer {
           });
           token.position.set(pts[0]!.x, pts[0]!.y);
         } else {
-          const p = this.tokenPos(nx, ny); token.position.set(p.x, p.y);
+          const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y);
         }
         if (performance.now() - anim.start >= Math.max(1, anim.squares.length - 1) * this.moveStepMs) this.o66MovePath.delete(data.playerId);
         this.lastSquares.set(data.playerId, [nx, ny]);
@@ -7105,12 +7154,12 @@ export class PitchRenderer {
       if (placement && !deferred && previous && (previous[0] !== nx || previous[1] !== ny)) {
         // Owner 09-14: setup placements teleport — no walk tween across the pitch while coaches arrange a formation.
         this.moveTweens.delete(data.playerId);
-        const p = this.tokenPos(nx, ny); token.position.set(p.x, p.y);
+        const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y);
       } else if (carried && !deferred) {
         // Owner 2026-07-13: CONTINUE an in-flight walk across the token rebuild. Same destination: re-attach the
         // tween unchanged (style, clock, remaining path) so the walk neither restarts nor changes character.
         // Destination moved this sync: ease from the token's current visual position to the new model square.
-        const dest = this.tokenPos(nx, ny);
+        const dest = this.tokenPos(nx, ny, data.playerId);
         const end = carried.tween.waypoints[carried.tween.waypoints.length - 1];
         // Only a PLAIN tween re-attaches: a presentation-step, movement-intent or reconciliation tween is owned by its
         // rail (rollback/consume look it up by tag) and keeps the prior ease-from-pixel behaviour across a rebuild.
@@ -7127,7 +7176,7 @@ export class PitchRenderer {
       // hop the sprite STRAIGHT UP and back down in the SAME square. A same-point tween
       // with the leap arc: no horizontal travel, sin-lift up at mid, back at the end.
       if (this.pendingLeapInPlace.delete(data.playerId)) {
-        const p = this.tokenPos(nx, ny);
+        const p = this.tokenPos(nx, ny, data.playerId);
         this.moveTweens.set(data.playerId, {
           token, waypoints: [{ x: p.x, y: p.y }, { x: p.x, y: p.y }],
           style: 'slide', start: performance.now(), segmentMs: presentationMs(260), arc: 30,
@@ -7158,14 +7207,14 @@ export class PitchRenderer {
           // player stays drawn where he came down (bounded), never walked back to the origin square. Astra (MAJOR 2):
           // any OTHER authoritative coordinate wins at once (eased from the landing square), and so does the cap.
           if (this.ttmLandingHeld(tt.armedAt, tt.to, [nx, ny], elapsed - THROW_MS)) {
-            const p = this.tokenPos(tt.to[0], tt.to[1]); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+            const p = this.tokenPos(tt.to[0], tt.to[1], data.playerId); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
           } else {
             this.pendingTtmThrow.delete(data.playerId);
             if (this.modernPitchPresentation && !atModel(tt.to)) { this.startMoveTween(data.playerId, token, tt.to, [nx, ny]); landedTo = [nx, ny]; }
           }
         } else {
-          const p0 = this.tokenPos(tt.from[0], tt.from[1]);
-          const p1 = this.tokenPos(tt.to[0], tt.to[1]);
+          const p0 = this.tokenPos(tt.from[0], tt.from[1], data.playerId);
+          const p1 = this.tokenPos(tt.to[0], tt.to[1], data.playerId);
           this.moveTweens.set(data.playerId, { token, waypoints: [p0, p1], style: 'slide', start: tt.start, segmentMs: THROW_MS, arc: KICK_ARC_PX });
           if (sc) { this.pendingScatter.delete(data.playerId); ttConsumedScatter = true; }
         }
@@ -7180,13 +7229,13 @@ export class PitchRenderer {
         if (elapsed >= total) {
           // Owner 10-13 (Modern): like the flight, the bounce's landing square is held until the model reaches it.
           if (this.ttmLandingHeld(sc.armedAt, end, [nx, ny], elapsed - total)) {
-            const p = this.tokenPos(end[0], end[1]); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+            const p = this.tokenPos(end[0], end[1], data.playerId); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
           } else {
             this.pendingScatter.delete(data.playerId);
             if (this.modernPitchPresentation && !atModel(end)) { this.startMoveTween(data.playerId, token, end, [nx, ny]); landedOn = [nx, ny]; }
           }
         } else {
-          const pts = sc.path.map(([sx, sy]) => this.tokenPos(sx, sy));
+          const pts = sc.path.map(([sx, sy]) => this.tokenPos(sx, sy, data.playerId));
           // Owner 10-13: Modern bounces a thrown player exactly like the loose ball (slide ease, one hop per square at
           // the ball's per-hop pace); Classic keeps its quick hop.
           this.moveTweens.set(data.playerId, { token, waypoints: pts, style: this.modernPitchPresentation ? 'slide' : 'hop', start: sc.start, segmentMs: SCATTER_SEG });
@@ -7201,8 +7250,8 @@ export class PitchRenderer {
         if (performance.now() - tk.start >= TRICKSTER_MS) {
           this.pendingTrickster.delete(data.playerId);
         } else {
-          const p0 = this.tokenPos(tk.from[0], tk.from[1]);
-          const p1 = this.tokenPos(tk.to[0], tk.to[1]);
+          const p0 = this.tokenPos(tk.from[0], tk.from[1], data.playerId);
+          const p1 = this.tokenPos(tk.to[0], tk.to[1], data.playerId);
           this.moveTweens.set(data.playerId, { token, waypoints: [p0, p1], style: 'slide', start: tk.start, segmentMs: TRICKSTER_MS, arc: 0 });
         }
         this.lastSquares.set(data.playerId, [tk.to[0], tk.to[1]]);
@@ -7768,7 +7817,7 @@ export class PitchRenderer {
       if (ad && isOnPitch(ad.playerCoordinate)) {
         const [ax, ay] = ad.playerCoordinate;
         const anchor = squareAnchor(ax, ay);
-        const tp = this.tokenPos(ax, ay); // the token's real screen position (perspective-nudged)
+        const tp = this.tokenPos(ax, ay, ad.playerId); // the token's real screen position (its own base)
         const scale = depthScale(ax, ay);
         // Owner 2026-07-06: wrap the halo in a Container centred on the token's
         // ground point, so the ticker can scale-pop it around its own centre
@@ -7938,7 +7987,7 @@ export class PitchRenderer {
         const data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
         if (!data || !isOnPitch(data.playerCoordinate)) continue;
         const [x, y] = data.playerCoordinate;
-        const tp = this.tokenPos(x, y);
+        const tp = this.tokenPos(x, y, playerId);
         const s = depthScale(x, y);
         const sprite = new Sprite(texture);
         sprite.anchor.set(0.5, 0.5);
@@ -7951,7 +8000,7 @@ export class PitchRenderer {
         sprite.zIndex = this.depthZ(x, y) + 3;
         sprite.label = 'blockResultStamp';
         this.effectsLayer.addChild(sprite);
-        this.anchorEffect(sprite, x, y, true, true);
+        this.anchorEffect(sprite, x, y, true, true, undefined, playerId);
         nodes.push(sprite);
       }
       if (nodes.length === 0) return;
@@ -7984,7 +8033,7 @@ export class PitchRenderer {
     if (!data || !isOnPitch(data.playerCoordinate)) return;
     const [ax, ay] = data.playerCoordinate;
     const anchor = squareAnchor(ax, ay);
-    const tp = this.tokenPos(ax, ay);
+    const tp = this.tokenPos(ax, ay, playerId);
     const scale = depthScale(ax, ay);
     const ring = new Container();
     const gfx = new Graphics();
@@ -7995,7 +8044,7 @@ export class PitchRenderer {
     ring.position.set(tp.x, anchor.y - 3);
     ring.label = 'placementPulse';
     this.effectsLayer.addChild(ring);
-    this.anchorEffect(ring, ax, ay, false, true, { x: 0, y: -3 }); // placed at (tp.x, anchor.y - 3)
+    this.anchorEffect(ring, ax, ay, false, true, { x: 0, y: -3 }, playerId); // placed at (tp.x, anchor.y - 3)
     const start = performance.now();
     const dur = presentationMs(1100);
     const ticker = this.app.ticker;
@@ -8818,7 +8867,7 @@ export class PitchRenderer {
   playerDrawnAt(playerId: string, square: readonly [number, number]): boolean {
     const token = this.tokensById.get(playerId);
     if (!token || token.destroyed) return true;
-    const rest = this.tokenPos(square[0], square[1]);
+    const rest = this.tokenPos(square[0], square[1], playerId);
     const tween = this.moveTweens.get(playerId);
     if (tween) {
       // Astra (10-06): a presentation tile is armed before the ticker stamps its clock (anchorPresentationTileOnFirstTweenPass);
@@ -9254,7 +9303,7 @@ export class PitchRenderer {
           () => new Graphics().poly(quad.points.flat()).fill({ color: 0x9a9a9a, alpha: 0.3 }),
         );
         if (this.o66PathSquares.some(([px, py]) => px === sx && py === sy)) continue; // Astra pass 5: the path tags price this step
-        const a = this.tokenPos(sx, sy);
+        const a = this.tokenPos(sx, sy, cursor.playerId);
         const dieScale = depthScale(sx, sy) * 0.8; // owner 09-09: one rush die everywhere, 0.8 x depth, fully opaque (owner 10-13: the D6 stays on the go-for-it squares)
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
@@ -9377,7 +9426,7 @@ export class PitchRenderer {
       const legacyRush = this.tilePickGfi?.has(key) ?? false;
       if (!rolls && !legacyRush) continue;
       const [sx, sy] = key.split(',').map(Number) as [number, number];
-      const a = this.tokenPos(sx, sy);
+      const a = this.tokenPos(sx, sy, actorId || undefined);
       const ds = depthScale(sx, sy);
       const onPath = pathKeys.has(key);
       if (rolls) {
@@ -9387,7 +9436,7 @@ export class PitchRenderer {
           // rush die like the dodge chip when the square owes both.
           // Owner 10-14: in the die + word style it is the same JUMP plate as the path tags (lone tag shrinks to the square).
           const plate = this.plannerTagStyle === 'dieWord';
-          const jumpScale = plate ? this.plannerTagGroupLayout(['jump'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
+          const jumpScale = plate ? this.plannerTagGroupLayout(['jump'], this.reachPlateRoom(sx, sy, a, ds, actorId || undefined) / ds).scale : 1;
           if (plate) this.registerReachPlate('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, jumpScale);
           const chip = plate
             ? this.buildPlannerTag('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * jumpScale, rolls.dodge, actorSide)
@@ -9397,7 +9446,7 @@ export class PitchRenderer {
         } else if (rolls.dodge > 0 && !onPath) {
           // Owner 10-14: the reach-square dodge chip is the die + DODGE plate in the die + word style too.
           const plate = this.plannerTagStyle === 'dieWord';
-          const dodgeScale = plate ? this.plannerTagGroupLayout(['dodge'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
+          const dodgeScale = plate ? this.plannerTagGroupLayout(['dodge'], this.reachPlateRoom(sx, sy, a, ds, actorId || undefined) / ds).scale : 1;
           if (plate) this.registerReachPlate('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, dodgeScale);
           const chip = plate
             ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, rolls.dodge, actorSide)
@@ -9505,7 +9554,7 @@ export class PitchRenderer {
     // a brighter ring on the destination) BEFORE the legacy planner gate — plannerEnabled is off in o66. The
     // host passes [from, ...route]; the start square gets no dot. Minimal by design (owner tunes on return).
     if (this.o66PathSquares.length > 1) {
-      const pts = this.o66PathSquares.map(([sx, sy]) => this.tokenPos(sx, sy));
+      const pts = this.o66PathSquares.map(([sx, sy]) => this.tokenPos(sx, sy, this.o66PathMover ?? undefined));
       // Owner 09-16: a step that OWES A ROLL (dodge leaving a marked square, rush beyond normal MA, pickup on the
       // loose ball) draws in the ROLL colour — its segment and its dot — the rest in the base colour. Same three
       // tests as the cost-chip loop below (kept separate: this is the line's colour, that is the chip).
@@ -9572,7 +9621,7 @@ export class PitchRenderer {
           // stroke, scaled 0.8) is an obstacle for the tag placement.
           if (this.plannerTagStyle === 'dieWord') {
             const destSq = this.o66PathSquares[this.o66PathSquares.length - 1]!;
-            const ca = this.tokenPos(destSq[0], destSq[1]);
+            const ca = this.tokenPos(destSq[0], destSq[1], this.o66PathMover ?? undefined);
             const cd = depthScale(destSq[0], destSq[1]);
             const reachPx = 0.8 * (TILE_W * 0.26 * cd + Math.max(1.4, 2.2 * cd) / 2);
             this.o66TagRects.push({ x0: ca.x - reachPx, x1: ca.x + reachPx, y0: ca.y - reachPx, y1: ca.y + reachPx });
@@ -9591,7 +9640,7 @@ export class PitchRenderer {
             const isJumpStep = !!srvRolls?.jump && srvRolls.dodge > 0; // a server-priced leap, in either style
             const jumpPlate = this.plannerTagStyle === 'dieWord' && isJumpStep; // dieWord: the path draws the plate; letter: the reach J6+ chip is the one jump tag
             if (!dodge && !rush && !pickup && !jumpPlate) continue;
-            const a = this.tokenPos(dx, dy);
+            const a = this.tokenPos(dx, dy, this.o66PathMover ?? undefined);
             const ds = depthScale(dx, dy);
             const both = dodge && rush;
             const dieWord = this.plannerTagStyle === 'dieWord';
@@ -9715,7 +9764,7 @@ export class PitchRenderer {
       // Owner g478: the plotted destination is the CONFIRM target — mark it with the crosshair reticle
       // (a 2nd click on this square commits the move). This is the only crosshair in o66 automove.
       const dest = this.o66PathSquares[this.o66PathSquares.length - 1]!;
-      const cross = this.buildPushCrosshair(dest);
+      const cross = this.buildPushCrosshair(dest, undefined, undefined, this.o66PathMover ?? undefined); // Astra r2: the mover's arrival point
       cross.scale.set(cross.scale.x * 0.8); // owner o66p #9: destination crosshair 20% smaller
       cross.zIndex = 5; // above the trail
       this.overlayLayer.addChild(cross);
@@ -9752,7 +9801,7 @@ export class PitchRenderer {
         if (!keg.has(data.playerId)) continue;
         const coordinate = this.effectiveCoordinate(data);
         if (!coordinate) continue;
-        const cross = this.buildPushCrosshair(coordinate);
+        const cross = this.buildPushCrosshair(coordinate, undefined, undefined, data.playerId);
         this.kegCrosshairs.push({ node: cross, base: cross.scale.x });
         this.pathLayer.addChild(cross);
       }
@@ -9763,7 +9812,7 @@ export class PitchRenderer {
         if (!this.skillTargetSet.has(data.playerId)) continue;
         const coordinate = this.effectiveCoordinate(data);
         if (!coordinate) continue;
-        const cross = this.buildPushCrosshair(coordinate);
+        const cross = this.buildPushCrosshair(coordinate, undefined, undefined, data.playerId);
         this.skillTargetMarks.push({ node: cross, base: cross.scale.x });
         this.pathLayer.addChild(cross);
       }
@@ -10959,13 +11008,13 @@ export class PitchRenderer {
   }
   /** Astra pass 3: the width (px) a reach-square plate may take: the tightest horizontal room the neighbouring priced reach
    *  squares (their anchors, projected) leave; Infinity when none shares its height. */
-  private reachPlateRoom(sx: number, sy: number, a: { x: number; y: number }, ds: number): number {
+  private reachPlateRoom(sx: number, sy: number, a: { x: number; y: number }, ds: number, mover?: string): number {
     let room = Infinity;
     for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const key = `${sx + ox},${sy + oy}`;
       const nr = this.tilePickRolls?.get(key);
       if (!this.tilePickEligible?.has(key) || !nr || !(nr.dodge > 0)) continue;
-      const an = this.tokenPos(sx + ox, sy + oy);
+      const an = this.tokenPos(sx + ox, sy + oy, mover); // owner 10-22 (Astra r2): the MOVER's base on every square
       const lim = this.plannerTagNeighbourLimit(a.x, a.y, ds, an.x, an.y, depthScale(sx + ox, sy + oy));
       if (lim !== null) room = Math.min(room, lim);
     }
@@ -12628,6 +12677,12 @@ export class PitchRenderer {
     if (!this.plannerDiceSeatTint) return null; // Classic (never opted in): the neutral face, as before
     return displayDiceSide(playerServerSide(this.game, playerId), this.viewerDiceSeat());
   }
+  /** Owner 10-22: a roll that adopts the prompt's unlabelled copy brings its server-named roller; a copy whose owner
+   *  the model could not name takes it (the frame loop re-textures the held face for the new side). */
+  private adoptActionDieRoller(die: ActionDieRecord, ownerPlayerId: string | null): void {
+    if (!ownerPlayerId || die.owner) return;
+    die.owner = playerServerSide(this.game, ownerPlayerId);
+  }
   /** Owner 10-13: the displayed side of a held action die, from its owner and the CURRENT seat (never cached). */
   private actionDieRecordSide(die: ActionDieRecord): BlockDieSide | null {
     return displayDiceSide(die.owner ?? null, this.viewerDiceSeat());
@@ -12852,6 +12907,8 @@ export class PitchRenderer {
    *  and cleared with overlayLayer each redrawOverlays. The aim is a FACING, not a walk — the server scatters. */
   private drawBncAim(): void {
     this.bncAimCoords = [];
+    // Owner 10-22 (Astra r3): every B&C mark is where the FANATIC arrives - his base, not the occupant's / default.
+    const bncMover = this.playerIdAt(this.bncScatterFrom ?? this.bncAimFrom);
     this.puntConeCenterWorld = null;
     this.puntReaimHits = [];
     let rushTarget = 0;
@@ -12864,14 +12921,14 @@ export class PitchRenderer {
     }
     const addRushChip = (square: Square, layer: Container): void => {
       if (rushTarget <= 0) return;
-      const origin = this.tokenPos(square[0], square[1]);
+      const origin = this.tokenPos(square[0], square[1], bncMover);
       let upRight: Square | null = null;
       let rightmostX = origin.x;
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           if (dx === 0 && dy === 0) continue;
           const neighbour: Square = [square[0] + dx, square[1] + dy];
-          const projected = this.tokenPos(neighbour[0], neighbour[1]);
+          const projected = this.tokenPos(neighbour[0], neighbour[1], bncMover);
           if (projected.y < origin.y && projected.x > rightmostX) {
             upRight = neighbour;
             rightmostX = projected.x;
@@ -12879,7 +12936,7 @@ export class PitchRenderer {
         }
       }
       if (!upRight) return;
-      const anchor = this.tokenPos(upRight[0], upRight[1]);
+      const anchor = this.tokenPos(upRight[0], upRight[1], bncMover);
       const die = this.buildRollDie(anchor.x, anchor.y, depthScale(upRight[0], upRight[1]) * 0.5, rushTarget);
       die.alpha = 0.9;
       layer.addChild(die);
@@ -12894,11 +12951,11 @@ export class PitchRenderer {
         // scatter tip landed on a player — on a crowded pitch that read as invisible. This arrow
         // is the reroll decision's whole payload (which direction did it go), so it stays full
         // opacity regardless of occupancy; it already renders on pathLayer, over every token.
-        const arrow = this.pushArrowGraphic(scatterFrom, scatterDest);
+        const arrow = this.pushArrowGraphic(scatterFrom, scatterDest, { playerId: bncMover });
         arrow.alpha = 1;
         this.pathLayer.addChild(arrow);
       }
-      this.overlayLayer.addChild(this.buildPushCrosshair(scatterDest));
+      this.overlayLayer.addChild(this.buildPushCrosshair(scatterDest, undefined, undefined, bncMover));
       addRushChip(scatterDest, this.overlayLayer);
     }
     const from = this.bncAimFrom;
@@ -12916,10 +12973,10 @@ export class PitchRenderer {
       const occupied = this.game?.fieldModel.playerDataArray.some(
         (d) => d.playerCoordinate?.[0] === sq[0] && d.playerCoordinate?.[1] === sq[1],
       ) ?? false;
-      const arrow = this.pushArrowGraphic(from, sq);
+      const arrow = this.pushArrowGraphic(from, sq, { playerId: bncMover });
       if (occupied) arrow.alpha = 0.3;
       this.pathLayer.addChild(arrow);
-      this.pathLayer.addChild(this.buildPushCrosshair(sq));
+      this.pathLayer.addChild(this.buildPushCrosshair(sq, undefined, undefined, bncMover));
       addRushChip(sq, this.pathLayer);
       this.bncAimCoords.push([sq[0], sq[1]]);
     }
@@ -13049,7 +13106,7 @@ export class PitchRenderer {
         this.overlayLayer.addChild(crowd);
         this.swoopPreviewNodes.push(crowd);
       } else {
-        const crosshair = this.buildPushCrosshair([dx, dy], 0x22d3ee, 1.08);
+        const crosshair = this.buildPushCrosshair([dx, dy], 0x22d3ee, 1.08, this.actingPlayerId()); // Astra r3: the swooper's base
         const marker = new Container();
         marker.position.copyFrom(crosshair.position);
         crosshair.position.set(0, 0);
@@ -13134,7 +13191,7 @@ export class PitchRenderer {
 
   private drawJumpCrosshairs(): void {
     for (const sq of this.jumpCrosshairSquares) {
-      if (isOnPitch(sq)) this.overlayLayer.addChild(this.buildPushCrosshair(sq));
+      if (isOnPitch(sq)) this.overlayLayer.addChild(this.buildPushCrosshair(sq, undefined, undefined, this.actingPlayerId()));
     }
   }
 
@@ -13146,12 +13203,12 @@ export class PitchRenderer {
     for (const d of this.game.fieldModel.playerDataArray) {
       if (!this.pickMeUpCueIds.has(d.playerId) || !isOnPitch(d.playerCoordinate)) continue;
       const coord: [number, number] = [d.playerCoordinate![0], d.playerCoordinate![1]];
-      const arrow = this.buildPickArrow(coord);
+      const arrow = this.buildPickArrow(coord, d.playerId);
       this.pickArrows.push({ node: arrow.node, baseY: arrow.node.position.y, scale: arrow.scale });
       this.tokenLayer.addChild(arrow.node);
       // "Pick-me-up?" label just above the arrow (scaled by depth, dark-stroked to read over the pitch).
       // #164: tokenPos so the label tracks the token's wing nudge, like the arrow above.
-      const a = this.tokenPos(coord[0], coord[1]);
+      const a = this.tokenPos(coord[0], coord[1], d.playerId);
       const label = new Text({ text: 'Pick-me-up?', style: ACTION_CHIP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       label.anchor.set(0.5, 1);
       label.scale.set(arrow.scale);
@@ -13171,9 +13228,11 @@ export class PitchRenderer {
     // #216 QS-4 / S20 (owner 09-29): mark each eligible destination with the default pick crosshair (gold, full
     // size), registered for the ticker pulse. `from` and `qs.color` are not used by the reticle.
     this.quickSnapCrosshairs = [];
+    // Owner 10-22 (Astra r3): the destinations are where the QUICK-SNAPPING player arrives - mark his base.
+    const snapperId = qs.from ? this.playerIdAt(qs.from) : undefined;
     for (const to of qs.targets) {
       if (!isOnPitch(to)) continue;
-      const cross = this.buildPushCrosshair(to);
+      const cross = this.buildPushCrosshair(to, undefined, undefined, snapperId);
       this.quickSnapCrosshairs.push({ node: cross, base: cross.scale.x });
       this.tokenLayer.addChild(cross);
     }
@@ -13191,13 +13250,13 @@ export class PitchRenderer {
       locked?: boolean;
     }[];
     // Owner 09-22: fade the candidates that were on offer last refresh and are no longer live-and-unchosen now.
-    const nextLive = new Map<string, { from: [number, number]; to: [number, number] }>();
+    const nextLive = new Map<string, { from: [number, number]; to: [number, number]; playerId?: string }>();
     const retire = () => {
       for (const [key, geo] of this.pushCandidateLast) {
         if (nextLive.has(key)) continue;
         const stillChosen = squares.some((sq) => sq.coordinate && `${sq.coordinate[0]},${sq.coordinate[1]}` === key && sq.selected);
         if (stillChosen) continue;
-        this.fadePushCandidate(geo.from, geo.to);
+        this.fadePushCandidate(geo.from, geo.to, geo.playerId);
       }
       this.pushCandidateLast = nextLive;
     };
@@ -13251,12 +13310,12 @@ export class PitchRenderer {
         pushedData && isOnPitch(pushedData.playerCoordinate)
           ? pushedData.playerCoordinate!
           : origin ?? sq.coordinate;
-      const arrow = this.pushArrowGraphic(arrowFrom, sq.coordinate);
+      const arrow = this.pushArrowGraphic(arrowFrom, sq.coordinate, { playerId: pushedId ?? undefined });
       arrow.alpha = sq.selected ? 1 : isLive ? 0.95 : 0.22; // fade only the resolved non-chosen
       // Owner 09-22: the offer sits ABOVE the tokens (the fan was under the pushed player's figure) and persists
       // until the coach picks — the model keeps the squares until the server resolves the push.
       arrow.zIndex = this.depthZ(sq.coordinate[0], sq.coordinate[1]) + 70;
-      if (isLive && !spectator) nextLive.set(`${sq.coordinate[0]},${sq.coordinate[1]}`, { from: arrowFrom, to: sq.coordinate });
+      if (isLive && !spectator) nextLive.set(`${sq.coordinate[0]},${sq.coordinate[1]}`, { from: arrowFrom, to: sq.coordinate, playerId: pushedId ?? undefined });
       if (sq.selected) this.pushOptionPulse.push(arrow);
       this.tokenLayer.addChild(arrow);
       // spectators: no crosshairs / click targets. Owner 10-04: the watched Side Step candidates DO carry the
@@ -13264,15 +13323,15 @@ export class PitchRenderer {
       if (spectator && !(this.pushOptionsWatching && isLive)) continue;
       // Owner 2026-07-03: a pulsing crosshair reticle at the arrow tip marks where
       // to click (interactive play only).
-      const cross = this.buildPushCrosshair(sq.coordinate);
+      const cross = this.buildPushCrosshair(sq.coordinate, undefined, undefined, pushedId ?? undefined);
       cross.alpha = active ? 1 : 0.22;
       if (active) this.pushCrosshairs.push({ node: cross, base: cross.scale.x });
       this.tokenLayer.addChild(cross);
       // case 422: shared skill badge (Side Step; owner 09-06: Grab too). Owner 09-06: with a skill ICON available it
       // mounts at the CENTRE of the arrow; without one the glyph badge keeps nesting on the crosshair.
       if (this.pushCrosshairSkill && !sq.locked) {
-        const badge = this.buildPushArrowSkillIcon(this.pushCrosshairSkill, arrowFrom, sq.coordinate)
-          ?? this.buildSkillBadge(this.pushCrosshairSkill, sq.coordinate);
+        const badge = this.buildPushArrowSkillIcon(this.pushCrosshairSkill, arrowFrom, sq.coordinate, pushedId ?? undefined)
+          ?? this.buildSkillBadge(this.pushCrosshairSkill, sq.coordinate, pushedId ?? undefined);
         badge.alpha = active ? 1 : 0.22;
         this.tokenLayer.addChild(badge);
       }
@@ -13297,7 +13356,7 @@ export class PitchRenderer {
         // FIX 7: opposition gets the existing reticle. A target absent from both classified sets is deliberately
         // unknown and uses this same crosshair-only fallback, never a guessed friendly arrow.
         if (opposition || !friendly) {
-          const cross = this.buildPushCrosshair(coordinate);
+          const cross = this.buildPushCrosshair(coordinate, undefined, undefined, d.playerId);
           // owner 08-19: lift above the targeted token — default zIndex 0 sat BEHIND the depth-sorted players.
           cross.zIndex = this.depthZ(coordinate[0], coordinate[1]) + 4;
           this.pickCrosshairs.push({ node: cross, base: cross.scale.x });
@@ -13305,7 +13364,7 @@ export class PitchRenderer {
         }
         // Friendly targets get the existing overhead arrow. Touchback's nominee override still narrows this set.
         if (friendly && (!this.pickArrowIds || this.pickArrowIds.has(d.playerId))) {
-          const arrow = this.buildPickArrow(coordinate);
+          const arrow = this.buildPickArrow(coordinate, d.playerId);
           this.pickArrows.push({ node: arrow.node, baseY: arrow.node.position.y, scale: arrow.scale });
           this.tokenLayer.addChild(arrow.node);
         }
@@ -13325,7 +13384,7 @@ export class PitchRenderer {
         const selected = this.game.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
         const coordinate = selected ? this.effectiveCoordinate(selected) : undefined;
         if (!coordinate) continue;
-        const arrow = this.buildPickArrow(coordinate);
+        const arrow = this.buildPickArrow(coordinate, playerId);
         this.pickArrows.push({ node: arrow.node, baseY: arrow.node.position.y, scale: arrow.scale });
         this.tokenLayer.addChild(arrow.node);
       }
@@ -13336,7 +13395,7 @@ export class PitchRenderer {
       const sel = this.game.fieldModel.playerDataArray.find((d) => d.playerId === this.pickSelectedId);
       const coordinate = sel ? this.effectiveCoordinate(sel) : undefined;
       if (coordinate) {
-        const arrow = this.buildPickArrow(coordinate);
+        const arrow = this.buildPickArrow(coordinate, this.pickSelectedId);
         this.pickArrows.push({ node: arrow.node, baseY: arrow.node.position.y, scale: arrow.scale });
         this.tokenLayer.addChild(arrow.node);
       }
@@ -13369,9 +13428,12 @@ export class PitchRenderer {
           if (dumpOffTints) {
             dumpOffTints.poly(squareQuad(sx, sy).points.flat()).fill({ color: 0x40c060, alpha: 0.24 });
           }
+          // Owner 10-22 (Astra r4): a MOVEMENT destination pick (Hit and Run / Furious Outburst) marks the acting player's
+          // base, where he arrives; ball-destination picks (kick placement, Dump-Off, server square picks) stay plain.
+          const pickMover = o66HitAndRun ? this.actingPlayerId() : undefined;
           const cross = dumpOff
             ? this.buildPushCrosshair([sx, sy], 0xffe066, 0.7)
-            : this.buildPushCrosshair([sx, sy]);
+            : this.buildPushCrosshair([sx, sy], undefined, undefined, pickMover);
           this.pickCrosshairs.push({ node: cross, base: cross.scale.x });
           this.tokenLayer.addChild(cross);
           // case 422: a die-marking skill badge below the crosshair says WHICH skill this pick is for.
@@ -13471,7 +13533,7 @@ export class PitchRenderer {
       const data = this.game.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
       const coordinate = data ? this.effectiveCoordinate(data) : null;
       if (!token || token.destroyed || !coordinate) continue;
-      const arrow = this.buildPickArrow(coordinate);
+      const arrow = this.buildPickArrow(coordinate, playerId);
       const offsetY = -TILE_H * arrow.scale * 1.15;
       arrow.node.position.set(token.position.x, token.position.y + offsetY);
       arrow.node.zIndex = token.zIndex + 80;
@@ -13887,13 +13949,13 @@ export class PitchRenderer {
 
   /** A small gold crosshair reticle centred in a square (fits inside the tile),
    *  used to mark a push-option target (the arrow tip). */
-  private buildPushCrosshair(coord: [number, number], color = 0xffe066, sizeScale = 1): Graphics {
+  private buildPushCrosshair(coord: [number, number], color = 0xffe066, sizeScale = 1, playerId?: string | null): Graphics {
     // #164 (owner 07-23): position the crosshair through tokenPos (the SAME projection source the player
     // tokens use), so it gets the off-centre-column perspective nudge and stays centred on wing squares
     // (A-B / N-O) instead of drifting off the token — no second offset table (nudge now applies in FLAT too).
     // #216 QS-4/QS-5 (owner 08-04): optional `color` + `sizeScale` let Quick-Snap reuse this idiom in the UI
     // primary colour at a SMALLER scale; every existing caller omits both ⇒ byte-identical (gold, full size).
-    const a = this.tokenPos(coord[0], coord[1]);
+    const a = this.tokenPos(coord[0], coord[1], playerId);
     const depth = depthScale(coord[0], coord[1]);
     const r = TILE_W * 0.26 * depth * sizeScale; // fits inside the square
     const gap = r * 0.42;
@@ -13916,11 +13978,12 @@ export class PitchRenderer {
     // leads to (none if that is off the pitch); the original aim keeps only the quiet aim mark.
     const decision = this.hmpScatterMarks?.decision;
     if (decision) return; // the pending step's marker is drawn with the scatter marks, above the tokens
-    if (this.passDestinationMarker) this.drawPassMarkerAt(this.passDestinationMarker, this.overlayLayer);
+    // Owner 10-22 (Astra r3): a thrown team-mate's landing marks HIS base (the ball / bomb keep the plain point).
+    if (this.passDestinationMarker) this.drawPassMarkerAt(this.passDestinationMarker, this.overlayLayer, this.passDestinationKind === 'stunty' ? this.thrownPlayerId() : null);
   }
 
-  private drawPassMarkerAt(square: Square, layer: Container): void {
-    const crosshair = this.buildPushCrosshair(square, 0x22d3ee, 1.08);
+  private drawPassMarkerAt(square: Square, layer: Container, playerId?: string | null): void {
+    const crosshair = this.buildPushCrosshair(square, 0x22d3ee, 1.08, playerId);
     const marker = new Container();
     marker.position.copyFrom(crosshair.position);
     crosshair.position.set(0, 0);
@@ -14004,10 +14067,10 @@ export class PitchRenderer {
   /** Owner o66 #20: a chunky gold arrow that hovers ABOVE a player's head, pointing down at them — the pick marker
    *  for every server player-pick state. Tip sits just over the head; the ticker bobs it gently. Dark outline for
    *  contrast against tokens. Returns the container + its depth scale (for the ticker's per-depth bob amplitude). */
-  private buildPickArrow(coord: [number, number]): { node: Container; scale: number } {
+  private buildPickArrow(coord: [number, number], playerId?: string | null): { node: Container; scale: number } {
     // #164 (owner 07-23): hover over the TOKEN's projected position (tokenPos), so the over-head arrow
     // stays over the player's head on wing columns instead of the raw square anchor.
-    const a = this.tokenPos(coord[0], coord[1]);
+    const a = this.tokenPos(coord[0], coord[1], playerId);
     const depth = depthScale(coord[0], coord[1]);
     const w = TILE_W * 0.34 * depth;      // arrowhead width
     const h = TILE_W * 0.30 * depth;      // arrowhead height
@@ -14209,7 +14272,7 @@ export class PitchRenderer {
    *  language: the skill's icon art on a black @60% shade, or a coloured glyph badge fallback
    *  (SKILL_BADGE_GLYPH) for skills with no icon (e.g. Trickster ✦). Nested at the crosshair's top-right
    *  (with a gap) to tell the user which skill this pick belongs to. */
-  private buildSkillBadge(skillName: string, coord: [number, number]): Container {
+  private buildSkillBadge(skillName: string, coord: [number, number], playerId?: string | null): Container {
     const depth = depthScale(coord[0], coord[1]);
     const R = TILE_W * 0.10 * depth; // small — reads as a tag, not a token (owner: −a bit)
     const c = new Container();
@@ -14236,7 +14299,7 @@ export class PitchRenderer {
     // Owner 2026-07-08 (case 422): NEST just outside the TOP-RIGHT of the crosshair (centred on the square)
     // with a small gap — sits at 45° up-right, clear of the crosshair's reticle by `gap`.
     // #164: tokenPos so the badge stays pinned to the (now wing-nudged) crosshair it nests on.
-    const centre = this.tokenPos(coord[0], coord[1]);
+    const centre = this.tokenPos(coord[0], coord[1], playerId);
     const crossR = TILE_W * 0.26 * depth;                 // buildPushCrosshair radius
     const dist = crossR + TILE_W * 0.05 * depth + R;      // crosshair edge + gap + badge radius
     const k = Math.SQRT1_2;                                // 45° top-right
@@ -14251,10 +14314,10 @@ export class PitchRenderer {
   /** Owner 09-06: the push-modifying skill's ICON (Side Step / Grab) mounted at the centre of a candidate arrow —
    *  null when the active icon set has no art for it (the caller falls back to the crosshair glyph badge). The
    *  span matches pushArrowGraphic (0.25 tile out of the origin, tip 0.28 tile short of the target centre). */
-  private buildPushArrowSkillIcon(skillName: string, from: [number, number], to: [number, number]): Container | null {
+  private buildPushArrowSkillIcon(skillName: string, from: [number, number], to: [number, number], playerId?: string | null): Container | null {
     if (!skillIcon(skillName, this.skillIconStyle)) return null;
-    const a = this.tokenPos(from[0], from[1]);
-    const b = this.tokenPos(to[0], to[1]);
+    const a = this.tokenPos(from[0], from[1], playerId);
+    const b = this.tokenPos(to[0], to[1], playerId);
     const depth = depthScale(to[0], to[1]);
     const dx = b.x - a.x;
     const dy = b.y - a.y;
@@ -14282,11 +14345,11 @@ export class PitchRenderer {
     return c;
   }
 
-  private pushArrowGraphic(from: [number, number], to: [number, number], opts?: { tipInsetFrac?: number; color?: number }): Graphics {
+  private pushArrowGraphic(from: [number, number], to: [number, number], opts?: { tipInsetFrac?: number; color?: number; playerId?: string | null }): Graphics {
     // #164 (owner 07-23): endpoints through tokenPos (the token projection source) so the arrow stays
     // aligned with the tokens AND with the crosshair it's drawn beside on wing columns (both nudged).
-    const a = this.tokenPos(from[0], from[1]);
-    const b = this.tokenPos(to[0], to[1]);
+    const a = this.tokenPos(from[0], from[1], opts?.playerId);
+    const b = this.tokenPos(to[0], to[1], opts?.playerId);
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -14328,9 +14391,9 @@ export class PitchRenderer {
 
   /** Owner 09-22: a retired push candidate (the coach chose another square) fades out over 350 ms on the effects
    *  layer instead of vanishing on the next refresh. */
-  private fadePushCandidate(from: [number, number], to: [number, number]): void {
+  private fadePushCandidate(from: [number, number], to: [number, number], playerId?: string): void {
     if (!this.app) return;
-    const arrow = this.pushArrowGraphic(from, to);
+    const arrow = this.pushArrowGraphic(from, to, { playerId });
     arrow.zIndex = this.depthZ(to[0], to[1]) + 70;
     this.effectsLayer.addChild(arrow);
     const app = this.app;
@@ -14344,9 +14407,11 @@ export class PitchRenderer {
     };
     cleanup = this.registerEffectTicker(app, tick, [arrow]);
   }
-  playPushArrow(from: [number, number], to: [number, number]): void {
+  /** Owner 10-22 (Astra r4): `playerId` = the pushed player - both ends sit on HIS base (the vacated origin and the
+   *  destination alike), matching the preview fan; omitted (the ball-direction arrow) = each square's occupant. */
+  playPushArrow(from: [number, number], to: [number, number], playerId?: string | null): void {
     if (!this.app) return;
-    const arrow = this.pushArrowGraphic(from, to);
+    const arrow = this.pushArrowGraphic(from, to, { playerId: playerId ?? undefined });
     // Owner 2026-07-08 BUGFIX: the arrow used to go in tokenLayer, which refresh() WIPES
     // every model sync — in spectate (frequent syncs during a push) the arrow was destroyed
     // a frame after it appeared, so push arrows never seemed to render. effectsLayer is the
@@ -15277,7 +15342,7 @@ export class PitchRenderer {
     const square = this.cueAnchorForPlayer(playerId);
     if (!square) return;
     const [x, y] = square;
-    const tp = this.tokenPos(x, y);
+    const tp = this.tokenPos(x, y, playerId);
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
     // Owner 08-19 (reveal beat ①): a gold circle PULSE at the square — the flashGoldAura ring
@@ -15302,7 +15367,7 @@ export class PitchRenderer {
       if (this.focusArrow?.playerId === playerId && this.focusArrow.node && !this.focusArrow.node.destroyed) return;
       // Owner 10-12: the arrow is built after the pulse; it takes the projection as it stands when it appears (the
       // pitch may have turned in between), never the pixels computed when the cue was requested.
-      const tp = this.tokenPos(x, y);
+      const tp = this.tokenPos(x, y, playerId);
       const anchor = squareAnchor(x, y);
       const scale = depthScale(x, y);
       const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
@@ -15314,7 +15379,7 @@ export class PitchRenderer {
       node.position.set(tp.x, baseY);
       node.zIndex = this.depthZ(x, y) + 72;
       this.effectsLayer.addChild(node);
-      this.anchorEffect(node, x, y, true, true);
+      this.anchorEffect(node, x, y, true, true, undefined, playerId);
       const t0 = performance.now();
       const tick = () => {
         if (node.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -15405,7 +15470,7 @@ export class PitchRenderer {
     if (fa.node && !fa.node.destroyed && fa.square && fa.square[0] === square[0] && fa.square[1] === square[1]) return;
     this.removeFocusArrowNode();
     const [x, y] = square;
-    const tp = this.tokenPos(x, y);
+    const tp = this.tokenPos(x, y, fa.playerId);
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
     const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
@@ -15415,7 +15480,7 @@ export class PitchRenderer {
     node.position.set(tp.x, baseY);
     node.zIndex = this.depthZ(x, y) + 72;
     this.effectsLayer.addChild(node);
-    this.anchorEffect(node, x, y, true, true);
+    this.anchorEffect(node, x, y, true, true, undefined, fa.playerId);
     const t0 = performance.now();
     const tick = () => {
       if (node.destroyed) { this.app?.ticker.remove(tick); return; }
@@ -15450,7 +15515,7 @@ export class PitchRenderer {
       const [x, y] = square;
       // Owner 10-12: the same chunky over-head arrow every nomination flow uses (buildPickArrow: charge, Pick-Me-Up,
       // player picks), its tip just over the head, not the small chest-height glyph. Same hop as the pick arrows.
-      const arrow = this.buildPickArrow([x, y]);
+      const arrow = this.buildPickArrow([x, y], playerId);
       const node = arrow.node;
       const baseY = node.position.y;
       const scale = arrow.scale;
@@ -16332,8 +16397,11 @@ export class PitchRenderer {
    *  from the report stream on skill/agility rolls (pickup, dodge, GFI, catch…). */
   /** Owner 10-15: `disturbingPresence` = the combined Disturbing Presence count the SERVER applied to this roll (from
    *  its report's rollModifiers); the die then carries a "DP −N" tag. Absent / 0 = no tag. */
-  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean, disturbingPresence?: number): void {
-    this.showActionDieImpl(null, square, value, cause, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, rerollOfferPending, rerollOfferNotFailed, breatheFireReroll, disturbingPresence);
+  /** Owner 10-22: `ownerPlayerId` = the rolling player the server's report named. The die wears that player's team
+   *  colour; without it the roller is read from the model at show time (the player on the square, else the acting one),
+   *  which a movement die shown on the token's arrival can no longer see once the mover has moved on. */
+  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean, rerollOfferNotFailed?: boolean, breatheFireReroll?: boolean, disturbingPresence?: number, ownerPlayerId?: string | null): void {
+    this.showActionDieImpl(ownerPlayerId ?? null, square, value, cause, failed, needed, rerollSkill, rerollTeam, opponentRerollPending, rerollOfferPending, rerollOfferNotFailed, breatheFireReroll, disturbingPresence);
   }
   /** Owner 10-13: an action die whose roller is known and may not be the player on `square` (Ball & Chain shows its
    *  direction die at the destination, which can hold an opposing victim). The die wears `ownerPlayerId`'s colour. */
@@ -16403,6 +16471,7 @@ export class PitchRenderer {
           copy.causeTagHome = { x: tag.position.x, y: tag.position.y };
         }
         copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer;
+        this.adoptActionDieRoller(copy, ownerPlayerId);
         return;
       }
     }
@@ -16431,7 +16500,7 @@ export class PitchRenderer {
     if (failed && !cause && !rerollSkill) {
       const copy = this.actionDice.find((d) => d.failed && d.cause === undefined && d.value === value && !d.node.destroyed
         && now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS) && d.square && d.square[0] === x && d.square[1] === y);
-      if (copy) { copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer; return; }
+      if (copy) { copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer; this.adoptActionDieRoller(copy, ownerPlayerId); return; }
     }
     const owner = this.actionDieOwner(square, ownerPlayerId);
     const side = displayDiceSide(owner, this.viewerDiceSeat());
@@ -16882,11 +16951,11 @@ export class PitchRenderer {
   /** Owner 2026-07-08: VAMPIRE FEED — pop a 🧛 over a bitten Thrall's head just before the
    *  "bitten" injury plays, so the feed reads first. Reuses the action-die pop/hold/fade
    *  lifecycle (self-removing). `playerId` accepted for parity with the store call. */
-  armVampireBite(_playerId: string, square: [number, number]): void {
+  armVampireBite(playerId: string, square: [number, number]): void {
     if (!this.app || !isOnPitch(square)) return;
     const [x, y] = square;
     const anchor = squareAnchor(x, y);
-    const tp = this.tokenPos(x, y);
+    const tp = this.tokenPos(x, y, playerId);
     const scale = depthScale(x, y);
     const node = new Text({
       text: '🧛',
@@ -16898,7 +16967,7 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 62;
     this.effectsLayer.addChild(node);
-    this.anchorEffect(node, x, y, true, true);
+    this.anchorEffect(node, x, y, true, true, undefined, playerId);
     this.addActionDie({ node, baseScale: scale, start: performance.now() });
   }
 
@@ -17201,7 +17270,7 @@ export class PitchRenderer {
     if (!landing) return;
     const [ox, oy] = surfOutward(landing);
     const scale = depthScale(Math.min(Math.max(landing[0], 0), PITCH_COLS - 1), Math.min(Math.max(landing[1], 0), PITCH_ROWS - 1));
-    const target = this.tokenPos(landing[0], landing[1]);
+    const target = this.tokenPos(landing[0], landing[1], playerId ?? undefined);
     const anchor = squareAnchor(landing[0], landing[1]);
     // the stand front behind him: one more square outward
     const standAnchor = squareAnchor(landing[0] + ox, landing[1] + oy);
@@ -18295,16 +18364,18 @@ export class PitchRenderer {
     /** A constant pixel offset from the anchor that the builder does NOT scale with depth (a pulse 3 px above the
      *  token's feet): it is part of the anchor, so the carry moves it but never scales it. */
     fixed: { x: number; y: number }; wrapper: Container | null;
+    /** Owner 10-22 (Astra r3): the player the cue marks (undefined = the player rendered on the square). */
+    playerId?: string | null;
   }>();
   /** `depthOrdered`: the node's zIndex is `this.depthZ(x, y) + band`. After a turn its wrapper sorts at the square's
    *  NEW depth + the same band, i.e. exactly where a freshly built effect on that square sorts; a fixed-band node
    *  (the trail numerals, the over-everything flashes) keeps its band as it is. */
-  private anchorEffect<T extends Container>(node: T, x: number, y: number, depthOrdered = false, tokenMounted = false, fixed = { x: 0, y: 0 }): T {
+  private anchorEffect<T extends Container>(node: T, x: number, y: number, depthOrdered = false, tokenMounted = false, fixed = { x: 0, y: 0 }, playerId?: string | null): T {
     // `tokenMounted`: the anchor is where tokenPos() puts a token on this square NOW, and after a change where it
     // puts one THEN, so a carried cue sits exactly where a freshly built one would.
-    const base = tokenMounted ? this.tokenPos(x, y) : extPoint(x + 0.5, y + 0.5);
+    const base = tokenMounted ? this.tokenPos(x, y, playerId) : extPoint(x + 0.5, y + 0.5);
     const origin = { x: base.x + fixed.x, y: base.y + fixed.y };
-    this.effectAnchors.set(node, { square: [x, y], origin, scale: depthScale(x, y) || 1, depthOrdered, depthZ: depthZKey(x, y), tokenMounted, fixed, wrapper: null });
+    this.effectAnchors.set(node, { square: [x, y], origin, scale: depthScale(x, y) || 1, depthOrdered, depthZ: depthZKey(x, y), tokenMounted, fixed, wrapper: null, playerId });
     node.once('destroyed', () => this.dropEffectAnchor(node));
     return node;
   }
@@ -18319,7 +18390,7 @@ export class PitchRenderer {
   private reprojectAnchoredEffects(): void {
     for (const [node, rec] of [...this.effectAnchors]) {
       if (node.destroyed) { this.dropEffectAnchor(node); continue; }
-      const base = rec.tokenMounted ? this.tokenPos(rec.square[0], rec.square[1]) : extPoint(rec.square[0] + 0.5, rec.square[1] + 0.5);
+      const base = rec.tokenMounted ? this.tokenPos(rec.square[0], rec.square[1], rec.playerId) : extPoint(rec.square[0] + 0.5, rec.square[1] + 0.5);
       const at = { x: base.x + rec.fixed.x, y: base.y + rec.fixed.y };
       const s = (depthScale(rec.square[0], rec.square[1]) || 1) / rec.scale;
       let wrapper = rec.wrapper;
@@ -19532,16 +19603,34 @@ export class PitchRenderer {
     // part of the normal parent transform, exactly like the ordinary Blitz badge; no separate hook needed here.
   }
 
-  private tokenPos(x: number, y: number): { x: number; y: number } {
-    const anchor = squareAnchor(x, y);
-    const quad = squareQuad(x, y);
-    const [nearL, nearR, farR, farL] = quad.points as [[number, number], [number, number], [number, number], [number, number]];
-    const band = quad.yBottom - quad.yTop;
-    const slantPerPx = band > 0 ? (((farL[0] + farR[0]) - (nearL[0] + nearR[0])) / 2) / band : 0;
-    // The anchor sits at the square's centre; the sprite's visual centre is TOKEN_CENTRE_HEIGHT_PX above its feet,
-    // so shift by the midline's drift over that height. Zero in FLAT mode (no slant); flip-aware via the quad.
-    return { x: anchor.x + slantPerPx * TOKEN_CENTRE_HEIGHT_PX, y: anchor.y };
+  /** Owner 10-22 (Astra r1): where a token stands on (x, y) - and where everything anchored on it (halo, rings, carrier
+   *  label / ball, active aura, move badge, chest badges, state markers, cues) is placed. `playerId` names the token
+   *  (tweens and presentation steps pass the MOVING player, whose model square may differ); omitted = the player
+   *  rendered on that square; null = no token (the plain standing-walker base). */
+  private tokenPos(x: number, y: number, playerId?: string | null): { x: number; y: number } {
+    const id = playerId === undefined ? this.playersBySquare.get(`${x},${y}`) : playerId;
+    return playerTokenPos(x, y, id ? this.tokenGrounds.get(id) : undefined);
   }
+  /** Owner 10-22 (Astra r3): the player standing on `square` in the model (the rendered occupant as a fallback). */
+  private playerIdAt(square: readonly [number, number] | null | undefined): string | undefined {
+    if (!square) return undefined;
+    const d = this.game?.fieldModel.playerDataArray.find((e) => e.playerCoordinate?.[0] === square[0] && e.playerCoordinate?.[1] === square[1]);
+    return d?.playerId ?? this.playersBySquare.get(`${square[0]},${square[1]}`);
+  }
+  /** Owner 10-22 (Astra r3): the server's acting player (undefined when none). */
+  private actingPlayerId(): string | undefined {
+    return (this.game?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? undefined;
+  }
+  /** Owner 10-22 (Astra r3): the team-mate in the air on a Throw / Kick Team-mate or Swoop - the swooper is the acting
+   *  player; on a throw FFB holds the thrown player as game.defender (updateThrownPlayer); the held-mate cue otherwise. */
+  private thrownPlayerId(): string | undefined {
+    const action = String((this.game?.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '').toLowerCase();
+    if (action.includes('swoop')) return this.actingPlayerId();
+    const defender = String((this.game as { defenderId?: unknown } | null)?.defenderId ?? '');
+    return defender || this.ttmHeld?.thrownId || undefined;
+  }
+  /** Owner 10-22 (Astra r1): each on-pitch player's token base (see TokenGround), refreshed whenever his token is built. */
+  private tokenGrounds = new Map<string, TokenGround>();
 
   /** @deprecated W31 constant nudge — retained only for the historical note above; no callers. */
   private legacyTokenPosNudge(x: number, y: number): { x: number; y: number } {
@@ -19565,7 +19654,23 @@ export class PitchRenderer {
     return { x: anchor.x + nudgeX, y: anchor.y };
   }
 
-  private buildPlayerToken(
+  /** Owner 10-22: every player token, any sprite set, stands with its BASE on its square's projected centre line: the
+   *  token records where its base sits (tokenGrounds) and its origin goes to tokenPos(x, y, id) - the centre line at
+   *  THAT base's depth. Decorations and tweens place from the same tokenPos, so nothing drifts off the figure. */
+  private buildPlayerToken(...args: Parameters<PitchRenderer['buildPlayerTokenBody']>): Container {
+    const token = this.buildPlayerTokenBody(...args);
+    const square = args[1].playerCoordinate;
+    if (square && isOnPitch(square)) {
+      const id = args[0].playerId;
+      const ground = tokenGroundOf(token, square);
+      if (ground) this.tokenGrounds.set(id, ground); else this.tokenGrounds.delete(id);
+      const p = this.tokenPos(square[0], square[1], id);
+      token.position.set(p.x, p.y);
+    }
+    return token;
+  }
+
+  private buildPlayerTokenBody(
     player: PlayerJson,
     data: PlayerDataJson,
     isHome: boolean,
@@ -19611,6 +19716,7 @@ export class PitchRenderer {
       // level, so overlays and the center/ground anchor keep exactly the same geometry as every other player.
       frog.scale.set(FROG_ART_SCALE * PLAYER_SPRITE_BASE / Math.max(this.frogTexture.width, this.frogTexture.height));
       frog.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
+      tagGround(token, frog.position.y);
       if (down) frog.rotation = Math.PI / 2;
       token.addChild(frog);
       if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, undefined, downMark);
@@ -19647,6 +19753,7 @@ export class PitchRenderer {
         sprite.width = size;
         sprite.height = size;
         const feetY = 10 + TOKEN_BASE_SHIFT_PX;
+        tagGround(token, down ? feetY - size * 0.5 : feetY);
         sprite.position.set(0, feetY);
         token.addChild(sprite);
         if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, feetY - size * 0.5);
@@ -19689,6 +19796,7 @@ export class PitchRenderer {
         disc.width = size;
         disc.height = size;
         const centreY = -3 + TOKEN_BASE_SHIFT_PX;
+        tagGround(token, centreY); // a counter lies flat: its centre IS its ground point
         disc.position.set(0, centreY);
         token.addChild(disc);
         if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, undefined, downMark);
@@ -19779,6 +19887,7 @@ export class PitchRenderer {
         sprite.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
         if (down) sprite.rotation = Math.PI / 2;
         token.addChild(sprite);
+        tagGround(token, down ? sprite.position.y : TILE_H * 0.32); // standing: the position ring under the feet
         // Owner 10-07: a FUMBBL-style icon's figure fills its frame - its chest-anchored markers drop to the chest
         // (markerAnchorFor); the STUNNED banner on the lying icon follows, capped at the icon's centre.
         (token as MarkerTaggedToken).markerSpriteSet = 'fumbblIcon';
@@ -19821,6 +19930,7 @@ export class PitchRenderer {
         // ground squares shrink toward the far edge, and the pixel snap can draw the figure over its ideal size,
         // so the boots crossed the square's bottom edge there. The square's half-height below the anchor rides the
         // token (token-local units); snapWalker lifts the token by exactly the overflow on every re-snap.
+        if (down) tagGround(built, 0); // a lying walker is centred on the token origin (walkers.ts walkerSpriteArtPosition)
         if (!down && isOnPitch([x, y])) {
           (built as Container & { squareHalfBelow?: number }).squareHalfBelow =
             (squareQuad(x, y).yBottom - squareAnchor(x, y).y) / (token.scale.x || 1);
@@ -19854,11 +19964,13 @@ export class PitchRenderer {
       const scale = WALKER_TARGET_FIGURE_PX / pair.base.height;
       const layers: [typeof pair.base, number][] = [[pair.base, 0xffffff]];
       if (pair.jersey) layers.push([pair.jersey, body]);
+      // Owner 10-22: the figure's body axis over the base - measured on the BASE layer, shared by the jersey overlay.
+      const art = textureArtCentre(pair.base);
       for (const [texture, tint] of layers) {
         const sprite = new Sprite(texture);
         sprite.anchor.set(0.5, 1);
         sprite.scale.set(scale);
-        sprite.position.set(0, -2 + TOKEN_BASE_SHIFT_PX);
+        sprite.position.set(art ? -art.dx * scale : 0, -2 + TOKEN_BASE_SHIFT_PX);
         sprite.tint = tint;
         token.addChild(sprite);
       }
@@ -19867,12 +19979,13 @@ export class PitchRenderer {
       const scale = (WALKER_TARGET_FIGURE_PX * 40 / 48) / pair.base.height;
       const layers: [typeof pair.base, number][] = [[pair.base, 0xffffff]];
       if (pair.jersey) layers.push([pair.jersey, body]);
+      const lying = pairProneArtOffset(textureArtCentre(pair.base), scale, scale * 0.8);
       for (const [texture, tint] of layers) {
         const sprite = new Sprite(texture);
         sprite.anchor.set(0.5, 0.5);
         sprite.scale.set(scale, scale * 0.8);
         sprite.rotation = -Math.PI / 2;
-        sprite.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
+        sprite.position.set(lying.x, -3 + TOKEN_BASE_SHIFT_PX + lying.y);
         sprite.tint = tint;
         token.addChild(sprite);
       }
@@ -19891,6 +20004,7 @@ export class PitchRenderer {
       token.addChild(g);
     }
 
+    if (pair) tagGround(token, (down ? -3 : -2) + TOKEN_BASE_SHIFT_PX);
     if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption, undefined, downMark);
 
     // number centered on the right foot, home team only (owner 2026-07-02) — off by default (owner 2026-07-04)
@@ -20785,7 +20899,7 @@ export class PitchRenderer {
    *  so no clear bookkeeping is owed. Coloured to the plot trail (0x66ccff) with a dark stroke for
    *  contrast on any tile; corner offset is depth-scaled so it tracks the tile size in perspective. */
   private buildPlotStepNumber(sx: number, sy: number, n: number, isDestination = false): Text | null {
-    const a = this.tokenPos(sx, sy);
+    const a = this.tokenPos(sx, sy, this.o66PathMover ?? undefined);
     const ds = depthScale(sx, sy);
     // Owner 09-25: 4x raster + linear filtering + mipmaps (the marking-text rule) — the planner digits read low-res
     // next to the trail numbers, which already raster this way (addTrailNumber).
@@ -21693,7 +21807,7 @@ export class PitchRenderer {
           : this.dugoutTokensById.get(player.playerId);
         if (!token || token.destroyed) continue;
         const target = targetCompartment === 'pitch' && current?.coordinate
-          ? this.tokenPos(current.coordinate[0], current.coordinate[1])
+          ? this.tokenPos(current.coordinate[0], current.coordinate[1], player.playerId)
           : { x: token.position.x, y: token.position.y }; // refresh resolved this compartment's current slot
         if (Math.hypot(target.x - prior.x, target.y - prior.y) <= 0.5) continue;
         token.position.set(prior.x, prior.y);
@@ -21782,7 +21896,7 @@ export class PitchRenderer {
         return;
       }
       if (expectedRenderedCompartment !== 'pitch' || !current?.coordinate || !token || token.destroyed) return;
-      const target = this.tokenPos(current.coordinate[0], current.coordinate[1]);
+      const target = this.tokenPos(current.coordinate[0], current.coordinate[1], playerId);
       this.startTokenReconciliation(
         playerId,
         token,
@@ -21889,7 +22003,7 @@ export class PitchRenderer {
       if (!this.authoritativePostStepStillCurrent(step, gameId) || this.hasNewerPostStepOwner(step, key)) return;
       const token = this.tokensById.get(step.playerId);
       if (!token || token.destroyed) return;
-      const target = this.tokenPos(step.to[0], step.to[1]);
+      const target = this.tokenPos(step.to[0], step.to[1], step.playerId);
       const distance = Math.hypot(target.x - token.position.x, target.y - token.position.y);
       if (distance <= 1) return;
       const segmentMs = Math.min(120, Math.max(45, Math.round(45 + distance * 0.35)));
@@ -21982,7 +22096,7 @@ export class PitchRenderer {
       if (this.reconcileRestSquares.get(playerId)?.key === key) this.reconcileRestSquares.delete(playerId);
       const token = this.tokensById.get(playerId);
       if (!token || token.destroyed) { this.refresh(); this.updateTrailNumberVisibility(); this.releaseSettledTrailNumbers(); return; }
-      const target = this.tokenPos(coordinate[0], coordinate[1]);
+      const target = this.tokenPos(coordinate[0], coordinate[1], playerId);
       // Vue's post-flush model rebuild may already have placed a fresh token at truth. Restore only the exact
       // pixels visible when the fence arrived, then bridge forward; never revisit the movement origin.
       if (start && Math.hypot(target.x - start.x, target.y - start.y) > 0.5) {
@@ -22008,8 +22122,8 @@ export class PitchRenderer {
     const start = { x: token.position.x, y: token.position.y };
     const distance = Math.hypot(target.x - start.x, target.y - start.y);
     if (distance <= 0.5) return; // already authoritative: do not touch the token or manufacture a tween
-    const tileA = this.tokenPos(0, 0);
-    const tileB = this.tokenPos(1, 0);
+    const tileA = this.tokenPos(0, 0, null);
+    const tileB = this.tokenPos(1, 0, null);
     const tileDistance = Math.max(1, Math.hypot(tileB.x - tileA.x, tileB.y - tileA.y));
     const distanceFactor = Math.min(2, Math.max(0.25, distance / tileDistance));
     const segmentMs = Math.min(180, Math.max(45, Math.round(expectedRttMs * 0.55 + distanceFactor * 35)));
@@ -22060,8 +22174,8 @@ export class PitchRenderer {
     if (currentStep?.playerId === intent.playerId && this.presentationStepConsumed !== currentStep) return;
     const token = this.tokensById.get(intent.playerId);
     if (!token || token.destroyed) return;
-    const from = this.tokenPos(intent.from[0], intent.from[1]);
-    const to = this.tokenPos(intent.to[0], intent.to[1]);
+    const from = this.tokenPos(intent.from[0], intent.from[1], intent.playerId);
+    const to = this.tokenPos(intent.to[0], intent.to[1], intent.playerId);
     const tileDistance = Math.hypot(to.x - from.x, to.y - from.y) || 1;
     // A later command can be accepted while the prior confirmed tile is still on screen. Never jump across that
     // visual seam; completion calls this method again once the token actually reaches the new intent's origin.
@@ -22100,7 +22214,7 @@ export class PitchRenderer {
     if (this.confirmedMovementPresentationEnabled) return;
     const token = this.tokensById.get(intent.playerId);
     if (!token || token.destroyed) return;
-    const to = this.tokenPos(intent.to[0], intent.to[1]);
+    const to = this.tokenPos(intent.to[0], intent.to[1], intent.playerId);
     token.position.set(to.x, to.y);
     this.followTokenDecorations(intent.playerId, to.x, to.y);
   }
@@ -22116,7 +22230,7 @@ export class PitchRenderer {
     const square = model && model[0] >= 0 && model[0] < 26 && model[1] >= 0 && model[1] < 15
       ? model : intent.from;
     if (token && !token.destroyed) {
-      const p = this.tokenPos(square[0], square[1]);
+      const p = this.tokenPos(square[0], square[1], intent.playerId);
       token.position.set(p.x, p.y);
       this.followTokenDecorations(intent.playerId, p.x, p.y);
     }
@@ -22133,7 +22247,7 @@ export class PitchRenderer {
     if (tween?.movementIntent?.occurrenceId === intent.occurrenceId) this.moveTweens.delete(intent.playerId);
     const token = this.tokensById.get(intent.playerId);
     if (token && !token.destroyed) {
-      const to = this.tokenPos(intent.to[0], intent.to[1]);
+      const to = this.tokenPos(intent.to[0], intent.to[1], intent.playerId);
       token.position.set(to.x, to.y);
       this.followTokenDecorations(intent.playerId, to.x, to.y);
     }
@@ -22211,7 +22325,7 @@ export class PitchRenderer {
       };
       const token = this.tokensById.get(step.playerId);
       if (token && !token.destroyed) {
-        const from = this.tokenPos(step.from[0], step.from[1]);
+        const from = this.tokenPos(step.from[0], step.from[1], step.playerId);
         token.position.set(from.x, from.y);
         this.followTokenDecorations(step.playerId, from.x, from.y);
         this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
@@ -22335,13 +22449,13 @@ export class PitchRenderer {
   private redrawPresentationStep(step: PresentationStep, token: Container): void {
     if (step.rollPending) {
       this.moveTweens.delete(step.playerId);
-      const p = this.tokenPos(step.from[0], step.from[1]);
+      const p = this.tokenPos(step.from[0], step.from[1], step.playerId);
       token.position.set(p.x, p.y);
       this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
       return;
     }
     if (this.presentationStepConsumed !== step) { this.armPresentationStepTween(step, token); return; }
-    const p = this.tokenPos(step.to[0], step.to[1]);
+    const p = this.tokenPos(step.to[0], step.to[1], step.playerId);
     token.position.set(p.x, p.y);
     this.lastSquares.set(step.playerId, [step.to[0], step.to[1]]);
   }
@@ -22371,13 +22485,13 @@ export class PitchRenderer {
   private armPresentationStepTween(step: PresentationStep, token: Container): void {
     if (step.rollPending) {
       this.moveTweens.delete(step.playerId);
-      const p = this.tokenPos(step.from[0], step.from[1]);
+      const p = this.tokenPos(step.from[0], step.from[1], step.playerId);
       token.position.set(p.x, p.y);
       this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
       return;
     }
-    const p0 = this.tokenPos(step.from[0], step.from[1]);
-    const p1 = this.tokenPos(step.to[0], step.to[1]);
+    const p0 = this.tokenPos(step.from[0], step.from[1], step.playerId);
+    const p1 = this.tokenPos(step.to[0], step.to[1], step.playerId);
     const intent = this.movementIntent;
     const matchingIntent = intent?.playerId === step.playerId
       && intent.from[0] === step.from[0] && intent.from[1] === step.from[1]
@@ -22498,7 +22612,7 @@ export class PitchRenderer {
       const sx = Math.round(from[0] + ((to[0] - from[0]) * i) / count);
       const sy = Math.round(from[1] + ((to[1] - from[1]) * i) / count);
       // players ease to their nudged token position; the ball keeps the raw anchor
-      const p = isPlayer ? this.tokenPos(sx, sy) : squareAnchor(sx, sy);
+      const p = isPlayer ? this.tokenPos(sx, sy, playerId) : squareAnchor(sx, sy);
       waypoints.push({ x: p.x, y: p.y });
     }
     if (style === 'trail' || style === 'hoptrail') {
@@ -22586,7 +22700,7 @@ export class PitchRenderer {
     fromPixel: { x: number; y: number },
     to: [number, number],
   ): void {
-    const dest = this.tokenPos(to[0], to[1]);
+    const dest = this.tokenPos(to[0], to[1], playerId);
     if (Math.abs(fromPixel.x - dest.x) < 0.5 && Math.abs(fromPixel.y - dest.y) < 0.5) {
       token.position.set(dest.x, dest.y); // already there — no tween needed
       return;

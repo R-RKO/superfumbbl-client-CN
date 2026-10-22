@@ -3478,6 +3478,12 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <p class="hint">Marks the rush, dodge and pickup rolls on a planned path.</p>
+            <!-- Owner 10-22: the route chips can wear the mover's Home / Away die (default: the neutral grey die). -->
+            <label class="row">
+              <input v-model="settings.plannerDiceSeatTint" type="checkbox" data-testid="planner-dice-seat-tint-toggle" />
+              <span>Team-coloured route dice</span>
+            </label>
+            <p class="hint">Route and reach roll chips wear the mover's home or away die. Off: the neutral grey die.</p>
             <label class="row">
               <span>Blitz target marker</span>
               <select v-model="settings.blitzTargetMarker">

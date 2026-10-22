@@ -77,7 +77,11 @@ export interface ActionDieCue { square: [number, number]; value: number; cause?:
   breatheFireReroll?: boolean;
   /** Owner 10-15: the combined Disturbing Presence count from this roll's server `rollModifiers` (interception only;
    *  absent when the server applied none). The die's tag reads "DP −N". */
-  disturbingPresence?: number }
+  disturbingPresence?: number;
+  /** Owner 10-22: the rolling player, as the server's report names it (`playerId`). The die's Home / Away colour comes
+   *  from this player's team: a movement die is shown on the token's ARRIVAL, by when the model may have moved the
+   *  mover on and ended the activation, so the square / acting player at show time cannot name the roller. */
+  rollerId?: string }
 export interface ActionRollCue {
   reRolled: boolean;
   die: ActionDieCue | null;
@@ -143,7 +147,7 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
     return result;
   }
   result.die = { square, value: roll, cause, failed, needed,
-    rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined };
+    rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined, rollerId: playerId };
   if (disturbingPresence > 0) result.die.disturbingPresence = disturbingPresence;
   // Owner 10-09 ("The FAILED toast is appearing at the square where the player fails their dodge before the player
   // token enters that square"): the first roll of a move into a square is shown on the token's arrival there. A

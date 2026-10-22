@@ -330,6 +330,19 @@ export function squareAnchor(x: number, y: number): { x: number; y: number } {
   };
 }
 
+/** Owner 10-22: screen x of a square's projected CENTRE LINE (far-edge midpoint to near-edge midpoint) at `below`
+ *  screen px below the square's anchor (negative = above). Passes through squareAnchor at below = 0; follows the
+ *  orientation, the flat / uniform projections and the field flip through squareQuad. */
+export function squareCentreLineX(x: number, y: number, below = 0): number {
+  const q = squareQuad(x, y);
+  const midNear = (q.points[0]![0] + q.points[1]![0]) / 2;
+  const midFar = (q.points[2]![0] + q.points[3]![0]) / 2;
+  const band = q.yBottom - q.yTop;
+  if (!(band > 0)) return (midNear + midFar) / 2;
+  const t = ((q.yBottom + q.yTop) / 2 + below - q.yTop) / band;
+  return midFar + (midNear - midFar) * t;
+}
+
 /**
  * Owner 09-10: rotation (radians) for ground text that must read the SAME way as in North-South — the text's top
  * toward the far end zone (game +x). N-S is unchanged (0, upright even under the field flip); in East-West the +x

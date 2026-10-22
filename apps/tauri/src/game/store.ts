@@ -1001,7 +1001,7 @@ const legacyState = reactive({
   /** Owner 07-14 (#10 pt-2): "recovering" latch — STUNNED→PRONE at own-turn start (enforced missed turn); stun X stays so they don't look recovered early. TRANSITION-derived so a wrestled player (STANDING→PRONE) is never falsely marked. */
   recoveringPlayers: [] as string[],
   /** B9-14: one-shot push arrows — pre-push square → pushed-into square, per pushback this frame. */
-  pushArrows: null as { from: [number, number]; to: [number, number] }[] | null,
+  pushArrows: null as { from: [number, number]; to: [number, number]; playerId?: string }[] | null,
   /** Owner 07-03: INTERACTIVE push-direction choice — >1 legal square + our push ⇒ gold arrows, coach clicks (onPushChoice → resolvePushback). `key` dedups one live prompt; chain push re-arms. Headless keeps auto-pick. */
   pushChoice: null as { defenderId: string; squares: [number, number][]; key: string; skill?: string; seq: number } | null,
   /** B5-5: true while a cinematic plays — the log is obscured meanwhile. */

@@ -265,6 +265,8 @@ export interface AppSettings extends ConfirmationSettings {
   bloodSplatters: boolean;
   /** Owner 10-21: the movement-left badge at the acting / selected player's feet. */
   moveBadge: boolean;
+  /** Owner 10-22: route / reach roll chips wear the mover's Home / Away die (Settings > Display); off = neutral grey. */
+  plannerDiceSeatTint: boolean;
   /** Owner 10-22 ("Option A"): lets a second client instance start (Settings > General > Client windows). The shell
    *  reads this key from settings.json at startup (second_client.rs), before any page loads. */
   allowSecondClient: boolean;
@@ -723,6 +725,7 @@ const DEFAULTS: AppSettings = {
   castShadows: true, // owner 09-06: prototype on by default
   bloodSplatters: true, // owner 10-03: on by default; Settings > Display turns them off
   moveBadge: true, // owner 10-21: Settings > Display turns it off
+  plannerDiceSeatTint: false, // owner 10-22: route chips stay the neutral grey die unless turned on
   allowSecondClient: false, // owner 10-22: off by default; Settings > General turns it on (applies after a restart)
   allowSecondClientEdition: '',
   uniformFigures: false, // owner 09-10: N-S OFF by default (classic depth scaling); was on 09-09
@@ -1094,6 +1097,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.castShadows = typeof raw.castShadows === 'boolean' ? raw.castShadows : DEFAULTS.castShadows;
     merged.bloodSplatters = typeof raw.bloodSplatters === 'boolean' ? raw.bloodSplatters : DEFAULTS.bloodSplatters;
     merged.moveBadge = typeof raw.moveBadge === 'boolean' ? raw.moveBadge : DEFAULTS.moveBadge;
+    merged.plannerDiceSeatTint = typeof raw.plannerDiceSeatTint === 'boolean' ? raw.plannerDiceSeatTint : DEFAULTS.plannerDiceSeatTint;
     merged.allowSecondClient = typeof raw.allowSecondClient === 'boolean' ? raw.allowSecondClient : DEFAULTS.allowSecondClient;
     merged.allowSecondClientEdition = raw.allowSecondClientEdition === 'public' || raw.allowSecondClientEdition === 'fork' ? raw.allowSecondClientEdition : DEFAULTS.allowSecondClientEdition;
     merged.uniformFigures = typeof raw.uniformFigures === 'boolean' ? raw.uniformFigures : DEFAULTS.uniformFigures;
