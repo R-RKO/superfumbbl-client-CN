@@ -2361,6 +2361,7 @@ watch(() => settings.oneSpritePerPosition, (enabled) => renderer?.setOneSpritePe
 watch(() => settings.actionDecorations, (style) => { if (renderer) { renderer.actionDecorationStyle = style; renderer.refresh(); } });
 // Owner 10-03: Settings > Display > blood splatters - repaint the pitch on change.
 watch(() => settings.bloodSplatters, (on) => { if (renderer) { renderer.bloodDecalsEnabled = on; renderer.refresh(); } });
+watch(() => settings.moveBadge, (on) => { if (renderer) { renderer.moveBadgeEnabled = on; renderer.refresh(); } }); // owner 10-21
 // Accessibility grid options (owner 2026-07-03 r3): parse the hex colour and push
 // show/width/colour to the renderer whenever any changes.
 function gridColorInt(): number {
@@ -8182,6 +8183,7 @@ function applyMarkings() {
   void renderer.setBundledSkillBadgeFamily(settings.skillBadgeFamily); // owner 09-09: "Illustrated - Default" (no-op when unchanged)
   renderer.actionDecorationStyle = settings.actionDecorations; // owner 09-06: artwork | emoji
   renderer.bloodDecalsEnabled = settings.bloodSplatters; // owner 10-03
+  renderer.moveBadgeEnabled = settings.moveBadge; // owner 10-21
   // owner 2026-07-03 r6f: per-group render position (over head / at feet)
   renderer.iconPosition = settings.iconPosition;
   renderer.markerPosition = settings.markerPosition;
@@ -11411,6 +11413,7 @@ onMounted(async () => {
   mountedRenderer.setPlannerTagStyle(settings.plannerTagStyle); // owner 10-14
   // Astra review: seed at MOUNT - a saved "off" must hold from the very first paint (applyMarkings only runs from watchers).
   mountedRenderer.bloodDecalsEnabled = settings.bloodSplatters;
+  mountedRenderer.moveBadgeEnabled = settings.moveBadge; // owner 10-21: a saved "off" holds from the first paint
   mountedRenderer.actionDecorationStyle = settings.actionDecorations;
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);

@@ -152,6 +152,7 @@ import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { CROSSHAIR_GLIDE_MS, RAIL_COLOR, crosshairTargetKey, easeOutCubic, railLanes, type PitchCrosshairTarget } from './crosshairRail';
 import { rushTargetForPlayer } from './rushTarget';
+import { MOVE_BADGE_MAX, activationShowsMoveBadge, moveBadgeIndex, moveBadgeNormalLeft, moveBadgeSide } from './moveRemaining';
 import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
 
@@ -301,6 +302,18 @@ export function sameIdSet(a: ReadonlySet<string> | null, b: ReadonlySet<string> 
 const BLOOD_DECAL_URLS: string[] = Object.entries(
   import.meta.glob('../assets/decorations/blood/blood-*-4x.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 ).sort(([a], [b]) => a.localeCompare(b)).map(([, url]) => url);
+/** Owner 10-21: the movement-remaining badge art by value 0..12 (128/ = the 4x source of a 32 px badge). A glob, so the
+ *  build never breaks while the art is absent - the badge simply does not draw. */
+const MOVE_REMAINING_URLS: Map<number, string> = new Map(
+  Object.entries(
+    import.meta.glob('../assets/decorations/move-remaining/128/move-remaining-*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  )
+    .map(([path, url]) => [Number(/move-remaining-(\d+)\.png$/.exec(path)?.[1] ?? Number.NaN), url] as [number, string])
+    .filter(([value]) => Number.isInteger(value) && value >= 0 && value <= MOVE_BADGE_MAX),
+);
+/** Owner 10-21: the activation badge's size in the token's decor-1 units (the chest state markers are 14 too), so it
+ *  rides the token's depth and decoration (zoom) scale. */
+const MOVE_BADGE_SIZE = 14;
 /** The decal covers this share of the tile's on-screen width / height. */
 const BLOOD_DECAL_FILL = 0.94;
 /** The on-pitch squares that carry a CASUALTY blood spot (FFB BloodSpot.injury = the victim's PlayerState: base 6
@@ -356,6 +369,7 @@ export function movementTokenGenerationSignature(game: GameJson | null): string 
     diceDecorations: field.diceDecorationArray ?? [],
   });
 }
+
 
 export function canReuseMovementTokenGeneration(previous: GameJson | null, next: GameJson | null): boolean {
   const previousSignature = movementTokenGenerationSignature(previous);
@@ -2608,6 +2622,9 @@ export class PitchRenderer {
   private bloodTextures: Texture[] = [];
   /** Owner 10-03: Settings > Display can turn the splatters off (the host sets this and refreshes). */
   bloodDecalsEnabled = true;
+  /** Owner 10-21: Settings > Display can turn the movement-left feet badge off (the host sets this and refreshes).
+   *  Astra: OPT-IN (default off) - a view that never wires the setting (Classic) draws no badge at all. */
+  moveBadgeEnabled = false;
   /** Range shading + selection halo, under the tokens. */
   private overlayLayer = new Container();
   private movementReachLayer = new Container();
@@ -2620,6 +2637,9 @@ export class PitchRenderer {
    *  and the player's own label - they stay token children (position, scale, alpha, removal) and only the paint order
    *  moves. Still under the effects layer, so a block-result stamp lands over them. */
   private blitzBadgeLayer = new RenderLayer({ sortableChildren: true });
+  /** Owner 10-21: the movement-remaining badge paints ABOVE every token (never hidden behind a neighbour) while it stays
+   *  a child of its token for position (walk tween), decoration scale, alpha and removal - only the paint order moves. */
+  private moveBadgeLayer = new RenderLayer();
   /** Queued path: line, step numbers, rush dice, dodge chips — over the tokens. */
   private pathLayer = new Container();
   /** Controller support P2a (owner 10-07): the pad crosshair + its rails. Its own layer so redrawOverlays never
@@ -2739,6 +2759,13 @@ export class PitchRenderer {
   /** Owner 10-10: Secure the Ball action decoration (approved art). The acting player's server-declared
    *  `secureTheBall` action wears it over the head exactly like Pass / Hand-off; until now it wore the Move runner. */
   private actionSecureBallDecoTexture: Texture | null = null;
+  /** Owner 10-21: movement-remaining badge textures by value (0..12); a missing entry draws no badge. */
+  private moveRemainingTextures: (Texture | null)[] = [];
+  /** Owner 10-21: the badge on the acting player's activation decoration - a child of the over-head action marker, or
+   *  (a blitzer whose Blitz badge rests on the chest) a sibling of that chest badge. Mounted with its decoration in
+   *  refresh(); its value is synced on every refresh and overlay pass (a token-reuse frame paints only overlays). */
+  private activeMoveBadge: { node: Container; sprite: Sprite; playerId: string; token: Container; key: string; side: 'left' | 'right'; down: boolean; spot: string; scaleKey: string } | null = null;
+  /** Owner 10-21: each blitzer token's chest Blitz badge node (state-marker row), the chest anchor for the badge. */
   /** Owner 09-06: Settings > Appearance — 'art' (default) draws the decorations, 'emoji' keeps the glyph markers. */
   actionDecorationStyle: 'art' | 'emoji' = 'art';
   /** Live die sprites of the armed preview; the ticker animates them in sync. */
@@ -3494,6 +3521,7 @@ export class PitchRenderer {
     tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt());
     this.redrawBlockPreviewOnDecorChange();
     this.replaceActiveMarkerOnDecorChange();
+    this.placeMoveBadge(); // Astra r2: a walker decor rung re-snapped the feet skill row
     this.syncKickBallLayer(); // a kick tween just ended (or began): re-seat the ball this frame
   }
 
@@ -5418,6 +5446,23 @@ export class PitchRenderer {
       }
       if (!this.initActive(generation, app)) return;
     }
+    // Owner 10-21: movement-remaining badges 0..12 - 128 px sources drawn ~32 px: the 4x raster, linear + mipmaps.
+    {
+      const loaded = await Promise.all([...MOVE_REMAINING_URLS].map(async ([value, url]): Promise<[number, Texture | null]> => {
+        try {
+          const texture = await Assets.load<Texture>(url);
+          texture.source.scaleMode = 'linear';
+          texture.source.autoGenerateMipmaps = true;
+          return [value, texture];
+        } catch {
+          return [value, null];
+        }
+      }));
+      if (!this.initActive(generation, app)) return;
+      const textures: (Texture | null)[] = [];
+      for (const [value, texture] of loaded) textures[value] = texture;
+      this.moveRemainingTextures = textures;
+    }
     try {
       const source = await Assets.load<GifSource>(
         new URL('../assets/fireball-snes/explosion.gif', import.meta.url).href,
@@ -6022,6 +6067,7 @@ export class PitchRenderer {
       this.dugoutLayer,
       this.markingLayer, // owner 09-15: skill markings over every token, on-pitch and in the dugout
       this.blitzBadgeLayer, // owner 10-09: the Blitz badges over the markings and player labels
+      this.moveBadgeLayer, // owner 10-21: the movement-remaining badge over every token
       this.turnTrackLayer, // owner 2026-07-07: SW turn/score/re-roll track
       this.kickBallLayer, // owner 10-05: an airborne kick-off ball, over the dugouts (the trail is in effectsLayer above)
       this.effectsLayer, // F-5 transient effects — never cleared by refresh
@@ -6649,6 +6695,7 @@ export class PitchRenderer {
     this.carrierFollow = null;
     if (this.activeMarker && !this.activeMarker.node.destroyed) this.activeMarker.node.destroy({ children: true }); // 09-06: effects-layer node
     this.activeMarker = null;
+    this.clearActiveMoveBadge();
     this.activeHalo = null;
     this.activeFollow = null;
     this.pushOptionPulse = [];
@@ -7658,6 +7705,7 @@ export class PitchRenderer {
     // (was -52, up in the skill-badge band).
     if (this.activeMarker && !this.activeMarker.node.destroyed) this.activeMarker.node.destroy({ children: true }); // 09-06: effects-layer node
     this.activeMarker = null;
+    // owner 10-21: the movement badge is a feet node of the token now - syncMoveRemainingBadge (end of refresh) owns it
     this.activeHalo = null;
     this.activeFollow = null; // #3: rebuilt below if an active player is on-pitch (nodes destroyed each refresh)
     if (activePlayerAuraVisible(this.activePlayerId)) {
@@ -7793,6 +7841,7 @@ export class PitchRenderer {
         };
       }
     }
+    this.syncMoveRemainingBadge();
     refreshCompleted = true;
     this.syncFocusArrow();
     } catch (error) {
@@ -9343,6 +9392,7 @@ export class PitchRenderer {
 
   private redrawOverlays(): void {
     this.o66TagRects = [];
+    this.syncMoveRemainingBadge(); // owner 10-21: a step frame on the token-reuse path paints only here
     // owner 10-12: a token-reuse setGame paints here instead of refresh(). Mid-refresh this runs BEFORE drawDugouts
     // has re-registered the dugout tokens, so an unresolved anchor is left alone here (refresh syncs again at its end).
     this.syncFocusArrow(true);
@@ -9590,6 +9640,8 @@ export class PitchRenderer {
       // OCCUPIES in the model (`playersBySquare`, server truth, not the tween) — so the number under the piece
       // hides and the origin's total count shows only once the player has left it. Planner is redrawn per-frame, so the skip
       // is naturally dynamic; the executed trail mirrors it via the per-frame visibility toggle in refresh().
+      // Owner 10-21 (final): the planned route carries NO movement-left badges - only the feet badge on the player
+      // persists (the owner struck the per-step 6/5/4 badges on the route).
       const used = this.o66PathMover ? (this.o66MovementBudget(this.o66PathMover)?.used ?? 0) : 0;
       for (let k = 0; k < this.o66PathSquares.length; k++) {
         const [nx, ny] = this.o66PathSquares[k]!;
@@ -15474,6 +15526,212 @@ export class PitchRenderer {
       default: return null;
     }
   }
+
+  /** Owner 10-21: who wears the movement-remaining badge - the ACTIVE player in a moving action (activationShowsMoveBadge
+   *  over the declared action, the Modern blitz intent counting as a blitz), else the SELECTED player before an action
+   *  is declared (no acting player, or the acting player is somebody else). Unselected, non-acting players never do. */
+  private moveBadgeTarget(): { playerId: string; acting: boolean } | null {
+    const apid = this.activePlayerId;
+    let action: string | null = null;
+    if (apid) {
+      const acting = this.game?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | null | undefined;
+      const raw = acting?.playerId === apid ? (acting.playerAction ?? null) : null;
+      action = raw ?? (this.declaredActionCache?.playerId === apid ? this.declaredActionCache.action : null);
+      if (apid === this.blitzIntentPlayerId) action = 'blitzMove';
+      if (activationShowsMoveBadge(action)) return { playerId: apid, acting: true };
+    }
+    const sel = this.selectedPlayerId;
+    if (sel && (sel !== apid || action == null)) return { playerId: sel, acting: false };
+    return null;
+  }
+
+  /** Owner 10-21 (Astra P2): the player's NORMAL movement left for the badges, server-derived only: the wire MA itself
+   *  must be a number (a missing / invalid one draws nothing - never the planner's MA-6 fallback or its MA-9 cap), the
+   *  stand-up charged only while still down and only when it costs (Jump Up stands free), rushes never counted.
+   *  `used` overrides actingPlayer.currentMove (the presentation cursor, or 0 for a not-yet-declared selection). */
+  private moveBadgeNormalLeftFor(playerId: string, used: number | null): number | null {
+    const game = this.game;
+    if (!game) return null;
+    const player = [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => p.playerId === playerId);
+    const data = game.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+    if (!player || !data) return null;
+    // Astra r2: the wire stat must BE a finite number - never coerced ("" / false -> 0, true -> 1, "7" -> 7)
+    const wire = (player as { movement?: unknown }).movement;
+    if (typeof wire !== 'number' || !Number.isFinite(wire)) return null;
+    const ma = Number(effectiveMovement(player));
+    const acting = game.actingPlayer as { playerId?: string | null; currentMove?: unknown } | null | undefined;
+    const currentMove = used ?? (acting?.playerId === playerId ? acting.currentMove : 0);
+    const turnMode = String(game.turnMode ?? '');
+    return moveBadgeNormalLeft(Number.isFinite(ma) ? ma : null, currentMove, {
+      down: isDown(data.playerState),
+      standsForFree: playerHasSkill(player, 'Jump Up'), // the sole canStandUpForFree grantor (availableActions.ts)
+      onTheBall: turnMode === 'kickoffReturn' || turnMode === 'passBlock',
+    });
+  }
+
+  /** Owner 10-21: drop the movement-remaining badge. */
+  private clearActiveMoveBadge(): void {
+    const badge = this.activeMoveBadge;
+    this.activeMoveBadge = null;
+    if (!badge || badge.node.destroyed) return;
+    badge.node.parentRenderLayer?.detach(badge.node);
+    badge.node.parent?.removeChild(badge.node);
+    badge.node.destroy({ children: true });
+  }
+
+  /** Owner 10-21: the movement-remaining badge at the wearer's FEET - bottom-right of the token base, just outside the
+   *  base ellipse (bottom-left on the left of the pitch / away from a near end zone: moveBadgeSide). A child of the
+   *  TOKEN (so the walk tween, the decoration / zoom scale, the occlusion alpha and the token's removal carry it with
+   *  no per-frame work), at the chest state-marker row's zIndex, painted through moveBadgeLayer ABOVE every token.
+   *  Clear of the chest row (y -23..-9 decor units), the chest-mounted carried ball and the over-head skill row; a
+   *  feet skill row pushes it outward. Pointer-transparent. Runs at the end of refresh() and on every overlay pass
+   *  (token-reuse frames); remounts only when the wearer, token, side or base geometry changes. */
+  private syncMoveRemainingBadge(): void {
+    if (!this.moveBadgeEnabled) { this.clearActiveMoveBadge(); return; }
+    const target = this.moveBadgeTarget();
+    const game = this.game;
+    const data = target && game ? game.fieldModel.playerDataArray.find((d) => d.playerId === target.playerId) : undefined;
+    const token = target ? this.tokensById.get(target.playerId) : undefined;
+    if (!target || !data || !isOnPitch(data.playerCoordinate) || !token || token.destroyed) { this.clearActiveMoveBadge(); return; }
+    const cursor = target.acting && this.movementPresentationCursor?.playerId === target.playerId ? this.movementPresentationCursor : null;
+    const index = moveBadgeIndex(this.moveBadgeNormalLeftFor(target.playerId, cursor ? cursor.movementUsed : target.acting ? null : 0));
+    const square = cursor?.coordinate ?? data.playerCoordinate;
+    const side = moveBadgeSide([square[0], square[1]], getOrientation(), isFieldFlip());
+    const down = isDown(data.playerState);
+    const key = `${side}|${down ? 1 : 0}`;
+    let badge = this.activeMoveBadge;
+    if (!badge || badge.node.destroyed || badge.node.parent !== token || badge.token !== token
+      || badge.playerId !== target.playerId || badge.key !== key) {
+      this.clearActiveMoveBadge();
+      badge = this.mountMoveBadgeNode(token, target.playerId, key, side, down);
+    } else {
+      this.placeMoveBadge(true);
+      badge = this.activeMoveBadge!;
+    }
+    const texture = index == null ? null : this.moveRemainingTextures[index] ?? null;
+    if (!texture) { badge.node.visible = false; return; } // never a misleading number
+    if (badge.sprite.texture !== texture) badge.sprite.texture = texture;
+    badge.sprite.scale.set(MOVE_BADGE_SIZE / Math.max(1, texture.height));
+    badge.node.visible = true;
+  }
+
+  /** Owner 10-21: build and mount the badge node on `token` at its feet spot. */
+  private mountMoveBadgeNode(token: Container, playerId: string, key: string, side: 'left' | 'right', down: boolean): NonNullable<PitchRenderer['activeMoveBadge']> {
+    const node = new Container();
+    node.label = 'moveRemainingBadge';
+    node.eventMode = 'none';
+    node.interactiveChildren = false;
+    const sprite = new Sprite(Texture.EMPTY);
+    sprite.anchor.set(0.5, 0.5);
+    sprite.eventMode = 'none';
+    node.addChild(sprite);
+    const spot = this.moveBadgeFeetSpot(token, side, down);
+    placeWalkerDecor(token, node, spot.x, spot.y, 1);
+    node.zIndex = 50; // the chest state-marker row's depth on the token
+    token.addChild(node);
+    this.moveBadgeLayer.attach(node);
+    const badge = { node, sprite, playerId, token, key, side, down, spot: `${spot.x.toFixed(2)},${spot.y.toFixed(2)}`, scaleKey: this.moveBadgeScaleKey(token) };
+    this.activeMoveBadge = badge;
+    return badge;
+  }
+
+  /** The scales the feet clearance depends on: the walker decoration scale and the camera's overlay factor (the skill
+   *  rows of classic tokens counter-scale with zoom). */
+  private moveBadgeScaleKey(token: Container): string {
+    return `${(walkerDecorScale(token) ?? 1).toFixed(4)}:${this.overlayZoomFactor().toFixed(4)}`;
+  }
+
+  /** Astra r2: re-run the feet clearance (a feet skill row grows / shrinks with zoom and the decoration scale) - on every
+   *  overlay pass (force) and from the rescale hooks (updateOverlayScales, the walker decor-change tick), which skip
+   *  unless a scale changed. A classic token's badge just moves; a walker's is rebuilt so applyDecorScale re-captures
+   *  its decor-1 placement (a moved child would otherwise snap back on the next rung). */
+  private placeMoveBadge(force = false): void {
+    const badge = this.activeMoveBadge;
+    if (!badge || badge.node.destroyed || badge.token.destroyed || badge.node.parent !== badge.token) return;
+    const scaleKey = this.moveBadgeScaleKey(badge.token);
+    if (!force && scaleKey === badge.scaleKey) return;
+    badge.scaleKey = scaleKey;
+    const spot = this.moveBadgeFeetSpot(badge.token, badge.side, badge.down);
+    const spotKey = `${spot.x.toFixed(2)},${spot.y.toFixed(2)}`;
+    if (spotKey === badge.spot) return;
+    if (isWalkerToken(badge.token)) {
+      const { token, playerId, key, side, down, sprite, node } = badge;
+      const texture = sprite.texture;
+      const visible = node.visible;
+      this.clearActiveMoveBadge();
+      const next = this.mountMoveBadgeNode(token, playerId, key, side, down);
+      next.sprite.texture = texture;
+      next.sprite.scale.set(MOVE_BADGE_SIZE / Math.max(1, texture.height));
+      next.node.visible = visible;
+      return;
+    }
+    placeWalkerDecor(badge.token, badge.node, spot.x, spot.y, 1);
+    badge.spot = spotKey;
+  }
+
+  /** Owner 10-21 (annotation): the badge centre in the token's decor-1 units (placeWalkerDecor's frame), tucked against
+   *  the outer boot where it meets the base ring: x = +/-max(ringRx - 0.35 size, 0.35 size), y = feet line - 0.25 size
+   *  (it overlaps the ring edge and the boot's outer corner; it paints above the token layer, so never hidden). Walkers
+   *  measure the ring (standing: walkerShadowRadii, feet line WALKER_FEET_Y_PX; prone: the lying-body ring about the
+   *  origin); classic icons use their local bounds. Feet skill icons ('skillBadges') and skill MARKINGS
+   *  ('skillMarkings', the text tag hung at the feet) overlapping that spot push it outward past their end; both are
+   *  measured as token-local rects from the group's position, scale and its children's local bounds (the marking's
+   *  fit scale included), so a zoom counter-scale is seen on the next rescale pass. */
+  private moveBadgeFeetSpot(token: Container, side: 'left' | 'right', down: boolean): { x: number; y: number } {
+    const size = MOVE_BADGE_SIZE;
+    const half = size / 2;
+    const walker = isWalkerToken(token);
+    const f = walker ? walkerDecorScale(token) ?? 1 : 1;
+    let x: number;
+    let y: number;
+    let pivot = 0;
+    if (walker && down) {
+      const length = (walkerDrawnFigureHeight(token) ?? 40 * f) / Math.max(1e-6, f);
+      const rx = length * 0.335; // walkerRingGeometry(down): length * 0.5 * 0.67
+      x = rx - size * 0.35;
+      y = rx * 0.4 - size * 0.25;
+    } else if (walker) {
+      const ring = walkerShadowRadii(token) ?? { rx: 8, ry: 3.4 };
+      pivot = WALKER_FEET_Y_PX;
+      x = ring.rx - size * 0.35;
+      y = WALKER_FEET_Y_PX - size * 0.25;
+    } else {
+      let maxX = 14;
+      let maxY = 12;
+      const own = this.activeMoveBadge?.token === token && !this.activeMoveBadge.node.destroyed ? this.activeMoveBadge.node : null;
+      const wasVisible = own?.visible ?? false;
+      if (own) own.visible = false; // measure the token without the badge itself
+      try {
+        const lb = token.getLocalBounds();
+        if (Number.isFinite(lb.maxX) && lb.maxX > 0) maxX = lb.maxX;
+        if (Number.isFinite(lb.maxY) && lb.maxY > 0) maxY = lb.maxY;
+      } catch { /* headless: the fallback box */ }
+      if (own) own.visible = wasVisible;
+      x = Math.min(18, Math.max(10, maxX)) - size * 0.35;
+      y = Math.min(16, Math.max(6, maxY)) - size * 0.25;
+    }
+    x = Math.max(x, size * 0.35); // never centred on the figure's axis
+    // feet skill icons / skill markings (token-local) overlapping the badge push it past their end on that side
+    const ty = () => pivot + (y - pivot) * f;
+    const th = half * f;
+    for (const group of token.children) {
+      if ((group.label !== 'skillBadges' && group.label !== 'skillMarkings') || group.destroyed || !group.visible) continue;
+      try {
+        const lb = group.getLocalBounds();
+        const r = {
+          x0: group.x + lb.minX * group.scale.x, x1: group.x + lb.maxX * group.scale.x,
+          y0: group.y + lb.minY * group.scale.y, y1: group.y + lb.maxY * group.scale.y,
+        };
+        if (!Number.isFinite(r.x0) || !Number.isFinite(r.y0) || r.x1 <= r.x0) continue;
+        if (ty() + th > r.y0 && ty() - th < r.y1) {
+          const edge = side === 'right' ? r.x1 : -r.x0;
+          if (x * f - th < edge) x = Math.max(x, edge / f + half + 1);
+        }
+      } catch { /* unmeasurable group: the base spot */ }
+    }
+    return { x: side === 'right' ? x : -x, y };
+  }
+
 
   private buildActionMarker(action: string | null): Container {
     const c = new Container();
@@ -22288,6 +22546,7 @@ export class PitchRenderer {
     for (const group of this.overlayScaleGroups) {
       if (!group.destroyed) this.applyOverlayScale(group, factor);
     }
+    this.placeMoveBadge(); // Astra r2: the feet clearance follows the rescaled skill rows
   }
 
   private applyOverlayScale(group: Container, factor: number): void {

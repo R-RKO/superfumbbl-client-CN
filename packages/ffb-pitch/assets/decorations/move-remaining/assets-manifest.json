@@ -1,0 +1,90 @@
+{
+  "generator": "built-in image_gen",
+  "sizes": [
+    24,
+    32,
+    48,
+    64,
+    128
+  ],
+  "assets": [
+    {
+      "number": 0,
+      "color": "red",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-b074ce10-d4c9-4c88-9dc2-d37a78861107.png",
+      "prompt": "Edit reference number badge to exact number 0, and recolor its blue tile to saturated RED tile face with scarlet highlight rim and deep burgundy underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 1,
+      "color": "yellow",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-79fbfc65-9e9e-4717-ab83-34d0df9b37e0.png",
+      "prompt": "Edit reference number badge to exact number 1, and recolor its blue tile to bright YELLOW tile face with lemon highlight rim and golden amber underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 2,
+      "color": "yellow",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-5d8d2fd8-3cf6-4052-b24d-4b1e9362cd3f.png",
+      "prompt": "Edit reference number badge to exact number 2, and recolor its blue tile to bright YELLOW tile face with lemon highlight rim and golden amber underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 3,
+      "color": "yellow",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-10dc8f11-2fd2-4800-b0d6-d99d4d28d39a.png",
+      "prompt": "Edit reference number badge to exact number 3, and recolor its blue tile to bright YELLOW tile face with lemon highlight rim and golden amber underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 4,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-ef1b36a3-69d0-4864-b6fd-82ceb33f632e.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 4. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 5,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-0ec1e9d9-c042-4dc2-b566-739fc134beee.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 5. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 6,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-e9dca9a8-19cd-43e5-9357-4b9902399c95.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 6. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 7,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-310f0271-8f27-428c-b3fb-14fa831bab75.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 7. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 8,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-b0857fd7-5781-4f8b-9ca7-583aacdc1cca.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 8. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral(s) same height as reference, centered, consistent digit weight. Single digits centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 9,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-f565e62c-e268-4107-8fd0-ba9debc835b5.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 9. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral(s) same height as reference, centered, consistent digit weight. Single digits centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 10,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-89bb286f-8d5b-4409-af27-8c6161afc583.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 10. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral(s) same height as reference, centered, consistent digit weight. Single digits centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 11,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-71fcf4b7-55c5-43e5-8e81-90424623c754.png",
+      "prompt": "Edit reference number badge changing ONLY 12 to exact number 11. Keep identical square navy tile, cyan blue thin beveled clipped-corner rim, black outline, pixel style, padding and layout. Ivory-white block numeral(s) same height as reference, centered, consistent digit weight. Single digits centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+    },
+    {
+      "number": 12,
+      "color": "blue",
+      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-8022e23c-fdd8-45d6-baeb-01875861318d.png",
+      "prompt": "Create a single tiny game UI movement-distance counter badge with exact number \"12\". Square canvas, transparent outside. Compact dark navy clipped-corner square tile with thin black outer outline and restrained cyan-blue beveled rim. Giant ivory-white retro arcade pixel block digits 12 centered, very thick strokes, clean open counters, simple flat bright faces with minimal cool grey underside shading. Number occupies 80% tile height and most width. Designed for 24px readability. No scratches, rivets, decorative symbols, labels, other text or glow. Match the reference Move decoration retro pixel-art language but render ONLY the separate number badge, no shoe. Tile fills 94% canvas. This is the master of a consistent 0-12 set."
+    }
+  ]
+}

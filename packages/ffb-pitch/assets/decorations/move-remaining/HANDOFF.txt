@@ -1,0 +1,19 @@
+Super FUMBBL — movement distance remaining badges
+
+Integrate these as small counters anchored to the top-right of the existing Move decoration. This package contains artwork only; no client changes have been made.
+
+Values: 12 through 0 inclusive, one PNG per value.
+12–4: blue. 3, 2, 1: yellow. 0: red.
+The colors indicate remaining movement, not Home/Away seat colors. Preserve this palette for either team.
+
+Use the client's existing authoritative movement-remaining value and display rules. Do not calculate or change movement rules, rush allowance, or action lifecycle from these assets. Keep zero visible when the Move decoration itself is still visible; hide with its parent decoration when the existing rules hide it. Do not infer that zero means the turn is over.
+
+Files: 24/, 32/, 48/, 64/, 128/ contain matching square PNG exports named move-remaining-N.png. masters/ contains original generated artwork. Outside the badge is transparent. Keep the entire canvas and consistent square dimensions; do not independently crop digits or stretch images.
+
+Recommended starting display size: 24 or 32 CSS pixels, selected against the actual Move decoration scale. Use 48/64px sources respectively for high-density screens. Anchor consistently to the parent decoration's top-right; avoid obscuring its main label. Make the badge pointer-events:none so it does not intercept player interactions. Provide an accessible label such as '3 movement remaining' where appropriate.
+
+size-review.png shows 12→0 at 24, 32, and 64 pixels in three rows. Reviewed visually; final placement still requires client review over both light and dark pitch backgrounds. Generated tile edges have minor optical variations; use consistent canvas bounds.
+
+Verify all 13 values, 4→3 and 1→0 transitions, zoom scaling, both seats, and hiding/reset behavior with existing Move decoration rules. Out-of-range or missing values should follow existing client handling, not silently display a misleading number.
+
+assets-manifest.json records prompts, source provenance, and palette. All artwork created with built-in image_gen; exports resized without redesigning the artwork.

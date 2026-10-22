@@ -3071,6 +3071,12 @@ onBeforeUnmount(() => {
               <input v-model="settings.bloodSplatters" type="checkbox" data-testid="blood-splatters-toggle" />
               <span>Blood splatters where players are casualtied</span>
             </label>
+            <!-- Owner 10-21: the movement-left badge at the acting player's feet can be turned off. -->
+            <label class="row">
+              <input v-model="settings.moveBadge" type="checkbox" data-testid="move-badge-toggle" />
+              <span>Movement-left badge</span>
+            </label>
+            <p class="hint">Shows the normal movement remaining at the acting player's feet.</p>
             <label class="row">
               <input v-model="settings.uniformFigures" type="checkbox" />
               <span>Players stay one size across the pitch (North-South)</span>

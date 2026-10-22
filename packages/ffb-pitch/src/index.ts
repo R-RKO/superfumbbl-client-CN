@@ -1,5 +1,6 @@
 export { dugoutLabel, fitDugoutLabelScale, bundledTurfOptions, PLACEMENT_TURN_MODES, injuryTokenHoldsDrawn } from './renderer';
 export { configurePixiAssetOrigin } from './assetOrigin';
+export { MOVE_BADGE_ACTIONS, MOVE_BADGE_ENDZONE_MARGIN, MOVE_BADGE_MAX, activationShowsMoveBadge, moveBadgeIndex, moveBadgeNormalLeft, moveBadgeSide, moveRemaining } from './moveRemaining';
 export { installArtPack, artUrl, artBlobUrl, artPackActive, artPackHas, textureParserFor, ART_PACK_PARSER, type ArtPackFileRef, type ArtPackSource } from './artPack';
 export { KICK_ARC_GATE_CAP_MS, KICK_ARC_LONGEST_LEGIT_MS, KICK_FLYIN_MS, KICKOFF_CINE_MS, PUNT_BALL_ARC_MS, TTM_THROW_MS, TTM_THROW_CLASSIC_MS, ttmThrowMs, ttmBounceHopMs, activePlayerAuraVisible, ballThrowArcMs, isServerKickoffScatterTransition, kickArcGateCapMs, kickArcLongestLegitMs, setFumbblPitchFallbacks, staticSelectionHaloVisible, PitchRenderer, backdropColorNumber, type ActionMode, type BackdropKind, type StadiumStandStyle, type BoardPresentationFence, type ContextTarget, type MovementPresentationFence, type MovementPresentationRecovery, type HmpScatterMarksState, type MarkLabelRequest, type PassDestinationKind, type ServerKickoffScatterOccurrence, type InjuryTokenHold, type BloodSpotRelocation } from './renderer';
 export { blockDicePreview, type BlockPreview } from './blocks';
