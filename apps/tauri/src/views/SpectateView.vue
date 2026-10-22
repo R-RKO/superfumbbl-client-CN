@@ -81,7 +81,7 @@ import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/bal
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
 import { teamBoxCounts } from '../game/dugoutCounts';
 import QuickBarButton from '../components/QuickBarButton.vue';
-import ConnectionQualityPill from '../components/ConnectionQualityPill.vue';
+import ConnectionQualityIcon from '../components/ConnectionQualityIcon.vue';
 import QuickBarPopTip from '../components/QuickBarPopTip.vue';
 import { createPressOrder } from '../game/quickBarTipPlacement';
 import OnTheBallWaitingModal from '../components/OnTheBallWaitingModal.vue';
@@ -15272,10 +15272,12 @@ function sendChat() {
             @click="quickOpenReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
           <div class="quick-brand-menu">
             <div class="quick-match-controls">
-            <!-- Owner 10-21: POOR CONNECTION pill at the row's left end, beside the spectator controls; play + spectate only,
-                 never replay, a paused spectator's replayer review (replayerOpen) or demo. Astra 10-21: out of flow (absolute, right: 100%), so showing / hiding it never
-                 moves Pause / LIVE / the spectator chip / the logo — the row is right-anchored and byte-stable. -->
-            <ConnectionQualityPill v-if="props.mode !== 'replay' && !replayerOpen && !gameStore.isReplay.value && !gameStore.state.demoMode"
+            <!-- Owner 10-21 / 10-22: connection signal-bars icon at the row's left end, beside the spectator controls, always
+                 shown (good / weak / poor / lost; pulses while poor or lost); play + spectate only, never replay, a paused
+                 spectator's replayer review (replayerOpen) or demo. Astra 10-22 round 1: an in-flow first child with a fixed 24 px
+                 slot (it is always present now), so the right-anchored row lays out around it (no dock can cover an
+                 out-of-flow overhang) and a state change never moves Pause / LIVE / the spectator chip / the logo. -->
+            <ConnectionQualityIcon v-if="props.mode !== 'replay' && !replayerOpen && !gameStore.isReplay.value && !gameStore.state.demoMode"
               class="quick-conn-slot" :quality="gameStore.connectionHealth.value.quality" :rtt-ms="gameStore.connectionHealth.value.rttMs" />
             <button v-if="props.mode === 'spectate' && !gameStore.state.demoMode"
               ref="spectatorPauseButton" class="quick-spectator-pause" type="button"
@@ -21243,7 +21245,7 @@ function sendChat() {
 .quick-match-controls { position: absolute; z-index: 3; right: 0; bottom: calc(100% + 8.4px); display: flex; align-items: center; gap: 7.2px; width: max-content; }
 .quick-match-controls .quick-super-logo, .config-bar .quick-match-controls .quick-live { position: static; flex: 0 0 auto; }
 /* Owner 10-21 / Astra: the connection pill hangs off the row's left edge, out of flow — nothing else shifts. */
-.quick-match-controls > .quick-conn-slot { position: absolute; right: calc(100% + 7.2px); top: 50%; transform: translateY(-50%); }
+.quick-match-controls > .quick-conn-slot { position: static; flex: 0 0 24px; width: 24px; height: 24px; }
 @media (prefers-reduced-motion: reduce) { .quick-spectator-pause .go-live-dot { animation: none; opacity: 1; transform: none; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .quick-super-logo {
