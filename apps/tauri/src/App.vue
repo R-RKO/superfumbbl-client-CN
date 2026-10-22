@@ -56,6 +56,7 @@ import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import BugReportModal from './components/BugReportModal.vue';
 import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/bugReportHost';
+import { detectSecondClient, launchSecondClient, secondClientRowVisible, secondClientSupported } from './game/secondClient';
 import { onReportOwnedKey } from './game/reportModalKeys';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -73,7 +74,7 @@ import { cornerNotice, hideControllerNotices, hideCornerNotice, showCornerNotice
 import PadOverlay from './components/PadOverlay.vue';
 import { browserHapticPads, hapticForSound } from './game/haptics';
 import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
-import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, secondClientEnabled, secondClientEnabledElsewhere, setAllowSecondClient, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { SKILL_CONFIG_AS_SKILL, SKILL_CONFIG_NAMES, iconWriteKey, isStarPlayerTrait, skillConfigEntryFor } from './game/skillConfigRows';
@@ -91,6 +92,7 @@ import {
 import { ui } from './game/ui';
 import { floatAfterLaunch, floatOnOwnMatch } from './game/fumbblFloatLayout';
 import { gameStore } from './game/store';
+import { homeOnGameLoadKey, navigateHomeOnGameLoad } from './game/fumbblHomeOnGameLoad';
 import { gameStatRows, teamLogo } from './game/gameStatRows';
 import {
   ambiguousJnlpEntry,
@@ -820,6 +822,19 @@ if (homeBladeEnabled) {
     ui.fumbblFloating = false;
     ui.fumbblFloatHeldAt = 0;
   });
+  // Owner 10-22: WHENEVER A GAME LOADS - live (either seat), spectate or replay, however it was joined (Gamefinder,
+  // queue, JNLP / fumbbl:// link, Play blade, rejoin) - the FUMBBL.com pane goes back to the fumbbl.com home page, so a
+  // Gamefinder page left behind stops beeping. Fires on the game MODEL's gameId (the moment the match view's game-load
+  // rank bar keys on), never at join start; once per gameId (game/fumbblHomeOnGameLoad.ts). 'post': after the
+  // own-match park above has been asked for; the load runs in the surface driver's serialised loop and stands aside there
+  // for a park asked for first (homeSurface.navigateHome, Astra 10-22).
+  watch(() => (gameStore.game.value as { gameId?: unknown } | null)?.gameId, (gameId) => {
+    if (homeOnGameLoadKey(gameId) === null || !inTauri) return;
+    void import('./game/fumbblHome').then(({ homeSurface, FUMBBL_HOME_URL }) => navigateHomeOnGameLoad(gameId, {
+      url: FUMBBL_HOME_URL,
+      navigate: (url) => homeSurface.navigateHome(url),
+    })).catch(() => undefined);
+  }, { immediate: true, flush: 'post' });
 }
 /** The site's driver lives with the blade (a lazy chunk); it is loaded whenever a site exists to park. */
 function parkFumbblSite(): void {
@@ -1746,6 +1761,16 @@ const exitAppAvailable = computed(() => {
   for (let i = 0; i < 3; i++) { if (shell[i]! !== min[i]!) return shell[i]! > min[i]!; }
   return true;
 });
+/** Owner 10-22 ("Option A"): Esc menu > New client window - setting on AND a shell with launch_second_instance. */
+const secondClientRow = computed(() => secondClientRowVisible(secondClientEnabled(), secondClientSupported.value));
+const secondClientHint = ref('');
+onMounted(() => { void detectSecondClient(); });
+async function openSecondClient(): Promise<void> {
+  secondClientHint.value = '';
+  const error = await launchSecondClient(flushSettingsFile);
+  if (error) secondClientHint.value = error;
+  else ui.gameMenuOpen = false;
+}
 async function exitApp(): Promise<void> {
   exitAppHint.value = '';
   try { const { exit } = await import('@tauri-apps/plugin-process'); await exit(0); return; } catch { /* not permitted or not packaged */ }
@@ -2353,6 +2378,8 @@ onBeforeUnmount(() => {
           <button :disabled="!gameStats" :title="gameStats ? '' : 'No game loaded'"
             @click="statsOpen = true"><DisplayCaps text="Game statistics" /></button>
           <button @click="openSettings('general')"><DisplayCaps text="Settings" /></button>
+          <button v-if="secondClientRow" data-testid="new-client-window" @click="openSecondClient()"><DisplayCaps text="New client window" /></button>
+          <p v-if="secondClientRow && secondClientHint" class="hint">{{ secondClientHint }}</p>
           <!-- Owner 09-10: Help moved here from the retired hamburger; the Protocol console is a fork-edition dev tool. -->
           <button @click="ui.gameMenuOpen = false; guideOpen = true"><DisplayCaps text="Help / Field Manual" /></button>
           <button v-if="FORK_EDITION" @click="openConsole()"><DisplayCaps text="Protocol console" /></button>
@@ -2541,6 +2568,20 @@ onBeforeUnmount(() => {
             <div class="actions" style="justify-content: flex-start">
               <button type="button" @click="rerunClientTour()">Run the client walkthrough again</button>
             </div>
+          </fieldset>
+
+          <!-- Owner 10-22 ("Option A"): the shell reads this key (and allowSecondClientEdition) from settings.json at
+               startup (second_client.rs). With the guard lifted a .jnlp is not forwarded to a running window: it starts
+               a new client that joins on its own (cold-start argv path) - the last sentence of the hint. -->
+          <fieldset class="settings-group">
+            <legend>Client windows</legend>
+            <label class="row">
+              <input :checked="secondClientEnabled()" type="checkbox" data-testid="allow-second-client-toggle"
+                @change="setAllowSecondClient(($event.target as HTMLInputElement).checked)" />
+              <span>Allow a second client window</span>
+            </label>
+            <p class="hint">Lets you launch Super FUMBBL a second time, for example to spectate another game while you play. This is experimental: two clients share your settings file and may behave oddly (duplicate sounds, update prompts, or settings saved by one window overwriting the other). Changes apply after a restart. Opening a game link while two windows are running starts the join in a new window; close the other one first.</p>
+            <p v-if="secondClientEnabledElsewhere()" class="hint" data-testid="allow-second-client-other-edition">This was turned on by a different edition of Super FUMBBL, so it stays off here until you tick it.</p>
           </fieldset>
 
           <fieldset class="settings-group">

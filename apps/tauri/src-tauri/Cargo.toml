@@ -1,6 +1,6 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.266"
+version = "1.0.267"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 
@@ -35,6 +35,8 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Owner 10-22: settings.json path before the app is built (same crate/version Tauri resolves app_data_dir with).
+dirs = "6"
 sha2 = "0.10"
 hex = "0.4"
 # Owner 09-23: the art pack - zipped parts downloaded from the public release (via tauri-plugin-http reqwest).

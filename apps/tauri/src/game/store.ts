@@ -87,6 +87,7 @@ import { PRAYER_TABLE, prayerForPlayerEventMessage, type PrayerCatalogEntry } fr
 import { applyServerAddPlayer } from './serverAddPlayer';
 import { stopPresentationSounds, playSound, setSoundsSuppressed, setSoundWeather } from './sounds';
 import { settings, FORK_SERVER_HOST } from './settings';
+import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
 import { clearOfficialRejoinTarget, peekOfficialRejoinTarget, setOfficialRejoinTarget } from './officialRejoinTarget';
@@ -13131,7 +13132,7 @@ function verboseTee(dir: 'in' | 'out', cmd: Record<string, unknown>) {
   if (gid !== wireLog.gameId) {
     // ROLL to a new file for this newly-observed game (one file per game)
     wireLog.gameId = gid;
-    wireLog.file = `wire-g${gid}-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+    wireLog.file = wireLogFileName(gid); // owner 10-22: carries this client instance's tag (wireLogName.ts)
     state.wireLogFile = '';
     // Owner 2026-07-08: enrich the header with each team's NAME + RACE + position names so the observation catalog can document TEAMS (the mid-game delta frames don't carry the roster).
     const teamInfo = (t: unknown) => {

@@ -52,7 +52,7 @@ export function gameServiceLabel(service: BugReportGameService): string {
 }
 
 /**
- * The game id embedded in the wire-log file name (`wire-g<ID>-<timestamp>.jsonl` — see the roll
+ * The game id embedded in the wire-log file name (`wire-g<ID>-<timestamp>-<instance tag>.jsonl` — see wireLogName.ts and the roll
  * logic in store.ts verboseTee). The wire log knows the game even when the live model no longer
  * does, so this is the report's fallback id source. Returns a number when the id is numeric.
  */

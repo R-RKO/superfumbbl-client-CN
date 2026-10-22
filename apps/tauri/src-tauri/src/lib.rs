@@ -19,6 +19,7 @@ mod asset_mods;
 // The FUMBBL.COM blade's docked website (owner 10-05; ships in every build since 10-06) - see the module.
 mod fumbbl_home;
 mod window_state;
+mod second_client;
 
 const MAX_JNLP_BYTES: usize = 128 * 1024;
 const MAX_PENDING_JNLPS: usize = 4;
@@ -592,17 +593,167 @@ fn read_settings_text(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// Atomic replace: write `<name>.tmp`, fsync, rename over `<name>`. A crash mid-write leaves the
-/// old file intact plus a stale .tmp the next write overwrites; the rename is the commit point.
+/// Cross-process advisory lock beside settings.json (owner 10-22, second client window): every save holds it around
+/// the whole read-merge-write, so two clients can never interleave their renames.
+const SETTINGS_LOCK: &str = "settings.lock";
+
+/// A temp name no other process (or thread) uses: `<name>.<pid>-<nanos>-<counter>.tmp`. A shared `<name>.tmp` let a
+/// shorter write leave another writer's tail behind and one rename commit invalid JSON (Astra P1, 10-22).
+fn unique_tmp_name(name: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{name}.{}-{nanos:08x}-{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Atomic replace: write a per-process unique temp, fsync, rename over `<name>`. A crash mid-write leaves the old
+/// file intact plus a stray temp nothing ever reads; the rename is the commit point.
 fn atomic_write(dir: &Path, name: &str, contents: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir failed: {e}"))?;
-    let tmp = dir.join(format!("{name}.tmp"));
-    {
+    let tmp = dir.join(unique_tmp_name(name));
+    let staged = (|| {
         let mut f = std::fs::File::create(&tmp).map_err(|e| format!("write failed: {e}"))?;
         f.write_all(contents.as_bytes()).map_err(|e| format!("write failed: {e}"))?;
-        f.sync_all().map_err(|e| format!("sync failed: {e}"))?;
+        f.sync_all().map_err(|e| format!("sync failed: {e}"))
+    })();
+    let result = staged.and_then(|()| std::fs::rename(&tmp, dir.join(name)).map_err(|e| format!("rename failed: {e}")));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, dir.join(name)).map_err(|e| format!("rename failed: {e}"))
+    result
+}
+
+/// Held for the life of the value; dropping the handle releases the OS lock.
+struct SettingsLock(#[allow(dead_code)] std::fs::File);
+
+/// Blocks until this process holds the exclusive settings lock (std File::lock: LockFileEx / flock).
+fn lock_settings(dir: &Path) -> Result<SettingsLock, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("mkdir failed: {e}"))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(SETTINGS_LOCK))
+        .map_err(|e| format!("lock open failed: {e}"))?;
+    file.lock().map_err(|e| format!("lock failed: {e}"))?;
+    Ok(SettingsLock(file))
+}
+
+/// Same denylist as the page's stripSecretFields (settings.ts SECRET_KEY_RE = /password|token|secret/i), at every
+/// depth: a merged file can never carry a credential, whichever window put it on disk.
+fn strip_secret_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|key, _| {
+                let k = key.to_ascii_lowercase();
+                !(k.contains("password") || k.contains("token") || k.contains("secret"))
+            });
+            map.values_mut().for_each(strip_secret_fields);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_secret_fields),
+        _ => {}
+    }
+}
+
+/// Two-client save (owner 10-22): `patch` = the keys THIS window changed. Under the lock the merge starts from the
+/// CURRENT disk object, sets the patched keys over it and removes only the keys named in `retire` (the page's explicit
+/// list of fields its migration dropped); every other disk key - including one another window just added - is kept
+/// (Astra round 2). Secret-named fields are stripped. An unreadable / non-object disk file -> the page's full blob
+/// (`contents`), also stripped.
+fn merge_settings_patch(contents: &str, patch: &str, retire: &[String], on_disk: Option<&str>) -> Result<String, String> {
+    use serde_json::{Map, Value};
+    let ours: Map<String, Value> = serde_json::from_str(contents).map_err(|e| format!("settings blob not an object: {e}"))?;
+    let patch: Map<String, Value> = serde_json::from_str(patch).map_err(|e| format!("settings patch not an object: {e}"))?;
+    let disk: Option<Map<String, Value>> = on_disk.and_then(|t| serde_json::from_str(t).ok());
+    let mut merged = match disk {
+        Some(mut disk) => {
+            for (key, value) in patch {
+                disk.insert(key, value);
+            }
+            for key in retire {
+                disk.remove(key);
+            }
+            Value::Object(disk)
+        }
+        None => Value::Object(ours),
+    };
+    strip_secret_fields(&mut merged);
+    serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())
+}
+
+/// The settings text at `path` when it parses as a JSON object; None = absent / unreadable / not an object.
+fn read_settings_object_text(path: &Path) -> Option<String> {
+    read_settings_text(path).filter(|t| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(t).is_ok())
+}
+
+/// What a save achieved (Astra r6): the primary is always written when the call returns Ok; the .bak refresh is
+/// reported separately so a partial save (primary ok, .bak failed) is never acknowledged as a complete repair.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsSaveOutcome {
+    /// Always "ok" (a primary failure is an Err).
+    primary: &'static str,
+    /// "ok" | "failed" | "skipped" (no refresh asked, or the repaired-primary branch left it alone).
+    backup: &'static str,
+}
+
+/// The whole save, under the cross-process lock. `patch` None = the single-client full replace.
+/// A requested .bak refresh is written from the merged primary text (after the patch), in any branch but the
+/// repaired-primary one; its failure is reported in the outcome, not as an Err (the primary did commit).
+///
+/// `restore` (Astra r4/r5, a window that loaded settings.json.bak because the primary was unreadable) = Some(the
+/// RESTORE patch: the page's hydrated-minus-raw-backup migration diff, version key included, plus its own changes).
+/// Decided HERE, under the lock, against the file as it is now. Primary still unreadable -> the backup + the restore
+/// patch - `retire` (the legacy keys hydration dropped), written to the primary and the .bak, so the migration is
+/// persisted. Primary readable again (another window repaired it, its migration already ran) -> only this window's own
+/// `patch` merged onto it, no retirements, and the .bak is left alone.
+fn save_settings_in(
+    dir: &Path,
+    contents: &str,
+    refresh_backup: bool,
+    patch: Option<&str>,
+    retire: &[String],
+    restore: Option<&str>,
+) -> Result<SettingsSaveOutcome, String> {
+    let too_big = |t: Option<&str>| t.is_some_and(|p| p.len() as u64 > MAX_SETTINGS_BYTES);
+    if contents.len() as u64 > MAX_SETTINGS_BYTES || too_big(patch) || too_big(restore) {
+        return Err("settings blob too large".into());
+    }
+    let _lock = lock_settings(dir)?;
+    let mut refresh_backup = refresh_backup;
+    let text = if let Some(restore_patch) = restore {
+        match read_settings_object_text(&dir.join(SETTINGS_FILE)) {
+            Some(primary) => {
+                refresh_backup = false;
+                merge_settings_patch(contents, patch.unwrap_or("{}"), &[], Some(&primary))?
+            }
+            None => {
+                let base = read_settings_object_text(&dir.join(SETTINGS_BAK));
+                refresh_backup = true;
+                merge_settings_patch(contents, restore_patch, retire, base.as_deref())?
+            }
+        }
+    } else {
+        match patch {
+            Some(patch) => merge_settings_patch(contents, patch, retire, read_settings_text(&dir.join(SETTINGS_FILE)).as_deref())?,
+            None => contents.to_string(),
+        }
+    };
+    atomic_write(dir, SETTINGS_FILE, &text)?;
+    let backup = if !refresh_backup {
+        "skipped"
+    } else if atomic_write(dir, SETTINGS_BAK, &text).is_ok() {
+        "ok"
+    } else {
+        "failed"
+    };
+    // The pre-10-22 shared temp name: a leftover from an older shell is junk now.
+    let _ = std::fs::remove_file(dir.join(format!("{SETTINGS_FILE}.tmp")));
+    Ok(SettingsSaveOutcome { primary: "ok", backup })
 }
 
 #[tauri::command]
@@ -616,18 +767,26 @@ fn settings_load(app: tauri::AppHandle) -> Result<SettingsFilePayload, String> {
 }
 
 /// `refresh_backup` is set only when the caller just hydrated this exact blob clean —
-/// the .bak must never be refreshed from bytes that were not proven loadable.
+/// the .bak must never be refreshed from bytes that were not proven loadable. `patch` (optional, owner 10-22): the
+/// keys this window changed, as a JSON object - merged onto the CURRENT file under the lock; `retire` (optional, with
+/// a patch only): keys to remove from the file; `restoreFromBackup` + `restorePatch` (optional): the conditional backup
+/// recovery of save_settings_in (`restorePatch` absent -> `patch`). An older shell ignores all of them and writes
+/// `contents` whole (the pre-10-22 behaviour).
 #[tauri::command]
-fn settings_save(app: tauri::AppHandle, contents: String, refresh_backup: bool) -> Result<(), String> {
-    if contents.len() as u64 > MAX_SETTINGS_BYTES {
-        return Err("settings blob too large".into());
-    }
+fn settings_save(
+    app: tauri::AppHandle,
+    contents: String,
+    refresh_backup: bool,
+    patch: Option<String>,
+    retire: Option<Vec<String>>,
+    restore_from_backup: Option<bool>,
+    restore_patch: Option<String>,
+) -> Result<SettingsSaveOutcome, String> {
     let dir = settings_dir(&app)?;
-    atomic_write(&dir, SETTINGS_FILE, &contents)?;
-    if refresh_backup {
-        atomic_write(&dir, SETTINGS_BAK, &contents)?;
-    }
-    Ok(())
+    let restore = restore_from_backup
+        .unwrap_or(false)
+        .then(|| restore_patch.as_deref().or(patch.as_deref()).unwrap_or("{}"));
+    save_settings_in(&dir, &contents, refresh_backup, patch.as_deref(), retire.as_deref().unwrap_or(&[]), restore)
 }
 
 /// Deletes the one-shot recovery file. Called only after a CONFIRMED durable import
@@ -706,7 +865,18 @@ pub fn run() {
     // a NEW instance and joins via the cold-start argv path above; forward-into-running needs the env var.
     // Owner 09-21: the PUBLIC edition always enforces one instance — a second launch focuses the running
     // client (and hands it any .jnlp) instead of opening a second session against FUMBBL.
-    let single_instance = cfg!(public_edition) || std::env::var_os("FUMBBL_SINGLE_INSTANCE").is_some();
+    // Owner 10-22 ("Option A"): Settings > General > "Allow a second client window" lifts the public edition's guard.
+    // Read from settings.json on disk before anything is built (second_client.rs); any read failure, or the key saved
+    // by the OTHER edition (shared identifier), keeps it ON. With it lifted, a .jnlp opens a NEW window (cold-start
+    // argv path) instead of being forwarded - the Settings disclaimer says so.
+    let context = tauri::generate_context!();
+    let public_edition = cfg!(public_edition);
+    let allow_second = public_edition && second_client::allow_at_boot(&context.config().identifier);
+    let single_instance = second_client::single_instance_enforced(
+        public_edition,
+        std::env::var_os(second_client::FORCE_ENV).is_some(),
+        allow_second,
+    );
     if single_instance {
         // When enabled it must be registered before every other plugin.
         builder = builder.plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
@@ -832,9 +1002,10 @@ pub fn run() {
             fumbbl_home::fumbbl_home_focus_region,
             fumbbl_home::fumbbl_home_park,
             fumbbl_home::fumbbl_home_queue_watch,
-            fumbbl_home::fumbbl_home_history
+            fumbbl_home::fumbbl_home_history,
+            second_client::launch_second_instance
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application")
         .run(|_app, _event| {
             // FUMBBL.COM pane: its private JNLP directory never outlives the app.
@@ -944,12 +1115,186 @@ mod tests {
             "a stale tmp must never shadow the intact main file"
         );
 
-        // The next write commits over both: tmp consumed by the rename, main replaced whole.
-        atomic_write(&dir, SETTINGS_FILE, "{\"coach\":\"new\"}").unwrap();
+        // The next save commits over both: main replaced whole, the legacy shared tmp swept, no temp left behind.
+        save_settings_in(&dir, "{\"coach\":\"new\"}", false, None, &[], None).unwrap();
         assert_eq!(read_settings_text(&dir.join(SETTINGS_FILE)).unwrap(), "{\"coach\":\"new\"}");
         assert!(!dir.join(format!("{SETTINGS_FILE}.tmp")).exists());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "a committed save leaves no temp file");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_temp_names_are_unique_per_writer() {
+        let a = unique_tmp_name(SETTINGS_FILE);
+        let b = unique_tmp_name(SETTINGS_FILE);
+        assert_ne!(a, b);
+        assert!(a.contains(&std::process::id().to_string()));
+        assert_ne!(a, format!("{SETTINGS_FILE}.tmp"));
+    }
+
+    #[test]
+    fn settings_lock_is_exclusive_across_handles() {
+        // Simulates the second client: while one writer holds settings.lock, another handle cannot take it, so it
+        // cannot reach its rename until the first has committed.
+        let dir = tempfile::tempdir().unwrap();
+        let held = lock_settings(dir.path()).unwrap();
+        let other = std::fs::OpenOptions::new().read(true).write(true).open(dir.path().join(SETTINGS_LOCK)).unwrap();
+        assert!(other.try_lock().is_err(), "a second writer must not get the lock while the first holds it");
+        drop(held);
+        assert!(other.try_lock().is_ok(), "released on drop");
+    }
+
+    #[test]
+    fn concurrent_patch_saves_keep_every_window_change_and_valid_json() {
+        // Eight writers each change ONE key ten times, and each also INTRODUCES a key of its own in round 1 that the
+        // other writers' blobs never carry; every save goes through the lock + merge, so no change and no added key is
+        // lost and the file always parses.
+        let dir = tempfile::tempdir().unwrap();
+        let base: serde_json::Map<String, serde_json::Value> =
+            (0..8).map(|i| (format!("k{i}"), serde_json::json!(0))).collect();
+        std::fs::write(dir.path().join(SETTINGS_FILE), serde_json::to_string(&base).unwrap()).unwrap();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let dir = dir.path().to_path_buf();
+                let base = base.clone();
+                std::thread::spawn(move || {
+                    for round in 1..=10 {
+                        let key = format!("k{i}");
+                        let mut ours = base.clone();
+                        ours.insert(key.clone(), serde_json::json!(round));
+                        let mut patch = serde_json::Map::new();
+                        patch.insert(key, serde_json::json!(round));
+                        if round == 1 {
+                            ours.insert(format!("new{i}"), serde_json::json!(i));
+                            patch.insert(format!("new{i}"), serde_json::json!(i));
+                        }
+                        let patch = serde_json::Value::Object(patch).to_string();
+                        save_settings_in(&dir, &serde_json::to_string(&ours).unwrap(), false, Some(&patch), &[], None).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let final_text = read_settings_text(&dir.path().join(SETTINGS_FILE)).unwrap();
+        let final_value: serde_json::Value = serde_json::from_str(&final_text).unwrap();
+        for i in 0..8 {
+            assert_eq!(final_value[format!("k{i}")], serde_json::json!(10), "k{i} lost: {final_text}");
+            assert_eq!(final_value[format!("new{i}")], serde_json::json!(i), "new{i} (added by writer {i}) lost: {final_text}");
+        }
+    }
+
+    #[test]
+    fn patch_merge_starts_from_disk_keeps_added_keys_retires_only_named_ones() {
+        let parse = |t: &str| serde_json::from_str::<serde_json::Value>(t).unwrap();
+        // A's blob lacks `added` (another window put it there) and `gone`; only the patch key and the retired key move.
+        let merged = merge_settings_patch(
+            "{\"a\":2,\"b\":\"x\",\"c\":true}",
+            "{\"a\":2}",
+            &["gone".to_string()],
+            Some("{\"a\":1,\"b\":\"y\",\"c\":true,\"gone\":1,\"added\":7}"),
+        )
+        .unwrap();
+        assert_eq!(parse(&merged), serde_json::json!({"a": 2, "b": "y", "c": true, "added": 7}));
+        // secrets never survive a merge, from the patch or from disk, at any depth
+        let merged = merge_settings_patch(
+            "{}",
+            "{\"password40k\":\"p\",\"n\":{\"apiToken\":\"t\",\"ok\":1}}",
+            &[],
+            Some("{\"clientSecret\":\"s\",\"keep\":1}"),
+        )
+        .unwrap();
+        assert_eq!(parse(&merged), serde_json::json!({"keep": 1, "n": {"ok": 1}}));
+        // unreadable disk: the page's blob (stripped)
+        assert_eq!(parse(&merge_settings_patch("{\"a\":1,\"password\":\"x\"}", "{}", &[], Some("{trunc")).unwrap()), serde_json::json!({"a": 1}));
+        assert_eq!(parse(&merge_settings_patch("{\"a\":1}", "{}", &[], None).unwrap()), serde_json::json!({"a": 1}));
+        assert!(merge_settings_patch("[1]", "{}", &[], None).is_err());
+    }
+
+    #[test]
+    fn writer_b_adds_a_key_then_writer_a_saves_an_unrelated_change_and_b_key_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), "{\"k\":0,\"z\":0}").unwrap();
+        // B introduces `fresh`
+        save_settings_in(dir.path(), "{\"k\":0,\"z\":0,\"fresh\":true}", false, Some("{\"fresh\":true}"), &[], None).unwrap();
+        // A (whose blob never had `fresh`) changes k
+        save_settings_in(dir.path(), "{\"k\":5,\"z\":0}", false, Some("{\"k\":5}"), &[], None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&read_settings_text(&dir.path().join(SETTINGS_FILE)).unwrap()).unwrap();
+        assert_eq!(v, serde_json::json!({"k": 5, "z": 0, "fresh": true}));
+    }
+
+    #[test]
+    fn a_failed_bak_refresh_is_reported_and_the_next_refresh_rewrites_it_from_the_primary() {
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join(SETTINGS_FILE);
+        let bak = dir.path().join(SETTINGS_BAK);
+        // corrupt primary, and the .bak cannot be replaced (fault injection: a directory sits at its path, so the
+        // rename between the two writes fails while the primary write succeeds)
+        std::fs::write(&primary, "{\"vol").unwrap();
+        std::fs::create_dir(&bak).unwrap();
+        let out = save_settings_in(dir.path(), "{\"v\":1,\"b\":2}", true, Some("{}"), &[], Some("{}")).unwrap();
+        assert_eq!(out, SettingsSaveOutcome { primary: "ok", backup: "failed" });
+        assert!(read_settings_object_text(&primary).is_some(), "the primary committed");
+        assert!(bak.is_dir());
+        // fault clears; the page's backup-refresh retry is a plain (non-restore) save with refreshBackup + its patch
+        std::fs::remove_dir(&bak).unwrap();
+        let out = save_settings_in(dir.path(), "{\"v\":1,\"b\":3}", true, Some("{\"b\":3}"), &[], None).unwrap();
+        assert_eq!(out, SettingsSaveOutcome { primary: "ok", backup: "ok" });
+        assert_eq!(std::fs::read(&bak).unwrap(), std::fs::read(&primary).unwrap(), ".bak byte-equal to the primary");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&primary).unwrap()).unwrap();
+        assert_eq!(v, serde_json::json!({"v": 1, "b": 3}));
+        // no refresh asked -> skipped
+        let out = save_settings_in(dir.path(), "{\"v\":1,\"b\":4}", false, Some("{\"b\":4}"), &[], None).unwrap();
+        assert_eq!(out.backup, "skipped");
+    }
+
+    #[test]
+    fn backup_recovery_after_another_window_repaired_applies_only_own_patch_and_leaves_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |name: &str| serde_json::from_str::<serde_json::Value>(&read_settings_text(&dir.path().join(name)).unwrap()).unwrap();
+        // A loaded the backup (volume 20) because the primary was corrupt; its repair failed.
+        let bak = "{\"volume\":20,\"badge\":true}";
+        std::fs::write(dir.path().join(SETTINGS_BAK), bak).unwrap();
+        // B repaired the primary, saved volume 60 and added a key.
+        std::fs::write(dir.path().join(SETTINGS_FILE), "{\"volume\":60,\"badge\":true,\"fromB\":1}").unwrap();
+        // A's retry: restore-from-backup with A's own change only.
+        save_settings_in(dir.path(), "{\"volume\":20,\"badge\":false}", true, Some("{\"badge\":false}"), &["legacy".to_string()], Some("{\"badge\":false,\"version\":35}")).unwrap();
+        assert_eq!(parse(SETTINGS_FILE), serde_json::json!({"volume": 60, "badge": false, "fromB": 1}));
+        assert_eq!(read_settings_text(&dir.path().join(SETTINGS_BAK)).unwrap(), bak, ".bak untouched");
+    }
+
+    #[test]
+    fn backup_recovery_with_primary_still_corrupt_restores_backup_plus_own_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |name: &str| serde_json::from_str::<serde_json::Value>(&read_settings_text(&dir.path().join(name)).unwrap()).unwrap();
+        std::fs::write(dir.path().join(SETTINGS_BAK), "{\"volume\":20,\"badge\":true}").unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), "{\"volu").unwrap();
+        // the raw backup is an older version carrying a legacy key hydration dropped; the restore patch carries the
+        // migration (version + migrated key) plus this window's own change
+        std::fs::write(dir.path().join(SETTINGS_BAK), "{\"version\":30,\"volume\":20,\"badge\":true,\"legacy\":1}").unwrap();
+        save_settings_in(
+            dir.path(),
+            "{\"version\":35,\"volume\":20,\"badge\":false}",
+            false,
+            Some("{\"badge\":false}"),
+            &["legacy".to_string()],
+            Some("{\"version\":35,\"badge\":false}"),
+        )
+        .unwrap();
+        assert_eq!(parse(SETTINGS_FILE), serde_json::json!({"version": 35, "volume": 20, "badge": false}));
+        assert_eq!(parse(SETTINGS_BAK), serde_json::json!({"version": 35, "volume": 20, "badge": false}));
+        // no backup either: the page's blob
+        let dir2 = tempfile::tempdir().unwrap();
+        save_settings_in(dir2.path(), "{\"volume\":5}", true, Some("{}"), &[], Some("{}")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&read_settings_text(&dir2.path().join(SETTINGS_FILE)).unwrap()).unwrap();
+        assert_eq!(v, serde_json::json!({"volume": 5}));
     }
 
     #[test]

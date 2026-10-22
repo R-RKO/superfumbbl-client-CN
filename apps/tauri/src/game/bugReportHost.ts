@@ -6,6 +6,7 @@
  */
 import { gameServiceFromTarget, wireLogBasename, type BugReportDevLogEntry, type BugReportGameService, type BugReportLogEntry } from './bugReport';
 import { ref } from 'vue';
+import { WIRE_LOG_INSTANCE_TAG } from './wireLogName';
 import type { PitchFrame } from './bugReportScreenshot';
 
 export interface BugReportPitch {
@@ -46,30 +47,60 @@ const LAST_WIRE_LOG_KEY = 'sf.lastWireLogFile';
 /** A ref, so the dialog's attachments list follows it. null = not read from storage yet. */
 const lastWireLog = ref<string | null>(null);
 
+// Owner 10-22 (second client window): two windows share localStorage, so the per-WINDOW copy lives in sessionStorage.
+// localStorage is only the restart fallback, read when this window has none AND the second-client setting is off; with
+// the setting on, a window offers only a log carrying its own instance tag (wireLogName.ts), never the other window's.
+
+/** Whether the second-client setting is effectively on. settings.ts registers it at load (this module stays free of
+ *  the settings import); unregistered = off, the single-window behaviour. */
+// `var`, not `let`: settings.ts registers during an import cycle (bugReport -> settings), before this module body has
+// run; a `let` would still be in its temporal dead zone there. Unset = off.
+// eslint-disable-next-line no-var
+var secondClientProbe: (() => boolean) | undefined;
+function secondClientEnabled(): boolean { return secondClientProbe?.() === true; }
+export function setWireLogSecondClientProbe(probe: () => boolean): void { secondClientProbe = probe; }
+
+/** True when this window may attach `path`: always with the setting off; with it on, only its own tagged file. */
+export function isOwnWindowWireLog(path: string): boolean {
+  if (!secondClientEnabled()) return true;
+  return wireLogBasename(path).endsWith(`-${WIRE_LOG_INSTANCE_TAG}.jsonl`);
+}
+
 export function rememberWireLogFile(path: string): void {
   const value = (path || '').trim();
   if (!value) return;
   lastWireLog.value = value;
+  try { globalThis.sessionStorage?.setItem(LAST_WIRE_LOG_KEY, value); } catch { /* storage blocked: memory only */ }
   try { globalThis.localStorage?.setItem(LAST_WIRE_LOG_KEY, value); } catch { /* storage blocked: memory only */ }
 }
 
 export function lastWireLogFile(): string {
   if (lastWireLog.value === null) {
-    try { lastWireLog.value = globalThis.localStorage?.getItem(LAST_WIRE_LOG_KEY) ?? ''; } catch { lastWireLog.value = ''; }
+    let value = '';
+    try { value = globalThis.sessionStorage?.getItem(LAST_WIRE_LOG_KEY) ?? ''; } catch { value = ''; }
+    if (!value && !secondClientEnabled()) {
+      try { value = globalThis.localStorage?.getItem(LAST_WIRE_LOG_KEY) ?? ''; } catch { value = ''; }
+    }
+    lastWireLog.value = value;
   }
-  return lastWireLog.value;
+  return lastWireLog.value && isOwnWindowWireLog(lastWireLog.value) ? lastWireLog.value : '';
+}
+
+function clearStoredWireLog(): void {
+  try { globalThis.sessionStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
+  try { globalThis.localStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
 }
 
 /** The remembered log could not be read (deleted, or never there): stop offering it. */
 export function forgetWireLogFile(): void {
   lastWireLog.value = '';
-  try { globalThis.localStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
+  clearStoredWireLog();
 }
 
 /** Test seam. */
 export function resetLastWireLogFile(): void {
   lastWireLog.value = null;
-  try { globalThis.localStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
+  clearStoredWireLog();
 }
 
 /** The blade names the coach sees on the ribbon, for the attachments list (context.blade carries the raw view id). */

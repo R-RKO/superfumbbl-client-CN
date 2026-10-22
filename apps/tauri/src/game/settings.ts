@@ -1,6 +1,7 @@
 import { reactive, watch } from 'vue';
 import { SPECTATOR_TACKLE_ZONE_MODES, type SpectatorTackleZoneMode } from './tackleZoneQuickBar';
 import { FORK_EDITION } from './edition';
+import { setWireLogSecondClientProbe } from './bugReportHost';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { FLOAT_QUEUE_MIN, sanitizeFloatPos, sanitizeFloatSize, sanitizeFloatZoom } from './fumbblFloatLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
@@ -264,6 +265,12 @@ export interface AppSettings extends ConfirmationSettings {
   bloodSplatters: boolean;
   /** Owner 10-21: the movement-left badge at the acting / selected player's feet. */
   moveBadge: boolean;
+  /** Owner 10-22 ("Option A"): lets a second client instance start (Settings > General > Client windows). The shell
+   *  reads this key from settings.json at startup (second_client.rs), before any page loads. */
+  allowSecondClient: boolean;
+  /** The edition ('public' / 'fork') that turned allowSecondClient on. Both builds share the settings file; the shell
+   *  honours allowSecondClient only when this names its own edition (Astra 10-22). Written with the checkbox. */
+  allowSecondClientEdition: string;
   /** Owner 09-09 ("option 3"): players and their markers stay one size on every square; the ground keeps its
    *  perspective with a softer far edge. Off = Madden depth scaling. */
   uniformFigures: boolean;
@@ -716,6 +723,8 @@ const DEFAULTS: AppSettings = {
   castShadows: true, // owner 09-06: prototype on by default
   bloodSplatters: true, // owner 10-03: on by default; Settings > Display turns them off
   moveBadge: true, // owner 10-21: Settings > Display turns it off
+  allowSecondClient: false, // owner 10-22: off by default; Settings > General turns it on (applies after a restart)
+  allowSecondClientEdition: '',
   uniformFigures: false, // owner 09-10: N-S OFF by default (classic depth scaling); was on 09-09
   uniformFiguresEw: true, // owner 09-10: E-W on by default, independent
   actionDecorations: 'art', // owner 09-06: artwork by default; emoji kept as the Appearance option
@@ -975,6 +984,7 @@ function purgeStoredSecret(field: 'password40k' | 'password'): void {
 /** Drop the legacy clear-text fork password from the stored blob. Called ONLY after the OS
  *  credential store has confirmed the write — a failed keychain must not lose the password. */
 export function purgeStoredPassword40k(): void {
+  password40kConfirmed = true;
   purgeStoredSecret('password40k');
   // A confirmed keychain write is also the durable-import confirmation the recovery file waits on.
   if (recoveryPendingPurge) {
@@ -1084,6 +1094,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.castShadows = typeof raw.castShadows === 'boolean' ? raw.castShadows : DEFAULTS.castShadows;
     merged.bloodSplatters = typeof raw.bloodSplatters === 'boolean' ? raw.bloodSplatters : DEFAULTS.bloodSplatters;
     merged.moveBadge = typeof raw.moveBadge === 'boolean' ? raw.moveBadge : DEFAULTS.moveBadge;
+    merged.allowSecondClient = typeof raw.allowSecondClient === 'boolean' ? raw.allowSecondClient : DEFAULTS.allowSecondClient;
+    merged.allowSecondClientEdition = raw.allowSecondClientEdition === 'public' || raw.allowSecondClientEdition === 'fork' ? raw.allowSecondClientEdition : DEFAULTS.allowSecondClientEdition;
     merged.uniformFigures = typeof raw.uniformFigures === 'boolean' ? raw.uniformFigures : DEFAULTS.uniformFigures;
     merged.uniformFiguresEw = typeof raw.uniformFiguresEw === 'boolean' ? raw.uniformFiguresEw : DEFAULTS.uniformFiguresEw;
     merged.blockDice3d = raw.blockDice3d !== false;
@@ -1630,6 +1642,32 @@ function persistSettings(value: AppSettings): void {
 
 watch(settings, persistSettings, { deep: true });
 
+/** The edition name the shell compares against (second_client.rs running_edition). */
+export const SECOND_CLIENT_EDITION: 'public' | 'fork' = FORK_EDITION ? 'fork' : 'public';
+
+/** The EFFECTIVE second-client setting for this build: on only when the flag is on AND it was turned on by this
+ *  edition (Astra round 2). A pair saved by the other edition (shared settings file) reads OFF here and is left exactly
+ *  as loaded - never re-stamped by a watcher, hydration or migration. */
+export function secondClientEnabled(s: Pick<AppSettings, 'allowSecondClient' | 'allowSecondClientEdition'> = settings): boolean {
+  return s.allowSecondClient === true && s.allowSecondClientEdition === SECOND_CLIENT_EDITION;
+}
+
+// The bug-report host attaches only this window's own tagged wire log while the setting is effectively on.
+setWireLogSecondClientProbe(() => secondClientEnabled());
+
+/** True when the flag is on but was turned on by the other edition (the Settings hint says so). */
+export function secondClientEnabledElsewhere(s: Pick<AppSettings, 'allowSecondClient' | 'allowSecondClientEdition'> = settings): boolean {
+  return s.allowSecondClient === true && s.allowSecondClientEdition !== SECOND_CLIENT_EDITION;
+}
+
+/** The checkbox's own change handler - the ONLY writer of allowSecondClientEdition: on stamps this build's edition,
+ *  off clears both. */
+export function setAllowSecondClient(on: boolean): void {
+  if (on === true) patchModeSession = true;
+  settings.allowSecondClient = on === true;
+  settings.allowSecondClientEdition = on === true ? SECOND_CLIENT_EDITION : '';
+}
+
 // --- File persistence (owner 08-19) --------------------------------------------
 // The durable settings store is `settings.json` in the app data dir, written ATOMICALLY by the
 // Rust side (settings_save: tmp + fsync + rename). WebView2 localStorage is no longer trusted:
@@ -1650,9 +1688,29 @@ let v26DeferredFileAdoption = false;
 let v26DeferredRecoveryAdoption = false;
 /** Serializes settings_save invokes so writes land in order; never left rejected. */
 let fileWriteChain: Promise<void> = Promise.resolve();
+/** Owner 10-22 (second client window): this window's own value of every top-level key (JSON text) as of its last
+ *  load / write. A key whose live value still equals it was not changed HERE; a two-client save sends only the changed
+ *  keys as `patch`, and the shell merges them onto the CURRENT file under its cross-process lock (lib.rs
+ *  save_settings_in), so another window's unrelated edits survive. */
+let fileBaseline: Map<string, string> | null = null;
+/** Astra r3: once this session has had the second-client setting on (at load or by the checkbox), every save for the
+ *  rest of the session is a patch - including the one that turns it off - so a sibling window's newer values are never
+ *  replaced by this window's full blob. Sessions that started with it off and never turned it on keep the full blob. */
+let patchModeSession = false;
+/** Astra r3: a startup repair (backup recovery, migration, retired keys, stale .bak) not yet CONFIRMED by the shell.
+ *  The baseline only advances after a confirmed write, and every persist - even a "nothing changed" flush - retries
+ *  this first. `restore` = the primary was unreadable and this window runs on the backup: the shell decides under its
+ *  lock (Astra r4) - still unreadable -> backup + this window's own changes; repaired meanwhile by another window -> only
+ *  this window's own changes, .bak left alone. Else a patch against the disk baseline. */
+let pendingRepair: { restore: boolean; retire: string[]; rawBackup?: Map<string, string>; afterBackupOk?: () => void } | null = null;
+// Astra r6: a repair whose primary committed but whose .bak refresh failed becomes { restore: false, retire: [] } -
+// a "backup refresh pending" that the next save retries (refreshBackup + its patch, plain branch) until the shell
+// reports the .bak ok.
 /** The recovery file may only be deleted after its cleartext password CONFIRMS in the keychain
  *  (purgeStoredPassword40k is that signal — the f983443c pattern). */
 let recoveryPendingPurge = false;
+/** True once the keychain confirmed the fork password this session (purgeStoredPassword40k). */
+let password40kConfirmed = false;
 
 async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -1682,13 +1740,62 @@ export function serializeSettingsForFile(value: AppSettings): string {
   return JSON.stringify(stripSecretFields(JSON.parse(JSON.stringify(value)) as Record<string, unknown>), null, 2);
 }
 
+function noteFileBaseline(payload: Record<string, unknown>): void {
+  fileBaseline = canonicalMap(payload);
+}
+
+/** JSON with object keys sorted at every depth: the shell's merge writes keys in its own order, so "same content" is
+ *  compared on this form, never on raw text. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const rec = value as Record<string, unknown>;
+    return `{${Object.keys(rec).sort().filter((k) => rec[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonicalJson(rec[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** The keys of `ours` that differ from `base` (a per-key JSON map, e.g. the window baseline or the parsed disk file),
+ *  as a patch object. Without a base every key is in it. Empty object = nothing changed. */
+export function settingsPatch(ours: Record<string, unknown>, base: ReadonlyMap<string, string> | null): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(ours)) {
+    if (!base || base.get(key) !== canonicalJson(ours[key])) patch[key] = ours[key];
+  }
+  return patch;
+}
+
+function canonicalMap(rec: Record<string, unknown>): Map<string, string> {
+  return new Map(Object.keys(rec).map((key) => [key, canonicalJson(rec[key])]));
+}
+
 /** Ordered, result-visible settings_save. The chain keeps concurrent saves in write order. */
-function fileWrite(contents: string, refreshBackup: boolean): Promise<void> {
+function fileWrite(contents: string, refreshBackup: boolean, patch?: Record<string, unknown>, retire?: string[], restorePatch?: Record<string, unknown>): Promise<SettingsSaveOutcome | null> {
+  // `patch` (owner 10-22): the shell merges just these keys onto the CURRENT file under its lock, keeping every other
+  // key on disk; `retire` names the only keys it may remove; `restoreFromBackup` (Astra r4) makes a backup recovery
+  // conditional on the primary still being unreadable when the shell holds the lock; `restorePatch` (Astra r5) is what
+  // that branch applies to the raw backup (migration diff + own changes). An older shell ignores them and writes
+  // `contents` whole.
+  const args: Record<string, unknown> = patch
+    ? {
+      contents, refreshBackup, patch: JSON.stringify(patch),
+      ...(retire && retire.length ? { retire } : {}),
+      ...(restorePatch ? { restoreFromBackup: true, restorePatch: JSON.stringify(restorePatch) } : {}),
+    }
+    : { contents, refreshBackup };
   const next = fileWriteChain
     .catch(() => { /* earlier failure already noticed */ })
-    .then(() => invokeTauri<void>('settings_save', { contents, refreshBackup }));
-  fileWriteChain = next.catch(() => { /* keep the chain alive */ });
-  return next;
+    .then(() => invokeTauri<SettingsSaveOutcome | null | undefined>('settings_save', args));
+  fileWriteChain = next.then(() => undefined, () => { /* keep the chain alive */ });
+  return next.then((outcome) => outcome ?? null);
+}
+
+/** Astra r6: what the shell's save achieved. Older shells return nothing (null): treated as complete. */
+interface SettingsSaveOutcome { primary?: string; backup?: 'ok' | 'failed' | 'skipped' }
+
+/** False only when the shell reports that a requested .bak refresh failed. */
+export function backupRefreshOk(outcome: SettingsSaveOutcome | null): boolean {
+  return outcome?.backup !== 'failed';
 }
 
 /** Adopt a hydrated blob into the live reactive object and re-seed the cred-clobber guard. */
@@ -1721,6 +1828,27 @@ function retireLocalStorageBlob(): void {
  * (localStorage) with a settingsHealth notice; fileMode stays off, so a session that never read
  * the real file can never overwrite it — the file-lane mirror of the one-bad-read guard.
  */
+/** Astra r7: an import (localStorage, recovery file, deferred v26 adoption) writes the primary AND the .bak through the
+ *  same tracked path as a startup repair. A primary failure throws (the caller keeps its old lane). Primary ok + .bak
+ *  failed -> "backup refresh pending" (notice shown, the next save retries with refreshBackup) and `retireSource` - the
+ *  import source's retirement - runs only once BOTH are ok; the source stays the safety net until then. */
+async function importToFile(retireSource: () => void): Promise<void> {
+  const blob = serializeSettingsForFile(settings);
+  const outcome = await fileWrite(blob, true);
+  fileMode = true;
+  noteFileBaseline(JSON.parse(blob) as Record<string, unknown>);
+  if (backupRefreshOk(outcome)) { retireSource(); return; }
+  pendingRepair = { restore: false, retire: [], afterBackupOk: retireSource };
+  noteSettingsIssue('settings backup refresh failed - retried on the next save');
+}
+
+/** Retiring the recovery file: at once, or - when it carried a clear-text fork password the keychain has not
+ *  confirmed yet - when purgeStoredPassword40k() runs. */
+function retireRecoveryFile(hadLegacyPassword: boolean): void {
+  if (hadLegacyPassword && !password40kConfirmed) recoveryPendingPurge = true;
+  else void invokeTauri('settings_purge_recovery').catch(() => { /* retried next boot */ });
+}
+
 export async function initSettingsFile(): Promise<void> {
   if (!inTauri) return;
   let payload: SettingsFilePayload;
@@ -1737,10 +1865,41 @@ export async function initSettingsFile(): Promise<void> {
       adoptLoaded(hydrate(text, false));
       fileMode = true;
       diskAuthority = true;
+      const loadedBlob = serializeSettingsForFile(settings);
+      const loaded = JSON.parse(loadedBlob) as Record<string, unknown>;
+      if (secondClientEnabled()) patchModeSession = true;
+      noteFileBaseline(loaded);
       // Refresh the .bak ONLY from a blob that just parsed + hydrated clean (9f9eddbb doctrine);
       // this same write heals a primary that was recovered from the backup.
+      // Owner 10-22 (Astra P2): from the primary, write only what the migration CHANGED (as a patch the shell merges
+      // under its lock), never the unchanged snapshot - a second window's newer save must survive this boot. An
+      // identical primary + backup is not rewritten at all; a stale backup alone is refreshed with an empty patch
+      // (the shell re-reads the current file and copies it).
+      // Astra r3: the repair is PENDING until the shell confirms it; the baseline stays at what is actually on disk
+      // (nothing, for an unreadable primary) so a failed write is retried by the next persist / flush.
       if (!v26UserOverrideMigrationPending) {
-        void fileWrite(serializeSettingsForFile(settings), true).catch(() => { /* noticed on next save */ });
+        if (source !== 'file') {
+          // Baseline = what was loaded, so `patch` is only THIS window's own later changes (the repaired-primary branch).
+          // Astra r5: the still-corrupt branch restores the RAW backup, so its patch is measured against that raw blob:
+          // the hydration's migration diff (version key included) + own changes, and `retire` drops the legacy keys.
+          let rawRec: Record<string, unknown> = {};
+          try { rawRec = JSON.parse(text) as Record<string, unknown>; } catch { /* hydrate parsed it; unreachable */ }
+          const rawRetire = Object.keys(rawRec).filter((key) => !Object.prototype.hasOwnProperty.call(loaded, key));
+          pendingRepair = { restore: true, retire: rawRetire, rawBackup: canonicalMap(rawRec) };
+        } else {
+          let diskRec: Record<string, unknown> = {};
+          try { diskRec = JSON.parse(text) as Record<string, unknown>; } catch { /* hydrate parsed it; unreachable */ }
+          const patch = settingsPatch(loaded, canonicalMap(diskRec));
+          // The explicit retired-keys list: fields on disk this build's hydration dropped (a migration retired them).
+          const retire = Object.keys(diskRec).filter((key) => !Object.prototype.hasOwnProperty.call(loaded, key));
+          let backupStale = true;
+          try { backupStale = payload.backup === null || canonicalJson(JSON.parse(payload.backup)) !== canonicalJson(diskRec); } catch { /* unreadable backup */ }
+          if (Object.keys(patch).length > 0 || retire.length > 0 || backupStale) {
+            fileBaseline = canonicalMap(diskRec);
+            pendingRepair = { restore: false, retire };
+          }
+        }
+        if (pendingRepair) void persistToFile().catch(() => { /* noted; retried by the next persist */ });
       }
       if (source !== 'file') noteSettingsIssue('settings restored from file backup');
       return;
@@ -1758,9 +1917,7 @@ export async function initSettingsFile(): Promise<void> {
       return;
     }
     try {
-      await fileWrite(serializeSettingsForFile(settings), true);
-      fileMode = true;
-      retireLocalStorageBlob();
+      await importToFile(retireLocalStorageBlob);
     } catch (e) {
       noteSettingsIssue(`settings file write failed (${(e as Error)?.message ?? String(e)}) — staying on localStorage`);
     }
@@ -1777,10 +1934,8 @@ export async function initSettingsFile(): Promise<void> {
         v26DeferredRecoveryAdoption = true;
         return;
       }
-      await fileWrite(serializeSettingsForFile(settings), true);
-      fileMode = true;
-      if (legacyPassword40k) recoveryPendingPurge = true; // deleted once the keychain confirms
-      else void invokeTauri('settings_purge_recovery').catch(() => { /* retried next boot */ });
+      const hadLegacyPassword = !!legacyPassword40k; // deleted once the keychain confirms
+      await importToFile(() => retireRecoveryFile(hadLegacyPassword));
       noteSettingsIssue('settings imported from the 08-18 recovery file');
       return;
     } catch (e) {
@@ -1796,9 +1951,30 @@ function scheduleFilePersist(): void {
   fileWriteTimer = setTimeout(() => { fileWriteTimer = null; void persistToFile(); }, FILE_DEBOUNCE_MS);
 }
 
-async function persistToFile(propagateFailure = false): Promise<void> {
+// Astra r7: saves are SERIALISED - one in flight at a time; a save asked for meanwhile is queued (coalesced into one)
+// and runs only after the in-flight one completes, so its diff is taken at send time against the baseline the
+// completed save advanced to. A stalled older save can therefore never land after (and over) a newer edit.
+let persistRunning: Promise<void> | null = null;
+let persistQueued: Promise<void> | null = null;
+
+function persistToFile(propagateFailure = false): Promise<void> {
+  let run: Promise<void>;
+  if (!persistRunning) {
+    run = persistRunning = persistOnce().finally(() => { persistRunning = null; });
+  } else {
+    persistQueued ??= persistRunning.catch(() => undefined).then(() => {
+      persistQueued = null;
+      return persistToFile(true);
+    });
+    run = persistQueued;
+  }
+  return propagateFailure ? run : run.catch(() => undefined);
+}
+
+async function persistOnce(): Promise<void> {
   if (v26UserOverrideMigrationPending) return;
-  const payload = JSON.parse(serializeSettingsForFile(settings)) as Record<string, unknown>;
+  const live = JSON.parse(serializeSettingsForFile(settings)) as Record<string, unknown>;
+  const payload: Record<string, unknown> = { ...live };
   // Cred-clobber guard (leak #4, 322b209d) ported to the file lane: never write '' over a disk
   // value this session never held. password never rides the file, so only the coach names apply.
   try {
@@ -1811,11 +1987,41 @@ async function persistToFile(propagateFailure = false): Promise<void> {
       if (typeof value === 'string' && value) payload[field] = value;
     }
   } catch { /* disk unreadable — write what we have; last-writer-wins is accepted */ }
+  // Owner 10-22: with a second client window allowed, only the keys THIS window changed go to the shell (patch), which
+  // merges them onto the current file under its cross-process lock; nothing changed here = no write at all (e.g. the
+  // close-path flush). Setting off: the full blob, as before (same lock + unique temp on the shell side).
+  // Astra r2: nothing changed since this window's last load / write = no write at all, in either mode (the post-load
+  // debounce and the close flush no longer rewrite an identical snapshot - e.g. the other edition's untouched pair).
+  // Astra r3: a pending startup repair always goes (refreshing the .bak); the session's patch mode is sticky.
+  if (secondClientEnabled()) patchModeSession = true;
+  const repair = pendingRepair;
+  const changed = settingsPatch(payload, fileBaseline);
+  const sameShape = !!fileBaseline && fileBaseline.size === Object.keys(payload).length;
+  if (!repair && fileBaseline && sameShape && Object.keys(changed).length === 0) return;
+  let patch: Record<string, unknown> | undefined = patchModeSession ? changed : undefined;
+  let retire: string[] | undefined;
+  let restorePatch: Record<string, unknown> | undefined;
+  if (repair) {
+    patch = changed;
+    retire = repair.retire;
+    if (repair.restore) restorePatch = settingsPatch(payload, repair.rawBackup ?? null);
+  }
   try {
-    await fileWrite(JSON.stringify(payload, null, 2), false);
+    const outcome = await fileWrite(JSON.stringify(payload, null, 2), !!repair, patch, retire, restorePatch);
+    noteFileBaseline(live);
+    if (repair && pendingRepair === repair) {
+      // The primary is now readable (this window wrote it); only the .bak may still be owed.
+      if (backupRefreshOk(outcome)) {
+        pendingRepair = null;
+        repair.afterBackupOk?.();
+      } else {
+        pendingRepair = { restore: false, retire: [], afterBackupOk: repair.afterBackupOk };
+        noteSettingsIssue('settings backup refresh failed - retried on the next save');
+      }
+    }
   } catch (e) {
     noteSettingsIssue(`settings file write failed (${(e as Error)?.message ?? String(e)})`);
-    if (propagateFailure) throw e;
+    throw e;
   }
 }
 
@@ -1828,13 +2034,12 @@ export async function completeV26UserOverrideMigration(): Promise<void> {
   settings.settingsVersion = SETTINGS_VERSION;
   try {
     if (v26DeferredFileAdoption) {
-      await fileWrite(serializeSettingsForFile(settings), true);
-      fileMode = true;
-      retireLocalStorageBlob();
-      if (v26DeferredRecoveryAdoption) {
-        if (legacyPassword40k) recoveryPendingPurge = true;
-        else void invokeTauri('settings_purge_recovery').catch(() => { /* retried next boot */ });
-      }
+      const withRecovery = v26DeferredRecoveryAdoption;
+      const hadLegacyPassword = !!legacyPassword40k;
+      await importToFile(() => {
+        retireLocalStorageBlob();
+        if (withRecovery) retireRecoveryFile(hadLegacyPassword);
+      });
       v26DeferredFileAdoption = false;
       v26DeferredRecoveryAdoption = false;
     } else if (fileMode) {

@@ -300,6 +300,8 @@ export interface HomeSurfaceDeps {
   park(): Promise<void>;
   /** The shell hid the site on its own (a match launch was taken from the page). */
   onShellHidden(): void;
+  /** Load a fumbbl.com page in the site (fumbbl_home_navigate). Visibility is untouched. */
+  navigate(url: string): Promise<void>;
 }
 
 const defaultSurfaceDeps: HomeSurfaceDeps = {
@@ -307,6 +309,10 @@ const defaultSurfaceDeps: HomeSurfaceDeps = {
   send: (desired, options) => sendHomeState(desired, options),
   hideQuietly: () => hideHomeQuietly(),
   park: () => sendHomePark(),
+  navigate: async (url) => {
+    const { invoke } = await ipc();
+    await invoke('fumbbl_home_navigate', { url });
+  },
   listen: async (event, handler) => {
     const { listen } = await import('@tauri-apps/api/event');
     return listen(event, handler);
@@ -359,6 +365,8 @@ export function createHomeSurface(overrides: Partial<HomeSurfaceDeps> = {}) {
   let resizeObserver: ResizeObserver | null = null;
   /** The site was dismissed: the next time nothing shows it, it is parked instead of merely hidden. */
   let parkWanted = false;
+  /** Owner 10-22: a page load asked for (navigateHome), run in this driver's own loop like park / show / hide. */
+  let navigateWanted: string | null = null;
 
   function compute(): HomeDesired {
     const current = host;
@@ -413,6 +421,21 @@ export function createHomeSurface(overrides: Partial<HomeSurfaceDeps> = {}) {
           }
           lastSent = { visible: false };
           state.showing = false;
+          continue;
+        }
+        if (navigateWanted !== null) {
+          // Astra 10-22 (P2): decided HERE, in the serialised loop, at the moment it would run - never by a check made
+          // before it was queued. A park asked for (or landed) first wins: the native navigate un-parks the shell, which
+          // would restart a hidden page this driver believes parked. A park asked for after this point runs after it.
+          const url = navigateWanted;
+          navigateWanted = null;
+          if (!parkWanted && !state.parked) {
+            try {
+              await deps.navigate(url);
+            } catch {
+              /* no webview yet, a stopped one, an older shell: nothing to load into */
+            }
+          }
           continue;
         }
         if (sameDesired(lastSent, desired)) continue;
@@ -618,7 +641,19 @@ export function createHomeSurface(overrides: Partial<HomeSurfaceDeps> = {}) {
     queueMicrotask(() => { void flush(); });
   }
 
-  return { state, attach, refresh: schedule, invalidate, retry, retryBlocked, park };
+  /**
+   * Owner 10-22: load `url` in the site (game load -> fumbbl.com home), in the same serialised loop as park / show /
+   * hide, re-checked there when it runs: a no-op when a park was asked for or landed first (a parked site loads afresh
+   * on its next show anyway). Never shows or hides anything. Nothing to do while the shell is not known to have the
+   * site (no host has ever started it: no webview exists, and nothing can be parked either).
+   */
+  function navigateHome(url: string): void {
+    if (state.shell !== 'available') return;
+    navigateWanted = url;
+    queueMicrotask(() => { void flush(); });
+  }
+
+  return { state, attach, refresh: schedule, invalidate, retry, retryBlocked, park, navigateHome };
 }
 
 export type HomeSurface = ReturnType<typeof createHomeSurface>;
