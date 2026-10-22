@@ -126,6 +126,7 @@ import { dialogDescriptor, dialogRuntimeHandler, resolveDialogIntent, resolveDia
 import { describeUnknownDialog, type UnknownDialogLookup, type UnknownDialogView } from './unknownDialogView';
 import { playerActionClientState, playerActionDescriptor, playerActionFallbackState, resolvePlayerActionSelection } from './playerActionRegistry';
 import type { RailDiagnosticSink } from './railDiagnostics';
+import { INITIAL_CONNECTION_STATE, overdueSampleDue, settleConnection, stepConnection, type ConnectionQuality, type ConnectionSample, type ConnectionState } from './connectionQuality';
 import { connectionLogFileName, connectionWireRecord, pongOverdueStage, railDiagnosticWireRecord, type ConnectionWireEvent, createIntervalGate, createLongFrameDetector, serverJoinDetail, GAME_TIME_LOG_INTERVAL_MS } from './wireLogRecord';
 import {
   actionStateShadowInScope,
@@ -12985,6 +12986,37 @@ let connectionLastPongAt = 0;
 let connectionOverdueStage = 0;
 let connectionOverdueTimer: ReturnType<typeof setInterval> | null = null;
 let connectionLogSeq = 0;
+// Owner 10-21: POOR CONNECTION pill (quick bar). Fed from the same session listeners as the connection records below,
+// ahead of the wire-log gate, so it works with logging off (pings run on GameSession's own 8 s timer either way).
+// Astra 10-21: kept across a reconnect() ('lost' holds until the new session's first pong) — disconnect() resets it
+// only when no reconnect is driving it (connectionReconnectCarry); the leaving session's late close is ignored.
+let connectionQualitySession: GameSession | null = null;
+let connectionQualityState: ConnectionState = INITIAL_CONNECTION_STATE;
+let connectionReconnectCarry = false;
+/** Astra 10-21 round 2: the pill's own silence clock — the last pong, or the last hidden→visible resume (a throttled
+ *  background tab stalls pings; the wire log's ladder keeps its own clock, connectionLastPongAt, unchanged). */
+let connectionQualityQuietSince = 0;
+function pageHidden(): boolean {
+  return typeof document !== 'undefined' && document.hidden === true;
+}
+try {
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (!pageHidden()) connectionQualityQuietSince = Date.now(); });
+} catch { /* no document (tests) */ }
+const connectionHealth = ref<{ quality: ConnectionQuality; rttMs: number | null }>({ quality: 'good', rttMs: null });
+function noteConnectionSample(target: GameSession, sample: ConnectionSample | null): void {
+  if (connectionQualitySession !== target) return;
+  const now = Date.now();
+  connectionQualityState = settleConnection(sample ? stepConnection(connectionQualityState, sample) : connectionQualityState, now);
+  const { quality, rttMs } = connectionQualityState;
+  if (quality !== connectionHealth.value.quality || rttMs !== connectionHealth.value.rttMs) connectionHealth.value = { quality, rttMs };
+}
+/** disconnect(): stop listening to the leaving session; an explicit leave (not a reconnect()) also clears the pill. */
+function releaseConnectionHealth(): void {
+  connectionQualitySession = null;
+  if (connectionReconnectCarry) return;
+  connectionQualityState = INITIAL_CONNECTION_STATE;
+  if (connectionHealth.value.quality !== 'good' || connectionHealth.value.rttMs != null) connectionHealth.value = { quality: 'good', rttMs: null };
+}
 function wireConnection(event: ConnectionWireEvent, detail: Record<string, string | number | boolean | null> = {}): void {
   if (!settings.wireLog) return;
   if (wireLog.file) { void writeWireLine(JSON.stringify(connectionWireRecord(wireLog.seq++, Date.now(), event, detail))); return; }
@@ -13040,20 +13072,27 @@ function closeLoggedSession(target: GameSession | null): void {
 }
 function attachConnectionWireLog(target: GameSession): void {
   connectionLogSession = target;
+  connectionQualitySession = target;
   gameTimeLogGate = createIntervalGate(GAME_TIME_LOG_INTERVAL_MS);
   startFrameSampler();
   connectionLastPongAt = Date.now();
+  connectionQualityQuietSince = connectionLastPongAt;
   connectionOverdueStage = 0;
   if (connectionOverdueTimer) clearInterval(connectionOverdueTimer);
   connectionOverdueTimer = setInterval(() => {
     if (connectionLogSession !== target) return;
     const silenceMs = Date.now() - connectionLastPongAt;
+    // Owner 10-21: every tick of a 20 s+ silence is an overdue sample (keeps the pill's 20 s window live mid-outage);
+    // Astra round 2: never while hidden, and the silence restarts at a hidden→visible resume.
+    const tickAt = Date.now();
+    noteConnectionSample(target, overdueSampleDue({ hidden: pageHidden(), now: tickAt, quietSince: connectionQualityQuietSince }) ? { kind: 'overdue', t: tickAt } : null);
     const stage = pongOverdueStage(silenceMs);
     if (stage > connectionOverdueStage) { connectionOverdueStage = stage; wireConnection('pong-overdue', { silenceMs }); }
   }, 5_000);
   target.on('state', (next) => { if (connectionLogSession === target) wireConnection('state', { state: String(next) }); });
-  target.on('error', (error) => { if (connectionLogSession === target) wireConnection('error', { message: error instanceof Error ? error.message : String((error as { type?: string })?.type ?? error) }); });
+  target.on('error', (error) => { noteConnectionSample(target, { kind: 'lost', t: Date.now() }); if (connectionLogSession === target) wireConnection('error', { message: error instanceof Error ? error.message : String((error as { type?: string })?.type ?? error) }); });
   target.on('close', (code, reason) => {
+    noteConnectionSample(target, { kind: 'lost', t: Date.now() });
     if (connectionLogSession !== target) return;
     wireConnection('close', { code: Number(code), reason: String(reason ?? ''), sinceLastPongMs: Date.now() - connectionLastPongAt });
     detachConnectionWireLog(target);
@@ -13066,7 +13105,10 @@ function attachConnectionWireLog(target: GameSession): void {
     if (connectionLogSession !== target || (cmd as { netCommandId?: string }).netCommandId !== NetCommandId.SERVER_PONG) return;
     const now = Date.now();
     const sent = Number((cmd as { timestamp?: unknown }).timestamp);
-    wireConnection('pong', { rttMs: Number.isFinite(sent) && sent > 0 ? now - sent : null, gapMs: now - connectionLastPongAt });
+    const rttMs = Number.isFinite(sent) && sent > 0 ? now - sent : null;
+    connectionQualityQuietSince = now;
+    noteConnectionSample(target, { kind: 'pong', t: now, rttMs });
+    wireConnection('pong', { rttMs, gapMs: now - connectionLastPongAt });
     connectionLastPongAt = now;
     connectionOverdueStage = 0;
   });
@@ -26352,6 +26394,8 @@ export const gameStore = {
   interceptWait,
   replay,
   isReplay: computed(() => replay.active),
+  /** Owner 10-21: live connection quality for the quick bar's POOR CONNECTION pill (connectionQuality.ts rules). */
+  connectionHealth: computed(() => connectionHealth.value),
   setReplayPresentationIdleProbe(probe: (() => boolean) | null): void {
     replayPresentationIdleProbe = probe;
   },
@@ -27757,6 +27801,7 @@ export const gameStore = {
       session = null;
       spectatorIngress?.dispose();
       spectatorIngress = null;
+      connectionQualitySession = null; // Astra 10-21: a retained-history reconnect carries the pill; the old close is ignored
       closeLoggedSession(oldSession);
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
     } else this.disconnect();
@@ -30893,6 +30938,8 @@ export const gameStore = {
     // connectionClosed + `reconnecting`), so raise BOTH AFTER kicking it off. A successful
     // join clears them (gameState); a failed one keeps retrying/prompting via the close
     // handler (which treats `reconnecting` as a drop even though game.value is null).
+    connectionReconnectCarry = true; // Astra 10-21: the synchronous disconnect() inside keeps 'lost' for the new session
+    try {
     if (lc.mode === 'spectator') void this.connect(lc.params, true);
     else {
       // An automated seat (`seatAutomation`) that re-joins by itself keeps what it had before 10-08, on every attempt
@@ -30901,6 +30948,7 @@ export const gameStore = {
       reconnectJoinInProgress = true;
       try { void this.connectAsPlayer(lc.params); } finally { reconnectJoinInProgress = false; }
     }
+    } finally { connectionReconnectCarry = false; }
     reconnecting = true;
     state.connectionClosed = { mode: lc.mode, label, code: 0, reconnecting: true };
   },
@@ -31009,6 +31057,7 @@ export const gameStore = {
       cancelGameTimeout(joinTimer);
       joinTimer = null;
     }
+    releaseConnectionHealth(); // owner 10-21: the close below is ignored; an explicit leave clears the pill, a reconnect() carries it
     closeLoggedSession(session); // 10-13: drops logging ownership even when no close event will follow
     session = null;
     state.sessionState = 'idle';

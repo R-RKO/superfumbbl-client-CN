@@ -23,6 +23,7 @@ import {
 } from '../game/bugReport';
 import { captureClientWindowInBrowser, reportCaptureUnsettled, screenshotAttachment, type ReportCaptureResult } from '../game/bugReportScreenshot';
 import type { BugReportHost } from '../game/bugReportHost';
+import { bugReportSettingsSnapshot, collectBugReportEnv } from '../game/bugReportSettings';
 import { focusReportDialogIn, onReportModalKeydown } from '../game/reportModalKeys';
 import BugReportScreenshotPanel from './BugReportScreenshotPanel.vue';
 
@@ -209,7 +210,8 @@ async function submitReport() {
       settingsJson: serializeSettingsForFile(settings),
       // Owner 10-13: the picture taken when Report was opened, only while the coach left it ticked (frozen above).
       screenshot,
-      context: props.host.context(),
+      // Owner 10-21: allow-listed display / performance settings + machine facts, so performance reports are diagnosable.
+      context: { ...props.host.context(), settings: bugReportSettingsSnapshot(settings, collectBugReportEnv(props.host.pitch()?.element)) },
     });
     const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, botConfigBaseUrl());
     reportText.value = '';
