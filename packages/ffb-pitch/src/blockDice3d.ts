@@ -79,11 +79,15 @@ export interface BlockDiceRuntime {
   attach?(host: HTMLElement, slots?: () => readonly BlockDiceSlot[]): void;
   /** Take the canvas out of the DOM and stop observing the host; the context and its GPU resources stay alive. */
   detach?(): void;
+  /** Perf (owner 10-21, warm at game load): the GPU work the first draw would otherwise do, as separate steps (compile
+   *  the programs, upload each cached face texture) so a caller can run them in idle slots. Draws nothing. */
+  prewarmSteps?(): Array<() => void | Promise<void>>;
   dispose(): void;
 }
 
 export type BlockDiceRuntimeFactory = (
-  host: HTMLElement,
+  /** null = built PARKED (warm-up at game load): no canvas in the DOM until attach. */
+  host: HTMLElement | null,
   onFailure: (error: unknown) => void,
   slots?: () => readonly BlockDiceSlot[],
 ) => Promise<BlockDiceRuntime>;
@@ -143,6 +147,10 @@ export interface BlockDiceRow {
   detach(): void;
   /** The host the canvas currently sits in (null while parked). */
   readonly host: HTMLElement | null;
+  /** Perf (owner 10-21): run the runtime's prewarm steps (program compile, face uploads) one at a time, each after
+   *  `next()` resolves true; stops (resolving false) when `next()` resolves false, the row is disposed or attached
+   *  (the first draw then does the rest, as before). Draws nothing. */
+  prewarm(next?: () => Promise<boolean>): Promise<boolean>;
   dispose(): void;
 }
 
@@ -257,6 +265,27 @@ class BlockDiceRowController implements BlockDiceRow {
     }
   }
 
+  async prewarm(next: () => Promise<boolean> = async () => true): Promise<boolean> {
+    if (this.disposed || !this.runtime.prewarmSteps) return false;
+    let steps: Array<() => void | Promise<void>>;
+    try {
+      steps = this.runtime.prewarmSteps();
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+    for (const step of steps) {
+      if (!(await next()) || this.disposed || this.host) return false;
+      try {
+        await step();
+      } catch (error) {
+        this.fail(error);
+        return false;
+      }
+    }
+    return !this.disposed;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -304,7 +333,7 @@ class BlockDiceRowController implements BlockDiceRow {
   }
 }
 
-export async function createBlockDiceRow(host: HTMLElement, options: BlockDiceRowOptions = {}): Promise<BlockDiceRow> {
+export async function createBlockDiceRow(host: HTMLElement | null, options: BlockDiceRowOptions = {}): Promise<BlockDiceRow> {
   const onFailure = options.onFailure ?? (() => undefined);
   try {
     const runtime = await (options.runtimeFactory ?? createThreeBlockDiceRuntime)(host, onFailure, options.slots);
@@ -351,6 +380,8 @@ const WHITE_BODY_FALLBACK = { color: BLOCK_DIE_SURFACE_COLOURS.white.fill, metal
 export const BLOCK_DICE_FACE_MAX_PX = 512;
 /** Face textures kept per row (3 face sets: plain, home, away). Older unused sets are released. */
 export const BLOCK_DICE_FACE_CACHE_MAX = 15;
+/** Warm-up compile poll: 10 ms apart, at most this many (~3 s) before the warm-up gives up (Astra r3: a failure). */
+export const BLOCK_DICE_COMPILE_MAX_POLLS = 300;
 
 export interface BlockFaceTextureCache<T> {
   /** The texture for `url`: the cached one (no load), else a single shared load. */
@@ -364,6 +395,11 @@ export interface BlockFaceTextureCache<T> {
   drop(urls: readonly string[], keep: ReadonlySet<string>): void;
   /** How many urls are cached (settled or loading). */
   readonly size: number;
+  /** The urls whose textures are settled in the cache now (the warm-up queues their uploads). */
+  urls(): string[];
+  /** The texture the cache still OWNS for `url` (settled, not released), else null - read at upload time, so a queued
+   *  warm-up step never touches a texture evicted / released since it was queued (Astra r1 on 7e3febf9b). */
+  peek(url: string): T | null;
   dispose(): void;
 }
 
@@ -428,6 +464,12 @@ export function createBlockFaceTextureCache<T>(options: {
       evict();
     },
     get size() { return pending.size; },
+    urls() {
+      return [...settled.entries()].filter(([, texture]) => texture != null).map(([url]) => url);
+    },
+    peek(url) {
+      return disposed ? null : settled.get(url) ?? null;
+    },
     dispose() {
       disposed = true;
       for (const texture of settled.values()) if (texture) options.release(texture);
@@ -466,7 +508,7 @@ async function decodeFaceBitmap(url: string, maxPx = BLOCK_DICE_FACE_MAX_PX): Pr
 }
 
 async function createThreeBlockDiceRuntime(
-  initialHost: HTMLElement,
+  initialHost: HTMLElement | null,
   onFailure: (error: unknown) => void,
   initialSlots?: () => readonly BlockDiceSlot[],
 ): Promise<BlockDiceRuntime> {
@@ -480,7 +522,7 @@ async function createThreeBlockDiceRuntime(
   const canvas = renderer.domElement;
   canvas.className = 'bp-dice-3d-canvas';
   canvas.setAttribute('aria-hidden', 'true');
-  initialHost.prepend(canvas);
+  initialHost?.prepend(canvas);
 
   const scene = new THREE.Scene();
   // Owner 09-08: the scene is laid out in CSS PIXELS of the host (x right, y down via negative world y) so each
@@ -593,7 +635,7 @@ async function createThreeBlockDiceRuntime(
     draw();
   };
   const observer = new ResizeObserver(resize);
-  observer.observe(initialHost);
+  if (initialHost) observer.observe(initialHost);
 
   const fail = (event: Event) => {
     event.preventDefault();
@@ -713,6 +755,48 @@ async function createThreeBlockDiceRuntime(
         }
         standard.needsUpdate = true;
       }
+    },
+    prewarmSteps() {
+      if (disposed) return [];
+      // Like three's compileAsync (KHR_parallel_shader_compile: the link check never blocks the main thread), but safe to
+      // retire (Astra r2): three's own poll reads the material properties out of band and throws once the row is
+      // disposed, never settling. This poll checks `disposed` first, catches, and is bounded - it always settles.
+      // Astra r3: only a READY link is success - a timeout or a poll error (row not disposed) REJECTS, so the warm-up
+      // fails (quiet dispose) and the first block builds lazily behind the PNG dice; never an unready program drawn.
+      const compile = () => new Promise<void>((resolve, reject) => {
+        if (disposed) { resolve(); return; }
+        const compiled = renderer.compile(scene, camera) as unknown;
+        const pending = new Set<unknown>(compiled instanceof Set ? compiled : []);
+        let parallel = false;
+        try { parallel = renderer.extensions?.get?.('KHR_parallel_shader_compile') != null; } catch { parallel = false; }
+        let polls = 0;
+        const poll = () => {
+          if (disposed) { resolve(); return; }
+          try {
+            for (const material of [...pending]) {
+              const program = (renderer.properties.get(material as object) as { currentProgram?: { isReady?: () => boolean } } | undefined)?.currentProgram;
+              if (!program || typeof program.isReady !== 'function' || program.isReady()) pending.delete(material);
+            }
+          } catch (error) {
+            if (disposed) resolve(); // retired mid-compile: prewarm sees the disposed row and stops
+            else reject(error);
+            return;
+          }
+          if (pending.size === 0) { resolve(); return; }
+          if (++polls > BLOCK_DICE_COMPILE_MAX_POLLS) { reject(new Error('3D block-dice shader compile timed out')); return; }
+          setTimeout(poll, 10);
+        };
+        if (parallel) poll();
+        else setTimeout(poll, 10);
+      });
+      // Astra r1: each step re-reads the cache by url, so a texture evicted / released between idle slots (an art
+      // change with the cache full) is skipped, never uploaded.
+      const uploads = faces.urls().map((url) => () => {
+        if (disposed) return;
+        const texture = faces.peek(url);
+        if (texture) renderer.initTexture(texture);
+      });
+      return [compile, ...uploads];
     },
     async updateFaceTextures(urls) {
       if (urls.length !== 5) throw new Error(`Expected five block-face URLs, got ${urls.length}`);

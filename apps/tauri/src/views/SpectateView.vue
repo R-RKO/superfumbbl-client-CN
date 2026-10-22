@@ -6,7 +6,7 @@ import { installMouseEntropy } from '../game/mouseEntropy';
 import { composeGraphicalJoins } from '../game/reportFormatter';
 import { casualtyPillLines, decayPillLine } from '../game/injuryPillText';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch, watchEffect } from 'vue';
-import { createBlockDiceRowProvider } from '../game/blockDiceRowProvider';
+import { blockDiceIdleStep, createBlockDiceRowProvider, type BlockDiceWarmSignal } from '../game/blockDiceRowProvider';
 import { anchorRef } from '../game/anchorRef'; // perf 1.0.261: per-frame screen anchors trigger only on a real move
 import { FORK_EDITION } from '../game/edition';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
@@ -2657,6 +2657,9 @@ let bpDice3dLifecycle = 0;
 let bpReplaySeekFallback = false;
 let bpMotionQuery: MediaQueryList | null = null;
 let bpMotionListener: (() => void) | null = null;
+/** Perf (owner 10-21): warm-up epoch (bumped by every dispose) and the row a warm-up is still preparing. */
+let bpDice3dWarmEpoch = 0;
+let bpDice3dWarmingRow: BlockDiceRow | null = null;
 
 function blockDiceWebGlAvailable(): boolean {
   return typeof window !== 'undefined'
@@ -2688,9 +2691,11 @@ const bpDice3dProvider = createBlockDiceRowProvider<BlockDiceRow>({
       return row;
     });
   },
+  warm: (signal) => warmBlockDice3dRow(signal),
 });
 function disposeBlockDice3d(resetFailure = false) {
-  bpDice3dProvider.reset();
+  bpDice3dProvider.resetAll();
+  bpDice3dWarmEpoch++;
   bpDice3dLifecycle++;
   bpDice3dGeneration++;
   bpDice3d?.dispose();
@@ -2741,8 +2746,10 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
     const module = await loadBlockDice3d();
     bpDice3dModule = module;
     if (generation !== bpDice3dGeneration || !blockDice3dEligible() || bpDiceHost.value !== host) return null;
-    const row = await module.createBlockDiceRow(host, {
-      onFailure: failBlockDice3d,
+    let created: BlockDiceRow | null = null;
+    const row: BlockDiceRow = created = await module.createBlockDiceRow(host, {
+      // routed by ownership: a later re-warm of this (parked) row fails quietly, a card-owned roll latches
+      onFailure: (error) => { if (created) onWarmBlockDice3dFailure(created, error); else failBlockDice3d(error); },
       onSettled: () => { if (bpDice3dLive.value) stopBlockTumble(); },
       // Owner 09-08: the cubes sit exactly on the `.bp-die` buttons (60 px boxes, 7 px gap) — never their own spacing.
       slots: blockDiceSlotsOf(module, host),
@@ -2764,6 +2771,85 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
 }
 function ensureBlockDice3d(): Promise<BlockDiceRow | null> {
   return bpDice3dProvider.ensure();
+}
+/** Perf (owner 10-21, "Loading the 3D dice makes perfect sense"): the FIRST block of a session paid the one-time
+ *  build (WebGL context, shader programs, face uploads: ~0.5-0.7 s main thread on a slow machine) right as the roll
+ *  was presented. Once the pitch has painted, the row is built PARKED (no host, nothing drawn), the face sets applied
+ *  (home last - the local coach's own dice show home; the away / opposing set pre-cached too: 5 more 512 px
+ *  textures, inside the cache cap) and the programs compiled + faces uploaded, every step in an idle slot and never
+ *  while a movement is presented. It runs through the provider, so a block arriving mid warm-up shares it (the warm-up
+ *  hurries, the card re-homes the row; the PNG dice stay until it is ready). Fail open: any throw / context loss
+ *  during the warm-up disposes it quietly (no failure latch) and the lazy build stays exactly as before. */
+function blockDice3dWarmBusy(): boolean {
+  return !!gameStore.state.presentationStep || !!gameStore.state.movementIntent;
+}
+function blockDice3dWarmStep(signal: BlockDiceWarmSignal): Promise<boolean> {
+  return blockDiceIdleStep(signal, { busy: blockDice3dWarmBusy });
+}
+/** Every row's failure route, by CURRENT ownership (Astra r1): while a warm-up owns the row (cold build or re-warm of
+ *  a lazily built, parked row) the failure disposes quietly - no latch, the next block builds lazily; otherwise (a live,
+ *  card-owned roll) it is the failure latch as before. */
+function onWarmBlockDice3dFailure(row: BlockDiceRow | null, error: unknown) {
+  if (row && bpDice3dWarmingRow === row) {
+    // Warm-up only: no latch - drop the row, the first block builds lazily as it always did.
+    bpDice3dWarmingRow = null;
+    if (bpDice3d === row) disposeBlockDice3d();
+    else row.dispose();
+    return;
+  }
+  failBlockDice3d(error);
+}
+async function warmBlockDice3dRow(signal: BlockDiceWarmSignal): Promise<BlockDiceRow | null> {
+  const epoch = bpDice3dWarmEpoch;
+  const stale = () => epoch !== bpDice3dWarmEpoch || !blockDice3dEligible();
+  let row: BlockDiceRow | null = null;
+  try {
+    if (stale() || !(await blockDice3dWarmStep(signal)) || stale()) return null;
+    if (bpDice3d?.host) return null; // a card holds the row: nothing to warm
+    if (!bpDice3d) {
+      const module = await loadBlockDice3d();
+      bpDice3dModule = module;
+      if (stale() || bpDice3d) return null;
+      // Astra r1: the GLB (shared, cached) loads first; only then a fresh idle slot - skipping any presented movement -
+      // before the renderer and its resources are created (createBlockDiceRow then resolves the cached model at once).
+      await module.loadSharedBlockDiceModel();
+      if (stale() || bpDice3d || !(await blockDice3dWarmStep(signal)) || stale() || bpDice3d) return null;
+      let built: BlockDiceRow | null = null;
+      built = await module.createBlockDiceRow(null, {
+        // a failure while still creating (built null) is the warm-up's own: dropped quietly by the catch below
+        onFailure: (error) => { if (built) onWarmBlockDice3dFailure(built, error); },
+        onSettled: () => { if (bpDice3dLive.value) stopBlockTumble(); },
+      });
+      row = built;
+      if (stale() || bpDice3d) { row.dispose(); return null; }
+      bpDice3d = row;
+    } else {
+      row = bpDice3d; // parked: re-warm after a face-set / surface change
+    }
+    bpDice3dWarmingRow = row;
+    if (signal.urgent) return row;
+    for (const side of ['away', 'home'] as const) {
+      if (signal.urgent || row.host) break; // the card's re-home applies its own side
+      await row.updateFaceTextures(PitchRenderer.blockFaceUrls(side));
+      if (bpDice3d !== row || stale()) return null;
+    }
+    if (!signal.urgent && !row.host) {
+      row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, 'home'));
+      await row.prewarm(() => blockDice3dWarmStep(signal));
+    }
+    return bpDice3d === row ? row : null;
+  } catch (error) {
+    if (row) onWarmBlockDice3dFailure(row, error);
+    return null;
+  } finally {
+    if (bpDice3dWarmingRow === row) bpDice3dWarmingRow = null;
+  }
+}
+/** Warm at game load: the pitch has painted (rendererReady) and the game model is in; no block card up. */
+function scheduleBlockDice3dWarm() {
+  if (rendererReady.value === 0 || !gameStore.game.value || gameStore.state.blockPartial || !blockDice3dEligible()) return;
+  if (bpDice3d && bpDice3d.host) return;
+  void bpDice3dProvider.warm();
 }
 async function presentBlockDice3d(key: string, results: readonly number[], durationMs: number) {
   if (bpDice3dPresentedKey === key) return;
@@ -2856,6 +2942,14 @@ watch(() => gameStore.game.value?.gameId, () => {
   stopBlockTumble();
   disposeBlockDice3d(true);
 });
+// Perf (owner 10-21): warm the 3D dice once the pitch has painted and the game model is in (the loading cover / rank
+// bar is typically still up), and again lazily when they become eligible (setting on, catch-up over). The warm-up's
+// first step waits for an idle slot, so neither this watcher nor the first paint pays for it.
+watch(
+  () => [rendererReady.value, gameStore.game.value?.gameId, settings.order66, settings.blockDice3d, settings.spectatorClean,
+    gameStore.playbackCatchingUp.value, bpReducedMotion.value] as const,
+  () => { void nextTick(scheduleBlockDice3dWarm); },
+);
 let detachMouseEntropy: (() => void) | null = null;
 onMounted(() => {
   bpMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -2906,6 +3000,8 @@ const blockPartialSide = computed<BlockDieSide | null>(() => diceSideOfTeam(game
 watch(() => [assetMods.blockDiceRevision, blockPartialSide.value] as const, () => {
   bpDice3d?.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface, blockPartialSide.value)); // owner 10-06: the surface change bumps the revision once composed
   if (bpDice3d) void bpDice3d.updateFaceTextures(PitchRenderer.blockFaceUrls(blockPartialSide.value)).catch(failBlockDice3d);
+  // Perf (owner 10-21): a parked row re-warms the new face set / surface lazily (idle steps), never a stall.
+  if (bpDice3d && !bpDice3d.host) void nextTick(scheduleBlockDice3dWarm);
 });
 const liveMultiBlockChoosingTeamId = computed(() => currentMultiBlockChoosingTeamId(gameStore.game.value));
 const liveMultiBlockChooser = computed(() => projectBlockChooser(
