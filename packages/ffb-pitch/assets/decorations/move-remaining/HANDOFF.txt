@@ -3,7 +3,8 @@ Super FUMBBL — movement distance remaining badges
 Integrate these as small counters anchored to the top-right of the existing Move decoration. This package contains artwork only; no client changes have been made.
 
 Values: 12 through 0 inclusive, one PNG per value.
-12–4: blue. 3, 2, 1: yellow. 0: red.
+12–4: blue. 3: green. 2: yellow. 1: orange. 0: red.
+Revision 3 supersedes earlier packages. Do not use the alternate orange 2 or yellow 4.
 The colors indicate remaining movement, not Home/Away seat colors. Preserve this palette for either team.
 
 Use the client's existing authoritative movement-remaining value and display rules. Do not calculate or change movement rules, rush allowance, or action lifecycle from these assets. Keep zero visible when the Move decoration itself is still visible; hide with its parent decoration when the existing rules hide it. Do not infer that zero means the turn is over.

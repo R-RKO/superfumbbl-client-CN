@@ -17780,6 +17780,9 @@ function sendChat() {
   display: flex;
   flex-direction: column; /* owner 10-07: CURRENT over PLAYER */
 }
+/* Owner 10-22: the lead capitals (C, P) ran taller than the flag's tab; a touch smaller than the shared 1.25em lead
+   so they fit the tab, this flag only - the DisplayCaps treatment elsewhere is unchanged. */
+.active-label :deep(.display-caps-lead) { font-size: 1.12em; }
 .coach-panel.home .active-label { text-align: left; align-items: flex-start; }
 .coach-panel.away .active-label { text-align: right; align-items: flex-end; }
 .coach-panel.home { --active-badge-color: var(--seat-home-bright); --active-badge-text: #eef5ff; }

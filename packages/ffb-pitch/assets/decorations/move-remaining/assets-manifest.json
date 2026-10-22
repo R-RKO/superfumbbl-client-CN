@@ -16,9 +16,9 @@
     },
     {
       "number": 1,
-      "color": "yellow",
-      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-79fbfc65-9e9e-4717-ab83-34d0df9b37e0.png",
-      "prompt": "Edit reference number badge to exact number 1, and recolor its blue tile to bright YELLOW tile face with lemon highlight rim and golden amber underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+      "color": "orange",
+      "source": "action-icons/move-distance-variants/move-remaining-1-orange.png",
+      "prompt": "Orange 1 from approved variants; built-in image_gen."
     },
     {
       "number": 2,
@@ -28,9 +28,9 @@
     },
     {
       "number": 3,
-      "color": "yellow",
-      "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-10dc8f11-2fd2-4800-b0d6-d99d4d28d39a.png",
-      "prompt": "Edit reference number badge to exact number 3, and recolor its blue tile to bright YELLOW tile face with lemon highlight rim and golden amber underside. This background color is essential. Keep identical square tile geometry, thin beveled clipped-corner rim, black outer outline, pixel style, padding and layout. Ivory-white block numeral with heavy BLACK outline, same height as reference, centered, consistent digit weight. Single digit centered without stretching to double width. Readable tiny graphical log counter. Transparent outside tile. No extra elements."
+      "color": "green",
+      "source": "C:/Users/Jay/.codex/generated_images/01a07978-92fd-7f03-ae12-07f78a6b8772/exec-2c82115c-e983-472d-9a38-1f70a2e990f7.png",
+      "prompt": "Edit ONLY the yellow tile color of this exact movement counter 3 to bright saturated emerald GREEN, lighter mint green highlight rim and deep forest green underside bevel. Preserve exactly the ivory-white numeral 3, its black outline and grey shading, all pixel geometry, square dimensions, margins, clipped corners and retro styling. No other changes. Transparent outside badge. Green should read distinctly green between blue and yellow in a countdown palette."
     },
     {
       "number": 4,
@@ -86,5 +86,6 @@
       "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-8022e23c-fdd8-45d6-baeb-01875861318d.png",
       "prompt": "Create a single tiny game UI movement-distance counter badge with exact number \"12\". Square canvas, transparent outside. Compact dark navy clipped-corner square tile with thin black outer outline and restrained cyan-blue beveled rim. Giant ivory-white retro arcade pixel block digits 12 centered, very thick strokes, clean open counters, simple flat bright faces with minimal cool grey underside shading. Number occupies 80% tile height and most width. Designed for 24px readability. No scratches, rivets, decorative symbols, labels, other text or glow. Match the reference Move decoration retro pixel-art language but render ONLY the separate number badge, no shoe. Tile fills 94% canvas. This is the master of a consistent 0-12 set."
     }
-  ]
+  ],
+  "revision": 3
 }
