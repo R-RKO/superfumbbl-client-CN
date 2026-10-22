@@ -8042,6 +8042,53 @@ function movementDraining(playerId?: string): boolean {
   return presentation.queue.some((e) => e.kind === 'step' && (playerId === undefined || e.playerId === playerId));
 }
 
+/** Owner 10-22 (spectator blitz): the server sends a blitz's step frames and its block roll in one burst; the spectator
+ *  applied the block-roll frame on its pacing slot and armed the block card / 3D dice / thud while the #67 drain was
+ *  still walking the blitzer, so the dice appeared before the token reached the defender. The card (presentation only:
+ *  the model frame has already applied) now waits behind the blitzer's walk in the FIFO, and the playback pump holds the
+ *  frames behind it until the card is up (they would otherwise answer / clear an unseen offer). Fail-open: a watchdog of
+ *  the remaining walk + 1.5 s (cap 6 s) arms it anyway; catch-up arms it at once; a reset / seek / snapshot drops it. */
+const SPECTATOR_BLOCK_CARD_HOLD_MARGIN_MS = 1500;
+const SPECTATOR_BLOCK_CARD_HOLD_CAP_MS = 6000;
+const SPECTATOR_BLOCK_CARD_PROMPT = 'spectatorBlockCard';
+let spectatorBlockCardHold: { arm: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
+function spectatorBlockCardWatchdogMs(playerId: string): number {
+  const tiles = presentation.queue.reduce((n, e) => n + (e.kind === 'step' && e.playerId === playerId ? 1 : 0), 0)
+    + (presentation.presenting?.kind === 'walk' && presentation.presenting.id === playerId ? 1 : 0);
+  return Math.min(SPECTATOR_BLOCK_CARD_HOLD_CAP_MS,
+    tiles * presentationMs(settings.moveSpeedMs) + SPECTATOR_BLOCK_CARD_HOLD_MARGIN_MS);
+}
+/** Arm `arm` once the blitzer's walk has drained (FIFO prompt behind its steps), else at the watchdog. */
+function holdSpectatorBlockCard(playerId: string, arm: () => void): void {
+  dropSpectatorBlockCardHold();
+  const hold = {
+    arm,
+    timer: scheduleGameTimeout(() => releaseSpectatorBlockCardHold(hold), spectatorBlockCardWatchdogMs(playerId)),
+  };
+  spectatorBlockCardHold = hold;
+  enqueuePromptBehind(SPECTATOR_BLOCK_CARD_PROMPT, () => releaseSpectatorBlockCardHold(hold));
+}
+/** Arm the held card now (walk settled, watchdog, or catch-up) and start its read beat as an un-held card does.
+ *  `fromPump`: called from inside pumpPlayback, which carries on itself - never wake a second pump from there (Astra
+ *  r1 P2: a nested pump scheduled its own timer beside the outer one, and the orphaned chain applied frames through
+ *  later read holds), so the read beat is only recorded on holdUntil for the running pump to honour. */
+function releaseSpectatorBlockCardHold(hold: typeof spectatorBlockCardHold = spectatorBlockCardHold, fromPump = false): void {
+  if (!hold || hold !== spectatorBlockCardHold) return;
+  dropSpectatorBlockCardHold();
+  hold.arm();
+  const readMs = presentationMs(SPECTATOR_BLOCK_READ_MS);
+  if (fromPump) { if (!playback.catchingUp) playback.holdUntil = Math.max(playback.holdUntil, Date.now() + readMs); }
+  else if (!playback.catchingUp) holdPlayback(readMs);
+  else if (!playback.timer) pumpPlayback();
+}
+/** Forget a held card without arming it (reset / seek / snapshot, or superseded by a newer card). */
+function dropSpectatorBlockCardHold(): void {
+  if (!spectatorBlockCardHold) return;
+  cancelGameTimeout(spectatorBlockCardHold.timer);
+  spectatorBlockCardHold = null;
+  presentation.queue = presentation.queue.filter((e) => e.kind !== 'prompt' || e.label !== SPECTATOR_BLOCK_CARD_PROMPT);
+}
+
 // ── Authoritative pass destination ───────────────────────────────────────────────────────────────────
 // This is intentionally action/dialog agnostic. Upstream publishes passCoordinate for ordinary passes, bombs,
 // Throw Team-Mate reroll decisions, and the later Swoop election. The client only validates and displays it.
@@ -8132,6 +8179,7 @@ export function installOfferTransportTestHarness(): { lose(): void; alive(): boo
 function resetPresentation(): void {
   modalOfferHoldTeardown.value++;
   flushPendingUpstreamLogs(); // FUMBBL-only rows waiting behind a fireball beat keep their content
+  dropSpectatorBlockCardHold(); // owner 10-22: teardown drops a spectator block card held behind a walk
   presentation.queue.length = 0;
   if (presentation.presenting) {
     presentation.presenting.release(presentation.presenting.kind === 'rollBeat');
@@ -11348,7 +11396,8 @@ function applyFrameContents(frame: QueuedFrame) {
       // reroll-SPLASH beat, shorter than the dice read. Presentation-only (inside !play.active; holdPlayback
       // no-ops unforced in play). Hold ONLY on a fresh arm, else the per-frame re-derive re-holds forever.
       // Owner 09-06: live-play rate (tumble + viewer reveal) x the 1.1 spectator factor, not the 1950 ms dice life.
-      if (surfaceBlockPartial(dp, { readOnly: true, reports })) holdPlayback(presentationMs(SPECTATOR_BLOCK_READ_MS));
+      // Owner 10-22: a card held behind the blitzer's walk starts this read beat when it arms (releaseSpectatorBlockCardHold).
+      if (surfaceBlockPartial(dp, { readOnly: true, reports }) && !spectatorBlockCardHold) holdPlayback(presentationMs(SPECTATOR_BLOCK_READ_MS));
     } else if (state.blockPartial && !state.blockPartial.mine && state.blockPartial.choiceIndex == null) {
       // Owner 08-17 P1 (HANGING DIALOGS): the raise landed in c4e0e935 without the else-clear its predecessor
       // carried ("declined — no glow, no lingering surface"). The stale-dialog sweep that would otherwise retire
@@ -12552,6 +12601,7 @@ function pumpPlayback() {
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
     if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); } // Astra 10-20 (P2-3)
+    releaseSpectatorBlockCardHold(spectatorBlockCardHold, true); // owner 10-22: catch-up never waits on a walk for the block card
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
       playback.timer = null;
@@ -12576,6 +12626,11 @@ function pumpPlayback() {
     const liveOnTheBall = game.value?.turnMode === 'kickoffReturn' || game.value?.turnMode === 'passBlock';
     if (play.active && (livePrayer?.kind === 'player' || liveOnTheBall)) drivePregameStep();
   }
+  // Owner 10-22: a spectator's block card held behind the blitzer's walk - nothing behind it applies until it is up
+  // (its release arms the read beat and wakes this pump; the watchdog bounds the wait). A watchdog lost to a timeout
+  // sweep fails open here: the card arms instead of wedging the pump.
+  if (spectatorBlockCardHold && !gameTimeouts.has(spectatorBlockCardHold.timer)) releaseSpectatorBlockCardHold(spectatorBlockCardHold, true);
+  if (spectatorBlockCardHold) return;
   // Owner 2026-07-06 PACING GATE: while a gating cinematic is holding, do NOT drain or fast-forward — reschedule the pump for when the hold ends. This is what keeps the follow/stay indicator and the kick-off event on screen (in order) before the movement / ball-landing frames apply, even under backlog pressure.
   const heldFor = playback.holdUntil - Date.now();
   if (heldFor > 0) {
@@ -13411,6 +13466,7 @@ function resetPlayback() {
   rescuedMoveFloorUntil = 0;
   stagedCatchReadUntil = 0; // Astra r1 P2 (10-21): never crosses a reset / seek / snapshot
   stagedCatchTimer = null;
+  dropSpectatorBlockCardHold(); // owner 10-22: a held spectator block card never crosses a reset / seek / snapshot
   failedMoveHold = null;
   moveRollHeldBacklog = false;
   state.moveRollHoldBusy = false;
@@ -21768,7 +21824,11 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
     usedCaption,
   };
   };
+  const blitzerId = String(game.value?.actingPlayer?.playerId ?? dp.playerId ?? '');
   if (settings.order66 && play.active && movementDraining()) enqueuePromptBehind('blockPartial', armBlockPartial);
+  // Owner 10-22: a spectator's card waits for the blitzer's walk to settle (see holdSpectatorBlockCard).
+  else if (settings.order66 && readOnly && !play.active && !replay.active && !playback.catchingUp && blitzerId
+      && movementDraining(blitzerId)) holdSpectatorBlockCard(blitzerId, armBlockPartial);
   else armBlockPartial();
   return true;
 }
