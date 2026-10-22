@@ -83,7 +83,13 @@ export interface ActionRollCue {
   die: ActionDieCue | null;
   modal: { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled: boolean;
     /** Owner 10-15: the combined Disturbing Presence count from the server's `rollModifiers` (absent when none). */
-    disturbingPresence?: number } | null;
+    disturbingPresence?: number;
+    /** Owner 10-22: the server's reroll offer for this failed roll is open - the die is held until it closes (as an
+     *  ActionDieCue's flags: the watching seat / the deciding coach). */
+    opponentRerollPending?: boolean; rerollOfferPending?: boolean;
+    /** Owner 10-22: this rerolled result answers a failed die of an EARLIER frame (the reroll dialog): it re-rolls
+     *  that held die in place under the reroll caption, as a dialog-rerolled dodge does. */
+    rerollSkill?: string; rerollTeam?: boolean } | null;
   trait: { playerId: string; trait: string; successful: boolean; roll: number; needed?: number; hasTarget?: boolean } | null;
 }
 /** Shared report interpretation. Scheduling and UI publication remain with the active reader. */
@@ -122,13 +128,20 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   const square: [number, number] = [coordinate[0]!, coordinate[1]!];
   // Owner 10-15: render only what the server sent - the count comes from this report's modifiers, never the board.
   const disturbingPresence = DISTURBING_PRESENCE_TAG_REPORTS.has(id) ? disturbingPresenceFromRollModifiers(report.rollModifiers) : 0;
-  if (id === 'passRoll' || id === 'catchRoll') {
-    result.modal = { playerId, square, kind: id === 'passRoll' ? 'pass' : 'catch', roll, needed, ok: !failed, reRolled,
-      ...(disturbingPresence > 0 ? { disturbingPresence } : {}) };
-    return result;
-  }
   const dialog = game.dialogParameter as Record<string, unknown> | null | undefined;
   const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // The server's reroll offer for THIS failed roll is open (its dialog names this player and offers a source).
+  const offerOpen = (failed || rerollOfferNotFailed) && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
+    && offeredReRollOptions(dialog ?? {}, playerById(game, playerId)?.skillDisplayValuesMap).length > 0;
+  if (id === 'passRoll' || id === 'catchRoll') {
+    // Owner 10-22 (g1955713 #2052): a failed pass / catch die is held for the server's reroll offer on EVERY seat, like
+    // any other failed roll's die - the opposing seat and spectators used to lose it after its ~1.2 s read while the
+    // other coach was still deciding. Released by the renderer when the offer closes (the dialog-clearing frame).
+    result.modal = { playerId, square, kind: id === 'passRoll' ? 'pass' : 'catch', roll, needed, ok: !failed, reRolled,
+      ...(disturbingPresence > 0 ? { disturbingPresence } : {}),
+      ...(offerOpen ? (passiveViewer ? { opponentRerollPending: true } : { rerollOfferPending: true }) : {}) };
+    return result;
+  }
   result.die = { square, value: roll, cause, failed, needed,
     rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined };
   if (disturbingPresence > 0) result.die.disturbingPresence = disturbingPresence;
@@ -145,8 +158,7 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   // the cause. Both seats now hold it for as long as the server's reroll offer for that player is open.
   if (rerollOfferNotFailed) result.die.rerollOfferNotFailed = true;
   if (id === 'breatheFire' && reRolled) result.die.breatheFireReroll = true;
-  if ((failed || rerollOfferNotFailed) && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
-    && offeredReRollOptions(dialog ?? {}, playerById(game, playerId)?.skillDisplayValuesMap).length > 0) {
+  if (offerOpen) {
     if (passiveViewer) result.die.opponentRerollPending = true;
     else result.die.rerollOfferPending = true;
   }

@@ -53,7 +53,8 @@ import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAn
 import { isRightStuffReRolledAction } from '../game/logic/ttmLandingPromptHold';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
-import { ROLL_FAILED_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed } from '../game/logic/uiSoundCues';
+import { createModalOfferHoldTracker } from '../game/logic/modalOfferHolds';
+import { ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed } from '../game/logic/uiSoundCues';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
@@ -3222,6 +3223,19 @@ watch(
   },
 );
 
+// Astra r1 (a8a250fd1): a held pass / catch die belongs to ITS roller's reroll offer - released the moment that offer
+// is gone, even when another player's offer replaced it in the same sync (the renderer's own release only sees "no
+// reroll dialog at all").
+const modalOfferHolds = createModalOfferHoldTracker((square) => renderer?.releaseRerollOfferHold(square));
+watch(
+  () => {
+    const d = gameStore.game.value?.dialogParameter as { dialogId?: unknown; playerId?: unknown; reRolledAction?: unknown } | null | undefined;
+    return d ? `${String(d.dialogId ?? '')}|${String(d.playerId ?? '')}|${String(d.reRolledAction ?? '')}` : '';
+  },
+  () => modalOfferHolds.sync(gameStore.game.value?.dialogParameter as Record<string, unknown> | null | undefined),
+);
+// Astra r2: reset / disconnect / leave keep the frozen board's dialog - release every held pass / catch die there.
+watch(() => gameStore.modalOfferHoldTeardown.value, () => modalOfferHolds.releaseAll(), { flush: 'sync' });
 // Owner 2026-07-15 (live test): PASS/CATCH rolls now use the SAME die-tag d6 as every other roll (GFI, dodge,
 // pickup, block) instead of a bespoke over-head "Pass 4 / 4+ ✓" pill that read huge + off-theme. showActionDie
 // tags the die "Pass"/"Catch" and folds a fail into the standard "FAILED (N+)" stencil. Declare-time requirements
@@ -3234,10 +3248,15 @@ watch(
       // Owner 09-09: the cause is the renderer's lowercase KEY ('pass' / 'catch') — the capitalised words never
       // matched the die-tag branches, so the pass and catch badges were silently skipped (the tag fell to '?').
       // Owner 10-15: a server Disturbing Presence modifier on the roll rides the die as its "DP −N" tag.
-      if (m.disturbingPresence) renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed, undefined, undefined, undefined, undefined, undefined, undefined, m.disturbingPresence);
-      else renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed);
-      // Owner 10-19: these calls pass no reroll caption, so the renderer always pops the die in first (Astra r2 P3).
-      if (!m.ok) scheduleRollFailedCue(presentationMs(ROLL_FAILED_CUE_DELAY_MS));
+      // Owner 10-22 (g1955713): a failed pass / catch die is held while the server's reroll offer for it is open, on
+      // every seat (the store's opponentRerollPending / rerollOfferPending, as for any failed die); a result that
+      // answers the reroll dialog re-rolls that held die in place under its reroll caption.
+      renderer.showActionDie(m.square, m.roll, m.kind, !m.ok, m.needed, m.rerollSkill, m.rerollTeam,
+        m.opponentRerollPending, m.rerollOfferPending, undefined, undefined, m.disturbingPresence || undefined);
+      modalOfferHolds.noteShown(m, gameStore.game.value?.dialogParameter as Record<string, unknown> | null | undefined);
+      // Owner 10-19: without a reroll caption the renderer always pops the die in first (Astra r2 P3); an in-place
+      // reroll only tumbles.
+      if (!m.ok) scheduleRollFailedCue(presentationMs(m.rerollSkill || m.rerollTeam ? ROLL_FAILED_REROLL_CUE_DELAY_MS : ROLL_FAILED_CUE_DELAY_MS));
     }
   },
 );
@@ -11551,6 +11570,7 @@ onMounted(async () => {
   // Astra review: seed at MOUNT - a saved "off" must hold from the very first paint (applyMarkings only runs from watchers).
   mountedRenderer.bloodDecalsEnabled = settings.bloodSplatters;
   mountedRenderer.moveBadgeEnabled = settings.moveBadge; // owner 10-21: a saved "off" holds from the first paint
+  mountedRenderer.plannerDiceSeatTint = true; // owner 10-22: route / reach dice wear the mover's Home / Away die (Modern only)
   mountedRenderer.actionDecorationStyle = settings.actionDecorations;
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);

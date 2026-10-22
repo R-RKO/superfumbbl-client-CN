@@ -2633,6 +2633,9 @@ export class PitchRenderer {
   /** Owner 10-21: Settings > Display can turn the movement-left feet badge off (the host sets this and refreshes).
    *  Astra: OPT-IN (default off) - a view that never wires the setting (Classic) draws no badge at all. */
   moveBadgeEnabled = false;
+  /** Owner 10-22: planned-roll dice (route tags, reach rush dice) wear the mover's Home / Away seat die. Astra: OPT-IN
+   *  (default off) - Modern SpectateView sets it; Classic never does and keeps the neutral face byte-identical. */
+  plannerDiceSeatTint = false;
   /** Range shading + selection halo, under the tokens. */
   private overlayLayer = new Container();
   private movementReachLayer = new Container();
@@ -2720,6 +2723,9 @@ export class PitchRenderer {
   private d6FaceSideTextures: Partial<Record<BlockDieSide, Array<Texture | undefined>>> = {};
   private d6FaceVariant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT;
   private d6FaceLoadGeneration = 0;
+  /** Astra 10-22: bumped whenever a D6 face set FINISHES loading; part of the planned-dice cache signatures so a redraw
+   *  made before the load completed (new variant, old textures) is rebuilt on the next redraw. */
+  private d6FaceRevision = 0;
   /** Dedicated Go For It roll marker. An installed GFI icon pack target may override it. */
   private gfiDieTagTexture: Texture | null = null;
   /** Dedicated pickup roll marker. An installed `pickup` icon target may override it. */
@@ -9234,6 +9240,7 @@ export class PitchRenderer {
     if (cursor && acting?.playerId === cursor.playerId && isMovingPlayerAction(acting.playerAction)) {
       const reach = this.movementPresentationReach();
       const rushTarget = rushTargetForPlayer(this.game, cursor.playerId);
+      const cursorSide = this.plannedRollSide(cursor.playerId); // owner 10-22: the mover's seat die
       for (const [sx, sy] of reach?.rush ?? []) {
         const key = squareKey(sx, sy);
         const quad = squareQuad(sx, sy);
@@ -9252,11 +9259,11 @@ export class PitchRenderer {
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
           'reach',
-          `${dieScale}:${rushTarget}`,
+          `${dieScale}:${rushTarget}:${cursorSide ?? '-'}:${this.d6FaceVariant}:${this.d6FaceRevision}`,
           a.x,
           a.y,
           1,
-          () => this.buildReachableRushDie(0, 0, dieScale, rushTarget),
+          () => this.buildReachableRushDie(0, 0, dieScale, rushTarget, cursorSide),
           1,
         );
       }
@@ -9360,6 +9367,7 @@ export class PitchRenderer {
     const presentationOwnsMoveArt = this.movementPresentationCursor?.playerId === actorId;
     if (presentationOwnsMoveArt) return;
     const fallbackRushTarget = rushTargetForPlayer(this.game, actorId);
+    const actorSide = this.plannedRollSide(actorId); // owner 10-22: the reach costs wear the mover's seat die too
     // Astra pass 5: a square ON the planned path is priced by the path's own tags, so the reach-square cost chips (dodge
     // plate, rush die) are not drawn there. A server-priced JUMP plate stays: the path draws no jump tag, so without it
     // the leap's price would vanish.
@@ -9382,7 +9390,7 @@ export class PitchRenderer {
           const jumpScale = plate ? this.plannerTagGroupLayout(['jump'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
           if (plate) this.registerReachPlate('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, jumpScale);
           const chip = plate
-            ? this.buildPlannerTag('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * jumpScale, rolls.dodge)
+            ? this.buildPlannerTag('jump', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * jumpScale, rolls.dodge, actorSide)
             : this.buildJumpChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
@@ -9392,18 +9400,18 @@ export class PitchRenderer {
           const dodgeScale = plate ? this.plannerTagGroupLayout(['dodge'], this.reachPlateRoom(sx, sy, a, ds) / ds).scale : 1;
           if (plate) this.registerReachPlate('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, dodgeScale);
           const chip = plate
-            ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, rolls.dodge)
+            ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, rolls.dodge, actorSide)
             : this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         }
         if (rolls.gfi > 0 && !onPath) {
           this.pathLayer.addChild(
-            this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget),
+            this.buildReachableRushDie(a.x, a.y, ds * 0.8, rolls.gfi || fallbackRushTarget, actorSide),
           );
         }
       } else if (legacyRush && !onPath) {
-        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.8, fallbackRushTarget));
+        this.pathLayer.addChild(this.buildReachableRushDie(a.x, a.y, ds * 0.8, fallbackRushTarget, actorSide));
       }
     }
   }
@@ -9539,6 +9547,9 @@ export class PitchRenderer {
         const rushTarget = rushTargetForPlayer(this.game, this.o66PathMover);
         if (b && moverPlayer) {
           const persistentPath = this.movementOverlayOwner === this.o66PathMover;
+          // Owner 10-22: every tag on the route wears the MOVER's seat die (home blue / away red under the Home / Away
+          // dice), the same for the first, second and any later step; the price still comes from the server / mirror.
+          const moverSide = this.plannedRollSide(this.o66PathMover);
           if (persistentPath) this.pathLayer.addChild(this.movementPathCostLayer);
           const agility = Number((moverPlayer as { agility?: number }).agility) || 3;
           // Owner 10-21 (mutations): the dodge NUMBER for a step the server has not priced is dodgeTargetForPlayer
@@ -9603,11 +9614,11 @@ export class PitchRenderer {
               if (dieWord) this.o66TagRects.push(...placed.rects); // for later squares and the badge placement
             }
             const tagX = (k: string): number => a.x + (slotX.get(k) ?? 0) * ds;
-            const tagSig = `${tagStyle}:${gs.toFixed(3)}:${displayFontState()}`; // font state: late-arriving lettering rebuilds the tags
+            const tagSig = `${tagStyle}:${gs.toFixed(3)}:${displayFontState()}:${moverSide ?? '-'}:${this.d6FaceVariant}:${this.d6FaceRevision}`; // font state: late-arriving lettering rebuilds the tags
             // Owner o66p #8: lift the cost chips ABOVE the square's top edge (were sitting ON the square).
             const cy = a.y - TILE_H * 0.5 * ds;
             if (jumpPlate && srvRolls) {
-              const chip = this.buildPlannerTag('jump', tagX('jump'), placeY, ds * gs, srvRolls.dodge);
+              const chip = this.buildPlannerTag('jump', tagX('jump'), placeY, ds * gs, srvRolls.dodge, moverSide);
               chip.alpha = 0.9; this.pathLayer.addChild(chip);
             }
             if (dodge && !isJumpStep) { // a jump replaces the dodge: one jump tag, never J6+ together with D4+
@@ -9631,10 +9642,10 @@ export class PitchRenderer {
                   tagX('dodge'),
                   dieWord ? placeY : cy + (both ? stackGap : 0),
                   0.95,
-                  () => this.buildPlannerTag('dodge', 0, 0, ds * gs, target),
+                  () => this.buildPlannerTag('dodge', 0, 0, ds * gs, target, moverSide),
                 );
               } else {
-                const chip = this.buildPlannerTag('dodge', tagX('dodge'), dieWord ? placeY : cy + (both ? stackGap : 0), ds * gs, target);
+                const chip = this.buildPlannerTag('dodge', tagX('dodge'), dieWord ? placeY : cy + (both ? stackGap : 0), ds * gs, target, moverSide);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
             }
@@ -9648,10 +9659,10 @@ export class PitchRenderer {
                   tagX('rush'),
                   dieWord ? placeY : cy,
                   1,
-                  () => this.buildPlannerTag('rush', 0, 0, ds * gs, target), // owner 10-13: R<N>+ tag; owner 10-14: die + RUSH by default
+                  () => this.buildPlannerTag('rush', 0, 0, ds * gs, target, moverSide), // owner 10-13: R<N>+ tag; owner 10-14: die + RUSH by default
                 );
               } else {
-                const die = this.buildPlannerTag('rush', tagX('rush'), dieWord ? placeY : cy, ds * gs, target);
+                const die = this.buildPlannerTag('rush', tagX('rush'), dieWord ? placeY : cy, ds * gs, target, moverSide);
                 die.alpha = 1; this.pathLayer.addChild(die); // owner 09-08: planned rush tag fully opaque
               }
             }
@@ -9664,7 +9675,7 @@ export class PitchRenderer {
                 // Owner 10-14: in the die+word style a pickup that shares the square joins the side-by-side group on
                 // the top edge (rush, dodge, pickup); alone it keeps the bottom-edge spot.
                 const py2 = dieWord ? placeY : a.y + TILE_H * 0.5 * ds;
-                const chip = this.buildPlannerTag('pickup', tagX('pickup'), py2, ds * gs, pt.target);
+                const chip = this.buildPlannerTag('pickup', tagX('pickup'), py2, ds * gs, pt.target, moverSide);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
             }
@@ -9868,6 +9879,7 @@ export class PitchRenderer {
 
     // rush dice on the range squares beyond MA (BB3 convention)
     const reachRushTarget = rushTargetForPlayer(this.game, this.selectedPlayerId);
+    const reachSide = this.plannedRollSide(this.selectedPlayerId); // owner 10-22: the mover's seat die
     for (const [key, cost] of reach.costs) {
       if (actorRushOnly && !actorHasMovePhase) continue;
       if (used + cost <= info.normal) continue;
@@ -9878,15 +9890,15 @@ export class PitchRenderer {
         this.syncMovementOverlayNode(
           `reach:rush-die:${key}`,
           'reach',
-          `${dieScale}:${reachRushTarget}`,
+          `${dieScale}:${reachRushTarget}:${reachSide ?? '-'}:${this.d6FaceVariant}:${this.d6FaceRevision}`,
           a.x,
           a.y,
           1,
-          () => this.buildReachableRushDie(0, 0, dieScale, reachRushTarget),
+          () => this.buildReachableRushDie(0, 0, dieScale, reachRushTarget, reachSide),
           1,
         );
       } else {
-        this.overlayLayer.addChild(this.buildReachableRushDie(a.x, a.y, dieScale, reachRushTarget));
+        this.overlayLayer.addChild(this.buildReachableRushDie(a.x, a.y, dieScale, reachRushTarget, reachSide));
       }
     }
 
@@ -10473,10 +10485,10 @@ export class PitchRenderer {
   }
 
   /** Supplied D6 face showing the roll needed. */
-  private buildRollDie(x: number, y: number, scale: number, target: number): Container {
+  private buildRollDie(x: number, y: number, scale: number, target: number, side?: BlockDieSide | null): Container {
     const die = new Container();
     if (isD6FaceValue(target)) {
-      const face = this.buildD6(target);
+      const face = this.buildD6(target, undefined, side); // owner 10-22: a planned roll wears the roller's seat die
       face.scale.set(0.62 * scale);
       die.addChild(face);
       const plus = new Text({ text: '+', style: ROLL_DIE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
@@ -10496,8 +10508,8 @@ export class PitchRenderer {
 
   /** A reachable/unselected Rush cost: the D6 face + '+' (target 2 when the caller has none). Owner 10-13: the
    *  go-for-it squares KEEP the die; only the planned-path tags moved to the R<N>+ text plate. */
-  private buildReachableRushDie(x: number, y: number, scale: number, target?: number): Container {
-    const die = this.buildRollDie(x, y, scale, target ?? 2);
+  private buildReachableRushDie(x: number, y: number, scale: number, target?: number, side?: BlockDieSide | null): Container {
+    const die = this.buildRollDie(x, y, scale, target ?? 2, side);
     die.alpha = REACHABLE_RUSH_DIE_ALPHA;
     return die;
   }
@@ -10996,7 +11008,7 @@ export class PitchRenderer {
 
   /** Owner 10-14: one planned-path cost tag in the chosen style. `ds` is the square's depth scale. 'letter' = the
    *  1.0.205 plate at 0.5 x depth; 'dieWord' = the reach-square die (0.8 x depth) with the word beneath, centred on (x, y). */
-  private buildPlannerTag(kind: 'rush' | 'dodge' | 'jump' | 'pickup', x: number, y: number, ds: number, target: number): Container {
+  private buildPlannerTag(kind: 'rush' | 'dodge' | 'jump' | 'pickup', x: number, y: number, ds: number, target: number, side?: BlockDieSide | null): Container {
     if (this.plannerTagStyle === 'letter') {
       if (kind === 'rush') return this.buildRushChip(x, y, ds * 0.5, target);
       if (kind === 'dodge') return this.buildDodgeChip(x, y, ds * 0.5, target);
@@ -11013,7 +11025,7 @@ export class PitchRenderer {
       .fill({ color: plate.fill, alpha: 0.92 })
       .roundRect(m.left - 2 * ds, -h / 2, m.width, h, 3 * ds)
       .stroke({ color: plate.stroke, width: 1 * ds });
-    const die = this.buildRollDie(0, 0, ds * 0.65, target); // owner 10-14: face 1.3x the first cut, spans -5.65..+5.65 ds; the '+' (or 'N+') follows
+    const die = this.buildRollDie(0, 0, ds * 0.65, target, side); // owner 10-14: face 1.3x the first cut, spans -5.65..+5.65 ds; the '+' (or 'N+') follows
     const word = this.buildPlannerWord(kind === 'jump' ? this.jumpWordKind() : kind, ds); // owner 10-16: JUMP / LEAP / POGO
     word.position.set(m.wordX + m.wordW / 2, 0);
     for (const child of [plateG, die, word]) { child.x -= m.centre; tag.addChild(child); }
@@ -12584,6 +12596,7 @@ export class PitchRenderer {
     if (generation !== this.d6FaceLoadGeneration || variant !== this.d6FaceVariant) return;
     this.d6FaceTextures = textures;
     this.d6FaceSideTextures = { ...(home ? { home } : {}), ...(away ? { away } : {}) };
+    this.d6FaceRevision++;
     this.applyActionDiceFaces(); // the cube follows the PNG set (variant change or first load)
   }
   /** Owner 10-13: the D6 texture for a face of a die of `side` (the side set under 'team', else the plain set). */
@@ -12608,6 +12621,12 @@ export class PitchRenderer {
   }
   private viewerDiceSeat(): ServerSide {
     return this.friendlyIsHome ? 'home' : 'away';
+  }
+  /** Owner 10-22: the displayed side of a PLANNED roll (route tags, rush dice on the reach): the moving player's team,
+   *  seat-relative like an action die. Null (neutral die) when the mover is unknown. */
+  private plannedRollSide(playerId: string | null | undefined): BlockDieSide | null {
+    if (!this.plannerDiceSeatTint) return null; // Classic (never opted in): the neutral face, as before
+    return displayDiceSide(playerServerSide(this.game, playerId), this.viewerDiceSeat());
   }
   /** Owner 10-13: the displayed side of a held action die, from its owner and the CURRENT seat (never cached). */
   private actionDieRecordSide(die: ActionDieRecord): BlockDieSide | null {

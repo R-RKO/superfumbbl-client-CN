@@ -107,8 +107,9 @@ import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENT
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
-import { REROLL_SUCCESS_AFTER_FAIL_CUE_MS, ROLL_FAILED_CUE_DELAY_MS, dieSettleMs, rerollChainSuccessSound } from './logic/uiSoundCues';
+import { REROLL_SUCCESS_AFTER_FAIL_CUE_MS, ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, dieSettleMs, rerollChainSuccessSound } from './logic/uiSoundCues';
 import { staleDialogOutlivedPhase } from './logic/staleDialog';
+import { modalRerollCaption, withLiveOfferHold } from './logic/modalOfferHolds';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
 import {
   ApothecaryElectionController,
@@ -714,7 +715,7 @@ const legacyState = reactive({
    *  instead so the first die still renders. Emptied wherever `actionDice` is nulled. */
   actionDiceQueue: [] as ActionDiceBatchState[],
   /** o66 #7: PASS/CATCH roll as an over-head MODAL (passRoll.playerId = passer, catchRoll.playerId = catcher — the modal lands on the right head). */
-  rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; disturbingPresence?: number; seq: number } | null,
+  rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; disturbingPresence?: number; opponentRerollPending?: boolean; rerollOfferPending?: boolean; rerollSkill?: string; rerollTeam?: boolean; seq: number } | null,
   /** #18a: DERIVED each frame, not latched (Meero C-18a): opponent is the block-dice decider — keyed on the dialog's `choosingTeamId` so a Side-Step defender's OWN pick suppresses it. Existence-only, never the dice values. */
   opponentReviewingDice: false,
   /** DERIVED each frame from an opponent-owned reactive dialog. */
@@ -5799,6 +5800,8 @@ async function pauseSpectatorView(): Promise<void> {
   /** Astra round 5: the live-review reroll pin, raised in the synchronous publication boundary (the renderer drops
    *  the offer hold as soon as the published model has no reroll dialog - before present() ever runs). */
   let transitionRerollPin: { seq: number } | null = null;
+  /** Astra r2 (catch toast): the roller of the reroll offer this transition answered (null: none answered). */
+  let transitionAnsweredOfferFor: string | null = null;
   let transitionBlockCard = checkpoint.durableProjection.blockCard
     ? structuredClone(checkpoint.durableProjection.blockCard) : null;
   // Owner 09-14: the choice reveal after GO TO LIVE must sit on the block's defender square; the live model has
@@ -5845,6 +5848,8 @@ async function pauseSpectatorView(): Promise<void> {
         transitionRerollPin = !snap && previous && isRerollDialog(previous.model) && !isRerollDialog(position.model)
           ? { seq: (state.rerollResultPending?.seq ?? 0) + 1 } : null;
         if (transitionRerollPin) state.rerollResultPending = transitionRerollPin;
+        transitionAnsweredOfferFor = transitionRerollPin
+          ? String(((previous!.model as { dialogParameter?: { playerId?: unknown } | null }).dialogParameter)?.playerId ?? '') || null : null;
       }
       transitionBlockCard = previous?.durableProjection.blockCard
         ? structuredClone(previous.durableProjection.blockCard) : null;
@@ -6136,6 +6141,7 @@ async function pauseSpectatorView(): Promise<void> {
       for (const playerId of pushes.grabbers) state.grabUse = { playerId, seq: (state.grabUse?.seq ?? 0) + 1 };
       const firstRolls: ActionRollCue[] = [];
       const rerolledRolls: ActionRollCue[] = [];
+      const reviewFailedModalKinds = new Set<'pass' | 'catch'>();
       const rerollCue = rerollPresentation(reports);
       const reroll = rerollCue?.isBlockReroll ? null : rerollCue;
       // Owner 09-19: a re-roll SKILL no longer raises the skill-use icon + pill — the re-roll toast is the one surface.
@@ -6152,6 +6158,12 @@ async function pauseSpectatorView(): Promise<void> {
         if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
         const rollCoordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? coordinate;
         const roll = actionRollPresentation(report, reports, position.model, rollCoordinate, true, reroll);
+        // Astra r2: the same in-place reroll caption as the live publisher (the held failed die re-rolls; no second die)
+        if (roll?.modal) {
+          const caption = modalRerollCaption(roll.modal, reroll, transitionAnsweredOfferFor, reviewFailedModalKinds.has(roll.modal.kind));
+          if (caption) Object.assign(roll.modal, caption);
+          if (!roll.modal.ok && !roll.modal.reRolled) reviewFailedModalKinds.add(roll.modal.kind);
+        }
         noteRerollableRoll(pid, roll); // owner 10-20 (Astra r3): the roll a reroll offer would be for
         if (roll?.die && lonerGateDieHidden(report)) roll.die = null; // owner 10-20: the Loner check is no action die
         if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
@@ -6164,7 +6176,7 @@ async function pauseSpectatorView(): Promise<void> {
         const dice = rolls.flatMap((roll) => roll.die ? [roll.die] : []);
         for (const roll of rolls) {
           if (roll.trait) state.negatraitCue = { ...roll.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
-          if (roll.modal) { state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 }; }
+          if (roll.modal) { state.rollModal = { ...withLiveOfferHold(roll.modal, offerHoldDialog(game.value?.dialogParameter)), seq: (state.rollModal?.seq ?? 0) + 1 }; }
         }
         if (dice.length) publishActionDice(dice);
         // Owner 10-13: the landing die of a held TTM landing card is the hold's wake (see the publication above).
@@ -8093,7 +8105,32 @@ function syncHmpScatterMarks(): void {
 }
 
 /** #67: reset the drain on game teardown — drop the queue, release any open gate, clear the surface. */
+/** Astra r2 (catch toast): bumped at every hard presentation boundary (reset, disconnect, leave). The view releases
+ *  every pass / catch die it holds for a reroll offer: a frozen board after a disconnect keeps its dialog, so the
+ *  dialog-driven release would never come. */
+const modalOfferHoldTeardown = ref(0);
+/** Astra r3 (catch toast): the socket dropped (close / error, also on the auto-reconnect path). No server echo can end
+ *  an offer now: every held pass / catch die lets go and the Dump-Off suppression latch is dropped. A reconnect's fresh
+ *  snapshot re-establishes any live dialog, and the normal hold logic applies from there. */
+function retireOfferHoldsOnTransportLoss(): void {
+  offerTransportAlive = false;
+  modalOfferHoldTeardown.value++;
+  clearPassResolvedLatch();
+}
+/** Astra r4: false from a socket close until the next playback reset (a reconnect snapshot - resetPlayback also empties
+ *  the pacing queue). Frames still draining from the queue meanwhile can never be answered on this socket: they publish
+ *  their pass / catch dice unheld and set no Dump-Off latch. */
+let offerTransportAlive = true;
+/** The dialog an offer hold may be keyed to now: none once the transport is lost. */
+function offerHoldDialog(dialog: unknown): Record<string, unknown> | null | undefined {
+  return offerTransportAlive ? dialog as Record<string, unknown> | null | undefined : null;
+}
+/** Test seam (Astra r4): the socket-close teardown, without a socket. */
+export function installOfferTransportTestHarness(): { lose(): void; alive(): boolean } {
+  return { lose: () => retireOfferHoldsOnTransportLoss(), alive: () => offerTransportAlive };
+}
 function resetPresentation(): void {
+  modalOfferHoldTeardown.value++;
   flushPendingUpstreamLogs(); // FUMBBL-only rows waiting behind a fireball beat keep their content
   presentation.queue.length = 0;
   if (presentation.presenting) {
@@ -8859,6 +8896,60 @@ export function targetPendingPill(action: string): string {
   return `Pick ${verb} Target`;
 }
 
+/** Owner 10-22 (g1955713): a FAILED CATCH resolves the pass. Nothing on the thrower's pass-side cards can be acted on
+ *  any more, so they go at once: the free-select Pass arm and its "Throw to ...?" card, and the Dump-Off pick, which
+ *  turnMode dumpOff (kept by the server until the whole dump-off sequence ends) would otherwise re-arm under the
+ *  catching coach's reroll decision. Client-only surfaces; no server dialog is touched or answered.
+ *  The Dump-Off suppression is a latch on THAT dump-off: it releases when the turn mode or the acting player changes
+ *  (the server ending the sequence), on a reset, and by its silence watchdog (fail-open, armPassResolvedWatchdog). */
+const PASS_RESOLVED_LATCH_WATCHDOG_MS = 30_000;
+let passResolvedLatch: { turnMode: string; actingPlayerId: string; timer: ReturnType<typeof scheduleGameTimeout> | null } | null = null;
+/** Astra r1 (a8a250fd1): the latch fails open on SILENCE only - 30 s with no server frame - and never under a live
+ *  decision: while a reroll dialog is still open the watchdog re-arms instead of resurrecting the pick. Every
+ *  applied frame restarts it (armPassResolvedWatchdog from applyFrameContents). */
+function armPassResolvedWatchdog(): void {
+  const latch = passResolvedLatch;
+  if (!latch) return;
+  if (latch.timer != null) cancelGameTimeout(latch.timer);
+  latch.timer = scheduleGameTimeout(() => {
+    if (passResolvedLatch !== latch) return;
+    latch.timer = null;
+    const dialogId = normalizedWireName((game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId);
+    if (dialogId.includes('reroll')) { armPassResolvedWatchdog(); return; } // the catch is still being decided
+    passResolvedLatch = null;
+    armServerCoordinatePicks();
+  }, PASS_RESOLVED_LATCH_WATCHDOG_MS);
+}
+function clearPassResolvedLatch(): void {
+  if (passResolvedLatch?.timer != null) cancelGameTimeout(passResolvedLatch.timer);
+  passResolvedLatch = null;
+}
+function passResolvedLatchLive(g: GameJson): boolean {
+  const latch = passResolvedLatch;
+  if (!latch) return false;
+  if (String(g.turnMode ?? '') !== latch.turnMode
+    || String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') !== latch.actingPlayerId) {
+    clearPassResolvedLatch();
+    return false;
+  }
+  return true;
+}
+function retirePassSurfacesOnFailedCatch(): void {
+  state.freeSelectPass = false;
+  state.freeSelectPassConfirm = null;
+  if (state.squarePick?.kind === 'dumpOff') state.squarePick = null;
+  const g = game.value;
+  clearPassResolvedLatch();
+  // Astra r4: a frame draining after the socket closed sets no latch (nothing could ever release it but the watchdog)
+  if (!g || String(g.turnMode ?? '') !== 'dumpOff' || !offerTransportAlive) return;
+  passResolvedLatch = {
+    turnMode: 'dumpOff',
+    actingPlayerId: String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''),
+    timer: null,
+  };
+  armPassResolvedWatchdog();
+}
+
 /** Derive server coordinate-pick ownership; Wizard is locally staged after its spell election. */
 function armServerCoordinatePicks(): void {
   if (!game.value) return;
@@ -8872,7 +8963,13 @@ function armServerCoordinatePicks(): void {
   // squares and flips turnMode to placeCarriedPlayer (StepPlaceCarriedPlayer.java:193-207); the answer is
   // CLIENT_FIELD_COORDINATE (:88-108). A one-square set auto-places server-side and never reaches here.
   const isPlaceCarried = String(game.value.turnMode ?? '') === 'placeCarriedPlayer';
-  const isDumpOff = String(game.value.turnMode ?? '') === 'dumpOff';
+  // owner 10-22: a failed catch already resolved this dump-off's pass (retirePassSurfacesOnFailedCatch)
+  const dumpOffPassResolved = passResolvedLatchLive(game.value); // evaluated every pass: a turn-mode change releases it
+  // Astra r3: also derived from the model alone (a reconnect's snapshot carries no latch): a catch reroll offer that is
+  // open means the dump-off's throw has already been caught at - no pick under it
+  const catchRerollOpen = normalizedWireName((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId).includes('reroll')
+    && String((game.value.dialogParameter as { reRolledAction?: unknown } | null)?.reRolledAction ?? '') === 'Catch';
+  const isDumpOff = String(game.value.turnMode ?? '') === 'dumpOff' && !dumpOffPassResolved && !catchRerollOpen;
   const isSafeHands = String(game.value.turnMode ?? '') === 'safePairOfHands';
   const isWizard = String(game.value.turnMode ?? '') === 'wizard'
     && String((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '') === 'wizardSpell'
@@ -10793,6 +10890,12 @@ function applyFrameContents(frame: QueuedFrame) {
     const rerolledCatchModals: (() => void)[] = [];
     let failedCatchModalShown = false;
     let rerolledCatchModalShown = false;
+    let failedPassModalShown = false;
+    /** Owner 10-22: this frame's rerolled catch answers the reroll DIALOG (its failed die is an earlier frame's, held
+     *  for the offer): the chain's fail beat has already been read, the die re-rolls in place after the reroll beat. */
+    let dialogRerolledCatch = false;
+    /** Owner 10-22 (g1955713): a failed catch resolves the pass - the thrower's pass-side cards go (below). */
+    let failedCatchThisFrame = false;
     // Astra r5: snapshotted at THAT player's Loner-gated use, after the frame's earlier rolls went by
     let lonerAtUse: LonerOriginalAtUse | null = null;
     const lonerUse = lonerGatedUse(reports);
@@ -10824,14 +10927,32 @@ function applyFrameContents(frame: QueuedFrame) {
         if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
         if (cue?.modal) {
           const modal = cue.modal;
-          const publishModal = () => { state.rollModal = { ...modal, seq: (state.rollModal?.seq ?? 0) + 1 }; };
+          // Astra r1 (a8a250fd1): the offer hold is checked when the die is PUBLISHED (a kick-off die waits behind the
+          // flight; its roller's reroll may have been answered by then) - never a captured flag on a closed offer.
+          const publishModal = () => { state.rollModal = { ...withLiveOfferHold(modal, offerHoldDialog(game.value?.dialogParameter)), seq: (state.rollModal?.seq ?? 0) + 1 }; };
           // Owner 10-08: the kick-off catch die shows when the ball lands (behind the flight), not at apply time.
           const stagedCatch = reportId === 'catchRoll' ? stagedKickoffCatches.get(report) : undefined;
+          if (modal.kind === 'catch' && !modal.ok && !modal.reRolled) failedCatchThisFrame = true;
+          // Owner 10-22: a rerolled pass / catch whose failed die is an earlier frame's (the reroll dialog) re-rolls
+          // that held die in place under the reroll caption, as a dialog-rerolled dodge does.
+          // (only when this frame closes that player's reroll dialog: the offer is what held the failed die)
+          const offerAnsweredFor = normalizedWireName(dialogAtFrameStart?.dialogId).includes('reroll') ? String(dialogAtFrameStart?.playerId ?? '') : null;
+          const caption = stagedCatch ? null
+            : modalRerollCaption(modal, pendingActionReroll, offerAnsweredFor, modal.kind === 'catch' ? failedCatchModalShown : failedPassModalShown);
+          const answersDialog = caption !== null;
+          if (caption) Object.assign(modal, caption);
+          // Astra r1: a staged kick-off rerolled result re-rolls its staged failed die in place too (no second die)
+          else if (stagedCatch && modal.reRolled && pendingActionReroll) { modal.rerollSkill = pendingActionReroll.raw; modal.rerollTeam = pendingActionReroll.isTeam; }
           if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal);
           else if (modal.kind === 'catch' && modal.reRolled && failedCatchModalShown && settings.order66 && !playback.catchingUp) rerolledCatchModals.push(publishModal);
+          // Owner 10-22 (1.0.253 chain rules): failed die (already up, held for the offer), the reroll beat, then the
+          // rerolled die - never the rerolled die at once under the reroll toast.
+          // Astra r2: Modern only - Classic has no modal reader, so it keeps its timing byte-identical (no beat, no gate)
+          else if (modal.kind === 'catch' && answersDialog && settings.order66 && settings.uiMode !== 'classic' && !playback.catchingUp) { dialogRerolledCatch = true; rerolledCatchModals.push(publishModal); }
           else {
             publishModal();
             if (modal.kind === 'catch' && !modal.ok) failedCatchModalShown = true;
+            if (modal.kind === 'pass' && !modal.ok) failedPassModalShown = true;
             if (modal.kind === 'catch' && modal.reRolled) rerolledCatchModalShown = true;
           }
         }
@@ -10858,9 +10979,16 @@ function applyFrameContents(frame: QueuedFrame) {
     // an earlier frame's) keeps its die with its frame; only its catch sound waits for that die to settle. Timers ride
     // rerollStageTimers: a reset / seek / game change drops them; a dice clear discards them; nothing waits on them.
     const catchStageMs = rerolledCatchModals.length > 0
-      ? presentationMs(FAIL_BEAT_MS) + presentationMs(pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw) ? REROLL_BEAT_MS : 300)
+      ? (dialogRerolledCatch ? 0 : presentationMs(FAIL_BEAT_MS)) + presentationMs(pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw) ? REROLL_BEAT_MS : 300)
       : 0;
     const catchEpoch = actionDiceClearEpoch;
+    if (dialogRerolledCatch) {
+      // Owner 10-22: the failed catch die held for the offer stays up through the reroll beat (the dialog-clearing
+      // frame would release it) until the rerolled result re-rolls it in place; the pin's own timer is its fail-open.
+      const catchPin = { seq: (state.rerollResultPending?.seq ?? 0) + 1 };
+      state.rerollResultPending = catchPin;
+      rerollStageTimers.push(scheduleGameTimeout(() => releaseRerollResultPin(catchPin.seq), catchStageMs + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
+    }
     if (rerolledCatchModals.length > 0) {
       // Astra r1 P2: holdPlayback alone is a no-op in live play - the receive gate holds every seat
       stagedCatchReadUntil = Math.max(stagedCatchReadUntil, Date.now() + catchStageMs + presentationMs(BALL_CHAIN_CATCH_READ_MS));
@@ -10873,13 +11001,16 @@ function applyFrameContents(frame: QueuedFrame) {
       const sound = rerollChainBeatSound;
       rerollChainBeatSound = null;
       relocatedBeatSounds.add(sound);
-      // the catch die always pops in, then tumbles (the view passes it no reroll caption)
-      const at = Math.max(catchStageMs + presentationMs(ROLL_FAILED_CUE_DELAY_MS),
+      // the catch die pops in, then tumbles (the view passes it no reroll caption); a dialog-rerolled one tumbles the
+      // held die in place (owner 10-22)
+      const at = Math.max(catchStageMs + presentationMs(dialogRerolledCatch ? ROLL_FAILED_REROLL_CUE_DELAY_MS : ROLL_FAILED_CUE_DELAY_MS),
         failedCatchModalShown ? presentationMs(ROLL_FAILED_CUE_DELAY_MS + REROLL_SUCCESS_AFTER_FAIL_CUE_MS) : 0);
       rerollStageTimers.push(scheduleGameTimeout(() => {
         if (catchEpoch === actionDiceClearEpoch && !playback.catchingUp) playSound(sound);
       }, at));
     }
+    if (failedCatchThisFrame) retirePassSurfacesOnFailedCatch();
+    else if (passResolvedLatch && passResolvedLatchLive(game.value)) armPassResolvedWatchdog(); // frame release / a frame arrived: not silent
     const fireballSpellEffect = reports.some((report) => String(report.reportId) === 'spellEffectRoll'
       && String(report.specialEffect) === 'fireball');
     // Owner 09-15: a gaze DECLARATION reaches every seat as `gameSetDefenderId` while the acting action is a gaze —
@@ -13386,6 +13517,9 @@ function resetPlayback() {
   lastSentPushKey = ''; // g330 #11: fresh game — drop the stale-push guard
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
   state.freeSelectPassConfirm = null; // owner 10-20: nor its pending "Throw to ...?" card
+  clearPassResolvedLatch(); // owner 10-22: nor a failed catch's Dump-Off suppression
+  offerTransportAlive = true; // Astra r4: a fresh session (the queue is emptied below)
+  modalOfferHoldTeardown.value++; // Astra r2: nor a pass / catch die held for an offer of the old position
   state.ttmRailTerminal = null; // fresh game/reconnect — no historical landing may retire a new rail
   state.passDestination = null; // a server-owned destination never crosses a snapshot boundary
   cancelBombDestinationHold(); // Astra review 10-03: nor does a pending hold on one
@@ -26341,6 +26475,8 @@ export const gameStore = {
   appendSystemNotice(text: string): void { log('system', text); },
   state,
   game,
+  /** Astra r2 (catch toast): see modalOfferHoldTeardown. */
+  modalOfferHoldTeardown,
   /** Owner 10-12: players whose stunned decoration waits for their injury pill (renderer.stunDecorationHoldsProbe). */
   stunDecorationHolds,
   /** Owner 10-13: the apothecary card shows with the injury pill (Modern; see apothecaryCardPillHolds). */
@@ -27880,6 +28016,7 @@ export const gameStore = {
           const packetClass = classifySpectatorPacket(cmd as Record<string, unknown>);
           if (packetClass === 'snapshot' || packetClass === 'match' || packetClass === 'clock') {
             if (packetClass === 'snapshot') {
+              offerTransportAlive = true; // Astra r5: the retained-history reconnect skips resetPlayback - the session is live again
               expectingGame = false; state.waitingForMatch = null;
               if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
               state.connectionClosed = null; reconnectAttempts = 0; reconnecting = false;
@@ -27920,6 +28057,7 @@ export const gameStore = {
             if (result.kind === 'committed') spectatorDice?.ledger.publishDisplayed(result.checkpoint.cursor); // also when the checkpoint is too large to keep
             spectatorReviewRevision.value++;
             resetPlayback(); // fresh game: no stale queued frames
+            offerTransportAlive = true; // Astra r5: an accepted snapshot re-establishes the session (explicitly, not only via the reset)
             clearPendingRailCommands();
             game.value = structuredClone(cmd.game) as GameJson;
             noteChatGame(params.url, params.coach, game.value.gameId);
@@ -27962,10 +28100,13 @@ export const gameStore = {
     });
     session.on('error', (error) => {
       if (thisSession !== session) return;
+      // Astra r4: an 'error' is not transport loss (decode / parse / handler exceptions share it) - holds stay; the
+      // socket's 'close' releases them
       log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`);
     });
     session.on('close', (code, reason) => {
       if (thisSession !== session) return;
+      retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end
       history.disconnect(connectionGeneration);
       spectatorReviewRevision.value++;
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
@@ -28260,6 +28401,7 @@ export const gameStore = {
         prepared?.onAccepted?.(Number((cmd.game as { gameId?: string | number }).gameId ?? 0)); // S44: the served id lets a later rejoin find this game
         noteOfficialGameJoined(cmd.game, params.coach, officialFumbbl); // owner 10-11: the local record that leads the recent-games team order
       }
+      offerTransportAlive = true; // Astra r5: an accepted snapshot re-establishes the seated session
       expectingGame = false;
       state.waitingForMatch = null; // the match started — drop the waiting modal
       if (joinTimer) {
@@ -28339,11 +28481,13 @@ export const gameStore = {
       handleServerJoin(cmd as { spectators?: number });
     });
     session.on('command', (cmd) => { if (thisSession === session) handleServerPush(cmd as Record<string, unknown>); });
-    session.on('error', (error) =>
-      log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`),
-    );
+    session.on('error', (error) => {
+      // Astra r4: not transport loss by itself - only 'close' releases the offer holds
+      log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`);
+    });
     session.on('close', (code, reason) => {
       if (thisSession !== session) return;
+      retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
       state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
@@ -31012,6 +31156,7 @@ export const gameStore = {
   },
 
   disconnect() {
+    modalOfferHoldTeardown.value++; // Astra r2: no die stays held for an offer on the frozen board
     gameConnectionUrl = null; // owner 10-20: the next game sets its own origin
     recentPlayerJoinAt.clear(); // Keithabix 10-18: rejoin evidence belongs to this connection
     settleAllInjuryPillBeats(false); // owner 10-12 / Astra item 2: leaving (or a new join) never sounds the old game's injury
