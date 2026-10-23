@@ -106,7 +106,9 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   const failed = id === 'breatheFire' ? breatheFirePassed(report) === false : report.successful === false;
   const reRolled = report.reRolled === true;
   const rerollOfferNotFailed = id === 'breatheFire' && !failed && breatheFireRerollMayBeOfferedUnfailed(report);
-  const neededRaw = Number(report.minimumRoll);
+  // Owner 10-23: the stalling rock carries no minimumRoll; the server hits on roll >= the acting team's turn number.
+  const stallingTurn = Number((game.homePlaying ? game.turnDataHome : game.turnDataAway)?.turnNr);
+  const neededRaw = id === 'throwAtStallingPlayer' ? stallingTurn : Number(report.minimumRoll);
   const needed = Number.isFinite(neededRaw) && neededRaw >= 2 && neededRaw <= 6 ? neededRaw : undefined;
   const modifierCause = id === 'dodgeRoll' ? dieCauseFromRollModifiers(report.rollModifiers)
     : id === 'standUpRoll' && typeof report.modifier === 'number' && report.modifier > 0 ? 'timmber' : undefined;

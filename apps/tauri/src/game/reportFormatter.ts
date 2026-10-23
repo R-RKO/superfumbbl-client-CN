@@ -799,6 +799,13 @@ function turnEndLines(r: Report, g: GameJson | null, context: ReportLogContext |
   return lines;
 }
 
+/** BB2025 stalling rock: the server hits when the D6 >= the ACTING team's turn number (StallingExtension.java). */
+function stallingRockTarget(g: GameJson | null | undefined): number | null {
+  const td = g?.homePlaying ? g?.turnDataHome : g?.turnDataAway;
+  const nr = Number(td?.turnNr);
+  return Number.isInteger(nr) && nr >= 1 && nr <= 6 ? nr : null;
+}
+
 const formatters: Record<string, (report: Report, game: GameJson | null, context: ReportLogContext) => string> = {
   dodgeRoll: skillRoll('dodges'),
   goForItRoll: skillRoll('goes for it'),
@@ -1113,9 +1120,13 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // improved a pass/dodge outcome (owner: "which skill improved the outcome"). twoForOne = the star-pair skill.
   throwAtStallingPlayer: (r, g) => {
     const player = pn(g, r.playerId);
-    if (r.successful) return `${player} is hit by a rock!`;
+    // Owner 10-23 ("surface the dice roll that was needed"): BB2025 StallingExtension.java:13-15 hits on
+    // roll >= the acting team's turn number (turns 7-8 send roll 0 and never hit), so the target is the turn.
+    const target = stallingRockTarget(g);
+    const needed = target ? `, needed ${target}+` : '';
+    if (r.successful) return `${player} is hit by a rock! (${hiddenTag('rolls ')}${d6(r.roll)}${needed})`;
     return Number(r.roll ?? 0) > 0
-      ? `${player} is not punished for stalling. (${hiddenTag('rolls ')}${d6(r.roll)})`
+      ? `${player} is not punished for stalling. (${hiddenTag('rolls ')}${d6(r.roll)}${needed})`
       : `${player} stalled but the crowd cannot be bothered.`;
   },
   modifiedPassResult: (r) => `${r.skill ?? 'a skill'} modifies the pass → ${r.passResult ?? '?'}`,
