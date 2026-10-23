@@ -13723,6 +13723,14 @@ const INDUCEMENT_ICONS: Record<string, string> = {
   dwarfenWisdom: 'dwarfen_wisdom',
   teamMascot: 'team_mascot', // owner 2026-07-09: dedicated wacky-inflatable-man mascot icon (bg-removed)
   briberyAndCorruption: 're_roll_argue',
+  // Owner-generated inducement icons (2026-10-23); mirrors coachPanelChips.ts.
+  partTimeCoach: 'part_time_assistant_coaches',
+  tempCheerleader: 'temp_agency_cheerleaders',
+  riotousRookies: 'riotous_rookies',
+  extraTeamTraining: 'extra_team_training',
+  infamousStaff: 'infamous_coaching_staff',
+  josefBugman: 'infamous_coaching_staff',
+  bretonnianPastries: 'bretonnian_pastries',
 };
 
 // Owner 2026-07-08: inducement key → resource-slot icon URL (null = no slot icon,

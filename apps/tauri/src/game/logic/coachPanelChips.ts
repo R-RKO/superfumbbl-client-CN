@@ -48,6 +48,15 @@ const INDUCEMENT_ICONS: Record<string, string> = {
   dwarfenWisdom: 'dwarfen_wisdom',
   teamMascot: 'team_mascot',
   briberyAndCorruption: 're_roll_argue',
+  // Owner-generated inducement icons (2026-10-23, docs/art-provenance/inducement-icons).
+  // Bretonnian Pastries: Spike! Journal 19 (not in the fork's InducementCollection; wireName per the validator dataset).
+  partTimeCoach: 'part_time_assistant_coaches',
+  tempCheerleader: 'temp_agency_cheerleaders',
+  riotousRookies: 'riotous_rookies',
+  extraTeamTraining: 'extra_team_training',
+  infamousStaff: 'infamous_coaching_staff',
+  josefBugman: 'infamous_coaching_staff',
+  bretonnianPastries: 'bretonnian_pastries',
 };
 
 /**
