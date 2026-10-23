@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Лекарь",
   "hud.coachPanel.text.cards": "Карты",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Болельщики: +{count} к поддержке атаки в блоке",
-  "hud.coachPanel.text.prayers": "Молитвы",
+  "hud.coachPanel.text.prayers": "Молитвы Ниффлу",
   "hud.coachPanel.text.singleUseRerolls": "Одноразовые перебросы",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Переброс ({source}) — истекает в конце следующего драйва",
   "hud.coachPanel.thisCoachIsActivating": "Этот тренер активирует игрока",

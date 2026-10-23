@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Apotheker",
   "hud.coachPanel.text.cards": "Kaarten",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Juichende Fans: +{count} aanvallende assist bij een block",
-  "hud.coachPanel.text.prayers": "Gebeden",
+  "hud.coachPanel.text.prayers": "Gebeden tot Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Eenmalige herworpen",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Herworp van {source} — vervalt aan het einde van de volgende drive",
   "hud.coachPanel.thisCoachIsActivating": "Deze coach activeert een speler",

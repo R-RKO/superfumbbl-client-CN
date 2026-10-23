@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Apothicaire",
   "hud.coachPanel.text.cards": "Cartes",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Fans en délire : +{count} assistance offensive sur un blocage",
-  "hud.coachPanel.text.prayers": "Prières",
+  "hud.coachPanel.text.prayers": "Prières à Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Relances à usage unique",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Relance {source} — expire à la fin de la séquence suivante",
   "hud.coachPanel.thisCoachIsActivating": "Ce coach active un joueur",

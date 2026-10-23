@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Апотекар",
   "hud.coachPanel.text.cards": "Карте",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Навијачи бодре: +{count} нападна помоћ при блоку",
-  "hud.coachPanel.text.prayers": "Молитве",
+  "hud.coachPanel.text.prayers": "Молитве Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Једнократна ПБ",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Поновно бацање: {source} — истиче на крају следеће серије",
   "hud.coachPanel.thisCoachIsActivating": "Овај тренер активира играча",

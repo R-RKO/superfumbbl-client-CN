@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "医生",
   "hud.coachPanel.text.cards": "卡牌",
   "hud.coachPanel.text.cheeringFansCountOffensive": "球迷欢呼：阻挡时 +{count} 进攻助攻",
-  "hud.coachPanel.text.prayers": "祈祷",
+  "hud.coachPanel.text.prayers": "向纳弗尔祈祷",
   "hud.coachPanel.text.singleUseRerolls": "一次性重掷",
   "hud.coachPanel.text.sourceRerollExpiresAt": "{source} 重掷——在下一次进攻结束时失效",
   "hud.coachPanel.thisCoachIsActivating": "该教练正在激活球员",

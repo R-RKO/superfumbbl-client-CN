@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Apotacaire",
   "hud.coachPanel.text.cards": "Cairtean",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Luchd-taic ag èigheach: +{count} cuideachadh ionnsaigh air casg",
-  "hud.coachPanel.text.prayers": "Ùrnaighean",
+  "hud.coachPanel.text.prayers": "Ùrnaighean gu Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Ath-thilgeilean aon-uair",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Ath-thilgeil {source} — falbhaidh e aig deireadh an dràibh a leanas",
   "hud.coachPanel.thisCoachIsActivating": "Tha a’ choidse seo a’ gnìomhachadh cluicheadair",

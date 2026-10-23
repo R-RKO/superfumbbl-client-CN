@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Apotecario",
   "hud.coachPanel.text.cards": "Cartas",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Hinchas Animosos: +{count} de ayuda ofensiva en un bloqueo",
-  "hud.coachPanel.text.prayers": "Plegarias",
+  "hud.coachPanel.text.prayers": "Plegarias a Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Repeticiones únicas",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Repetición de {source} — caduca al final de la serie siguiente",
   "hud.coachPanel.thisCoachIsActivating": "Este entrenador está activando a un jugador",

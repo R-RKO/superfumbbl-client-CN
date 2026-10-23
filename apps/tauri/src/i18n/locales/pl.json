@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Aptekarz",
   "hud.coachPanel.text.cards": "Karty",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Wiwatujący Kibice: +{count} wsparcia ofensywnego w bloku",
-  "hud.coachPanel.text.prayers": "Modlitwy",
+  "hud.coachPanel.text.prayers": "Modlitwy do Nuffle’a",
   "hud.coachPanel.text.singleUseRerolls": "Przerzuty jednorazowe",
   "hud.coachPanel.text.sourceRerollExpiresAt": "Przerzut ze źródła {source} — wygasa na koniec następnej akcji",
   "hud.coachPanel.thisCoachIsActivating": "Ten trener aktywuje gracza",

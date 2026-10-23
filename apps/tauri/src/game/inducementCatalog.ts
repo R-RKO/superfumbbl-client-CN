@@ -158,7 +158,7 @@ export const BB2025_FIXED_INDUCEMENTS: readonly FixedDefinition[] = [
   // GameOptionId.java:63; GameOptionFactory.java:172 (cost), :175 (max).
   { type: 'teamMascot', label: 'Team Mascot', costKey: 'inducementMascotCost', maxKey: 'inducementMascotMax', defaultCost: 25000, defaultMax: 1 },
   // GameOptionId.java:66; GameOptionFactory.java:272 (cost), :275 (max, default zero).
-  { type: 'prayers', label: 'Prayers', costKey: 'inducementPrayersCost', maxKey: 'inducementPrayersMax', defaultCost: 50000, defaultMax: 0 },
+  { type: 'prayers', label: 'Prayers to Nuffle', costKey: 'inducementPrayersCost', maxKey: 'inducementPrayersMax', defaultCost: 50000, defaultMax: 0 },
   // GameOptionId.java:74; GameOptionFactory.java:313 (cost), :316 (max), :319 (total max).
   { type: 'partTimeCoach', label: 'Part-time Assistant Coaches', costKey: 'inducementPartTimeCoachCost', maxKey: 'inducementPartTimeCoachMax', defaultCost: 20000, defaultMax: 3, totalMaxKey: 'inducementPartTimeCoachTotalMax', existingField: 'assistantCoaches' },
   // GameOptionId.java:73; GameOptionFactory.java:304 (cost), :307 (max), :310 (total max).

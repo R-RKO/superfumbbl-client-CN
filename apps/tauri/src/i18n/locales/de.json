@@ -811,7 +811,7 @@
   "hud.coachPanel.text.apothecary": "Apotheker",
   "hud.coachPanel.text.cards": "Karten",
   "hud.coachPanel.text.cheeringFansCountOffensive": "Jubelnde Fans: +{count} Offensivunterstützung bei einem Block",
-  "hud.coachPanel.text.prayers": "Gebete",
+  "hud.coachPanel.text.prayers": "Gebete an Nuffle",
   "hud.coachPanel.text.singleUseRerolls": "Einmal-Rerolls",
   "hud.coachPanel.text.sourceRerollExpiresAt": "{source}-Reroll — verfällt am Ende des folgenden Drives",
   "hud.coachPanel.thisCoachIsActivating": "Dieser Coach aktiviert einen Spieler",
