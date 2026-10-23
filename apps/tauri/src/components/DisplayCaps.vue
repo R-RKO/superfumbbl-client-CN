@@ -33,14 +33,15 @@ import { computed } from 'vue';
 import { displayCapsRuns } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
 
-type Run = { text: string; kind: 'lead' | 'rest' | 'keep' };
+type Run = { text: string; kind: 'lead' | 'rest' | 'keep' | 'fallback' };
+const kindOf = (run: { lead: boolean; fallback?: true }): Run['kind'] => (run.fallback ? 'fallback' : run.lead ? 'lead' : 'rest');
 
 const props = defineProps<{ text: string; keep?: readonly string[] }>();
 
 function letter(text: string, keep: ReadonlySet<string>): Run[] {
   const words = text.split(/\s+/u).filter((word) => word.length > 0);
   // No abbreviation in this label: the shared rule on the whole label, exactly as before.
-  if (!words.some((word) => keep.has(word))) return displayCapsRuns(text).map((run): Run => ({ text: run.text, kind: run.lead ? 'lead' : 'rest' }));
+  if (!words.some((word) => keep.has(word))) return displayCapsRuns(text).map((run): Run => ({ text: run.text, kind: kindOf(run) }));
   const runs: Run[] = [];
   const push = (run: Run): void => {
     if (!run.text) return;
@@ -51,7 +52,7 @@ function letter(text: string, keep: ReadonlySet<string>): Run[] {
   words.forEach((word, index) => {
     if (index > 0) push({ text: ' ', kind: 'rest' });
     if (keep.has(word)) push({ text: word, kind: 'keep' });
-    else for (const run of displayCapsRuns(word)) push({ text: run.text, kind: run.lead ? 'lead' : 'rest' });
+    else for (const run of displayCapsRuns(word)) push({ text: run.text, kind: kindOf(run) });
   });
   return runs;
 }
@@ -90,8 +91,12 @@ const runs = computed(() => (settings.uiFont === 'nuffle'
    Nuffle, then the system face. */
 /* A host whose text shadow is too heavy for the finer Graduate letters (the blades' red buttons) hands them a lighter
    one in --display-caps-rest-shadow; without it they inherit the host's shadow like any text. */
-.display-caps-rest { font-family: 'Graduate', 'Nuffle', system-ui, sans-serif; text-shadow: var(--display-caps-rest-shadow, inherit); }
-.display-caps-lead { font-family: 'Nuffle', system-ui, sans-serif; font-size: 1.25em; }
+.display-caps-rest { font-family: var(--font-graduate); text-shadow: var(--display-caps-rest-shadow, inherit); }
+.display-caps-lead { font-family: var(--font-display); font-size: 1.25em; }
+/* Script support (owner 10-23): a word whose first letter is not Latin, Greek or Cyrillic (kana, kanji, Hangul...)
+   is drawn whole, as typed, in the system fallback faces at the label's own size (an ideograph's ink is about as tall
+   as the 1.25em lead capital), nudged up so it centres on the capitals rather than sitting on the baseline. */
+.display-caps-fallback { font-family: var(--font-fallback); vertical-align: 0.04em; }
 /* An abbreviation: Nuffle capitals as typed, at the label's own size. */
-.display-caps-keep { font-family: 'Nuffle', system-ui, sans-serif; }
+.display-caps-keep { font-family: var(--font-display); }
 </style>

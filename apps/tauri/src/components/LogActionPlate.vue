@@ -110,7 +110,7 @@ const actionLabel = computed(() => (icons.value.action === 'skill' && props.plat
   user-select: none;
 }
 .log-icon-ko { width: 100%; height: auto; max-height: 100%; }
-.log-icon-ko-text { font-family: 'Nuffle', serif; font-weight: 700; font-size: calc(var(--log-icon-size, 2.4em) * 0.45); color: #fff; }
+.log-icon-ko-text { font-family: var(--font-display); font-weight: 700; font-size: calc(var(--log-icon-size, 2.4em) * 0.45); color: #fff; }
 .log-icon-emoji {
   font-size: calc(var(--log-icon-size, 2.4em) * 0.72);
   line-height: 1;

@@ -28,11 +28,18 @@
  *  5. Everything after the lead stays in the folded LOWERCASE, so Graduate draws small capitals: "ORCLAND RAIDERS", "orcland raiders"
  *     and "Orcland Raiders" all come out as O+"rcland" R+"aiders". Initials follow the same rule ("FC" = F+"c").
  *  6. Grapheme clusters stay whole (a letter keeps its combining marks; an emoji sequence is never split).
+ *  7. SCRIPT (owner 10-23, script support): a word whose first LETTER (after any punctuation, symbols or digits) is
+ *     not Latin, Greek or Cyrillic - kana, kanji / CJK ideographs, Hangul, Arabic, Hebrew, Thai, Devanagari... - is
+ *     a FALLBACK word: kept WHOLE, exactly as typed (NFC only: no case fold, no hyphen parts, no lead), and drawn in
+ *     the system fallback face (FONT_FALLBACK_FAMILY) at the lettering's box height. The bundled display faces carry
+ *     none of those scripts, and a first-letter split means nothing in them. A word with no letter at all keeps the
+ *     rules above. Latin / Greek / Cyrillic words keep the Graduate C treatment (their case folds work).
  *
  * Characters neither font carries are left to the font stack's fallback by the caller; nothing here can throw on them.
  */
 
-/** One hyphen part of a word. `before` and `rest` are drawn in Graduate at the normal size, `lead` in Nuffle, larger. */
+/** One hyphen part of a word. `before` and `rest` are drawn in Graduate at the normal size, `lead` in Nuffle, larger.
+ *  A fallback word (rule 7) is ONE part, `rest` = the word as typed, `fallback: true`. */
 export interface DisplayCapsPart {
   /** Punctuation that precedes the lead, as written. */
   before: string;
@@ -40,17 +47,44 @@ export interface DisplayCapsPart {
   lead: string;
   /** Everything after the lead, lowercased (the trailing hyphen included). */
   rest: string;
+  /** Rule 7: the whole word, as typed, in the fallback face. */
+  fallback?: true;
 }
 export type DisplayCapsWord = DisplayCapsPart[];
 
-/** A drawable run: consecutive characters in one font at one size. Words are joined by a single-space run. */
-export interface DisplayCapsRun { text: string; lead: boolean }
+/** A drawable run: consecutive characters in one font at one size. Words are joined by a single-space run (part of
+ *  the fallback run when the words on both sides of it are fallback words). `fallback`: rule 7, drawn in the
+ *  fallback face; never a lead. */
+export interface DisplayCapsRun { text: string; lead: boolean; fallback?: true }
 
 /** How much larger than the rest the lead letter is drawn (owner 10-11: "25% larger"). */
 export const DISPLAY_CAPS_LEAD_SCALE = 1.25;
 
 const PART_BREAK = /^[-‐-―−/]/u;
 const LETTER = /^\p{L}/u;
+/** Scripts whose words take the Graduate C treatment (rule 7); every other script's words are fallback words. */
+const CAPS_SCRIPT = /^[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]/u;
+
+/** True when `cluster` starts with a Latin, Greek or Cyrillic letter (rule 7). */
+export function isCapsScriptLetter(cluster: string): boolean {
+  return CAPS_SCRIPT.test(cluster);
+}
+
+/**
+ * Rule 7: how a WORD is lettered, decided by its first letter. 'caps' = the Graduate C treatment (Latin, Greek,
+ * Cyrillic, and any word with no letter at all: digits, emoji, punctuation, ''); 'fallback' = drawn whole, as typed,
+ * in the fallback face (kana, kanji, Hangul, Arabic, Hebrew, Thai, Devanagari...). Never throws.
+ */
+export function displayWordScript(word: string): 'caps' | 'fallback' {
+  try {
+    for (const point of String(word ?? '')) {
+      if (LETTER.test(point)) return CAPS_SCRIPT.test(point) ? 'caps' : 'fallback';
+    }
+  } catch {
+    /* an unreadable word keeps the default treatment */
+  }
+  return 'caps';
+}
 const DIGIT = /^\p{N}/u;
 
 type SegmenterLike = { segment(input: string): Iterable<{ segment: string }> };
@@ -123,6 +157,7 @@ function foldWord(word: string): string {
 }
 
 function splitWord(word: string): DisplayCapsWord {
+  if (displayWordScript(word) === 'fallback') return [{ before: '', lead: '', rest: word.normalize('NFC'), fallback: true }];
   const parts: DisplayCapsWord = [];
   let before = '';
   let lead = '';
@@ -185,15 +220,18 @@ export function displayCapsWords(input: string): DisplayCapsWord[] {
 /** `displayCapsWords` flattened to drawable runs, adjacent same-font runs merged, one space between words. */
 export function displayCapsRuns(input: string): DisplayCapsRun[] {
   const runs: DisplayCapsRun[] = [];
-  const push = (text: string, lead: boolean): void => {
+  const push = (text: string, lead: boolean, fallback = false): void => {
     if (!text) return;
     const last = runs[runs.length - 1];
-    if (last && last.lead === lead && !lead) last.text += text;
-    else runs.push({ text, lead });
+    if (last && !lead && !last.lead && !!last.fallback === fallback) last.text += text;
+    else runs.push(fallback ? { text, lead, fallback: true } : { text, lead });
   };
-  displayCapsWords(input).forEach((word, index) => {
-    if (index > 0) push(' ', false);
+  const words = displayCapsWords(input);
+  const isFallback = (word: DisplayCapsWord | undefined): boolean => word?.[0]?.fallback === true;
+  words.forEach((word, index) => {
+    if (index > 0) push(' ', false, isFallback(words[index - 1]) && isFallback(word));
     for (const part of word) {
+      if (part.fallback) { push(part.rest, false, true); continue; }
       push(part.before, false);
       push(part.lead, true);
       push(part.rest, false);

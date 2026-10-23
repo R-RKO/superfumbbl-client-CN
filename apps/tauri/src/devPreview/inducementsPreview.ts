@@ -9,6 +9,7 @@
  */
 import { createApp, h, reactive } from 'vue';
 import { applyTheme } from '../game/theme';
+import { installFontStackVariables } from '../game/fontStacks';
 import InducementsPhase, { type PanelView, type PickerCard, type SummaryCardView } from '../components/InducementsPhase.vue';
 import {
   KIND_LABEL, bladeOf, estimateInducementBudget, ownedResources, phaseMoney, summaryCards,
@@ -182,6 +183,7 @@ function panelFor(role: InducementRole): PanelView {
 /** The seat may act only during its own leg ('done' matches neither role). */
 const canAct = () => state.phase === state.seat;
 
+installFontStackVariables();
 createApp({
   render: () => h(InducementsPhase, {
     class: 'induce-phase', // the mount's class: the host rules in inducements-preview.html key off it, as the client's do

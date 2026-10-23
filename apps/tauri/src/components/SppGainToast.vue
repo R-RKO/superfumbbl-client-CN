@@ -55,7 +55,7 @@ onBeforeUnmount(follower.clear);
   background: repeating-linear-gradient(0deg, #24134d 0 3px, #321c68 3px 6px);
   box-shadow: 0 4px 0 #080510, 0 8px 18px #000b, 0 0 12px #f8e36a88;
   color: #fff7a8;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   text-align: center;
   image-rendering: pixelated;
   pointer-events: none;

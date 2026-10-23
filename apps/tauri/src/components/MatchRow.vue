@@ -105,7 +105,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
 .row-coach { color: var(--pb-text); }
 .row-centre { display: grid; justify-items: center; align-content: center; gap: 6px; min-width: 0; }
-.row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 42px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap;
+.row-score { color: var(--pb-carmine); font-family: var(--font-display); font-size: 42px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap;
   display: grid; grid-template-columns: 1fr auto 1fr; column-gap: .35em; align-items: baseline; justify-self: stretch; }
 .row-score-n:first-child { text-align: right; }
 .row-score-n:last-child { text-align: left; }

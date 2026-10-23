@@ -72,6 +72,7 @@ export { bundledStadiumPacks, type BundledStadiumPack } from './bundledStadium';
 export const loadBlockDice3d = () => import('./blockDice3d');
 export { ACTION_DIE_TUMBLE_MS } from './actionDice3d';
 export type { BlockDiceRow } from './blockDice3d';
-export { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayCapsWords, sentenceCaseLine, type DisplayCapsPart, type DisplayCapsRun, type DisplayCapsWord } from './displayCaps';
+export { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayCapsWords, displayWordScript, isCapsScriptLetter, sentenceCaseLine, type DisplayCapsPart, type DisplayCapsRun, type DisplayCapsWord } from './displayCaps';
 export { surfLandingSquare, surfOutward, isSurfLanding, isCrowdSquare, thrownCrowdLanding } from './crowdSurf';
 export { DUGOUT_LETTERING, composeDisplayLettering, loadDisplayFonts } from './displayLettering';
+export * from './fontStacks';

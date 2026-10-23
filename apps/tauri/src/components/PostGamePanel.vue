@@ -758,7 +758,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
   border-bottom: 1px solid var(--ui-border);
 }
 .pg-title {
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem);
   font-weight: 900;
   color: var(--ui-heading);
@@ -819,7 +819,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
   justify-content: center;
   gap: 10px;
   padding: 18px 16px;
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem);
   letter-spacing: 0.08em;
   color: var(--ui-text-dim);
@@ -938,7 +938,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-team-coach { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
 .pg-scoreline { text-align: center; }
 .pg-score {
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 3rem);
   font-weight: 900;
   color: var(--ui-text);
@@ -1071,7 +1071,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-coverage:not([data-coverage='whole']) { color: var(--ui-text); padding: 2px 8px; border: 1px solid var(--ui-border); border-left: 3px solid #d9a441; border-radius: 4px; background: var(--ui-surface); }
 .pg-dice-close:hover { background: var(--ui-accent); color: var(--ui-text-on-primary); border-color: var(--ui-accent); }
 .pg-dice-switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
-.pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
+.pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: var(--font-display); font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
 .pg-dice-switch button img { width: 1.5em; height: 1.5em; object-fit: contain; }
 .pg-dice-switch button:hover { color: var(--ui-text); }
 .pg-dice-switch button[aria-selected='true'] { background: var(--ui-surface-2); color: var(--ui-heading); }
@@ -1114,7 +1114,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
 .pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
 .pg-dice-col-single .pg-dice-fact-detail { font-size: 1.05em; }
-.pg-dice-grid h3 { margin: 0 0 0.35em; font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: 1.2em; color: var(--ui-heading); letter-spacing: 0.03em; }
+.pg-dice-grid h3 { margin: 0 0 0.35em; font-family: var(--font-display); font-weight: 900; font-size: 1.2em; color: var(--ui-heading); letter-spacing: 0.03em; }
 .pg-dice-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .pg-dice-fact { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
 .pg-dice-fact:first-child { border-top: 0; }
@@ -1129,7 +1129,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
    now, and Dodge dice gets its own divider under the Dodges-by-target chart it shares a block with. */
 .pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid color-mix(in srgb, var(--ui-muted) 70%, transparent); }
 .pg-dice-block .pg-dodge-legend + h4 { margin: 0 -12px 0.25em; padding: 6px 12px 0; border-top: 1px solid color-mix(in srgb, var(--ui-muted) 70%, transparent); }
-.pg-dice-block h4 { margin: 0 0 0.25em; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
+.pg-dice-block h4 { margin: 0 0 0.25em; font-family: var(--font-display); font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
 .pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.85em; color: var(--ui-muted); letter-spacing: 0; }
 .pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
 .pg-dice-chart { width: 100%; height: auto; display: block; }
@@ -1138,7 +1138,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-bar-block { opacity: 0.75; }
 .pg-dice-expected { fill: none; stroke: var(--ui-text); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.9; }
 .pg-dice-face { image-rendering: auto; } /* smooth minification of the 64 px face, as in the log */
-.pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: 'Nuffle', sans-serif; }
+.pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: var(--font-display); }
 .pg-dice-count { fill: var(--ui-text); font-size: 9px; text-anchor: middle; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* Owner 10-01 (S67): dodges by target - the three fills mean the same on both sides (not the team colours). */
 .pg-dodge-attempts { fill: none; stroke: var(--ui-muted); stroke-width: 1; }

@@ -116,7 +116,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, tru
   /* --ui-heading = the theme's section-header red, nudged to clear 4.5:1 on the surface (game/theme.ts);
      the raw primary the legal notice uses reads too dark on the surface-2 band. */
   color: var(--ui-heading, #ff3b3b);
-  font-family: 'Nuffle', Arial, Helvetica, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 26px);
   line-height: 1.2;
   letter-spacing: 0.04em;

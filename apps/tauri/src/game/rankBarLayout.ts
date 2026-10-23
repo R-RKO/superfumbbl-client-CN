@@ -1,3 +1,4 @@
+import { FONT_DISPLAY_FAMILY } from './fontStacks';
 /**
  * Game-load rank bar layout (owner 10-21 browser check): the in-game match-up bar must lay out cleanly at every width.
  * Pure math over the banner's own metrics (components/WaitingVsBanner.vue, every size x --vs-scale):
@@ -207,8 +208,8 @@ export function rankBarTop(input: { height: number; barHeight: number; hudBottom
  *  computed style (the record line inherits the selected UI font - Nuffle by default - in small capitals). */
 export interface BarFonts { team: string; teamWeight: string; record: string; recordWeight: string }
 export const DEFAULT_BAR_FONTS: BarFonts = {
-  team: "Nuffle, system-ui, sans-serif", teamWeight: 'normal',
-  record: "Nuffle, system-ui, sans-serif", recordWeight: 'normal',
+  team: FONT_DISPLAY_FAMILY, teamWeight: 'normal',
+  record: FONT_DISPLAY_FAMILY, recordWeight: 'normal',
 };
 export const barFontString = (kind: MeasureKind, px: number, fonts: BarFonts): string => (kind === 'team'
   ? `${fonts.teamWeight} ${px}px ${fonts.team}`

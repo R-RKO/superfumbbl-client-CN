@@ -4216,7 +4216,7 @@ onBeforeUnmount(() => {
   border: 2px dashed var(--ui-border);
   border-radius: 6px;
   color: var(--ui-muted);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   text-align: center;
@@ -4258,7 +4258,7 @@ onBeforeUnmount(() => {
   --seat-away-bright: #fe0000;
   --seat-away-text: #fe6666;
   /* B2-16/UI11 + B3-8: display font is user-selectable (default Nuffle) */
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
   /* Owner 2026-07-05: base UI 20% larger. The whole shell is rem-based, so scaling
      the root font-size grows every panel/dialog/button/label 20%; the JS-sized pitch
      canvas is unaffected. */
@@ -4474,7 +4474,7 @@ input, textarea, [contenteditable="true"], .log-panel {
   border: 2px solid #c0532f;
   border-radius: 3px;
   color: #d5643a;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
   font-size: max(var(--ui-min-text-size, 12px), 0.72rem);
   letter-spacing: 0.16em;
@@ -5194,7 +5194,7 @@ body.pad-cursor-hidden, body.pad-cursor-hidden * { cursor: none !important; }
   font-family: Arial, Helvetica, sans-serif;
 }
 .splash-title {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.55rem);
   font-weight: 900;
   margin: 0 0 0.5rem;
@@ -5234,7 +5234,7 @@ body.pad-cursor-hidden, body.pad-cursor-hidden * { cursor: none !important; }
   background: linear-gradient(160deg, #6441a5 0%, #9146ff 55%, #772ce8 100%);
   border: 1px solid #a970ff;
   aspect-ratio: 16 / 6;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   transition: filter 0.15s ease, transform 0.1s ease;
 }
 .splash-twitch-card:hover { filter: brightness(1.12); }
@@ -5251,7 +5251,7 @@ body.pad-cursor-hidden, body.pad-cursor-hidden * { cursor: none !important; }
   border: 1px solid #4a8a58;
   border-radius: 7px;
   padding: 0.5rem 1.4rem;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem);
   font-weight: 700;
   cursor: pointer;
@@ -5291,7 +5291,7 @@ body.pad-cursor-hidden, body.pad-cursor-hidden * { cursor: none !important; }
   color: var(--ui-text);
 }
 .creds-menu-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.creds-menu-head h2 { margin: 0; font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem); font-family: 'Nuffle', system-ui, sans-serif; color: var(--ui-primary); }
+.creds-menu-head h2 { margin: 0; font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem); font-family: var(--font-display); color: var(--ui-primary); }
 .creds-menu-close { background: none; border: none; color: var(--ui-muted); font-size: max(var(--ui-min-primary-text-size, 16px), 1.1rem); cursor: pointer; }
 .creds-menu-close:hover { color: var(--ui-text); }
 .creds-tabs { display: flex; gap: 4px; margin-bottom: 12px; }

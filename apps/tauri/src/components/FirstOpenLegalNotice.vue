@@ -142,7 +142,7 @@ onMounted(() => {
 .legal-header h1,
 .legal-scroll h2 {
   margin: 0;
-  font-family: 'Nuffle', Arial, Helvetica, sans-serif;
+  font-family: var(--font-display);
   line-height: 1.2;
 }
 

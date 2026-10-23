@@ -119,7 +119,7 @@ const padOptions = computed(() => ({
   background: var(--ui-surface-2, #171c18);
   border-bottom: 1px solid var(--ui-border, #4a514a);
   color: var(--ui-heading, #ff3b3b);
-  font-family: 'Nuffle', Arial, Helvetica, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 20px);
 }
 .mn-text { margin: 0; padding: 14px 16px; font-size: max(var(--ui-min-text-size, 12px), 14px); line-height: 1.4; }

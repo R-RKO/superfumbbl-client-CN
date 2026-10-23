@@ -684,7 +684,7 @@ function crestFailed(url: string | null): void {
   box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: var(--console-column-width, min(2200px, 94vw)); min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
 h1, h2, p { margin: 0; }
 .play-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
-h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .22); }
+h1 { color: var(--pb-text); font-family: var(--font-display); font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .22); }
 .head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .bevel {
   padding: 12px 26px;
@@ -693,7 +693,7 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
   color: #fff;
   background: var(--pb-carmine);
   box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 24px;
   font-weight: 800;
   letter-spacing: .04em;
@@ -726,7 +726,7 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
 /* Owner 10-02: the lobby's List Games / Cancel speak the game rows' bevelled-panel language (no behaviour change). */
 .plain { padding: 8px 14px; color: var(--pb-text); border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px; background: var(--ui-old-lace, #F8F5E7);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 2px 5px rgba(26, 64, 28, .2);
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: 15px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+  font-family: var(--font-display); font-size: 15px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
 .plain:hover:not(:disabled) { border-color: var(--pb-carmine); color: var(--pb-carmine); }
 .plain:disabled { opacity: .45; cursor: default; }
 .link { padding: 0; color: var(--pb-carmine); border: 0; background: none; font: inherit; text-decoration: underline; cursor: pointer; }
@@ -740,10 +740,10 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
 .play-body > .recent-card { flex: 1 1 0; min-height: 300px; }
 .card { box-sizing: border-box; min-width: 0; border: 1px solid var(--pb-text); border-radius: 6px; background: var(--ui-old-lace, #F8F5E7); box-shadow: 0 4px 14px rgba(26, 64, 28, .18); }
 .list-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; }
-h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
+h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: var(--font-display); font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
 .count { padding: 2px 10px; border-radius: 999px; color: var(--pb-text); background: color-mix(in srgb, var(--ui-forest, #1A401C) 14%, transparent); font-size: 14px; text-shadow: none; }
 .team-cap-note { color: var(--pb-muted); font-size: 14px; }
-.empty { width: 100%; padding: 22px 0; color: var(--pb-muted); font-family: 'Nuffle', system-ui, sans-serif; font-size: 26px; letter-spacing: .04em; text-align: center; } /* owner 09-25: larger */
+.empty { width: 100%; padding: 22px 0; color: var(--pb-muted); font-family: var(--font-display); font-size: 26px; letter-spacing: .04em; text-align: center; } /* owner 09-25: larger */
 .load-error { color: #8f111b; font-size: 14px; }
 .card-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 14px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
@@ -773,7 +773,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .race-logo, .logo-fallback { box-sizing: border-box; width: 128px; height: 128px; }
 .race-logo { object-fit: contain; image-rendering: pixelated; }
 .logo-fallback { display: grid; place-items: center; border: 1px solid var(--pb-line); border-radius: 4px; color: var(--pb-text); background: var(--ui-old-lace, #F8F5E7); font-size: 28px; letter-spacing: .06em; }
-.versus { color: var(--pb-carmine); font-family: 'SNES', 'Nuffle', sans-serif; font-size: 27px; font-style: italic; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
+.versus { color: var(--pb-carmine); font-family: var(--font-snes); font-size: 27px; font-style: italic; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
 .play-slot { width: 0; }
 .lobby-controls { display: grid; gap: 7px; }
 .lobby-controls label { color: var(--pb-carmine); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
@@ -816,14 +816,14 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
 .row-coach { color: var(--pb-text); } /* owner 09-25: coach names in the darker green */
 .row-centre { display: grid; justify-items: center; align-content: center; gap: 6px; min-width: 0; }
-.row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 42px; /* owner 10-01 (S78): larger, the time left this box (was 27px) */ font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap;
+.row-score { color: var(--pb-carmine); font-family: var(--font-display); font-size: 42px; /* owner 10-01 (S78): larger, the time left this box (was 27px) */ font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap;
   display: grid; grid-template-columns: 1fr auto 1fr; column-gap: .35em; align-items: baseline; justify-self: stretch; }
 .row-score-n:first-child { text-align: right; }
 .row-score-n:last-child { text-align: left; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
 /* Owner 10-02: active rows - the game's status heads the centre box (Waiting / In progress); a waiting lobby game has no
    score yet, so the centre keeps the Spectate page's truthful "vs" in the score's style. */
-.row-status { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 16px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+.row-status { color: var(--pb-carmine); font-family: var(--font-display); font-size: 16px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
 .row-score.row-score-vs { display: block; justify-self: center; }
 .row-waiting { color: var(--pb-muted); font-style: italic; }
 /* Owner 10-01 (S77): the result label art at its own CSS size (1x/2x/3x sources, never stretched). */

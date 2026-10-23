@@ -596,7 +596,7 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
 .fumbbl-float-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), 0.72rem);
   font-weight: 800;
   letter-spacing: 0.06em;

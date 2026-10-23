@@ -38,7 +38,7 @@ function onToggleRoomName(): void { if (!props.locked) roomNameShown.value = !ro
 </template>
 
 <style scoped>
-.waiting-card-title { margin: 0 0 0.6rem; font-family: 'Nuffle', system-ui, sans-serif; color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.3rem); }
+.waiting-card-title { margin: 0 0 0.6rem; font-family: var(--font-display); color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.3rem); }
 .waiting-card-status, .waiting-card-hint { margin: 0.5rem 0 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.92rem); line-height: 1.5; }
 .waiting-card-status { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
 /* Cancel alone stays centred; with a room name, Cancel keeps the left of the row and the reveal toggle sits in the

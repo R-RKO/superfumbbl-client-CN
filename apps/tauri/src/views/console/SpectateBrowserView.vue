@@ -545,7 +545,7 @@ onBeforeUnmount(() => {
 .competition-heading {
   margin: 10px 0 2px;
   padding: 4px 10px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), 0.95rem);
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -621,7 +621,7 @@ onBeforeUnmount(() => {
   align-items: baseline;
   justify-self: stretch;
   color: var(--pb-carmine);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 42px;
   font-weight: 800;
   line-height: 1;
@@ -641,7 +641,7 @@ onBeforeUnmount(() => {
   color: #fff;
   background: var(--pb-carmine, #790004);
   box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 24px;
   font-weight: 800;
   letter-spacing: .04em;

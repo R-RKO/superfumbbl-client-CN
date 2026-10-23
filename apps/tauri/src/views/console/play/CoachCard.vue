@@ -74,7 +74,7 @@ const ariaLabel = computed(() => ['FUMBBL coach', displayName.value, title.value
 
 .coach-title-chip {
   flex: none; padding: 1px 10px; border-radius: 999px; color: #fff; background: var(--ui-forest, #1A401C);
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: 14px; font-weight: 800; letter-spacing: .06em; line-height: 18px;
+  font-family: var(--font-display); font-size: 14px; font-weight: 800; letter-spacing: .06em; line-height: 18px;
   text-shadow: 1px 1px 0 #000; --display-caps-rest-shadow: 1px 1px 0 #000; white-space: nowrap;
 }
 .coach-title-chip.tier-rookie, .coach-title-chip.tier-experienced { color: var(--ui-forest, #1A401C); text-shadow: none; --display-caps-rest-shadow: none;

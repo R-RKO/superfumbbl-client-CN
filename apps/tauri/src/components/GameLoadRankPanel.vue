@@ -230,7 +230,7 @@ watch(() => settings.uiFont, fontsChanged);
 .rank-bar-slot { position: absolute; left: 0; right: 0; display: flex; justify-content: center; }
 .rank-title-chip {
   padding: 3px 10px; border-radius: 999px; color: #101010; background: #efc957;
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: 0.9em; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  font-family: var(--font-display); font-size: 0.9em; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
   white-space: nowrap;
 }
 /* Lines 3 and 4 (record, rating) are each ONE line (the layout sizes them to fit); each part is kept whole. */

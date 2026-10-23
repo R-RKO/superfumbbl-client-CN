@@ -56,7 +56,7 @@ defineProps<{
 }
 .chat-bubble-name {
   overflow-wrap: anywhere;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.9em;
   font-weight: 900;
   letter-spacing: 0.045em;

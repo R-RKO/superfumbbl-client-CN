@@ -1,4 +1,5 @@
 import { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayGraphemes, type DisplayCapsRun } from './displayCaps';
+import { FONT_DISPLAY_FAMILY, FONT_FALLBACK_FAMILY, FONT_GRADUATE_FAMILY } from './fontStacks';
 
 /**
  * Pitch lettering in the "Graduate C" style (owner 10-11): each word's first letter in Nuffle, 25% larger, the rest
@@ -15,14 +16,25 @@ import { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayGraphemes, type Displa
  * same quality rule the old single `Text` objects used (owner 09-14 / 09-16). The renderer keeps the texture per
  * surface and label, so a redraw does not rasterise again.
  *
- * Characters neither font carries fall to the rest of the CSS font stack (system sans-serif), per glyph, by the
- * browser: no tofu from a missing face, nothing to throw.
+ * Characters neither font carries fall to the rest of the font stack (fontStacks.ts: the Cyrillic / Greek system
+ * faces, then the CJK faces), per glyph, by the browser: nothing to throw.
+ *
+ * Script support (owner 10-23): a word whose first letter is not Latin, Greek or Cyrillic (displayCaps.ts rule 7) is
+ * drawn WHOLE in the fallback face (FONT_FALLBACK_FAMILY), sized so a full-width reference glyph (U+53E3) stands as
+ * tall as the lead capitals, and centred on the capitals' middle: a mixed name shares one centre line, and its Latin
+ * baseline is exactly where an all-Latin label puts it.
  */
 
-/** The rest of each word: Graduate (its lowercase glyphs are small capitals), then the old stack. */
-export const DISPLAY_REST_FONT_FAMILY = "'Graduate', 'Nuffle', sans-serif";
-/** The lead letter of each word: the display font these labels always used. */
-export const DISPLAY_LEAD_FONT_FAMILY = "'Nuffle', sans-serif";
+/** The rest of each word: Graduate (its lowercase glyphs are small capitals), then Nuffle and the script tail. */
+export const DISPLAY_REST_FONT_FAMILY = FONT_GRADUATE_FAMILY;
+/** The lead letter of each word: the display font these labels always used, then the script tail. */
+export const DISPLAY_LEAD_FONT_FAMILY = FONT_DISPLAY_FAMILY;
+/** A fallback word (kana, kanji, Hangul...): the script tail alone. */
+export const DISPLAY_FALLBACK_FONT_FAMILY = FONT_FALLBACK_FAMILY;
+/** The full-width glyph a fallback word is sized and centred by: its ink box is an ideograph's em box, near enough. */
+export const FALLBACK_REFERENCE_GLYPH = '\u53e3';
+/** The fallback face's size stays within this share of the lead size, whatever a measurement returns. */
+const FALLBACK_SIZE_RANGE = [0.6, 1.5] as const;
 
 /** What one surface's lettering looks like. Sizes are logical px: the unit the old `Text` style used. */
 export interface DisplayLetteringStyle {
@@ -70,12 +82,15 @@ export const DUGOUT_LETTERING: DisplayLetteringStyle = {
   fontPx: 14 * PITCH_REST_GROWTH, leadScale: PITCH_LEAD_SCALE, fontWeight: 'bold', letterSpacing: 2, fill: '#ffffff', restOutline: 0, capFill: 0.9, resolution: 4,
 };
 
-/** The two CSS font shorthands a style is drawn with. */
-export function displayLetteringFonts(style: DisplayLetteringStyle): { rest: string; lead: string } {
+/** The CSS font shorthands a style is drawn with. `fallback(px)` is the fallback face at `px` (default: the lead
+ *  size; the compositor sizes it from a measurement), in the lead's weight. */
+export function displayLetteringFonts(style: DisplayLetteringStyle): { rest: string; lead: string; fallback: (px?: number) => string } {
   const leadPx = style.fontPx * style.leadScale;
+  const leadWeight = style.leadWeight ?? style.fontWeight;
   return {
     rest: `${style.restWeight ?? style.fontWeight} ${style.fontPx}px ${DISPLAY_REST_FONT_FAMILY}`,
-    lead: `${style.leadWeight ?? style.fontWeight} ${leadPx}px ${DISPLAY_LEAD_FONT_FAMILY}`,
+    lead: `${leadWeight} ${leadPx}px ${DISPLAY_LEAD_FONT_FAMILY}`,
+    fallback: (px = leadPx) => `${leadWeight} ${Number.isFinite(px) && px > 0 ? px : leadPx}px ${DISPLAY_FALLBACK_FONT_FAMILY}`,
   };
 }
 
@@ -153,9 +168,18 @@ export interface DisplayLettering {
   /** Height of the lead capitals and of the Graduate small capitals, logical px (for sizing and reports). */
   capHeight: number;
   smallCapHeight: number;
+  /** The Latin alphabetic baseline (lead and rest runs), logical px from the canvas top. */
+  baseline: number;
+  /** Where each run was drawn: its font, left edge and baseline (logical px). A fallback run's baseline is set so its
+   *  reference glyph is centred on the capitals' middle. */
+  runs: DisplayLetteringRun[];
 }
 
-interface MeasuredRun { run: DisplayCapsRun; font: string; width: number }
+/** One drawn run of a composed label. */
+export interface DisplayLetteringRun { text: string; kind: 'lead' | 'rest' | 'fallback'; font: string; x: number; baseline: number; width: number }
+
+/** `drop`: how far the run's baseline sits below the capitals' middle. */
+interface MeasuredRun { run: DisplayCapsRun; kind: DisplayLetteringRun['kind']; font: string; width: number; drop: number }
 
 type SpacingContext = CanvasRenderingContext2D & { letterSpacing?: string };
 
@@ -188,6 +212,10 @@ export function composeDisplayLettering(label: string, style: DisplayLetteringSt
   };
   // Without native letter spacing each character is advanced by hand (Pixi's own fallback does the same): one
   // GRAPHEME at a time, so a letter keeps its combining marks and an emoji sequence is one piece.
+  // KNOWN LIMITATION (Astra review 10-23, inherited from da3ad3aa3, out of scope): on this no-letterSpacing path a
+  // right-to-left fallback word (Arabic, Hebrew) is also drawn grapheme by grapheme at increasing x, so Arabic loses
+  // its joining and Hebrew comes out in reversed visual order. Engines with native canvas letterSpacing (Chromium /
+  // WebView2, Safari 18.4+) draw every run whole and are unaffected.
   const pieces = (text: string): string[] => (nativeSpacing ? [text] : displayGraphemes(text));
   const advance = (target: SpacingContext, text: string): number =>
     target.measureText(text).width + (nativeSpacing ? 0 : style.letterSpacing);
@@ -199,27 +227,47 @@ export function composeDisplayLettering(label: string, style: DisplayLetteringSt
   prepare(ctx, fonts.rest);
   const smallCapHeight = ctx.measureText('h').actualBoundingBoxAscent || style.fontPx * 0.68;
 
+  // Fallback words (rule 7): sized so the reference glyph's ink is as tall as the lead capitals, and dropped so that
+  // ink is centred on the capitals' middle. Measured once per label, only when the label has such a word.
+  const leadPx = style.fontPx * style.leadScale;
+  let fallbackFont = fonts.fallback(leadPx);
+  let fallbackDrop = capHeight / 2;
+  if (runs.some((run) => run.fallback)) {
+    prepare(ctx, fallbackFont);
+    const probe = ctx.measureText(FALLBACK_REFERENCE_GLYPH);
+    const probeHeight = (probe.actualBoundingBoxAscent || 0) + (probe.actualBoundingBoxDescent || 0);
+    const ratio = probeHeight > 0 ? capHeight / probeHeight : 1;
+    const scale = Math.min(FALLBACK_SIZE_RANGE[1], Math.max(FALLBACK_SIZE_RANGE[0], Number.isFinite(ratio) ? ratio : 1));
+    fallbackFont = fonts.fallback(leadPx * scale);
+    prepare(ctx, fallbackFont);
+    const ref = ctx.measureText(FALLBACK_REFERENCE_GLYPH);
+    const refAscent = ref.actualBoundingBoxAscent || capHeight;
+    const refDescent = ref.actualBoundingBoxDescent || 0;
+    fallbackDrop = (refAscent - refDescent) / 2;
+  }
+
   const measured: MeasuredRun[] = [];
   let total = 0;
-  let inkAscent = capHeight;
-  let inkDescent = 0;
+  // The ink's reach about the capitals' middle (up / down), over every run; plain capitals reach half the cap height.
+  let inkUp = capHeight / 2;
+  let inkDown = capHeight / 2;
   for (const run of runs) {
-    const font = run.lead ? fonts.lead : fonts.rest;
+    const kind: DisplayLetteringRun['kind'] = run.fallback ? 'fallback' : run.lead ? 'lead' : 'rest';
+    const font = kind === 'fallback' ? fallbackFont : kind === 'lead' ? fonts.lead : fonts.rest;
+    const drop = kind === 'fallback' ? fallbackDrop : capHeight / 2;
     prepare(ctx, font);
     let width = 0;
     for (const piece of pieces(run.text)) width += advance(ctx, piece);
     const metrics = ctx.measureText(run.text);
-    inkAscent = Math.max(inkAscent, metrics.actualBoundingBoxAscent || 0);
-    inkDescent = Math.max(inkDescent, metrics.actualBoundingBoxDescent || 0);
-    measured.push({ run, font, width });
+    inkUp = Math.max(inkUp, (metrics.actualBoundingBoxAscent || 0) - drop);
+    inkDown = Math.max(inkDown, (metrics.actualBoundingBoxDescent || 0) + drop);
+    measured.push({ run, kind, font, width, drop });
     total += width;
   }
   // The last character's trailing spacing is not ink: the word is centred on its letters.
   const fitWidth = Math.max(1, total - style.letterSpacing);
   // Symmetric about the capitals' middle, so the canvas centre IS the cap centre. The ink's own reach (measured,
   // above and below) is reported beside the cap box: the renderer keeps both inside the band.
-  const inkUp = inkAscent - capHeight / 2;
-  const inkDown = inkDescent + capHeight / 2;
   const inkHalf = Math.max(inkUp, inkDown);
   // "Tall": past the plain capitals' own reach by more than 3% of the cap height (round letters overshoot a little).
   // This gate is a step: ink just under it keeps the ordinary placement, ink just over it is re-fitted and
@@ -237,17 +285,21 @@ export function composeDisplayLettering(label: string, style: DisplayLetteringSt
   canvas.height = Math.max(1, Math.ceil(height * style.resolution));
   // Resizing a canvas resets its context state.
   ctx.setTransform(style.resolution, 0, 0, style.resolution, 0, 0);
-  const baseline = height / 2 + capHeight / 2;
+  const centre = height / 2;
+  const baseline = centre + capHeight / 2;
+  const drawn: DisplayLetteringRun[] = [];
   let x = (width - fitWidth) / 2;
   for (const entry of measured) {
     prepare(ctx, entry.font);
+    const runBaseline = centre + entry.drop;
+    drawn.push({ text: entry.run.text, kind: entry.kind, font: entry.font, x, baseline: runBaseline, width: entry.width });
     for (const piece of pieces(entry.run.text)) {
-      ctx.fillText(piece, x, baseline);
-      if (!entry.run.lead && style.restOutline > 0) ctx.strokeText(piece, x, baseline);
+      ctx.fillText(piece, x, runBaseline);
+      if (entry.kind === 'rest' && style.restOutline > 0) ctx.strokeText(piece, x, runBaseline);
       x += advance(ctx, piece);
     }
   }
-  return { canvas, width, height, fitWidth, fitHeight, inkHeight, inkUp, inkDown, inkTall, capHeight, smallCapHeight };
+  return { canvas, width, height, fitWidth, fitHeight, inkHeight, inkUp, inkDown, inkTall, capHeight, smallCapHeight, baseline, runs: drawn };
 }
 
 /** A point on screen. */

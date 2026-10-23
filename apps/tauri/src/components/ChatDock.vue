@@ -292,7 +292,7 @@ defineExpose({ panelEl });
   display: flex;
   align-items: center;
   gap: 4px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), 0.62rem);
   font-weight: 800;
   letter-spacing: 0.06em;

@@ -91,10 +91,10 @@ function initials(name: string): string {
   border-radius: 50%; background: radial-gradient(circle at 50% 40%, #2a1012, #0b0d12 75%); border: 1px solid #e0303080;
 }
 .vs-crest img { width: calc(56px * var(--vs-scale, 1)); height: calc(56px * var(--vs-scale, 1)); object-fit: contain; filter: drop-shadow(0 2px 3px #000); }
-.vs-initials { font-family: 'Nuffle', system-ui, sans-serif; font-size: calc(1.3rem * var(--vs-type, var(--vs-scale, 1))); color: #e8918c; }
+.vs-initials { font-family: var(--font-display); font-size: calc(1.3rem * var(--vs-type, var(--vs-scale, 1))); color: #e8918c; }
 .vs-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .vs-team {
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: calc(max(var(--ui-min-primary-text-size, 16px), 1.25rem) * var(--vs-type, var(--vs-scale, 1)) * var(--vs-team-fit, 1));
+  font-family: var(--font-display); font-size: calc(max(var(--ui-min-primary-text-size, 16px), 1.25rem) * var(--vs-type, var(--vs-scale, 1)) * var(--vs-team-fit, 1));
   letter-spacing: 0.04em; text-transform: uppercase; color: #fff; text-shadow: 0 2px 4px #000;
   /* Owner 10-12: wrap at word starts, whole name visible; only a token wider than the column breaks inside the word. */
   white-space: normal; word-break: normal; overflow-wrap: anywhere; min-width: 0;
@@ -118,7 +118,7 @@ function initials(name: string): string {
 .vs-banner.keep-words .vs-side.opponent .vs-detail { align-items: flex-end; }
 .vs-mark {
   grid-area: mark; display: grid; place-items: center; width: calc(66px * var(--vs-scale, 1)); height: calc(66px * var(--vs-scale, 1)); border-radius: 50%;
-  font-family: 'SNES', 'Nuffle', system-ui, sans-serif; font-size: calc(2rem * var(--vs-type, var(--vs-scale, 1))); font-style: italic; font-weight: 900; color: #fff;
+  font-family: var(--font-snes); font-size: calc(2rem * var(--vs-type, var(--vs-scale, 1))); font-style: italic; font-weight: 900; color: #fff;
   background: linear-gradient(135deg, #b81818, #5a0a0a); border: 2px solid #ff6a6acc;
   box-shadow: 0 0 18px #e0303099, 0 4px 10px #000c; text-shadow: 2px 2px 0 #000;
 }

@@ -3,6 +3,7 @@ import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import App from './App.vue';
 import { initCredentials } from './game/credentials';
 import { installFocusClickGuard } from './game/focusClickGuard';
+import { installFontStackVariables } from './game/fontStacks';
 import { initSettingsFile, settings } from './game/settings';
 import {
   assetMods,
@@ -15,6 +16,8 @@ import {
  * it up on first render. The Settings pane opts back out to Arial/Helvetica.
  */
 async function boot() {
+  // Script support (owner 10-23): publish the font stacks (--font-display etc.) before anything renders.
+  installFontStackVariables();
   // Bundled Pixi textures resolve against the page origin on every platform (macOS/Linux run
   // at tauri://localhost, where Pixi's default root derivation breaks). Must precede any load.
   configurePixiAssetOrigin();

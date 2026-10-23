@@ -295,7 +295,7 @@ defineExpose({ tour });
 <style scoped>
 /* Above the Details popup (z 200) and its Dice pane (z 210), so the card stays readable over them; the layer itself
    lets every click through, so the blades and the Settings dialog stay usable. */
-.client-tour-layer { position: fixed; inset: 0; z-index: 220; pointer-events: none; font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif); }
+.client-tour-layer { position: fixed; inset: 0; z-index: 220; pointer-events: none; font-family: var(--ui-font, var(--font-display)); }
 .client-tour-arrows { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .ring { fill: none; stroke: #f0383f; stroke-width: 3; filter: drop-shadow(0 0 6px rgba(240, 56, 63, 0.75)); }
 .arrow { stroke: #f0383f; stroke-width: 4; stroke-linecap: round; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8)); }

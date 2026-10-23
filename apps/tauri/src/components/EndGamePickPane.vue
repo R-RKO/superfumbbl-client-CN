@@ -113,7 +113,7 @@ const emit = defineEmits<{ (e: 'pick', playerId: string): void; (e: 'confirm'): 
   padding: 14px 18px; border-bottom: 1px solid var(--ui-border);
 }
 .mvp-nominate-title { font-weight: 700; color: var(--ui-heading); }
-.mvp-nominate-count { font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); line-height: 1; color: var(--ui-accent); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; text-shadow: 2px 2px 0 #000; } /* owner 09-25: 2x, in the footer beside the button */
+.mvp-nominate-count { font-family: var(--font-display); font-weight: 900; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); line-height: 1; color: var(--ui-accent); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; text-shadow: 2px 2px 0 #000; } /* owner 09-25: 2x, in the footer beside the button */
 .mvp-nominate-count[data-complete='true'] { color: var(--ui-success); }
 /* The panel is the roster component in `fill`: ITS list scrolls, the foot stays pinned. */
 .mvp-nominate-roster { font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); min-width: 0; }

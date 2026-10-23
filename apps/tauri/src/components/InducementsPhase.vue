@@ -645,7 +645,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
      stop no --ui-* token names (--ui-forest #1A401C is the pitch surface, too
      light here). Kept literal for fidelity; --ui-surface carries the tail. */
   background: linear-gradient(160deg, #0f1f10 0%, var(--ui-surface) 45%, var(--ui-surface) 100%);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   color: var(--ui-text);
   overflow-x: hidden;
 }
@@ -692,7 +692,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
      floats over content that can still be scrolled clear of it. Opaque, with an edge and an upward shadow. */
   #indgrid.ind-grid > .ind-dock {
     position: sticky; bottom: 0; z-index: 5;
-    font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+    font-family: var(--ui-font, var(--font-display));
     border: 1px solid var(--ind-seat-border); border-top: 2px solid var(--ind-seat-accent); border-radius: 4px;
     background: linear-gradient(180deg, color-mix(in srgb, var(--ind-seat-head) 34%, #0b0e13), #07090c);
     box-shadow: 0 -10px 18px rgba(0, 0, 0, .7), 0 0 0 1px #000;
@@ -755,7 +755,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
    user's interface font, one accent edge on the outer side (mirrored, as the coach corners are). */
 .ind-summary.ind-seat-blue,
 .ind-summary.ind-seat-red {
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
   border-color: var(--ind-seat-border);
   border-radius: 4px;
   background: linear-gradient(180deg,

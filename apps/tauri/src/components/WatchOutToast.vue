@@ -55,7 +55,7 @@ onBeforeUnmount(follower.clear);
   background: color-mix(in srgb, #17130a 92%, var(--ui-accent, #f5c542) 8%);
   box-shadow: 0 4px 14px #000b, 0 0 10px color-mix(in srgb, var(--ui-accent, #f5c542) 22%, transparent);
   color: var(--ui-heading, #ffd97a);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.86rem);
   font-weight: 800;
   line-height: 1.15;

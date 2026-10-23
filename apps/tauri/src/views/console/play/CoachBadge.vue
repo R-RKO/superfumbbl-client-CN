@@ -61,7 +61,7 @@ const labelStyle = computed(() => (fit.value.scaleX < 1 ? { transform: `scaleX($
 }
 .coach-badge-label {
   display: block; white-space: nowrap; transform-origin: center;
-  color: #fff; font-family: 'Nuffle', system-ui, sans-serif; font-weight: 800; letter-spacing: 0; line-height: 1;
+  color: #fff; font-family: var(--font-display); font-weight: 800; letter-spacing: 0; line-height: 1;
   text-align: center; text-transform: uppercase; overflow-wrap: normal; word-break: keep-all;
   text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 3px rgba(0, 0, 0, .7);
 }

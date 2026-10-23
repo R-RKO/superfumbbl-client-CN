@@ -86,7 +86,7 @@ const surfaceStyle: CSSProperties = {
   border-radius: 8px;
   background: linear-gradient(135deg, #3d1014f2, #13080a 60%, #090b0e);
   box-shadow: 0 12px 38px #000d, inset 0 1px 0 #ffffff18;
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
   animation: sendoff-result-in var(--p-260) ease-out;
 }
 .sendoff-result-panel.success {

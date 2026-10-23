@@ -67,7 +67,7 @@ function onKeydown(event: KeyboardEvent) {
   outline-offset: -5px;
   background: var(--confirm-shell);
   box-shadow: 0 4px 0 #030405, 0 8px 18px #000c, inset 0 2px 0 #818a95;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem);
   font-weight: 900;
   line-height: 1.15;

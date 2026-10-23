@@ -51,7 +51,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
   border: 1px solid color-mix(in srgb, var(--ui-accent) 65%, #657080);
   border-radius: 7px;
   box-shadow: 0 7px 20px #000b;
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
   text-align: center;
 }
 .pitch-confirm-panel.compact { min-width: min(360px, calc(100% - 32px)); }

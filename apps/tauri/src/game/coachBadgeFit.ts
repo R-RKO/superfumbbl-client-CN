@@ -1,3 +1,4 @@
+import { FONT_DISPLAY_FAMILY } from './fontStacks';
 /**
  * Fit a coach status title onto its rank badge (Astra r3 P3): MEASURED widths in the house display font, not a
  * character-count estimate. The text area is the badge minus 7% padding each side (86% of the badge) and at most
@@ -46,7 +47,7 @@ export function fitBadgeTitle(title: string, size: number, measureCaps: MeasureT
   return { px, lines, scaleX: widest > width ? Math.max(0.5, width / widest) : 1 };
 }
 
-export const BADGE_TEXT_FONT = "800 {px}px Nuffle, system-ui, sans-serif";
+export const BADGE_TEXT_FONT = `800 {px}px ${FONT_DISPLAY_FAMILY}`;
 /** Without a canvas (tests, a renderer that refuses 2D): a conservative 0.68 em per capital - wider than Nuffle's caps. */
 export const estimateTextWidth: MeasureText = (text, px) => text.length * px * 0.68;
 

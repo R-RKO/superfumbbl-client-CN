@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 import { settings } from '../game/settings';
+import { FONT_DISPLAY_FAMILY } from '../game/fontStacks';
 import { importFumbblMarkingsDetailed } from '../game/fumbblMarkingsImport';
 import {
   addMarkingRule, clearAllMarkings, commitMarkingStores, currentMarkingStores, findMarkingConflicts, importedMarkingCount,
@@ -189,7 +190,7 @@ const MARKING_FONTS: Record<typeof settings.skillMarkingFont, string> = {
   arial: 'Arial, Helvetica, sans-serif',
   helvetica: 'Helvetica, Arial, sans-serif',
   system: 'system-ui, "Segoe UI", sans-serif',
-  nuffle: 'Nuffle, Arial, sans-serif',
+  nuffle: FONT_DISPLAY_FAMILY,
 };
 const chipStyle = computed(() => ({
   fontFamily: MARKING_FONTS[settings.skillMarkingFont] ?? MARKING_FONTS.arial,

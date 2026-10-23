@@ -475,6 +475,7 @@ import { useSuperFumbblLogoMip } from '../game/logoMips';
 import { useDelayedPresence } from '../game/delayedPresence';
 import { blitzTokenView } from '../game/blitzProjection';
 import { activeServerTarget, applyServerTarget, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, settings, turfCatalog, type AppSettings } from '../game/settings';
+import { FONT_DISPLAY_FAMILY } from '../game/fontStacks';
 import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
 import { gameServiceFromTarget, resolveReportGameId, wireLogBasename } from '../game/bugReport';
 import type { BugReportHost } from '../game/bugReportHost';
@@ -1037,7 +1038,7 @@ const hudAccessibilityStyle = computed<Record<string, string>>(() => ({
 
 // --- B2-8/9/15 (UI7/UI8): log window customization + scroll behavior ---
 const LOG_FONTS: Record<string, string> = {
-  nuffle: "'Nuffle', system-ui, sans-serif",
+  nuffle: FONT_DISPLAY_FAMILY,
   arial: 'Arial, Helvetica, sans-serif',
   mono: 'Consolas, "Courier New", monospace',
 };
@@ -2391,7 +2392,7 @@ const SKILL_MARKING_FONTS: Record<typeof settings.skillMarkingFont, string> = {
   arial: 'Arial, Helvetica, sans-serif',
   helvetica: 'Helvetica, Arial, sans-serif',
   system: 'system-ui, "Segoe UI", sans-serif',
-  nuffle: 'Nuffle, Arial, sans-serif',
+  nuffle: FONT_DISPLAY_FAMILY,
 };
 function skillMarkingColorInt(): number {
   const n = Number.parseInt(settings.skillMarkingColor.replace('#', ''), 16);
@@ -17755,7 +17756,7 @@ function sendChat() {
   border-radius: 0 0 3.75px 3.75px;
   box-shadow: 0 5px 9px #0009;
   color: #ffe8b0;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), clamp(0.42rem, 0.75vw, 0.51rem));
   font-weight: 900;
   letter-spacing: 0.02em;
@@ -17767,7 +17768,7 @@ function sendChat() {
 .prayer-tag-row + .prayer-tag-row { border-top: 1px solid #e0b04055; border-radius: 3.75px; }
 .prayer-tag-icon { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; font-size: 1.05em; line-height: 1; filter: drop-shadow(0 1px 2px #000c); }
 .active-label {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   /* Owner 10-08: larger label; the tag hugs its text (the old scaleX(0.8) squeeze left the box 25% wider than the
      words, which read as a dead margin on the outer side). */
   font-size: max(calc(var(--ui-min-text-size, 12px) + 2px), clamp(0.56rem, 0.95vw, 0.68rem));
@@ -18363,7 +18364,7 @@ function sendChat() {
   pointer-events: none;
 }
 .sc-title {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), 0.72rem);
   color: var(--ui-heading);
   text-shadow: 0 2px 5px #000d;
@@ -18374,7 +18375,7 @@ function sendChat() {
   display: grid;
   gap: 3px;
   color: var(--ui-heading);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-text-size, 12px), 0.7rem);
   line-height: 1.3;
   text-align: center;
@@ -18395,7 +18396,7 @@ function sendChat() {
   min-width: 26px;
   height: 26px;
   padding: 0 5px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 900;
   font-size: max(var(--ui-min-primary-text-size, 16px), 1rem);
   color: var(--ui-heading);
@@ -18405,7 +18406,7 @@ function sendChat() {
   text-shadow: 0 2px 6px #000d;
 }
 .sc-name {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem);
   color: var(--ui-heading);
   text-shadow: 0 2px 6px #000d;
@@ -18415,7 +18416,7 @@ function sendChat() {
   filter: drop-shadow(0 4px 5px #000a);
 }
 .sc-needed {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem);
   font-weight: 800;
   color: var(--ui-heading);
@@ -18423,7 +18424,7 @@ function sendChat() {
 }
 .sc-actions { display: flex; gap: 8px; }
 .sc-actions button {
-  font-family: 'Nuffle', system-ui, sans-serif; /* owner: Nuffle yes/no */
+  font-family: var(--font-display); /* owner: Nuffle yes/no */
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem);
   padding: 2px 14px;
   border-radius: 5px;
@@ -18489,7 +18490,7 @@ function sendChat() {
   border: 2px solid #353b44; border-radius: 5px; cursor: pointer;
   background: linear-gradient(180deg, #1c1f24, #07090b); color: var(--ui-text);
   box-shadow: 0 3px 0 #050607, 0 6px 16px #000c, inset 0 1px 0 #68717d;
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-text-size, 12px), 0.78rem); letter-spacing: .12em;
+  font-family: var(--font-display); font-size: max(var(--ui-min-text-size, 12px), 0.78rem); letter-spacing: .12em;
 }
 .induce-chat-btn:hover, .induce-chat-btn:focus-visible { border-color: var(--ui-accent); filter: brightness(1.2); }
 .induce-chat-btn-badge {
@@ -18521,7 +18522,7 @@ function sendChat() {
   border-bottom: 1px solid var(--ui-border); padding-bottom: 5px;
 }
 .induce-underdog {
-  font-family: 'Nuffle', sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem); font-weight: 800; text-align: center;
+  font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem); font-weight: 800; text-align: center;
   color: var(--ui-accent); letter-spacing: 0.08em; text-shadow: 0 2px 8px #000c; padding: 12px 0;
   animation: induce-blink 1.6s infinite;
 }
@@ -18553,7 +18554,7 @@ function sendChat() {
   outline: 2px solid var(--ui-accent); border-radius: 8px; background: color-mix(in srgb, var(--ui-surface) 80%, transparent);
 }
 .isi-star { font-size: max(var(--ui-min-primary-text-size, 16px), 2.2rem); color: var(--ui-accent); line-height: 1; width: 46px; text-align: center; }
-.isi-name { font-family: 'Nuffle', sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); color: var(--ui-heading); }
+.isi-name { font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); color: var(--ui-heading); }
 .isi-stats { display: flex; gap: 3px; }
 .isi-stat {
   flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -18570,7 +18571,7 @@ function sendChat() {
   justify-content: center;
   gap: 6px;
   margin: 2px 0 6px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
   font-weight: bold;
   color: #7ee59a;
@@ -18603,7 +18604,7 @@ function sendChat() {
   border: 1px solid color-mix(in srgb, var(--ui-accent) 67%, transparent); border-radius: 10px; box-shadow: 0 8px 28px #000c; color: #e8ecf2;
   pointer-events: none;
 }
-.isc-name { font-family: 'Nuffle', sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 15px); color: var(--ui-heading); text-align: center; }
+.isc-name { font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 15px); color: var(--ui-heading); text-align: center; }
 .isc-portrait {
   height: 74px; display: flex; align-items: center; justify-content: center;
   background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 6px;
@@ -18675,7 +18676,7 @@ function sendChat() {
   border-bottom: 1px solid var(--ui-border);
 }
 .pg-title {
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem);
   font-weight: 900;
   color: var(--ui-heading);
@@ -18736,7 +18737,7 @@ function sendChat() {
   justify-content: center;
   gap: 10px;
   padding: 18px 16px;
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem);
   letter-spacing: 0.08em;
   color: var(--ui-text-dim);
@@ -18856,7 +18857,7 @@ function sendChat() {
 .pg-team-coach { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
 .pg-scoreline { text-align: center; }
 .pg-score {
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 3rem);
   font-weight: 900;
   color: var(--ui-text);
@@ -19048,7 +19049,7 @@ function sendChat() {
 .pg-dice-head .pg-title { font-size: 1.5em; } /* the header scales with the card too */
 .pg-dice-close:hover { background: var(--ui-accent); color: var(--ui-text-on-primary); border-color: var(--ui-accent); }
 .pg-dice-switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
-.pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
+.pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: var(--font-display); font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
 .pg-dice-switch button img { width: 1.5em; height: 1.5em; object-fit: contain; }
 .pg-dice-switch button:hover { color: var(--ui-text); }
 .pg-dice-switch button[aria-selected='true'] { background: var(--ui-surface-2); color: var(--ui-heading); }
@@ -19077,7 +19078,7 @@ function sendChat() {
 .pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
 .pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
 .pg-dice-col-single .pg-dice-fact-detail { font-size: 1.05em; }
-.pg-dice-grid h3 { margin: 0 0 0.35em; font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: 1.2em; color: var(--ui-heading); letter-spacing: 0.03em; }
+.pg-dice-grid h3 { margin: 0 0 0.35em; font-family: var(--font-display); font-weight: 900; font-size: 1.2em; color: var(--ui-heading); letter-spacing: 0.03em; }
 .pg-dice-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .pg-dice-fact { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
 .pg-dice-fact:first-child { border-top: 0; }
@@ -19089,7 +19090,7 @@ function sendChat() {
 .pg-dice-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
 .pg-dice-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
 .pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid var(--ui-border); }
-.pg-dice-block h4 { margin: 0 0 0.25em; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
+.pg-dice-block h4 { margin: 0 0 0.25em; font-family: var(--font-display); font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
 .pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.85em; color: var(--ui-muted); letter-spacing: 0; }
 .pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
 .pg-dice-chart { width: 100%; height: auto; display: block; }
@@ -19097,7 +19098,7 @@ function sendChat() {
 .pg-dice-col[data-side='away'] .pg-dice-bar { fill: #f2363c; }
 .pg-dice-bar-block { opacity: 0.75; }
 .pg-dice-expected { fill: none; stroke: var(--ui-text); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.9; }
-.pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: 'Nuffle', sans-serif; }
+.pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: var(--font-display); }
 .pg-dice-count { fill: var(--ui-text); font-size: 9px; text-anchor: middle; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pg-dice-gauge-row { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 10px; align-items: center; padding: 2px 0; } /* owner 09-17 reflow: labels never truncate, the value is one line */
 .pg-dice-gauge-row > * { min-width: 0; } /* the SVG's 300 px intrinsic width must not size the track */
@@ -19188,7 +19189,7 @@ function sendChat() {
 .weather-cine.wc-changing .wc-caption { animation-delay: var(--p-150); }
 .dice-title,
 .wc-title {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem);
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -19902,7 +19903,7 @@ function sendChat() {
   padding: 12px 14px; background: rgba(14, 18, 26, 0.97); border: 1px solid color-mix(in srgb, var(--ui-accent) 67%, transparent);
   border-radius: 10px; box-shadow: 0 8px 28px #000c, 0 0 14px color-mix(in srgb, var(--ui-accent) 20%, transparent); color: #e8ecf2;
 }
-.induce-head { font-family: 'Nuffle', sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 17px); color: var(--ui-heading); text-align: center; }
+.induce-head { font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 17px); color: var(--ui-heading); text-align: center; }
 /* g300 IND #B: pane text +4px across the picker (totals/name/cost/count/empty) — owner: "we can
    go 4 point larger comfortably". Container is a scroll pane (.induce-list overflow-y: auto), so
    longer rosters/lists just scroll rather than clip. */
@@ -20204,7 +20205,7 @@ function sendChat() {
 .kick-election-target.icon { z-index: 48; width: 23px; height: 23px; border-radius: 50%; }
 .kick-election-target.boundary { width: auto; min-width: 70px; height: 26px; padding: 0 7px; border-radius: 13px; }
 .kick-election-target img { width: 19px; height: 19px; object-fit: contain; pointer-events: none; }
-.kick-election-k { color: #171104; font-family: Nuffle, system-ui, sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 15px); font-weight: 900; line-height: 1; pointer-events: none; }
+.kick-election-k { color: #171104; font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 15px); font-weight: 900; line-height: 1; pointer-events: none; }
 .kick-election-label { color: #fff; font-family: system-ui, sans-serif; font-size: max(var(--ui-min-text-size, 12px), 11px); font-weight: 800; line-height: 1; pointer-events: none; }
 /* #94: persistent blitz-used token badges (⚡ blitzer / 🎯 target) over the head, until the blitzUsed flag resets.
    Owner 08-18: .centered variants sit ON the token body (renderer.tokenBodyCenterToCanvas anchor);
@@ -20257,7 +20258,7 @@ function sendChat() {
   transform: translateX(-50%);
   padding: 4px 14px;
   border-radius: 9px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
   font-weight: 800;
   white-space: nowrap;
@@ -20277,7 +20278,7 @@ function sendChat() {
   transform: translateX(-50%);
   padding: 4px 14px;
   border-radius: 9px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
   font-weight: 800;
   white-space: nowrap;
@@ -20560,7 +20561,7 @@ function sendChat() {
   to { transform: translate(-50%, -60%) scale(1); opacity: 1; }
 }
 .fu-title {
-  font-family: 'Nuffle', sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 14px);
   font-weight: 800;
   color: var(--ui-heading);
@@ -20637,7 +20638,7 @@ function sendChat() {
   white-space: nowrap;
 }
 .ko-toast-type {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem);
   font-weight: 900;
   letter-spacing: 0.1em;
@@ -20654,7 +20655,7 @@ function sendChat() {
 .ko-toast-player { font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); font-weight: 700; color: #ffd7d7; }
 /* owner 2026-07-08: the casualty toast NAMES the injury ("X is Seriously Hurt!", etc.) */
 .ko-toast-phrase {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem);
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -20690,7 +20691,7 @@ function sendChat() {
   white-space: nowrap;
 }
 .fall-toast-type {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -20844,7 +20845,7 @@ function sendChat() {
 }
 .turnover-coach {
   text-transform: none;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem);
   font-weight: 700;
   color: #fff;
@@ -20854,7 +20855,7 @@ function sendChat() {
 }
 .turnover-head {
   text-transform: none;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 3.2rem);
   font-weight: 900;
   letter-spacing: 0.1em;
@@ -20925,7 +20926,7 @@ function sendChat() {
 }
 .staller-icon { font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem); filter: drop-shadow(0 2px 4px #000c); }
 .staller-text {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem);
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -21006,14 +21007,14 @@ function sendChat() {
 .yesno-card.select-skill-card.intensive-training-card { z-index: 49; }
 .masterchef-icon { font-size: max(var(--ui-min-primary-text-size, 16px), 2.6rem); line-height: 1; filter: drop-shadow(0 2px 4px #000c); }
 .masterchef-head {
-  font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); font-weight: 900; letter-spacing: 0.04em;
+  font-family: var(--font-display); font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); font-weight: 900; letter-spacing: 0.04em;
   color: #ffe8b0; text-shadow: 0 2px 6px #000d;
 }
 .dodgy-snack-lines { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 80%; text-align: center; overflow-wrap: anywhere; }
 .dodgy-snack-sentoff { font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
 .turnstart-head {
   text-transform: none;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 3rem);
   font-weight: 900;
   letter-spacing: 0.06em;
@@ -21466,7 +21467,7 @@ function sendChat() {
 }
 .reroll-toast-icon { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; }
 .reroll-toast-text {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
   font-weight: 700;
   color: #fff;
@@ -21483,7 +21484,7 @@ function sendChat() {
   transform: translateX(-50%);
   padding: 7px 22px;
   border-radius: 9px;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem);
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -21748,7 +21749,7 @@ function sendChat() {
   border-radius: 7px;
   background: #e5484d;
   color: #fff;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
   font-size: max(var(--ui-min-text-size, 12px), 0.5rem);
   line-height: 13px;
@@ -21763,7 +21764,7 @@ function sendChat() {
 .config-bar button .quick-helmet { width: 24px; height: 24px; object-fit: contain; image-rendering: auto; }
 .tab-icon { width: 0.9rem; height: 0.9rem; object-fit: contain; flex: none; image-rendering: auto; }
 .tab-stencil {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
   font-size: max(var(--ui-min-text-size, 12px), 0.46rem);
   letter-spacing: 0.08em;
@@ -21810,7 +21811,7 @@ function sendChat() {
 .log [data-kind='talk'] { color: var(--ui-text); }
 /* owner 08-19: chat typography — Nuffle names over sans-serif message text; spectator lines pale green (inline style). */
 .chat-log { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-.chat-log .log-name { font-family: 'Nuffle', system-ui, sans-serif; }
+.chat-log .log-name { font-family: var(--font-display); }
 /* Owner 10-16 (Chat style "Bubbles"): the chat builds FROM THE BOTTOM - newest bubble on the bottom edge, older ones
    stacked above, a short chat leaves the space above empty. A flex column whose FIRST child takes margin-top: auto is
    the bottom anchor (justify-content: flex-end would push overflowing bubbles past the top, where they cannot be
@@ -21894,7 +21895,7 @@ function sendChat() {
 .log.log-graphical .log-armour { width: var(--log-icon-size); height: var(--log-icon-size); margin: 0.04em 0.06em; vertical-align: middle; }
 /* Owner 10-15: the KO lettering is wider than tall - its box keeps the icon height and takes the lettering's width */
 .log.log-graphical .log-armour.log-ko { width: calc(var(--log-icon-size) * 1.6); }
-.log-ko-fallback { position: absolute; inset: 0; display: grid; place-items: center; font-family: 'Nuffle', serif; font-weight: 700; color: #fff; }
+.log-ko-fallback { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; color: #fff; }
 /* Owner 10-15: the stun outcome icon (three gold stars) is a square inline icon like the armour shield */
 .log-stun img { image-rendering: auto; }
 /* Owner 10-16: the kill outcome icon (skull) is a square inline icon like the stun stars */
@@ -22207,7 +22208,7 @@ function sendChat() {
   box-shadow: 0 16px 44px #000c;
   color: var(--ui-text);
 }
-.fumbbl-block-card h2 { margin: 0 0 0.6rem; font-family: 'Nuffle', system-ui, sans-serif; color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.25rem); }
+.fumbbl-block-card h2 { margin: 0 0 0.6rem; font-family: var(--font-display); color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.25rem); }
 .fumbbl-block-card p { margin: 0.5rem 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); line-height: 1.5; }
 .fumbbl-block-card ul { margin: 0.4rem 0 0.2rem; padding-left: 1.2rem; font-size: max(var(--ui-min-primary-text-size, 16px), 0.88rem); line-height: 1.6; color: var(--ui-text); }
 .fumbbl-block-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1rem; }
@@ -22242,7 +22243,7 @@ function sendChat() {
   color: var(--ui-text);
   text-align: center;
 }
-.conn-closed-card h2 { margin: 0 0 0.6rem; font-family: 'Nuffle', system-ui, sans-serif; color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.3rem); }
+.conn-closed-card h2 { margin: 0 0 0.6rem; font-family: var(--font-display); color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.3rem); }
 .conn-closed-card p { margin: 0.5rem 0 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.92rem); line-height: 1.5; }
 .conn-closed-status { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
 .conn-closed-actions { display: flex; gap: 10px; justify-content: center; margin-top: 1.1rem; }
@@ -22280,7 +22281,7 @@ function sendChat() {
   color: var(--ui-text);
   text-align: center;
 }
-.concede-card h2 { margin: 0 0 0.7rem; font-family: 'Nuffle', system-ui, sans-serif; color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
+.concede-card h2 { margin: 0 0 0.7rem; font-family: var(--font-display); color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
 .concede-card p { margin: 0.35rem 0; font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); line-height: 1.5; }
 .concede-card .concede-team { font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: #aeb4bf; margin-top: 0; }
 .concede-card button {
@@ -22312,7 +22313,7 @@ function sendChat() {
   color: var(--ui-text);
   text-align: center;
 }
-.shutdown-card h2 { margin: 0 0 0.7rem; font-family: 'Nuffle', system-ui, sans-serif; color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
+.shutdown-card h2 { margin: 0 0 0.7rem; font-family: var(--font-display); color: #e8918c; font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
 .shutdown-card p { margin: 0.35rem 0; font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); line-height: 1.5; }
 .shutdown-card .shutdown-sub { font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: #aeb4bf; }
 .shutdown-card button {
@@ -22426,7 +22427,7 @@ function sendChat() {
 }
 .reroll-menu .reroll-menu-decline { color: #e56a6a; }
 .rr-fail-tag {
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
   font-weight: 800;
   letter-spacing: 0.1em;
@@ -22441,7 +22442,7 @@ function sendChat() {
   padding: 4px 12px;
   cursor: pointer;
   font-weight: 600;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem);
 }
 .rr-use { background: var(--ui-accent); color: #1a1305; }

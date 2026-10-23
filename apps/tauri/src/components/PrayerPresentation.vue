@@ -42,7 +42,7 @@ defineProps<{
 }
 .prayer-announcement .masterchef-head {
   color: #ffe8b0;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), clamp(1.75rem, 2.5vw, 2.5rem));
   font-weight: 900;
   letter-spacing: 0.04em;

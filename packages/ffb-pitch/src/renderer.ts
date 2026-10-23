@@ -157,6 +157,7 @@ import { rushTargetForPlayer } from './rushTarget';
 import { MOVE_BADGE_MAX, activationShowsMoveBadge, moveBadgeIndex, moveBadgeNormalLeft, moveBadgeSide } from './moveRemaining';
 import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
+import { FONT_DISPLAY_FAMILY } from './fontStacks'; // owner 10-23: Cyrillic/CJK system faces behind Nuffle on every pitch label
 
 
 /** O4/O5: declared-action modes gating what clicks do for the selected player. */
@@ -1332,7 +1333,7 @@ export function passRulerBand(from: Square, to: Square): PassRulerBand | null {
 
 // player numbers: full opacity, dark stroke shadow for legibility over sprites
 const NAME_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 9,
   fontWeight: 'bold',
   fill: 0xffffff,
@@ -1513,7 +1514,7 @@ export function injuryTokenHoldsDrawn(
 export const PROMPT_DIE_FRESH_MS = 4000;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
 const DISTANCE_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 22,
   fontWeight: 'bold',
   fill: 0xffffff,
@@ -1525,11 +1526,11 @@ const DISTANCE_STYLE = new TextStyle({
  *  blue = away half. Heavier outline than DISTANCE_STYLE so the small edge numbers
  *  read over any turf photo. */
 const RAIL_HOME_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif', fontSize: 18, fontWeight: 'bold',
+  fontFamily: FONT_DISPLAY_FAMILY, fontSize: 18, fontWeight: 'bold',
   fill: 0xe8524b, stroke: { color: 0x180404, width: 2 },
 });
 const RAIL_AWAY_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif', fontSize: 18, fontWeight: 'bold',
+  fontFamily: FONT_DISPLAY_FAMILY, fontSize: 18, fontWeight: 'bold',
   fill: 0x5a8fe0, stroke: { color: 0x04101c, width: 2 },
 });
 /** Owner 10-07: the TOUCHBACK / OUT OF BOUNDS plate's pop (over the depth scale, settling at ~1 square) and fade, at
@@ -1545,7 +1546,7 @@ function popBallOutStamp(plate: Container, stampElapsed: number, stampScale: num
  *  square"), two short centred lines, Nuffle white on the band; rastered at 4x with mipmaps like the other glyphs. */
 export const BALL_OUT_STAMP_FONT_PX = 9;
 const BALL_OUT_STAMP_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif', fontSize: BALL_OUT_STAMP_FONT_PX, fontWeight: 'bold', fill: 0xffffff,
+  fontFamily: FONT_DISPLAY_FAMILY, fontSize: BALL_OUT_STAMP_FONT_PX, fontWeight: 'bold', fill: 0xffffff,
   stroke: { color: 0x000000, width: 2 }, align: 'center', lineHeight: BALL_OUT_STAMP_FONT_PX + 1,
 });
 /** Owner 10-07: the stamp's two lines. */
@@ -1606,7 +1607,7 @@ export function fitDugoutLabelScale(textWidth: number, scale: number, bandLength
 }
 /** Owner 2026-07-07: the SW turn/score/re-roll track — outlined so the numbers read on stone. */
 const TURN_TRACK_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 12,
   fontWeight: 'bold',
   fill: 0xffffff,
@@ -1619,7 +1620,7 @@ const TURN_TRACK_EMOJI_STYLE = new TextStyle({
   fontSize: 15,
 });
 const KO_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 14,
   fontWeight: 'bold',
   fontStyle: 'italic',
@@ -1643,7 +1644,7 @@ const SKILL_MARKING_MAX_WIDTH = PLAYER_SPRITE_BASE * 1.1;
 // Owner 2026-07-03: the ball-carrier marker inherits the ball's CYAN aura, so
 // the ▼/"BALL" label is cyan (0x22d3ee) to match the halo + the ball's column.
 const BALL_MARKER_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 14,
   fontWeight: 'bold',
   fontStyle: 'italic',
@@ -1696,7 +1697,7 @@ function lastingInjuryRank(seriousInjury: string): number {
 }
 // B9-2: gold active-player arrow, matching the HUD current-player arrow
 const ACTIVE_MARKER_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 20,
   fontWeight: 'bold',
   fill: 0xf5c542,
@@ -1704,7 +1705,7 @@ const ACTIVE_MARKER_STYLE = new TextStyle({
 });
 // red skull, styled to match the K.O. text (owner 2026-07-02)
 const SKULL_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 18,
   fontWeight: 'bold',
   fill: 0xff3030,
@@ -1761,7 +1762,7 @@ const SKILL_BADGE_GLYPH: Record<string, [number, string]> = {
   trickster: [0xb046d0, '✦'], // Gnome Illusionist — no icon art; magenta ✦
 };
 const OPP_CHOICE_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 11,
   fontWeight: 'bold',
   fill: 0xff5050,
@@ -1770,7 +1771,7 @@ const OPP_CHOICE_STYLE = new TextStyle({
 // B9-7: gold "<player> chooses <RESULT>" caption above the chosen block die,
 // matching the gold-arrow convention (ACTIVE_MARKER_STYLE colour).
 const BLOCK_CHOICE_STYLE = new TextStyle({
-  fontFamily: 'Nuffle, sans-serif',
+  fontFamily: FONT_DISPLAY_FAMILY,
   fontSize: 13,
   fontWeight: 'bold',
   fill: 0xf5c542,
@@ -16858,7 +16859,7 @@ export class PitchRenderer {
       }
       const word = new Text({
         text: isTeam ? 'used!' : 'reroll',
-        style: { fontFamily: 'Nuffle, system-ui, sans-serif', fontSize: 11, fontWeight: 'bold', fill: gold, stroke: { color: 0x14161a, width: 3 } },
+        style: { fontFamily: FONT_DISPLAY_FAMILY, fontSize: 11, fontWeight: 'bold', fill: gold, stroke: { color: 0x14161a, width: 3 } },
         // Owner 09-14: the caption rasters at 4x like the stencil tags — it read low-res under the camera zoom.
         resolution: 4,
         textureStyle: { scaleMode: 'linear' },

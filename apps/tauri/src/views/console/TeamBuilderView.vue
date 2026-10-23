@@ -2896,7 +2896,7 @@ onBeforeUnmount(() => {
   padding: 18px 20px;
   color: var(--ui-text);
   background: var(--ui-surface);
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 button,

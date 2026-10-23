@@ -88,7 +88,7 @@ const logoSrc = computed(() => {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  font-family: 'Nuffle', system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), clamp(1.15rem, 2.2vw, 1.9rem));
   font-weight: 700;
   letter-spacing: 0.14em;

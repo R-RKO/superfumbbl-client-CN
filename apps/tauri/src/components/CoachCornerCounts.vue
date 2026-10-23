@@ -53,7 +53,7 @@ function hide(): void {
     rgb(17 19 23 / var(--hud-coach-opacity, 0.9)));
   border: 2px solid #353b44;
   box-shadow: inset 0 1px 0 #626a75, 0 3px 0 #050607, 0 5px 10px #000a;
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
   line-height: 1;
   text-transform: uppercase;
   white-space: nowrap;

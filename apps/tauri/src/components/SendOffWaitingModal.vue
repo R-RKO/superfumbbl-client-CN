@@ -88,7 +88,7 @@ const portraitSrc = computed(() => fumbblAsset(
   border-radius: 10px;
   background: linear-gradient(135deg, rgba(53, 15, 19, 0.98), rgba(12, 15, 21, 0.98) 62%);
   box-shadow: 0 10px 34px #000d, inset 0 1px 0 #ffffff1a;
-  font-family: var(--ui-font, 'Nuffle', system-ui, sans-serif);
+  font-family: var(--ui-font, var(--font-display));
 }
 .sendoff-waiting.resolved { border-color: #69747e; }
 .sendoff-waiting-head {
