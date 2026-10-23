@@ -19,6 +19,8 @@
 //     each is replaced by an empty box and its ancestors' backgrounds are cleared so the pitch shows through.
 // Nothing here makes a request to another host: only same-origin assets the client already loaded are re-read.
 
+import { FALLBACK_FONT_FACES } from './fontStacks';
+
 /** Elements that never ride in the capture. The FUMBBL.COM pane and floating window are the owner's privacy line. */
 export const DOM_SNAPSHOT_EXCLUDE = [
   'script', 'style', 'link', 'meta', 'noscript', 'template', 'iframe', 'object', 'embed', 'video', 'audio',
@@ -59,11 +61,14 @@ export const SNAPSHOT_PROPS = [
 const URL_PROPS = new Set(['background-image', 'mask-image']);
 
 /** The client's own faces, registered through the FontFace API in main.ts (so no @font-face rule exists to read).
- *  Keep in step with main.ts boot(): an SVG image cannot see the document's fonts, so they are embedded. */
-export const CLIENT_FONT_FACES: readonly { family: string; url: string; style?: string }[] = [
+ *  Keep in step with main.ts boot(): an SVG image cannot see the document's fonts, so they are embedded. Astra 10-23:
+ *  the bundled last-resort faces too, with their unicode-range (only the ones the page actually loaded are embedded,
+ *  like every face here), so a bug-report snapshot of a CJK name does not show boxes. */
+export const CLIENT_FONT_FACES: readonly { family: string; url: string; style?: string; unicodeRange?: string }[] = [
   { family: 'Nuffle', url: '/fonts/Nuffle.otf' },
   { family: 'Graduate', url: '/fonts/Graduate-Regular.ttf' },
   { family: 'SNES', url: '/fonts/SNES-Italic.ttf', style: 'italic' },
+  ...FALLBACK_FONT_FACES.map((face) => ({ family: face.family, url: face.url, unicodeRange: face.unicodeRange })),
 ];
 const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FONT_BYTES_CAP = 4 * 1024 * 1024;
@@ -280,7 +285,7 @@ function collectFontFaces(doc: Document): { css: string; urls: string[] }[] {
     if (!loaded.has(face.family)) continue;
     let abs = face.url;
     try { abs = new URL(face.url, doc.baseURI).href; } catch { /* keep */ }
-    const css = `@font-face { font-family: "${face.family}"; src: url("${abs}");${face.style ? ` font-style: ${face.style};` : ''} }`;
+    const css = `@font-face { font-family: "${face.family}"; src: url("${abs}");${face.style ? ` font-style: ${face.style};` : ''}${face.unicodeRange ? ` unicode-range: ${face.unicodeRange};` : ''} }`;
     if (!declared.has(css)) out.push({ css, urls: [abs] });
   }
   return out;

@@ -3,17 +3,44 @@
  * ONE source of every font stack that names a bundled display face (Nuffle, Graduate, SNES Italic). Those faces are
  * Latin-only, so each stack ends in system faces that carry Cyrillic and Greek (Segoe UI, Arial, Noto Sans) and then
  * Simplified Chinese, Japanese and Korean (Windows: Microsoft YaHei, Yu Gothic, Malgun Gothic; macOS: PingFang SC,
- * Hiragino Sans, Apple SD Gothic Neo; Linux: Noto Sans CJK, pulled in by the .deb's fonts-noto-cjk dependency). No
- * font file is bundled for them; the Latin face each stack starts with is unchanged.
+ * Hiragino Sans, Apple SD Gothic Neo; Linux: Noto Sans CJK, pulled in by the .deb's fonts-noto-cjk dependency). The
+ * Latin face each stack starts with is unchanged.
+ *
+ * Last resort (Astra 10-23 P2, owner "Noto fallback fonts seems reasonable"): a host with none of those system faces
+ * (an AppImage on a bare distribution) still gets glyphs from four BUNDLED subsets of Noto (SIL OFL 1.1), listed after
+ * the system faces and before `sans-serif` (FALLBACK_FONT_FACES; provenance in docs/art-provenance/fonts-fallback.md).
+ * Each is registered with a unicode-range, so the browser only fetches one when a character in its range is on screen
+ * AND no system face before it has the glyph.
  *
  * Canvas code builds `ctx.font` with `canvasFont`; CSS reads the same values through custom properties
  * (`--font-display`, `--font-graduate`, `--font-snes`, `--font-fallback`, `--font-body`) that the client writes onto
  * the root element at startup (apps/tauri/src/game/fontStacks.ts: installFontStackVariables), so the two cannot drift.
  */
 
-/** System faces after the Latin display face: Cyrillic / Greek first, then the CJK faces of each platform. */
+import { FALLBACK_UNICODE_RANGES } from './fallbackFontRanges.generated';
+
+/** One bundled last-resort face: its family name, its file under the app's public root, the code points it covers. */
+export interface FallbackFontFace { family: string; url: string; unicodeRange: string }
+
+/** The bundled Noto subsets (apps/tauri/public/fonts/fallback/), in stack order. Each unicode-range is GENERATED from
+ *  the shipped file's own cmap (scripts/build-fallback-fonts.py -> fallbackFontRanges.generated.ts; Astra 10-23 P2):
+ *  a host never fetches the SC file for a character only the JP file carries (e.g. U+4E21), and Latin punctuation
+ *  never fetches a CJK file. */
+const fallbackFace = (family: string, file: string): FallbackFontFace => ({
+  family, url: `/fonts/fallback/${file}`, unicodeRange: FALLBACK_UNICODE_RANGES[family] ?? 'U+E000',
+});
+export const FALLBACK_FONT_FACES: readonly FallbackFontFace[] = [
+  fallbackFace('SF Fallback Sans', 'SFFallbackSans.woff2'),
+  fallbackFace('SF Fallback CJK SC', 'SFFallbackCJKSC.woff2'),
+  fallbackFace('SF Fallback CJK JP', 'SFFallbackCJKJP.woff2'),
+  fallbackFace('SF Fallback CJK KR', 'SFFallbackCJKKR.woff2'),
+];
+
+/** System faces after the Latin display face: Cyrillic / Greek first, then the CJK faces of each platform, then the
+ *  bundled last-resort faces, then the generic family. */
 export const FONT_SCRIPT_TAIL = '"Segoe UI", Arial, "Noto Sans", "Microsoft YaHei", "PingFang SC", "Hiragino Sans", "Yu Gothic", '
-  + '"Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", sans-serif';
+  + '"Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", '
+  + `${FALLBACK_FONT_FACES.map((face) => `"${face.family}"`).join(', ')}, sans-serif`;
 
 /** Nuffle (the display face) and the script tail. */
 export const FONT_DISPLAY_FAMILY = `Nuffle, ${FONT_SCRIPT_TAIL}`;

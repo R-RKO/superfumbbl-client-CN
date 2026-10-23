@@ -2610,7 +2610,13 @@ export class PitchRenderer {
    *  in the fallback font. No waits: everything is drawn at once either way, and only a CHANGED font state redraws. */
   private watchLetteringFonts(drawnState: string): void {
     this.letteringFontDrawn = drawnState;
-    if (drawnState === DISPLAY_FONTS_LOADED || drawnState === DISPLAY_FONTS_UNSUPPORTED) {
+    // Script support (Astra 10-23 P2): drawing a CJK name can itself start fetching a bundled last-resort face (on a
+    // host with no CJK system font), so the state is read again AFTER the draw: a fetch that began during it keeps
+    // the listener, and the lettering is redrawn once that face has arrived.
+    // Settled = the two display faces loaded and no bundled fallback face still arriving ("+n" loaded is settled,
+    // "+n~" is not): the exact-string test kept the listener forever once a fallback face had loaded (Astra 10-23).
+    const settled = drawnState === DISPLAY_FONTS_UNSUPPORTED || (drawnState.split('+')[0] === DISPLAY_FONTS_LOADED && !drawnState.includes('~'));
+    if (settled && displayFontState() === drawnState) {
       this.stopLetteringFontListener();
       return;
     }

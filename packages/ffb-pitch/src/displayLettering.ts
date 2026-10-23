@@ -1,5 +1,5 @@
 import { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayGraphemes, type DisplayCapsRun } from './displayCaps';
-import { FONT_DISPLAY_FAMILY, FONT_FALLBACK_FAMILY, FONT_GRADUATE_FAMILY } from './fontStacks';
+import { FALLBACK_FONT_FACES, FONT_DISPLAY_FAMILY, FONT_FALLBACK_FAMILY, FONT_GRADUATE_FAMILY } from './fontStacks';
 
 /**
  * Pitch lettering in the "Graduate C" style (owner 10-11): each word's first letter in Nuffle, 25% larger, the rest
@@ -118,20 +118,39 @@ function displayFaces(): FontFace[] {
  * "pending/loaded", "absent/loaded". (`document.fonts.check` is no use for this: it answers true for a family that
  * is not registered and, in Chromium, for a registered face that has not loaded yet.) The renderer keys its lettering
  * on this string, so lettering rasterised in the fallback font is rebuilt when a face arrives.
+ *
+ * Script support (Astra 10-23 P2): a bundled last-resort face (FALLBACK_FONT_FACES) the browser has started to fetch
+ * adds "+<n>~" while it loads and "+<n>" once it has, n = its index; one that is only registered adds nothing (it is
+ * fetched on demand, never by loadDisplayFonts). Lettering drawn before such a face arrived (boxes on a host with no
+ * CJK system font) is therefore rebuilt when it has.
  */
 export function displayFontState(): string {
   try {
     if (typeof document === 'undefined' || !document.fonts?.forEach) return DISPLAY_FONTS_UNSUPPORTED;
     const faces = displayFaces();
-    return DISPLAY_FAMILIES.map((name): FaceState => {
+    const main = DISPLAY_FAMILIES.map((name): FaceState => {
       const own = faces.filter((face) => familyOf(face) === name);
       if (own.some((face) => face.status === 'loaded')) return 'loaded';
       if (own.some((face) => face.status === 'unloaded' || face.status === 'loading')) return 'pending';
       return own.length ? 'error' : 'absent';
     }).join('/');
+    return main + fallbackFaceState();
   } catch {
     return DISPLAY_FONTS_UNSUPPORTED;
   }
+}
+
+const FALLBACK_FAMILIES = FALLBACK_FONT_FACES.map((face) => face.family);
+/** The bundled last-resort faces the browser has fetched ("+n") or is fetching ("+n~"); '' when none. */
+function fallbackFaceState(): string {
+  const status = new Map<number, string>();
+  (document.fonts as unknown as FontFaceSetLike).forEach((face) => {
+    const index = FALLBACK_FAMILIES.indexOf(familyOf(face));
+    if (index < 0) return;
+    if (face.status === 'loaded') status.set(index, `+${index}`);
+    else if (face.status === 'loading' && status.get(index) !== `+${index}`) status.set(index, `+${index}~`);
+  });
+  return [...status.entries()].sort((a, b) => a[0] - b[0]).map(([, part]) => part).join('');
 }
 
 /** Start loading any registered display face that has not loaded yet. Resolves when they settle; never rejects. */
