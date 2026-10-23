@@ -124,3 +124,22 @@ export function terms(term: string | null | undefined): string {
 
 /** Alias reading better at single-term call sites. */
 export const term = terms;
+
+/** Lower-case letters and digits only: the shape of a roster / sprite-sheet / position id (`Black Orc` -> `blackorc`). */
+const idKey = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+let englishById: Map<string, string> | null = null;
+/**
+ * The canonical ENGLISH game term whose id-shape equals `id` (`blackorc` -> `Black Orc`, `elvenunion` -> `Elven Union`),
+ * from the term dictionaries' English keys (the one place the client keeps those names), else null. The id itself
+ * stays DATA; this is for display (pass the result through terms()).
+ */
+export function englishTermForId(id: string | null | undefined): string | null {
+  if (!englishById) {
+    englishById = new Map();
+    for (const table of Object.values(TABLES)) for (const english of Object.keys(table)) {
+      const k = idKey(english);
+      if (k && !englishById.has(k)) englishById.set(k, english);
+    }
+  }
+  return englishById.get(idKey(String(id ?? ''))) ?? null;
+}

@@ -1,6 +1,7 @@
 import walkManifest from '../../../../packages/ffb-pitch/assets/walk/manifest.json';
 import { assetTargetPositionLabel, assetTargetTeamLabel, type AssetTargetCatalog, type AssetTargetPositionChoice, type AssetTargetTeamChoice } from './assetModUi';
 import { userFilesPack, type AssetPackAssignments, type InstalledAssetPack } from './assetMods';
+import { positionDisplayName, rosterDisplayName } from './rosterNames';
 import { t } from '../i18n';
 
 export type ConfiguredAssetSource = 'Built-in default' | 'Your file' | string;
@@ -98,7 +99,7 @@ function mergeTeams(catalog: AssetTargetCatalog): AssetTargetTeamChoice[] {
   for (const race of BASE_TEAM_RACES) {
     const teamId = `race:${race}`;
     const positions = BUILT_IN_WALK_ROWS.filter((row) => row.race === race)
-      .map((row) => ({ positionId: `${race}.${row.role}`, label: row.role }))
+      .map((row) => ({ positionId: `${race}.${row.role}`, label: positionDisplayName(row.role, row.role) })) // English proper name; ids stay data
       .filter((row, index, all) => all.findIndex((candidate) => candidate.positionId === row.positionId) === index);
     const current = teams.get(teamId);
     if (current) {
@@ -106,7 +107,7 @@ function mergeTeams(catalog: AssetTargetCatalog): AssetTargetTeamChoice[] {
       for (const position of positions) if (!mergedPositions.has(position.positionId)) mergedPositions.set(position.positionId, position);
       current.positions = [...mergedPositions.values()];
     } else {
-      teams.set(teamId, { teamId, label: race, positions });
+      teams.set(teamId, { teamId, label: rosterDisplayName(race), positions });
     }
   }
   return [...teams.values()];

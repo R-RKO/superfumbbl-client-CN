@@ -17,7 +17,8 @@ import {
   isCurrentSkillPackIntent,
   publishTeamLogoBindings,
 } from './assetMods';
-import { data, t, tEveryLocale } from '../i18n';
+import { data, t, terms, tEveryLocale } from '../i18n';
+import { positionDisplayName, rosterDisplayName } from './rosterNames';
 
 export interface SkillPackChoiceTransaction {
   installId: string;
@@ -117,14 +118,17 @@ function observed(value: unknown, id: string, kind: 'team' | 'position'): { labe
 }
 const isGenerated = (choice: { label: string; generated?: boolean }, id: string, kind: 'team' | 'position'): boolean =>
   choice.generated ?? isLegacyFallbackLabel(choice.label, id, kind);
-/** Display label for a catalogue team: the genuine name, else the localised "Team {id}". */
+/** Display label for a catalogue team: a roster target (`race:<id>`) shows its roster name in the current language,
+ *  a real team its genuine name, else the localised "Team {id}". */
 export function assetTargetTeamLabel(team: Pick<AssetTargetTeamChoice, 'teamId' | 'label' | 'generated'>): string {
+  if (team.teamId.startsWith('race:')) return terms(rosterDisplayName(team.teamId));
   return isGenerated(team, team.teamId, 'team') ? t('assets.text.teamTeamid', { teamId: team.teamId }) : team.label;
 }
 /** Display label for a catalogue position: the genuine name, else the localised "Position {id}". */
 export function assetTargetPositionLabel(position: Pick<AssetTargetPositionChoice, 'positionId' | 'label' | 'generated'>): string {
-  return isGenerated(position, position.positionId, 'position')
-    ? t('assets.text.positionPositionid', { positionId: position.positionId }) : position.label;
+  if (isGenerated(position, position.positionId, 'position')) return t('assets.text.positionPositionid', { positionId: position.positionId });
+  // a position known to the term dictionaries shows its proper name in the current language (ids like `goblinbruiser`)
+  return terms(positionDisplayName(position.positionId, position.label));
 }
 
 function normalizedCatalog(raw: unknown): AssetTargetCatalog {
