@@ -557,6 +557,46 @@ export const SETUP_TEMPLATES: readonly SetupTemplate[] = [
       slot('back-right', 6, 10, HIGH_VALUE, 'value'),
     ],
   },
+  {
+    id: 'halfway', name: 'Halfway', side: 'offense', symmetric: true,
+    notes: [
+      'Owner 10-23: three on the scrimmage line centre to satisfy the minimum; the other eight spread symmetrically along x=6 (y 1/3/5/6/8/9/11/13) with the ball handler just left of centre.',
+      'Wide zones hold two per side (y 1/3 and y 11/13).',
+    ],
+    slots: [
+      slot('los-big-guy', 12, 7, HIGH_STRENGTH, 'los'),
+      slot('los-left', 12, 6, STR_OR_STABLE, 'los'),
+      slot('los-right', 12, 8, STR_OR_STABLE, 'los'),
+      slot('line-ball-handler', 6, 6, BALL_HANDLER, 'value'),
+      slot('line-runner', 6, 8, RUNNER, 'value'),
+      slot('line-mid-left', 6, 5, HIGH_VALUE, 'value'),
+      slot('line-mid-right', 6, 9, HIGH_VALUE, 'value'),
+      slot('line-wing-left-inner', 6, 3, ANY, 'value'),
+      slot('line-wing-right-inner', 6, 11, ANY, 'value'),
+      slot('line-wing-left-outer', 6, 1, ANY, 'value'),
+      slot('line-wing-right-outer', 6, 13, ANY, 'value'),
+    ],
+  },
+  {
+    id: 'back-line', name: 'Back line', side: 'offense', symmetric: true,
+    notes: [
+      'Owner 10-23: three on the scrimmage line centre to satisfy the minimum; the other eight spread symmetrically along x=3 (y 1/3/5/6/8/9/11/13) with the ball handler just left of centre.',
+      'Wide zones hold two per side (y 1/3 and y 11/13).',
+    ],
+    slots: [
+      slot('los-big-guy', 12, 7, HIGH_STRENGTH, 'los'),
+      slot('los-left', 12, 6, STR_OR_STABLE, 'los'),
+      slot('los-right', 12, 8, STR_OR_STABLE, 'los'),
+      slot('line-ball-handler', 3, 6, BALL_HANDLER, 'value'),
+      slot('line-runner', 3, 8, RUNNER, 'value'),
+      slot('line-mid-left', 3, 5, HIGH_VALUE, 'value'),
+      slot('line-mid-right', 3, 9, HIGH_VALUE, 'value'),
+      slot('line-wing-left-inner', 3, 3, ANY, 'value'),
+      slot('line-wing-right-inner', 3, 11, ANY, 'value'),
+      slot('line-wing-left-outer', 3, 1, ANY, 'value'),
+      slot('line-wing-right-outer', 3, 13, ANY, 'value'),
+    ],
+  },
 ] as const;
 
 export function setupTemplatesForSide(side: SetupTemplateSide): readonly SetupTemplate[] {
