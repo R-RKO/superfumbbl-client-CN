@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Owner 08-18: plain-language reasons for the spectate connect-error modal (App.vue).
  * Pure/testable seam — maps a raw transport error string to a short, actionable
@@ -8,12 +9,12 @@
 export function friendlySpectateError(raw: string): string {
   const text = raw.trim();
   if (/WebSocket connection to .* failed/i.test(text)) {
-    return "Couldn't reach the server — check your internet connection, or the server may be offline.";
+    return t('replay.text.couldnTReachThe');
   }
   if (/not connected/i.test(text)) {
-    return 'Connection dropped before the game could be reached.';
+    return t('replay.text.connectionDroppedBeforeThe');
   }
-  if (!text) return 'The connection failed for an unknown reason.';
+  if (!text) return t('replay.text.theConnectionFailedFor');
   return text;
 }
 
@@ -24,17 +25,17 @@ export function spectateServerStatusError(
   message: string | null | undefined,
 ): { message: string; detail: string } {
   const status = serverStatus?.trim() ?? '';
-  const authoritative = message?.trim() || status || 'The server rejected the spectator join.';
+  const authoritative = message?.trim() || status || t('replay.authoritative.theServerRejectedThe');
   if (/wrong password/i.test(status) || /wrong password/i.test(authoritative)) {
     return {
-      message: 'FUMBBL rejected the spectator login. Check your FUMBBL coach name and password, then try again.',
-      detail: `FUMBBL server status: ${authoritative}`,
+      message: t('replay.text.fumbblRejectedTheSpectator'),
+      get detail() { return t('replay.text.fumbblServerStatusAuthoritative', { authoritative }); },
     };
   }
   return {
     message: authoritative,
     detail: status && status !== authoritative
-      ? `FUMBBL server status: ${status} — ${authoritative}`
-      : `FUMBBL server status: ${authoritative}`,
+      ? t('replay.text.fumbblServerStatusStatus', { status, authoritative })
+      : t('replay.text.fumbblServerStatusAuthoritative', { authoritative }),
   };
 }

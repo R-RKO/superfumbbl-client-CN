@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CSSProperties } from 'vue';
+import { $t } from '../i18n';
 
 withDefaults(defineProps<{
   title?: string;
@@ -27,7 +28,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
 <template>
   <section class="pitch-confirm-panel" :class="{ draggable, resizable, compact, spaced }"
     :style="positionStyle" :aria-label="label" :data-testid="testId"
-    :title="draggable ? 'Drag to move' : undefined"
+    :title="draggable ? $t('hud.pitchConfirmationPanel.pitchConfirmPanel.dragToMove') : undefined"
     @pointerdown="draggable && $emit('dragStart', $event)">
     <div v-if="title || $slots.title" class="pitch-confirm-title"><slot name="title">{{ title }}</slot></div>
     <div class="pitch-confirm-body"><slot /></div>

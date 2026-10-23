@@ -32,6 +32,7 @@ import {
 import { createClientTourController, type ClientTourHost } from '../game/clientTourController';
 import { arrowBetween } from '../game/tourGeometry';
 import { trapDialogFocus } from '../game/settingsDialog';
+import { $t } from '../i18n';
 
 
 const props = defineProps<{
@@ -253,30 +254,30 @@ defineExpose({ tour });
       <span v-if="a.label" class="client-tour-label" :data-above="a.labelAt.above" :data-long="a.label.length > 24"
         :style="{ left: a.labelAt.x + 'px', top: a.labelAt.y + 'px' }">{{ a.label }}</span>
     </template>
-    <section ref="card" class="client-tour-card" role="region" :data-docked="docked" @keydown="onCardKeydown" :aria-label="`Walkthrough: ${step!.title}`" :data-step="step!.id"
+    <section ref="card" class="client-tour-card" role="region" :data-docked="docked" @keydown="onCardKeydown" :aria-label="$t('tour.clientTourCard.walkthroughTitle', { title: step!.title })" :data-step="step!.id"
       :style="{ left: layout.card.x + 'px', top: layout.card.y + 'px' }">
       <h2 class="client-tour-title">{{ step!.title }}</h2>
       <div class="client-tour-body">
         <p v-for="(line, i) in step!.body" :key="i">{{ line }}</p>
-        <ol v-if="labelPlan.legend.length" class="client-tour-legend" aria-label="Arrow labels">
+        <ol v-if="labelPlan.legend.length" class="client-tour-legend" :aria-label="$t('tour.clientTourCard.arrowLabels')">
           <li v-for="item in labelPlan.legend" :key="item.n"><span class="client-tour-chip-n inline">{{ item.n }}</span>{{ item.label }}</li>
         </ol>
-        <div v-if="step!.id === 'nav'" class="client-tour-chips" role="group" aria-label="Panes">
+        <div v-if="step!.id === 'nav'" class="client-tour-chips" role="group" :aria-label="$t('tour.clientTourCard.panes')">
           <button v-for="b in TOUR_BLADES" :key="b" type="button" class="client-tour-chip" :data-blade="b" :data-read="read.has(b)" @click="chip(b)">
             <span v-if="read.has(b)" class="tick" aria-hidden="true">✓</span>{{ BLADE_LABEL[b] }}
           </button>
         </div>
         <p v-if="inCardInfo" class="client-tour-info">{{ inCardInfo }}</p>
-        <p v-if="step!.id === 'esc' && state?.hudSkipped" class="client-tour-info" data-testid="hud-unavailable">{{ HUD_UNAVAILABLE_NOTE }}</p>
+        <p v-if="step!.id === 'esc' && state?.hudSkipped" class="client-tour-info" data-testid="hud-unavailable">{{ $t('tour.hudUnavailable') }}</p>
         <div v-if="step!.id === 'esc'" class="client-tour-esc">
           <kbd>Esc</kbd>
-          <button type="button" class="secondary" @click="tour.dispatch({ type: 'esc' })">Open Settings</button>
+          <button type="button" class="secondary" @click="tour.dispatch({ type: 'esc' })">{{ $t('tour.clientTourCard.openSettings') }}</button>
         </div>
       </div>
       <div class="client-tour-actions">
-        <button v-if="step!.id !== 'nav'" type="button" class="back" @click="tour.dispatch({ type: 'back' })">◂ Back</button>
-        <button type="button" class="skip" @click="tour.dispatch({ type: 'skip' })">Skip walkthrough</button>
-        <button v-if="!step!.waits" type="button" class="primary" @click="tour.dispatch({ type: 'next' })">Next</button>
+        <button v-if="step!.id !== 'nav'" type="button" class="back" @click="tour.dispatch({ type: 'back' })">{{ $t('tour.clientTourCard.back') }}</button>
+        <button type="button" class="skip" @click="tour.dispatch({ type: 'skip' })">{{ $t('tour.clientTourCard.skipWalkthrough') }}</button>
+        <button v-if="!step!.waits" type="button" class="primary" @click="tour.dispatch({ type: 'next' })">{{ $t('tour.clientTourCard.next') }}</button>
       </div>
     </section>
     <section v-if="layout.mini && focusBlade" class="client-tour-mini" role="note" :data-blade="focusBlade"

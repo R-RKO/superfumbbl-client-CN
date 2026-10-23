@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { fumbblAsset } from '../game/jnlpRouting';
 import DisplayCaps from './DisplayCaps.vue';
+import { $t, terms } from '../i18n';
 
 export interface SendOffWaitingView {
   playerName: string;
@@ -38,18 +39,18 @@ const portraitSrc = computed(() => fumbblAsset(
             <img v-if="portraitSrc" class="sendoff-waiting-portrait" :src="portraitSrc" alt="" aria-hidden="true" />
           </span>
           <span class="sendoff-waiting-player-name">{{ progress.playerName }}</span>
-          <span v-if="positionName" class="sendoff-waiting-position">{{ positionName }}</span>
+          <span v-if="positionName" class="sendoff-waiting-position">{{ terms(positionName) }}</span>
         </div>
         <div class="sendoff-waiting-heading" :class="{ 'with-ref': !!refereeIconUrl }">
           <span v-if="refereeIconUrl" class="sendoff-waiting-ref-frame" aria-hidden="true">
             <img :src="refereeIconUrl" class="sendoff-waiting-ref" alt="" />
           </span>
-          <span class="sendoff-waiting-kicker"><DisplayCaps text="Referee" /></span>
-          <h2 id="sendoff-waiting-title"><DisplayCaps text="Send-off Review" /></h2>
+          <span class="sendoff-waiting-kicker"><DisplayCaps :text="$t('dialogs.sendOffWaitingModal.referee')" /></span>
+          <h2 id="sendoff-waiting-title"><DisplayCaps :text="$t('dialogs.sendOffWaitingModal.sendOffReview')" /></h2>
           <span class="sendoff-waiting-team">{{ progress.coach || progress.teamName }}</span>
         </div>
       </header>
-      <ol class="sendoff-waiting-steps" aria-label="Send-off progress">
+      <ol class="sendoff-waiting-steps" :aria-label="$t('dialogs.sendOffWaitingModal.sendOffProgress')">
         <li v-for="step in progress.steps" :key="step.key" :data-tone="step.tone">
           <span class="sendoff-waiting-mark" aria-hidden="true">{{ step.tone === 'success' ? '✓' : step.tone === 'failure' ? '✕' : step.tone === 'pending' ? '…' : '•' }}</span>
           <span>{{ step.text }}</span>

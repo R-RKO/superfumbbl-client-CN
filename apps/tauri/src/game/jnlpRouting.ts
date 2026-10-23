@@ -44,6 +44,7 @@ import {
 } from './officialRejoinTarget';
 import { isNotYourTeamStatus, rejoinFlow, trackOfficialJoin, type RejoinLaunch } from './rejoinFlow';
 import { pickTeam, type TeamChoiceEntry } from './teamChoice';
+import { t, liveSet, lt, type LocalText } from '../i18n';
 
 export interface BrowserTeam {
   side: string;
@@ -203,7 +204,7 @@ export function stageFumbblPasswordLobby(
   /** S44: a rejoin names its own server and skips the list request (the game id is already known) */
   options: { server?: { url: string; compression: boolean }; list?: boolean } = {},
 ): void {
-  const lobby: FumbblLobby = { coach, teamId: '', teamName: '', sourceName: 'My FUMBBL games', password: true };
+  const lobby: FumbblLobby = { coach, teamId: '', teamName: '', sourceName: t('jnlp.lobby.myFumbblGames'), password: true };
   stageFumbblLobby(lobby, (prepared) => prepared.prepareFumbblLobbyWithPassword({ coach, password, gameId: 0, mode: 'player' }), options.server);
   const prepared = preparedFumbblSession;
   const generation = preparedFumbblGeneration;
@@ -240,7 +241,7 @@ function stageFumbblLobby(
   preparedFumbblConnectTimer = setTimeout(() => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     if (prepared.state !== 'connecting' && prepared.state !== 'versioning') return;
-    fumbblLobbyError.value = lobby.password ? 'FUMBBL did not finish connecting. Try again in a moment.' : 'FUMBBL did not finish connecting. Cancel and load a fresh JNLP to try again.';
+    liveSet(fumbblLobbyError, 'value', () => lobby.password ? t('jnlp.text.fumbblDidNotFinish') : t('jnlp.text.fumbblDidNotFinish2'));
     surfaceOfficialFailure(fumbblLobbyError.value);
     fumbblLobbyState.value = 'closed';
     closePreparedFumbblSession();
@@ -264,7 +265,7 @@ function stageFumbblLobby(
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     const message = command.message?.trim()
       || command.serverStatus?.trim()
-      || 'FUMBBL rejected the lobby request.';
+      || t('jnlp.message.fumbblRejectedTheLobby');
     fumbblLobbyError.value = message;
     if (isRecoverableFumbblLobbyStatus(command.serverStatus)) return;
     fumbblLobbyState.value = 'closed';
@@ -281,7 +282,7 @@ function stageFumbblLobby(
     // Owner 10-17: the server-version gate refused the seat; the App modal explains it (no second, generic failure)
     if (prepared.refusal) { fumbblLobbyError.value = prepared.refusal; fumbblLobbyState.value = 'closed'; return; }
     if (!fumbblLobbyError.value) {
-      fumbblLobbyError.value = `FUMBBL lobby connection closed (${code}${reason ? `: ${reason}` : ''}). ${lobby.password ? 'Open My FUMBBL games again to retry.' : 'Reload the JNLP to try again.'}`;
+      liveSet(fumbblLobbyError, 'value', () => t('jnlp.text.lobbyConnectionClosed', { code, reason: reason ? `: ${reason}` : '', advice: lobby.password ? t('jnlp.text.openMyFumbblGames') : t('jnlp.text.reloadTheJnlpTo') }));
       if (!preparedFumbblHandedOff) surfaceOfficialFailure(fumbblLobbyError.value);
     }
   });
@@ -293,7 +294,7 @@ function stageFumbblLobby(
   });
 }
 
-function logJnlp(text: string): void {
+function logJnlp(text: string | LocalText): void {
   gameStore.appendSystemNotice(text);
 }
 
@@ -405,7 +406,7 @@ function watchOfficialRefusal(
   const offStatus = prepared.on('status', (command) => {
     if (currentOfficialLaunch() !== launch) return;
     const status = String(command.serverStatus ?? '');
-    launch.refusal = { status, message: command.message?.trim() || status.trim() || 'FUMBBL rejected the join.' };
+    launch.refusal = { status, message: command.message?.trim() || status.trim() || t('jnlp.offStatus.fumbblRejectedTheJoin') };
     if (isNotYourTeamStatus(status) && !isForkHost(target.url)) {
       void correctNotYourTeam(launch, target.coach, () => [...entryNames, ...gameNames], target);
     }
@@ -446,7 +447,7 @@ function watchOfficialTeamList(prepared: GameSession, launch: RejoinLaunch, lobb
     const pick = pickTeam(command.teamList?.teamListEntries, { teamId: lobby.teamId, teamName: lobby.teamName });
     if (pick.kind === 'empty') {
       logJnlp('FUMBBL asked for a team, but lists none for this coach.');
-      launch.refusal = { status: 'teamList', message: 'FUMBBL asked which team to play with, but lists no team for this coach.' };
+      launch.refusal = { status: 'teamList', message: t('jnlp.text.fumbblAskedWhichTeam') };
       prepared.close();
       return;
     }
@@ -475,7 +476,7 @@ function connectFumbblPlayer(
 ): void {
   const prepared = preparedFumbblSession;
   if (!prepared || prepared.state !== 'ready') {
-    if (!fumbblLobbyError.value) fumbblLobbyError.value = 'The FUMBBL lobby is not ready yet.';
+    if (!fumbblLobbyError.value) liveSet(fumbblLobbyError, 'value', () => t('jnlp.text.theFumbblLobbyIs'));
     return;
   }
   const fumbbl = preparedFumbblServer ?? activeServerTarget();
@@ -617,14 +618,14 @@ export function startOfficialPasswordJoin(target: OfficialJoinTarget, options: {
   });
   if (!password || !sameAccount) {
     // never make a password response for another account's game
-    launch.launchError = !password
-      ? 'No FUMBBL password is saved.'
-      : 'The saved FUMBBL account is not the one this game was joined with.';
+    liveSet(launch, 'launchError', () => !password
+      ? t('jnlp.text.noFumbblPasswordIs')
+      : t('jnlp.text.theSavedFumbblAccount'));
     clearOfficialRejoinTarget();
     return false;
   }
   if (!(target.gameId && target.gameId > 0) && !target.gameName) {
-    launch.launchError = 'This game cannot be found again without its number.';
+    liveSet(launch, 'launchError', () => t('jnlp.text.thisGameCannotBe'));
     return false;
   }
   setOfficialRejoinTarget(target); // the one target, held for this attempt so its failure window can offer Try again
@@ -683,7 +684,7 @@ function connectFumbblPlayerWhenReady(
 export function fumbblListGames(): void {
   try {
     if (!preparedFumbblSession) {
-      if (!fumbblLobbyError.value) fumbblLobbyError.value = 'Load the JNLP again to reconnect to FUMBBL.';
+      if (!fumbblLobbyError.value) liveSet(fumbblLobbyError, 'value', () => t('jnlp.text.loadTheJnlpAgain'));
       return;
     }
     fumbblLobbyError.value = '';
@@ -774,14 +775,14 @@ export function routeJnlpRequest(
   options: JnlpRouteOptions = {},
 ): JnlpRouteResult {
   if (jnlpLaunchGate?.()) {
-    jnlpEntryError.value = 'Update required: install the update before joining a game.';
-    logJnlp(jnlpEntryError.value);
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.updateRequiredInstallThe'));
+    logJnlp(lt('jnlp.text.updateRequiredInstallThe')); // the log keeps English (Astra r2)
     return 'blocked';
   }
   const classified = classifiedRequest(request);
   if (classified?.validation === 'host-policy') {
-    jnlpEntryError.value = 'JNLP rejected by host policy: only app-owned server targets may be used.';
-    logJnlp(jnlpEntryError.value);
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.jnlpRejectedByHost'));
+    logJnlp(lt('jnlp.text.jnlpRejectedByHost')); // the log keeps English (Astra r2)
     return 'host-rejected';
   }
   if (classified?.entryClassification.kind === 'ambiguous') {
@@ -790,15 +791,15 @@ export function routeJnlpRequest(
     return 'ambiguous';
   }
   if (classified?.validation === 'invalid') {
-    jnlpEntryError.value = 'JNLP could not be used because its arguments are invalid.';
-    logJnlp(jnlpEntryError.value);
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.jnlpCouldNotBe'));
+    logJnlp(lt('jnlp.text.jnlpCouldNotBe')); // the log keeps English (Astra r2)
     return 'invalid';
   }
   if (classified && (
     (classified.entryClassification.kind === 'replay') !== (request.mode === 'replay')
   )) {
-    jnlpEntryError.value = 'JNLP entry classification did not match its validated client mode.';
-    logJnlp(jnlpEntryError.value);
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.jnlpEntryClassificationDid'));
+    logJnlp(lt('jnlp.text.jnlpEntryClassificationDid')); // the log keeps English (Astra r2)
     return 'invalid';
   }
   jnlpEntryError.value = '';
@@ -845,8 +846,8 @@ export function routeJnlpRequest(
     ui.settingsOpen = false;
     ui.browserOpen = false;
     if (!playerJoinSupported()) {
-      jnlpEntryError.value = 'This build is spectator-only; FUMBBL player JNLPs cannot be opened.';
-      logJnlp(jnlpEntryError.value);
+      liveSet(jnlpEntryError, 'value', () => t('jnlp.text.thisBuildIsSpectator'));
+      logJnlp(lt('jnlp.text.thisBuildIsSpectator')); // the log keeps English (Astra r2)
       return 'invalid';
     }
     // P1 10-06: say which join fields the file carried (values only for the non-secret ids; never the token)
@@ -904,8 +905,8 @@ export function resolveAmbiguousJnlpEntry(choice: 'replay' | 'live'): JnlpRouteR
   try {
     return routeJnlpRequest(resolveClassifiedJnlpChoice(pending.request, choice), pending.options);
   } catch {
-    jnlpEntryError.value = `The JNLP cannot be used as ${choice}; its arguments do not match that upstream mode.`;
-    logJnlp(jnlpEntryError.value);
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.theJnlpCannotBe', { choice }));
+    logJnlp(lt('jnlp.text.theJnlpCannotBe', { choice })); // the log keeps English (Astra r2)
     return 'invalid';
   }
 }

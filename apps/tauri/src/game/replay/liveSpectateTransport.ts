@@ -12,9 +12,22 @@ import { LiveSpectateReview, type SpectatorPresentationAdapter } from './liveSpe
 import { sameSpectatorIdentity, type SpectatorCursor, type SpectatorCheckpoint } from './spectatorCheckpoint';
 import type { ReviewControlsBinding } from './reviewControlsBinding';
 import { turnSideIsHome } from '../blastinSecondBeat';
+import { disposeLive, t } from '../../i18n';
+
+/** i18n 10-23: segment interruptions are English DATA (compared, e.g. the join boundary); only the label is localised. */
+const INTERRUPTION_KEYS: Readonly<Record<string, string>> = {
+  'Before you joined': 'replay.segment.beforeYouJoined',
+  'Connection replaced': 'replay.text.connectionReplaced',
+  'Live feed disconnected': 'replay.text.liveFeedDisconnected',
+  'New match snapshot': 'replay.text.newMatchSnapshot',
+};
+function interruptionLabel(interruption: string): string {
+  const key = INTERRUPTION_KEYS[interruption];
+  return key ? t(key) : interruption;
+}
 
 function positionLabel(checkpoint: SpectatorCheckpoint | null): string {
-  if (!checkpoint) return 'Unknown starting position';
+  if (!checkpoint) return t('replay.text.unknownStartingPosition');
   const g = checkpoint.model;
   const side = turnSideIsHome(g) ? 'Home' : 'Away'; // S46
   const turn = (turnSideIsHome(g) ? g.turnDataHome : g.turnDataAway)?.turnNr;
@@ -52,12 +65,12 @@ export class LiveSpectateTransport {
     // each marker naming its segment so a pick can cross into it.
     const turnMarkers = window ? this.allTurnMarkers() : [];
     return {
-      coverageLabel: first ? 'History available from: ' + positionLabel(first) : 'Earlier history limit reached',
+      coverageLabel: first ? t('replay.text.historyAvailableFrom') + positionLabel(first) : t('replay.text.earlierHistoryLimitReached'),
       positionLabel: positionLabel(visible),
       turnMarkers,
-      liveDistanceLabel: this.history.staleReason ? 'Live feed unavailable — ' + this.history.staleReason
-        : !inLiveSegment ? 'Earlier segment — live position beyond a gap'
-        : behind === 0 ? 'At live edge — GO TO LIVE to follow' : behind + ' events behind',
+      liveDistanceLabel: this.history.staleReason ? t('replay.text.liveFeedUnavailable') + this.history.staleReason
+        : !inLiveSegment ? t('replay.text.earlierSegmentLivePosition')
+        : behind === 0 ? t('replay.text.atLiveEdgeGo') : behind + ' events behind',
       selectedSegment: visible?.cursor.segmentId ?? null,
       // Owner 09-16: the pre-join backfill's start line reads as history only; its "Before you joined" note moves to
       // the last turn it holds (ReplayControls, keyed by joinBoundary) — the line that really is before the join.
@@ -65,14 +78,14 @@ export class LiveSpectateTransport {
         const joinBoundary = segment.interruption === 'Before you joined';
         const start = positionLabel(this.history.checkpointAt({ ...segment.identity, sequence: segment.start }));
         return { id: segment.identity.segmentId, joinBoundary,
-          label: joinBoundary ? start + ' · Earlier history' : start + (segment.interruption ? ' · ' + segment.interruption : ' · Current connection') };
+          label: joinBoundary ? start + t('replay.segment.earlierHistorySuffix') : start + (segment.interruption ? ' · ' + interruptionLabel(segment.interruption) : t('replay.segment.currentConnectionSuffix')) };
       }),
       selectSegment: (id) => this.selectSegment(id),
       status: { phase: ['paused', 'playing'].includes(this.review.phase) ? 'ready' : this.review.phase,
         cursor, total: this.review.scrubMaximum?.sequence ?? window?.end ?? cursor,
         commandNr: event?.command.commandNr ?? null, failure: this.review.failure ? { message: this.review.failure } : null },
       minimum: window?.start ?? cursor, ...this.playback, pinned: this.review.pinned,
-      notice: this.review.pinned ? 'This position is retained outside recent history.' : this.history.notice ?? null,
+      notice: this.review.pinned ? t('replay.text.thisPositionIsRetained') : this.history.notice ?? null,
       canGoLive: !!this.history.head && !this.history.staleReason && this.review.phase !== 'returning',
       play: () => this.play(), pause: () => this.pause(), stepForward: () => this.stepForward(), stepBackward: () => this.stepBackward(),
       turn: (direction) => this.turn(direction), seek: (sequence) => this.seek(sequence), setSpeed: (speed) => this.setSpeed(speed),
@@ -199,7 +212,7 @@ export class LiveSpectateTransport {
   }
   endScrub(): void { this.review.endScrub(); }
   async goToLive(): Promise<boolean> { this.autoPlayer.pause(); return this.review.goToLive(); }
-  dispose(): void { this.autoPlayer.dispose(); this.review.dispose(); }
+  dispose(): void { this.autoPlayer.dispose(); this.review.dispose(); disposeLive(this.history); } // + the history's live-switch registrations
   private availableTurnMarkers(window: NonNullable<LiveSpectateTransport['window']>): ReplayTurnMarker[] {
     return labelReplayTurnMarkers(this.scanTurnMarkers(window));
   }

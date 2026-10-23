@@ -5,6 +5,7 @@
 // Right-click closes BOTH tabs (settings.coachCornerCounts = false) with a short notice; left-click does nothing.
 import { settings } from '../game/settings';
 import { COACH_CORNER_COUNTS_HIDDEN_NOTICE } from '../game/dugoutCounts';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   side: 'home' | 'away';
@@ -24,11 +25,11 @@ function hide(): void {
   <!-- data-panel-overhang: the panel's move/resize clamps include this tab (SpectateView panelOverhang).
        pointerdown.prevent keeps focus where it was (a left-click must not blur the chat input). -->
   <div v-if="settings.coachCornerCounts" class="coach-corner-counts" :data-side="side" data-panel-overhang
-    role="status" :aria-label="`${reserves} in reserves, ${out} out of the game`"
-    title="Reserves / Out of the game (right-click to hide)"
+    role="status" :aria-label="$t('hud.coachCornerCounts.reservesInReservesOut', { reserves, out })"
+    :title="$t('hud.coachCornerCounts.reservesOutOfThe')"
     @click.stop.prevent @pointerdown.stop.prevent @contextmenu.stop.prevent="hide">
-    <span class="ccc-row" data-kind="res"><b class="ccc-n">{{ reserves }}</b><span class="ccc-label">RES</span></span>
-    <span class="ccc-row" data-kind="out"><b class="ccc-n">{{ out }}</b><span class="ccc-label">OUT</span></span>
+    <span class="ccc-row" data-kind="res"><b class="ccc-n">{{ reserves }}</b><span class="ccc-label">{{ $t('hud.coachCornerCounts.cccRow.res') }}</span></span>
+    <span class="ccc-row" data-kind="out"><b class="ccc-n">{{ out }}</b><span class="ccc-label">{{ $t('hud.coachCornerCounts.cccRow.out') }}</span></span>
   </div>
 </template>
 

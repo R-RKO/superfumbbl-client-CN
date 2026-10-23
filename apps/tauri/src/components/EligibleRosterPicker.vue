@@ -8,6 +8,7 @@
 // answers the SAME wire: every row's id comes straight from the server's exact eligibleIds
 // (game/rosterPicker.ts resolveRosterPickCandidates), never re-derived or substituted.
 import type { RosterPickCandidate } from '../game/rosterPicker';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   prompt: string;
@@ -40,15 +41,15 @@ const emit = defineEmits<{
           <span class="erp-check">{{ props.picked.includes(c.id) ? '✓' : '' }}</span>
         </button>
       </li>
-      <li v-if="!props.candidates.length" class="erp-empty">No eligible players offered.</li>
+      <li v-if="!props.candidates.length" class="erp-empty">{{ $t('dialogs.eligibleRosterPicker.erpList.noEligiblePlayersOffered') }}</li>
     </ul>
     <div class="erp-foot">
       <span class="erp-count">{{ props.picked.length }}/{{ props.max }}</span>
       <div class="erp-actions">
-        <button v-if="props.declinable" type="button" class="erp-btn erp-decline" @click="emit('decline')">Decline</button>
+        <button v-if="props.declinable" type="button" class="erp-btn erp-decline" @click="emit('decline')">{{ $t('dialogs.eligibleRosterPicker.decline') }}</button>
         <button type="button" class="erp-btn erp-confirm"
           :disabled="props.picked.length < props.min || props.picked.length === 0"
-          @click="emit('confirm')">Confirm</button>
+          @click="emit('confirm')">{{ $t('dialogs.eligibleRosterPicker.confirm') }}</button>
       </div>
     </div>
   </div>

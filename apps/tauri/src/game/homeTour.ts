@@ -1,3 +1,4 @@
+import { data, t } from '../i18n';
 /**
  * Owner 2026-10-06: the Home pane walkthrough (docs/artifact-orchestration/spec-home-pane-tour.md) - the pure step model.
  *
@@ -88,35 +89,37 @@ export function sanitizeCoach(value: unknown): string {
   return /^[A-Za-z0-9 _.-]{1,40}$/.test(name) ? name : '';
 }
 
+// i18n (Astra r1/r2 #2): arrow candidates' `text` are MATCH PREDICATES against the website's own (English) labels:
+// DATA, marked data(...) so the codemods and the coverage detector leave them alone.
 export const ARROWS = {
   /** `<div class="mainmenu"><a href="/p/games">Game</a>` - the Gamefinder lives in its submenu. */
-  game: { name: 'GAME nav', candidates: [{ selector: '.topnav .mainmenu a[href="/p/games"]' }, { selector: '.topnav .mainmenu a', text: 'Game' }] },
+  game: { name: 'GAME nav', candidates: [{ selector: '.topnav .mainmenu a[href="/p/games"]' }, { selector: '.topnav .mainmenu a', text: data('Game') }] },
   /** Logged in, the first nav item is "Home" -> /~<Coach> (submenu "Overview"); logged out there is no such item and the
    *  arrow falls back to the account box ("Log in"). Logged-in markup from saved site pages (FumbblWebsite/, 2026-09). */
   coach: { name: 'coach / overview link', candidates: [{ selector: '.topnav .mainmenu a[href*="/~"]' }, { selector: '.accountbox a' }] },
-  forum: { name: 'FORUM nav', candidates: [{ selector: '.topnav .mainmenu a[href*="PNphpBB2"]' }, { selector: '.topnav .mainmenu a', text: 'Forum' }] },
+  forum: { name: 'FORUM nav', candidates: [{ selector: '.topnav .mainmenu a[href*="PNphpBB2"]' }, { selector: '.topnav .mainmenu a', text: data('Forum') }] },
   /** GAME's dropdown entry "Gamefinder" (`<div class="submenu"><a href="/p/lfg2">Gamefinder</a>`; hover-only, opened by
    *  the payload's `reveal`); the GAME item itself if the entry cannot be shown. */
   gamefinderMenu: {
     name: 'GAME > Gamefinder menu entry',
     candidates: [
-      { selector: '.topnav .submenu a[href="/p/lfg2"]', text: 'Gamefinder' },
+      { selector: '.topnav .submenu a[href="/p/lfg2"]', text: data('Gamefinder') },
       { selector: '.topnav .submenu a[href$="/p/lfg2"]' },
       { selector: '.topnav .mainmenu a[href="/p/games"]' },
     ],
   },
   /** gamefinder.js Blackbox.vue: `<div id="blackboxwrapper"> ... <button>Join the Draw</button>` (only while the
    *  Blackbox is active and the coach has a Blackbox-eligible team). */
-  joinDraw: { name: '"Join the Draw"', candidates: [{ selector: '#blackboxwrapper button', text: 'Join the Draw' }, { selector: 'button', text: 'Join the Draw' }] },
+  joinDraw: { name: '"Join the Draw"', candidates: [{ selector: '#blackboxwrapper button', text: data('Join the Draw') }, { selector: 'button', text: data('Join the Draw') }] },
   /** boxtrophy page header nav: `<li id="nav-mySquads">My Squads</li>` (pageheader.js: id "nav-" + page). */
-  mySquads: { name: '"My Squads"', candidates: [{ selector: '#nav-mySquads' }, { selector: 'li', text: 'My Squads' }] },
+  mySquads: { name: '"My Squads"', candidates: [{ selector: '#nav-mySquads' }, { selector: 'li', text: data('My Squads') }] },
   /** Coach overview team table rows are `tr.team`; the Play link is only rendered for the logged-in owner (not
    *  verifiable read-only), so the text match does the work. */
   play: {
     name: '"Play" link',
     candidates: [
-      { selector: 'tr.team a, tr.team button, tr.team input[type="button"]', text: 'Play' },
-      { selector: '.pagecontent a, .pagecontent button', text: 'Play' },
+      { selector: 'tr.team a, tr.team button, tr.team input[type="button"]', text: data('Play') },
+      { selector: '.pagecontent a, .pagecontent button', text: data('Play') },
     ],
   },
 } satisfies Record<string, ArrowSpec>;
@@ -124,22 +127,22 @@ export const ARROWS = {
 /** Gamefinder: the coach's teams looking for a game (`#cards .card`) and the "Choose teams" rows (`#lfgteams .lfgteam`). */
 export const TEAM_PRESENT_SELECTORS = ['#cards .card', '#lfgteams .lfgteam'];
 
-const NEXT = { id: 'next', label: 'Next' } as const;
-const SKIP = { id: 'skip', label: 'Skip walkthrough' } as const;
+const NEXT = { id: 'next', get label() { return t('tour.next.next'); } } as const;
+const SKIP = { id: 'skip', get label() { return t('tour.skip.skipWalkthrough'); } } as const;
 /** Owner 10-06: every card after the first can go back one step. */
-export const BACK = { id: 'back', label: '◂ Back' } as const;
+export const BACK = { id: 'back', get label() { return t('tour.back.back'); } } as const;
 
 export const COPY = {
   /** Owner 10-06: step 1 is the FUMBBL news page - a plain centred card, no arrows; two paragraphs (the runtime keeps the
    *  blank line: white-space pre-line). */
-  home: "This is the FUMBBL website where you'll find games and manage your teams. You'll use the Gamefinder to find games, the overview pane to manage your teams, and the forums to join communities and talk with other users.\n\nThis Home page shows the latest FUMBBL news and announcements — check it when you log in.",
-  login: 'Log in or create an account to continue.',
-  findernav: 'This is Gamefinder. Access it by selecting "Game" then "Gamefinder".',
-  gamefinder: 'Click "Join the Draw" to queue any teams you already have setup.',
-  gamefinderNoTeams: "If you don't have any teams setup, create one from your overview page first — we'll go there in a moment.",
-  blackbox: "Blackbox Trophy is FUMBBL's premier competitive environment. Each season, you'll draft a team of different factions and compete over 15 games with each to be the best person in the community. You get a budget of points to spend and each season the teams cost a different amount so you'll need to review the rules for whatever season we're currently in and construct the best team possible!",
-  squads: 'My Squads lists the squad you drafted and how each team is doing.',
-  overview: 'This is the overview page where you can access your teams and start matches against specific people. Click the Play button to start a match. The client will launch it right here for you.',
+  get home() { return t('tour.home.copy.thisIsTheFumbbl'); },
+  get login() { return t('tour.home.copy.logInOrCreate'); },
+  get findernav() { return t('tour.home.copy.thisIsGamefinderAccess'); },
+  get gamefinder() { return t('tour.home.copy.clickJoinTheDraw'); },
+  get gamefinderNoTeams() { return t('tour.home.copy.ifYouDonT'); },
+  get blackbox() { return t('tour.home.copy.blackboxTrophyIsFumbbl'); },
+  get squads() { return t('tour.home.copy.mySquadsListsThe'); },
+  get overview() { return t('tour.home.copy.thisIsTheOverview'); },
 } as const;
 
 const WAIT_MS = 6000;
@@ -151,11 +154,11 @@ export function sitePayload(step: TourStepId): SitePayload {
       return { ...base, title: 'FUMBBL.COM', body: COPY.home, buttons: [NEXT, SKIP], waitMs: 0 };
     case 'login':
       // Centred like the other text-only cards (owner 10-06), kept off FUMBBL's own login form.
-      return { ...base, title: 'Log in', body: COPY.login, buttons: [BACK, SKIP], avoid: ['#postform', 'form[action*="user.php"]'], waitMs: 0 };
+      return { ...base, get title() { return t('tour.text.logIn'); }, body: COPY.login, buttons: [BACK, SKIP], avoid: ['#postform', 'form[action*="user.php"]'], waitMs: 0 };
     case 'findernav':
       return {
         ...base,
-        title: 'Gamefinder',
+        get title() { return t('tour.text.gamefinder'); },
         body: COPY.findernav,
         arrows: [ARROWS.gamefinderMenu],
         placement: 'upper-right',
@@ -164,7 +167,7 @@ export function sitePayload(step: TourStepId): SitePayload {
     case 'gamefinder':
       return {
         ...base,
-        title: 'Gamefinder',
+        get title() { return t('tour.text.gamefinder'); },
         body: COPY.gamefinder,
         arrows: [ARROWS.joinDraw],
         alternate: { present: TEAM_PRESENT_SELECTORS, body: COPY.gamefinderNoTeams },
@@ -172,20 +175,19 @@ export function sitePayload(step: TourStepId): SitePayload {
     case 'blackbox':
       return {
         ...base,
-        title: 'Blackbox Trophy',
+        get title() { return t('tour.text.blackboxTrophy'); },
         body: COPY.blackbox,
-        buttons: [BACK, { id: 'rules', label: 'Open the rules' }, NEXT, SKIP],
+        buttons: [BACK, { id: 'rules', get label() { return t('tour.text.openTheRules'); } }, NEXT, SKIP],
         clicks: { rules: '#nav-rules' },
       };
     case 'squads':
       // Owner 10-06: the My Squads page itself is shown under the card (the site's own tab, as for Rules).
-      return { ...base, title: 'Blackbox Trophy', body: COPY.squads, arrows: [ARROWS.mySquads], autoClick: '#nav-mySquads' };
+      return { ...base, get title() { return t('tour.text.blackboxTrophy'); }, body: COPY.squads, arrows: [ARROWS.mySquads], autoClick: '#nav-mySquads' };
     case 'overview':
-      return { ...base, title: 'Overview', body: COPY.overview, arrows: [ARROWS.play] };
+      return { ...base, get title() { return t('tour.text.overview'); }, body: COPY.overview, arrows: [ARROWS.play] };
   }
 }
 
-export const COPY_RESUME = 'This page is not part of the walkthrough. Go back to continue it, or skip it.';
 
 /** Shown when a page load is not the step's own document (the coach clicked away, or a redirect landed elsewhere): the
  *  step does not draw on a page it was not made for; "Back to the walkthrough" reloads the step's page. */
@@ -193,9 +195,9 @@ export function resumePayload(step: TourStepId): SitePayload {
   return {
     step,
     title: sitePayload(step).title,
-    body: COPY_RESUME,
+    body: t('tour.home.resume'),
     arrows: [],
-    buttons: [{ id: 'resume', label: 'Back to the walkthrough' }, SKIP],
+    buttons: [{ id: 'resume', get label() { return t('tour.text.backToTheWalkthrough'); } }, SKIP],
     placement: 'corner',
     compact: true,
     waitMs: 0,

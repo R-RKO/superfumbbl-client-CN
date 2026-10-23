@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
+import { $t } from '../i18n';
 
 defineProps<{
   max: number;
@@ -18,12 +19,12 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <PitchConfirmationPanel :title="title ?? 'Charge!'" :label="label ?? 'Charge player selection'" test-id="charge-pick-panel">
-    <span v-if="roll != null" class="charge-roll">Rolled {{ roll }}</span>
-    <span class="charge-copy">Select up to {{ max }} Players - {{ selected }}/{{ max }}</span>
+  <PitchConfirmationPanel :title="title ?? $t('dialogs.chargePickPanel.charge')" :label="label ?? $t('dialogs.chargePickPanel.chargePlayerSelection')" test-id="charge-pick-panel">
+    <span v-if="roll != null" class="charge-roll">{{ $t('dialogs.chargePickPanel.rolledRoll', { roll }) }}</span>
+    <span class="charge-copy">{{ $t('dialogs.chargePickPanel.selectUpToMax', { max, selected, max2: max }) }}</span>
     <template #actions>
-      <button type="button" class="charge-confirm" data-pad-key="X" :disabled="confirmDisabled" @click="emit('confirm')">Confirm</button>
-      <button v-if="declinable" type="button" class="charge-decline" data-pad-cancel @click="emit('decline')">Decline</button>
+      <button type="button" class="charge-confirm" data-pad-key="X" :disabled="confirmDisabled" @click="emit('confirm')">{{ $t('dialogs.chargePickPanel.confirm') }}</button>
+      <button v-if="declinable" type="button" class="charge-decline" data-pad-cancel @click="emit('decline')">{{ $t('dialogs.chargePickPanel.decline') }}</button>
     </template>
   </PitchConfirmationPanel>
 </template>

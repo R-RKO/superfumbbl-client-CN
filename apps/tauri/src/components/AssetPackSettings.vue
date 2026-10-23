@@ -5,6 +5,8 @@ import { settings } from '../game/settings';
 import ConfiguredAssetsBrowser from './ConfiguredAssetsBrowser.vue';
 import { SOUND_CATALOG, previewSound } from '../game/sounds';
 import {
+  assetTargetPositionLabel,
+  assetTargetTeamLabel,
   loadAssetTargetCatalog,
   rememberAssetTargetCatalog,
   SKILL_TARGET_CHOICES,
@@ -42,6 +44,10 @@ import {
   type InspectedAssetPack,
 } from '../game/assetMods';
 import { ASSET_ASSIGNMENT_CAPABILITIES, publishAssetAssignments, useWholeAssetPack } from '../game/assetPackActions';
+import { $t, terms, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 const props = defineProps<{ builderMode?: boolean; liveGame?: unknown }>();
 
@@ -69,23 +75,23 @@ const soundEventId = ref(SOUND_CATALOG[0]!.id);
 const pitchThemeId = ref('fumbbl-default');
 const pitchWeathers = ref<Array<'blizzard' | 'heat' | 'nice' | 'rain' | 'sunny'>>(['nice']);
 const weatherChoices = [
-  { id: 'nice', label: 'Nice' },
-  { id: 'rain', label: 'Rain' },
-  { id: 'sunny', label: 'Very sunny' },
-  { id: 'blizzard', label: 'Blizzard' },
-  { id: 'heat', label: 'Sweltering heat' },
+  { id: 'nice', get label() { return t('settings.assetPackSettings.weatherChoices.nice'); } },
+  { id: 'rain', get label() { return t('settings.assetPackSettings.weatherChoices.rain'); } },
+  { id: 'sunny', get label() { return t('settings.assetPackSettings.weatherChoices.verySunny'); } },
+  { id: 'blizzard', get label() { return t('settings.assetPackSettings.weatherChoices.blizzard'); } },
+  { id: 'heat', get label() { return t('settings.assetPackSettings.weatherChoices.swelteringHeat'); } },
 ] as const;
 
 const capabilities = ASSET_ASSIGNMENT_CAPABILITIES; // owner 10-06: shared with the first-launch setup wizard
 const exportSections: Array<{ key: AssetPackSection; label: string }> = [
-  { key: 'player-sprites', label: 'Sprites only' },
-  { key: 'walk-sheets', label: 'Walk sheets only' },
-  { key: 'sound-events', label: 'Sounds only' },
-  { key: 'team-logos', label: 'Team logos only' },
-  { key: 'block-dice', label: 'Block dice only' },
-  { key: 'skill-icons', label: 'Skill icons only' },
-  { key: 'pitch-images', label: 'Pitches only' },
-  { key: 'combined', label: 'Combined pack' },
+  { key: 'player-sprites', get label() { return t('settings.assetPackSettings.exportSections.spritesOnly'); } },
+  { key: 'walk-sheets', get label() { return t('settings.assetPackSettings.exportSections.walkSheetsOnly'); } },
+  { key: 'sound-events', get label() { return t('settings.assetPackSettings.exportSections.soundsOnly'); } },
+  { key: 'team-logos', get label() { return t('settings.assetPackSettings.exportSections.teamLogosOnly'); } },
+  { key: 'block-dice', get label() { return t('settings.assetPackSettings.exportSections.blockDiceOnly'); } },
+  { key: 'skill-icons', get label() { return t('settings.assetPackSettings.exportSections.skillIconsOnly'); } },
+  { key: 'pitch-images', get label() { return t('settings.assetPackSettings.exportSections.pitchesOnly'); } },
+  { key: 'combined', get label() { return t('settings.assetPackSettings.exportSections.combinedPack'); } },
 ];
 
 const knownTeams = computed(() => targetCatalog.value.teams);
@@ -187,12 +193,12 @@ async function saveDraft(): Promise<void> {
   await run(async () => {
     draft.value = await updateAssetDraft(draft.value!.draftId, draftName.value.trim() || draft.value!.name);
     await reloadDrafts(draft.value!.draftId);
-    editorNotice.value = `Draft “${draft.value!.name}” saved — pick it up any time from the draft list.`;
+    liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.draftNameSavedPick', { name: draft.value!.name }));
   });
 }
 
 async function removeDraft(): Promise<void> {
-  if (!draft.value || !window.confirm(`Delete draft “${draft.value.name}”? Installed/exported packs are not removed.`)) return;
+  if (!draft.value || !window.confirm(t('ui.assetPackSettings.text.deleteDraftNameInstalled', { name: draft.value.name }))) return;
   await run(async () => { await deleteAssetDraft(draft.value!.draftId); draft.value = null; await reloadDrafts(); });
 }
 
@@ -301,7 +307,7 @@ async function applySection(section: AssetPackSection): Promise<void> {
     await run(async () => {
       const pack = await applyAssetDraft(draft.value!.draftId, section);
       if (!await publishAssignments(nextAssignmentsForPack(pack, section), intent)) throw new Error(assetMods.error || 'A newer pack choice won. The pack was installed but not activated.');
-      editorNotice.value = `${pack.name} ${pack.version} applied.`;
+      liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameVersionApplied', { name: pack.name, version: pack.version }));
     });
   } finally {
     assetMods.creatorApplyBusy = false;
@@ -317,7 +323,7 @@ async function exportSection(section: AssetPackSection): Promise<void> {
     });
     if (!destination) return;
     const exported = await exportAssetDraft(draft.value!.draftId, section, destination);
-    editorNotice.value = `${exported.name} ${exported.version} exported (${formatPackSize(exported.sizeBytes)}).`;
+    liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameVersionExportedP2', { name: exported.name, version: exported.version, p2: formatPackSize(exported.sizeBytes) }));
   });
 }
 
@@ -365,16 +371,16 @@ function capabilityCoverage(pack: InstalledAssetPack, capability: string): numbe
 }
 
 function redistributionLabel(value: InstalledAssetPack['redistribution']): string {
-  if (value === 'cleared') return 'Redistribution cleared';
-  if (value === 'owner-authorized-external-mod') return 'Owner-authorized external mod';
-  if (value === 'tester-approved-public-review-required') return 'Tester-approved; public review required';
-  return 'Local use only';
+  if (value === 'cleared') return t('ui.assetPackSettings.text.redistributionCleared');
+  if (value === 'owner-authorized-external-mod') return t('ui.assetPackSettings.text.ownerAuthorizedExternalMod');
+  if (value === 'tester-approved-public-review-required') return t('ui.assetPackSettings.text.testerApprovedPublicReview');
+  return t('ui.assetPackSettings.text.localUseOnly');
 }
 
 async function removePack(pack: InstalledAssetPack): Promise<void> {
-  if (!window.confirm(`Remove ${pack.name} ${pack.version} from this device? Exported files and drafts are not removed.`)) return;
+  if (!window.confirm(t('ui.assetPackSettings.text.removeNameVersionFrom', { name: pack.name, version: pack.version }))) return;
   await run(async () => {
-    if (await removeInstalledAssetPack(pack.installId)) editorNotice.value = `${pack.name} ${pack.version} removed.`;
+    if (await removeInstalledAssetPack(pack.installId)) liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameVersionRemoved', { name: pack.name, version: pack.version }));
     else throw new Error(assetMods.error || 'The pack could not be removed.');
   });
 }
@@ -390,7 +396,7 @@ async function importPack(): Promise<void> {
     const pack = await importAssetPack();
     if (!pack) return;
     importedPack.value = isAssignableAssetPack(pack) && importedPackCapabilitiesOf(pack).length ? pack : null;
-    editorNotice.value = importedPack.value ? '' : `${pack.name} installed. Choose capabilities below to use it.`;
+    liveSetHere(editorNotice, 'value', () => importedPack.value ? '' : t('ui.assetPackSettings.text.nameInstalledChooseCapabilities', { name: pack.name }));
   });
 }
 function importedPackCapabilitiesOf(pack: InstalledAssetPack): string[] {
@@ -401,12 +407,12 @@ async function applyImportedPack(): Promise<void> {
   if (!pack) return;
   importedPack.value = null;
   await useAll(pack);
-  if (!editorError.value) editorNotice.value = `${pack.name} ${pack.version} applied.`;
+  if (!editorError.value) liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameVersionApplied', { name: pack.name, version: pack.version }));
 }
 function dismissImportedPack(): void {
   const pack = importedPack.value;
   importedPack.value = null;
-  if (pack) editorNotice.value = `${pack.name} installed. Choose capabilities below to use it.`;
+  if (pack) liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameInstalledChooseCapabilities', { name: pack.name }));
 }
 
 async function validateExistingPack(): Promise<void> {
@@ -414,7 +420,8 @@ async function validateExistingPack(): Promise<void> {
     const path = await choosePath(['f40kmod'], 'F40KMod asset pack');
     if (!path) return;
     validatedPack.value = await inspectAssetPackFile(path);
-    editorNotice.value = `${validatedPack.value.name} ${validatedPack.value.version} is a valid .f40kmod pack.`;
+    const { name, version } = validatedPack.value;
+    liveSetHere(editorNotice, 'value', () => t('ui.assetPackSettings.text.nameVersionIsA', { name, version }));
   });
 }
 
@@ -449,46 +456,46 @@ onMounted(() => { void run(() => reloadDrafts()); });
 
 <template>
   <fieldset v-if="!props.builderMode" class="settings-group asset-pack-settings">
-    <legend>Asset packs</legend>
-    <p class="hint">Each category can use a different pack. Changes apply immediately to Modern and Classic; no restart or network request is needed.</p>
-    <p class="hint asset-pack-immediate">Active pack choices follow Settings Apply/Cancel. Importing, removing, exporting, editing a draft, or choosing/clearing a configured file changes app files immediately and is not undone by Cancel.</p>
+    <legend>{{ $t('settings.assetPacks.assetPacks.assetPacks') }}</legend>
+    <p class="hint">{{ $t('settings.assetPacks.assetPacks.eachCategoryCanUse') }}</p>
+    <p class="hint asset-pack-immediate">{{ $t('settings.assetPacks.assetPacks.activePackChoicesFollow') }}</p>
     <label v-for="capability in capabilities" :key="capability.key" class="row">
       <span>{{ capability.label }}</span>
       <select :value="assignmentSelectValue(capability.key)" :disabled="!!assetMods.pendingAssignments"
         @change="changeAssignment(capability.key, $event)">
-        <option value="">{{ capability.key === 'skillIcons' ? 'Flat badges (built-in)' : 'Built-in default' }}</option>
-        <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">Illustrated (built-in default)</option>
-        <option v-if="capability.key === 'blockDice'" :value="KRISB_BUILTIN">Rick dice (built-in)</option>
+        <option value="">{{ capability.key === 'skillIcons' ? $t('settings.assetPacks.assetPacks.flatBadgesBuiltIn') : $t('settings.assetPacks.assetPacks.builtInDefault') }}</option>
+        <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">{{ $t('settings.assetPacks.assetPacks.illustratedBuiltInDefault') }}</option>
+        <option v-if="capability.key === 'blockDice'" :value="KRISB_BUILTIN">{{ $t('settings.assetPacks.assetPacks.rickDiceBuiltIn') }}</option>
         <option v-for="pack in installedPacks.filter((candidate) => packSupports(candidate, capability.key))"
           :key="pack.installId" :value="pack.installId">{{ pack.name }} {{ pack.version }}</option>
       </select>
     </label>
-    <div class="actions"><button type="button" :disabled="assetMods.busy || editorBusy" @click="importPack">Import .f40kmod…</button></div>
+    <div class="actions"><button type="button" :disabled="assetMods.busy || editorBusy" @click="importPack">{{ $t('settings.assetPacks.assetPacks.importF40kmod') }}</button></div>
     <div v-for="pack in installedPacks" :key="pack.installId" class="pack-card">
       <span><strong>{{ pack.name }}</strong> {{ pack.version }} · {{ formatPackSize(pack.sizeBytes) }}</span>
-      <span>{{ pack.verifiedPublisher ? 'Verified publisher' : 'Unverified local pack' }} · {{ pack.source }}</span>
+      <span>{{ pack.verifiedPublisher ? $t('settings.assetPacks.packCard.assetPacks.verifiedPublisher') : $t('settings.assetPacks.packCard.assetPacks.unverifiedLocalPack') }} · {{ pack.source }}</span>
       <span>{{ redistributionLabel(pack.redistribution) }}</span>
       <span>{{ pack.capabilities.map((capability) => `${capability}: ${capabilityCoverage(pack, capability)}`).join(' · ') }}</span>
       <button type="button" :disabled="!!assetMods.pendingAssignments" @click="useAll(pack)">
-        {{ isRollbackVersion(pack) ? 'Rollback to this version' : 'Use all included' }}
+        {{ isRollbackVersion(pack) ? $t('settings.assetPacks.packCard.assetPacks.rollbackToThisVersion') : $t('settings.assetPacks.packCard.assetPacks.useAllIncluded') }}
       </button>
       <button type="button" :disabled="selectedPackIds.has(pack.installId) || editorBusy"
-        :title="selectedPackIds.has(pack.installId) ? 'Choose another pack before removing it.' : 'Remove this installed pack'"
-        @click="removePack(pack)">Remove</button>
-      <small v-if="activePackIds.has(pack.installId)">In use</small>
-      <small v-else-if="selectedPackIds.has(pack.installId)">Selected — not active this session</small>
-      <small v-else-if="isAssetPackLeased(pack.installId)">Finishing previous display…</small>
+        :title="selectedPackIds.has(pack.installId) ? $t('settings.assetPacks.packCard.assetPacks.chooseAnotherPackBefore') : $t('settings.assetPacks.packCard.assetPacks.removeThisInstalledPack')"
+        @click="removePack(pack)">{{ $t('settings.assetPacks.packCard.assetPacks.remove') }}</button>
+      <small v-if="activePackIds.has(pack.installId)">{{ $t('settings.assetPacks.packCard.assetPacks.inUse') }}</small>
+      <small v-else-if="selectedPackIds.has(pack.installId)">{{ $t('settings.assetPacks.packCard.assetPacks.selectedNotActiveThis') }}</small>
+      <small v-else-if="isAssetPackLeased(pack.installId)">{{ $t('settings.assetPacks.packCard.assetPacks.finishingPreviousDisplay') }}</small>
     </div>
   </fieldset>
 
   <fieldset v-else class="settings-group asset-validator">
-    <legend>Validate an existing pack</legend>
-    <p class="hint">Inspect a .f40kmod without installing or changing it. Validation checks its framing, manifest, capability contract, file bounds, and hashes.</p>
-    <div class="actions"><button type="button" :disabled="editorBusy" @click="validateExistingPack">Validate .f40kmod…</button></div>
+    <legend>{{ $t('settings.assetPacks.validateAnExisting.validateAnExistingPack') }}</legend>
+    <p class="hint">{{ $t('settings.assetPacks.validateAnExisting.inspectAF40kmodWithout') }}</p>
+    <div class="actions"><button type="button" :disabled="editorBusy" @click="validateExistingPack">{{ $t('settings.assetPacks.validateAnExisting.validateF40kmod') }}</button></div>
     <div v-if="validatedPack" class="pack-card validated-pack" role="status">
       <strong>{{ validatedPack.name }} {{ validatedPack.version }}</strong>
       <span>{{ validatedPack.packId }}</span>
-      <span>{{ formatPackSize(validatedPack.sizeBytes) }} · SHA-256 {{ validatedPack.wholePackSha256 }}</span>
+      <span>{{ $t('settings.assetPacks.packCard.validateAnExisting.p0Sha256Wholepacksha256', { p0: formatPackSize(validatedPack.sizeBytes), wholePackSha256: validatedPack.wholePackSha256 }) }}</span>
       <span>{{ validatedCoverage(validatedPack) }}</span>
     </div>
   </fieldset>
@@ -496,128 +503,128 @@ onMounted(() => { void run(() => reloadDrafts()); });
   <ConfiguredAssetsBrowser v-if="!props.builderMode" :target-catalog="targetCatalog" />
 
   <fieldset class="settings-group asset-creator">
-    <legend>Asset pack creator</legend>
-    <p class="hint">Build one portable pack containing any mix of sprites, skill icons, pitches, and sounds. Branding is never added automatically; a pack contains only the rows you choose.</p>
+    <legend>{{ $t('settings.assetPacks.assetPackCreator.assetPackCreator') }}</legend>
+    <p class="hint">{{ $t('settings.assetPacks.assetPackCreator.buildOnePortablePack') }}</p>
     <div class="draft-toolbar">
       <select :value="draft?.draftId ?? ''" @change="selectDraft">
-        <option value="">Choose a draft</option>
+        <option value="">{{ $t('settings.assetPacks.assetPackCreator.chooseADraft') }}</option>
         <option v-for="entry in drafts" :key="entry.draftId" :value="entry.draftId">{{ entry.name }} ({{ entry.bindings }})</option>
       </select>
-      <input v-model="draftName" maxlength="120" placeholder="Pack name" />
-      <button type="button" :disabled="editorBusy" @click="newDraft">New</button>
-      <button type="button" class="save-draft" :disabled="!draft || editorBusy" @click="saveDraft">Save draft</button>
-      <button type="button" :disabled="!draft || editorBusy" @click="removeDraft">Delete draft</button>
+      <input v-model="draftName" maxlength="120" :placeholder="$t('settings.assetPacks.assetPackCreator.packName')" />
+      <button type="button" :disabled="editorBusy" @click="newDraft">{{ $t('settings.assetPacks.assetPackCreator.new') }}</button>
+      <button type="button" class="save-draft" :disabled="!draft || editorBusy" @click="saveDraft">{{ $t('settings.assetPacks.assetPackCreator.saveDraft') }}</button>
+      <button type="button" :disabled="!draft || editorBusy" @click="removeDraft">{{ $t('settings.assetPacks.assetPackCreator.deleteDraft') }}</button>
     </div>
 
     <template v-if="draft">
-      <label class="row"><span>Image scaling</span><select v-model="scaling"><option value="nearest">Pixel art / nearest</option><option value="linear">Smooth / linear</option></select></label>
-      <p class="hint">PNG files can be fitted to the required canvas. GIF files retain their original bytes and must already be 48×48 for skill icons, 64×64 for player sprites, or 782×452 for pitches.</p>
+      <label class="row"><span>{{ $t('settings.assetPacks.assetPackCreator.imageScaling') }}</span><select v-model="scaling"><option value="nearest">{{ $t('settings.assetPacks.assetPackCreator.pixelArtNearest') }}</option><option value="linear">{{ $t('settings.assetPacks.assetPackCreator.smoothLinear') }}</option></select></label>
+      <p class="hint">{{ $t('settings.assetPacks.assetPackCreator.pngFilesCanBe') }}</p>
       <details open>
-        <summary>Player sprites</summary>
-        <p class="hint">Choose a team and roster position by name. The saved mod uses their exact stable IDs, so names are never sent as targets.</p>
+        <summary>{{ $t('settings.assetPacks.assetPackCreator.playerSprites') }}</summary>
+        <p class="hint">{{ $t('settings.assetPacks.assetPackCreator.chooseATeamAnd') }}</p>
         <div class="target-grid">
-          <label>Team <select data-testid="sprite-team-select" :value="spriteTeamChoice" @change="chooseSpriteTeam">
-            <option v-for="team in knownTeams" :key="team.teamId" :value="team.teamId">{{ team.label }}</option>
-            <option :value="ADVANCED_TARGET">Advanced: enter a stable team ID</option>
+          <label>{{ $t('settings.assetPacks.assetPackCreator.team') }} <select data-testid="sprite-team-select" :value="spriteTeamChoice" @change="chooseSpriteTeam">
+            <option v-for="team in knownTeams" :key="team.teamId" :value="team.teamId">{{ assetTargetTeamLabel(team) }}</option>
+            <option :value="ADVANCED_TARGET">{{ $t('settings.assetPacks.assetPackCreator.advancedEnterAStable') }}</option>
           </select></label>
-          <label v-if="spriteTeamChoice === ADVANCED_TARGET" class="advanced-target">Stable team ID <input data-testid="sprite-team-id" v-model="spriteTeamId" spellcheck="false" /></label>
-          <label>Position <select data-testid="sprite-position-select" :value="spritePositionChoice" @change="chooseSpritePosition">
-            <option v-for="position in knownPositions" :key="position.positionId" :value="position.positionId">{{ position.label }}</option>
-            <option :value="ADVANCED_TARGET">Advanced: enter a stable position ID</option>
+          <label v-if="spriteTeamChoice === ADVANCED_TARGET" class="advanced-target">{{ $t('settings.assetPacks.assetPackCreator.stableTeamId') }} <input data-testid="sprite-team-id" v-model="spriteTeamId" spellcheck="false" /></label>
+          <label>{{ $t('settings.assetPacks.assetPackCreator.position') }} <select data-testid="sprite-position-select" :value="spritePositionChoice" @change="chooseSpritePosition">
+            <option v-for="position in knownPositions" :key="position.positionId" :value="position.positionId">{{ assetTargetPositionLabel(position) }}</option>
+            <option :value="ADVANCED_TARGET">{{ $t('settings.assetPacks.assetPackCreator.advancedEnterAStable2') }}</option>
           </select></label>
-          <label v-if="spritePositionChoice === ADVANCED_TARGET" class="advanced-target">Stable position ID <input data-testid="sprite-position-id" v-model="spritePositionId" spellcheck="false" /></label>
-          <button type="button" :disabled="editorBusy" @click="addPlayerSprite">Choose PNG or GIF…</button>
+          <label v-if="spritePositionChoice === ADVANCED_TARGET" class="advanced-target">{{ $t('settings.assetPacks.assetPackCreator.stablePositionId') }} <input data-testid="sprite-position-id" v-model="spritePositionId" spellcheck="false" /></label>
+          <button type="button" :disabled="editorBusy" @click="addPlayerSprite">{{ $t('settings.assetPacks.assetPackCreator.choosePngOrGif') }}</button>
         </div>
-        <div class="asset-row-table" aria-label="Player sprite upload rows">
-          <div class="asset-row asset-row-head"><strong>Position</strong><strong>Home</strong><strong>Away</strong></div>
+        <div class="asset-row-table" :aria-label="$t('settings.assetPacks.assetPackCreator.playerSpriteUploadRows')">
+          <div class="asset-row asset-row-head"><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.position') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.home') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.away') }}</strong></div>
           <div v-for="position in knownPositions" :key="position.positionId" class="asset-row">
-            <span>{{ position.label }}</span>
-            <button type="button" :disabled="editorBusy" @click="addPlayerSpriteFor('home', position.positionId)">Upload…</button>
-            <button type="button" :disabled="editorBusy" @click="addPlayerSpriteFor('away', position.positionId)">Upload…</button>
+            <span>{{ assetTargetPositionLabel(position) }}</span>
+            <button type="button" :disabled="editorBusy" @click="addPlayerSpriteFor('home', position.positionId)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
+            <button type="button" :disabled="editorBusy" @click="addPlayerSpriteFor('away', position.positionId)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
           </div>
         </div>
       </details>
       <details open>
-        <summary>Walk sheets (optional)</summary>
+        <summary>{{ $t('settings.assetPacks.assetPackCreator.walkSheetsOptional') }}</summary>
         <div class="target-grid">
-          <span>Use the player-sprite team and position target above.</span>
-          <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('any')">Choose walk sheet PNG…</button>
+          <span>{{ $t('settings.assetPacks.assetPackCreator.useThePlayerSprite') }}</span>
+          <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('any')">{{ $t('settings.assetPacks.assetPackCreator.chooseWalkSheetPng') }}</button>
         </div>
-        <div class="asset-row-table" aria-label="Walk sheet upload rows">
-          <div class="asset-row asset-row-head"><strong>Position</strong><strong>Home</strong><strong>Away</strong></div>
+        <div class="asset-row-table" :aria-label="$t('settings.assetPacks.assetPackCreator.walkSheetUploadRows')">
+          <div class="asset-row asset-row-head"><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.position') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.home') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.away') }}</strong></div>
           <div v-for="position in knownPositions" :key="position.positionId" class="asset-row">
-            <span>{{ position.label }}</span>
-            <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('home', position.positionId)">Upload…</button>
-            <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('away', position.positionId)">Upload…</button>
+            <span>{{ assetTargetPositionLabel(position) }}</span>
+            <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('home', position.positionId)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
+            <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('away', position.positionId)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
           </div>
         </div>
       </details>
       <details open>
-        <summary>Skill icons</summary>
+        <summary>{{ $t('settings.assetPacks.assetPackCreator.skillIcons') }}</summary>
         <div class="target-grid">
-          <label>Skill <select data-testid="skill-select" :value="skillChoice" @change="chooseSkill">
+          <label>{{ $t('settings.assetPacks.assetPackCreator.skill') }} <select data-testid="skill-select" :value="skillChoice" @change="chooseSkill">
             <option v-for="choice in SKILL_TARGET_CHOICES" :key="choice.id" :value="choice.id">{{ choice.label }}</option>
-            <option :value="ADVANCED_TARGET">Advanced: enter a canonical skill ID</option>
+            <option :value="ADVANCED_TARGET">{{ $t('settings.assetPacks.assetPackCreator.advancedEnterACanonical') }}</option>
           </select></label>
-          <label v-if="skillChoice === ADVANCED_TARGET" class="advanced-target">Canonical skill ID <input data-testid="skill-id" v-model="skill" spellcheck="false" /></label>
+          <label v-if="skillChoice === ADVANCED_TARGET" class="advanced-target">{{ $t('settings.assetPacks.assetPackCreator.canonicalSkillId') }} <input data-testid="skill-id" v-model="skill" spellcheck="false" /></label>
           <!-- Owner 09-10: the per-position skill-icon target is cut from the builder — icons bind to the skill (any position). -->
-          <label>Side <select v-model="skillSide"><option value="any">Any</option><option value="home">Home</option><option value="away">Away</option></select></label>
-          <button type="button" :disabled="editorBusy" @click="addSkillIcon">Choose PNG or GIF…</button>
+          <label>{{ $t('settings.assetPacks.assetPackCreator.side') }} <select v-model="skillSide"><option value="any">{{ $t('settings.assetPacks.assetPackCreator.any') }}</option><option value="home">{{ $t('settings.assetPacks.assetPackCreator.home') }}</option><option value="away">{{ $t('settings.assetPacks.assetPackCreator.away') }}</option></select></label>
+          <button type="button" :disabled="editorBusy" @click="addSkillIcon">{{ $t('settings.assetPacks.assetPackCreator.choosePngOrGif') }}</button>
         </div>
-        <div class="asset-row-table skill-row-table" aria-label="Skill icon upload rows">
-          <div class="asset-row asset-row-head"><strong>Skill</strong><strong>Target</strong><strong>Icon</strong></div>
+        <div class="asset-row-table skill-row-table" :aria-label="$t('settings.assetPacks.assetPackCreator.skillIconUploadRows')">
+          <div class="asset-row asset-row-head"><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.skill') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.target') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.icon') }}</strong></div>
           <div v-for="choice in SKILL_TARGET_CHOICES" :key="choice.id" class="asset-row">
             <span>{{ choice.label }}</span>
             <small>{{ skillSide }}</small>
-            <button type="button" :disabled="editorBusy" @click="addSkillIconFor(choice.id)">Upload…</button>
+            <button type="button" :disabled="editorBusy" @click="addSkillIconFor(choice.id)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
           </div>
         </div>
       </details>
       <details open>
-        <summary>Sounds</summary>
+        <summary>{{ $t('settings.assetPacks.assetPackCreator.sounds') }}</summary>
         <div class="target-grid">
-          <label>Event <select v-model="soundEventId"><option v-for="sound in SOUND_CATALOG" :key="sound.id" :value="sound.id">{{ sound.label }}</option></select></label>
-          <button type="button" :disabled="editorBusy" @click="addSound">Choose OGG, WAV, or MP3…</button>
-          <button v-if="!props.builderMode" type="button" @click="previewSound(soundEventId)">Preview active sound</button>
+          <label>{{ $t('settings.assetPacks.assetPackCreator.event') }} <select v-model="soundEventId"><option v-for="sound in SOUND_CATALOG" :key="sound.id" :value="sound.id">{{ sound.label }}</option></select></label>
+          <button type="button" :disabled="editorBusy" @click="addSound">{{ $t('settings.assetPacks.assetPackCreator.chooseOggWavOr') }}</button>
+          <button v-if="!props.builderMode" type="button" @click="previewSound(soundEventId)">{{ $t('settings.assetPacks.assetPackCreator.previewActiveSound') }}</button>
         </div>
-        <div class="asset-row-table sound-row-table" aria-label="Sound event upload rows">
-          <div class="asset-row asset-row-head"><strong>Event</strong><strong>Preview</strong><strong>File</strong></div>
+        <div class="asset-row-table sound-row-table" :aria-label="$t('settings.assetPacks.assetPackCreator.soundEventUploadRows')">
+          <div class="asset-row asset-row-head"><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.event') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.preview') }}</strong><strong>{{ $t('settings.assetPacks.assetRow.assetPackCreator.file') }}</strong></div>
           <div v-for="sound in SOUND_CATALOG" :key="sound.id" class="asset-row">
             <span>{{ sound.label }}</span>
-            <button v-if="!props.builderMode" type="button" @click="previewSound(sound.id)">Play</button>
-            <span v-else class="builder-preview-note">Preview after upload</span>
-            <button type="button" :disabled="editorBusy" @click="addSoundFor(sound.id)">Upload…</button>
+            <button v-if="!props.builderMode" type="button" @click="previewSound(sound.id)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.play') }}</button>
+            <span v-else class="builder-preview-note">{{ $t('settings.assetPacks.assetRow.assetPackCreator.previewAfterUpload') }}</span>
+            <button type="button" :disabled="editorBusy" @click="addSoundFor(sound.id)">{{ $t('settings.assetPacks.assetRow.assetPackCreator.upload') }}</button>
           </div>
         </div>
       </details>
       <details open>
-        <summary>Pitches</summary>
-        <p class="hint">One pitch can cover any combination of weather states. It is normalized to the renderer's 782×452 pitch canvas.</p>
+        <summary>{{ $t('settings.assetPacks.assetPackCreator.pitches') }}</summary>
+        <p class="hint">{{ $t('settings.assetPacks.assetPackCreator.onePitchCanCover') }}</p>
         <div class="target-grid">
-          <label>Pitch family <select v-model="pitchThemeId">
-            <option value="fumbbl-default">Default</option>
-            <option value="fumbbl-basic">Basic</option>
-            <option value="fumbbl-blackbox">Blackbox</option>
-            <option value="fumbbl-fumbblcup">Cup</option>
-            <option value="fumbbl-chaos">Chaos</option>
-            <option value="fumbbl-darkelf">Dark Elf</option>
-            <option value="fumbbl-goblin">Goblin</option>
-            <option value="fumbbl-khorne">Khorne</option>
-            <option value="fumbbl-necromantic">Necromantic</option>
-            <option value="fumbbl-norse">Norse</option>
-            <option value="fumbbl-nurgle">Nurgle</option>
-            <option value="fumbbl-skaven">Skaven</option>
-            <option value="fumbbl-slaanesh">Slaanesh</option>
-            <option value="fumbbl-tzeentch">Tzeentch</option>
-            <option value="fumbbl-vampire">Vampire</option>
+          <label>{{ $t('settings.assetPacks.assetPackCreator.pitchFamily') }} <select v-model="pitchThemeId">
+            <option value="fumbbl-default">{{ $t('settings.assetPacks.assetPackCreator.default') }}</option>
+            <option value="fumbbl-basic">{{ $t('settings.assetPacks.assetPackCreator.basic') }}</option>
+            <option value="fumbbl-blackbox">{{ $t('settings.assetPacks.assetPackCreator.blackbox') }}</option>
+            <option value="fumbbl-fumbblcup">{{ $t('settings.assetPacks.assetPackCreator.cup') }}</option>
+            <option value="fumbbl-chaos">{{ $t('settings.assetPacks.assetPackCreator.chaos') }}</option>
+            <option value="fumbbl-darkelf">{{ $t('settings.assetPacks.assetPackCreator.darkElf') }}</option>
+            <option value="fumbbl-goblin">{{ $t('settings.assetPacks.assetPackCreator.goblin') }}</option>
+            <option value="fumbbl-khorne">{{ $t('settings.assetPacks.assetPackCreator.khorne') }}</option>
+            <option value="fumbbl-necromantic">{{ $t('settings.assetPacks.assetPackCreator.necromantic') }}</option>
+            <option value="fumbbl-norse">{{ $t('settings.assetPacks.assetPackCreator.norse') }}</option>
+            <option value="fumbbl-nurgle">{{ $t('settings.assetPacks.assetPackCreator.nurgle') }}</option>
+            <option value="fumbbl-skaven">{{ $t('settings.assetPacks.assetPackCreator.skaven') }}</option>
+            <option value="fumbbl-slaanesh">{{ $t('settings.assetPacks.assetPackCreator.slaanesh') }}</option>
+            <option value="fumbbl-tzeentch">{{ $t('settings.assetPacks.assetPackCreator.tzeentch') }}</option>
+            <option value="fumbbl-vampire">{{ $t('settings.assetPacks.assetPackCreator.vampire') }}</option>
           </select></label>
           <fieldset class="weather-checks">
-            <legend>Weather</legend>
+            <legend>{{ $t('settings.assetPacks.weather.weather') }}</legend>
             <label v-for="weather in weatherChoices" :key="weather.id">
-              <input v-model="pitchWeathers" type="checkbox" :value="weather.id" /> {{ weather.label }}
+              <input v-model="pitchWeathers" type="checkbox" :value="weather.id" /> {{ terms(weather.label) }}
             </label>
           </fieldset>
-          <button type="button" :disabled="editorBusy || !pitchWeathers.length" @click="addPitch">Choose pitch PNG or GIF…</button>
+          <button type="button" :disabled="editorBusy || !pitchWeathers.length" @click="addPitch">{{ $t('settings.assetPacks.assetPackCreator.choosePitchPngOr') }}</button>
         </div>
       </details>
 
@@ -626,21 +633,21 @@ onMounted(() => { void run(() => reloadDrafts()); });
           <img v-if="item.mime.startsWith('image/')" :src="item.previewUrl" alt="" />
           <audio v-else :src="item.previewUrl" controls preload="metadata" />
           <span><strong>{{ item.kind }}</strong><br />{{ targetLabel(item) }}<br /><small>{{ formatPackSize(item.sizeBytes) }}</small></span>
-          <button type="button" @click="removeItem(item)">Remove</button>
+          <button type="button" @click="removeItem(item)">{{ $t('settings.assetPacks.assetPackCreator.remove') }}</button>
         </article>
       </div>
 
       <div v-for="section in exportSections" :key="section.key" class="publish-row">
         <span>{{ section.label }}</span>
-        <button v-if="!props.builderMode" type="button" :disabled="editorBusy" @click="applySection(section.key)">Apply now</button>
-        <button type="button" :disabled="editorBusy" @click="exportSection(section.key)">Export .f40kmod…</button>
+        <button v-if="!props.builderMode" type="button" :disabled="editorBusy" @click="applySection(section.key)">{{ $t('settings.assetPacks.publishRow.assetPackCreator.applyNow') }}</button>
+        <button type="button" :disabled="editorBusy" @click="exportSection(section.key)">{{ $t('settings.assetPacks.publishRow.assetPackCreator.exportF40kmod') }}</button>
       </div>
     </template>
-    <p v-if="editorBusy" class="hint" role="status">Working…</p>
+    <p v-if="editorBusy" class="hint" role="status">{{ $t('settings.assetPacks.assetPackCreator.working') }}</p>
     <div v-if="importedPack" class="import-apply-prompt" role="status" aria-live="polite">
-      <span>{{ importedPack.name }} {{ importedPack.version }} installed. Apply it now for {{ importedPackCapabilities.join(', ') }}?</span>
-      <button type="button" class="import-apply-yes" :disabled="editorBusy" @click="applyImportedPack">Apply</button>
-      <button type="button" class="import-apply-no" :disabled="editorBusy" @click="dismissImportedPack">Not now</button>
+      <span>{{ $t('settings.assetPacks.importApplyPrompt.assetPackCreator.nameVersionInstalledApply', { name: importedPack.name, version: importedPack.version, p2: importedPackCapabilities.join(', ') }) }}</span>
+      <button type="button" class="import-apply-yes" :disabled="editorBusy" @click="applyImportedPack">{{ $t('settings.assetPacks.importApplyPrompt.assetPackCreator.apply') }}</button>
+      <button type="button" class="import-apply-no" :disabled="editorBusy" @click="dismissImportedPack">{{ $t('settings.assetPacks.importApplyPrompt.assetPackCreator.notNow') }}</button>
     </div>
     <p v-if="editorNotice" class="hint asset-pack-ok" role="status">{{ editorNotice }}</p>
     <p v-if="editorError || assetMods.error" class="hint asset-pack-error" role="alert">{{ editorError || assetMods.error }}</p>

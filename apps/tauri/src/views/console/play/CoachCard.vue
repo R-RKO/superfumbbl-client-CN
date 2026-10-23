@@ -23,6 +23,7 @@ import { computed, ref, watch } from 'vue';
 import DisplayCaps from '../../../components/DisplayCaps.vue';
 import CoachBadge from './CoachBadge.vue';
 import { settings } from '../../../game/settings';
+import { t } from '../../../i18n';
 import { coachProfileStatItems, coachProfileStatParts, coachTitleBadgeUrl, coachTitleSlug, type FumbblCoachProfile } from '../../../game/fumbblCoachProfile';
 
 const props = defineProps<{ name: string; profile: FumbblCoachProfile | null }>();
@@ -38,7 +39,7 @@ const stats = computed(() => coachProfileStatParts(props.profile).join(' · '));
 /** The parts, the WAR one carrying its "wins above a .500 coach" description (owner 10-21). */
 const statItems = computed(() => coachProfileStatItems(props.profile));
 /** The full, untruncated card for assistive tech (the visible rows clip with an ellipsis; Astra P3). */
-const ariaLabel = computed(() => ['FUMBBL coach', displayName.value, title.value, stats.value].filter(Boolean).join(', '));
+const ariaLabel = computed(() => [t('coachCard.ariaFumbblCoach'), displayName.value, title.value, stats.value].filter(Boolean).join(', '));
 </script>
 
 <template>

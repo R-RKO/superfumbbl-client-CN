@@ -22,6 +22,7 @@ import {
   wideRailPreActionModeForPlayerAction,
   type WideRailPreActionRuleId,
 } from './wideRailPreAction';
+import { t, data } from '../../i18n';
 
 /** declare = clientActingPlayer{action}; endMove = clientActingPlayer{playerId:null}. */
 export type CoachActionKind = 'declare' | 'endMove';
@@ -139,24 +140,24 @@ export function blockAttackPreview(game: GameJson, defenderId: string, kind: Blo
   const armourTarget = blockAlternativeArmourTarget(game, defenderId, kind);
   switch (kind) {
     case 'stab':
-      return { kind, title: 'STAB!', emoji: BLOCK_KIND_EMOJI[kind], activationTarget: null, armourTarget, detail: 'Armour roll' };
+      return { kind, get title() { return t('hud.actions.text.stab'); }, emoji: BLOCK_KIND_EMOJI[kind], activationTarget: null, armourTarget, get detail() { return t('hud.actions.text.armourRoll'); } };
     case 'chainsaw':
       return {
-        kind, title: 'CHAINSAW!', emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 2, armourTarget,
-        detail: hasSkill(game, defenderId, 'Iron Hard Skin') ? 'Kickback on 1 · Iron Hard Skin cancels +3 AV' : 'Kickback on 1 · +3 to armour',
+        kind, get title() { return t('hud.actions.text.chainsaw'); }, emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 2, armourTarget,
+        detail: hasSkill(game, defenderId, 'Iron Hard Skin') ? t('hud.actions.text.kickbackOn1Iron') : t('hud.actions.text.kickbackOn13'),
       };
     case 'vomit':
-      return { kind, title: 'VOMIT!', emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 2, armourTarget, detail: 'On 1, the attacker is hit instead' };
+      return { kind, get title() { return t('hud.actions.text.vomit'); }, emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 2, armourTarget, get detail() { return t('hud.actions.text.on1TheAttacker'); } };
     case 'breatheFire': {
       const defender = findRosterPlayer(game, defenderId);
       const strongOpponent = defender ? effectiveStat(defender, 'ST') > 4 : false;
       return {
-        kind, title: 'BREATHE FIRE!', emoji: BLOCK_KIND_EMOJI[kind], activationTarget: strongOpponent ? 3 : 2, armourTarget,
-        detail: `1: attacker down · ${strongOpponent ? 5 : 4}+: target prone · 6: knockdown + armour`,
+        kind, get title() { return t('hud.actions.text.breatheFire'); }, emoji: BLOCK_KIND_EMOJI[kind], activationTarget: strongOpponent ? 3 : 2, armourTarget,
+        get detail() { return t('hud.actions.text.n1AttackerDownP0', { p0: strongOpponent ? 5 : 4 }); },
       };
     }
     case 'chomp':
-      return { kind, title: 'CHOMP!', emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 3, armourTarget: null, detail: 'Pins the target on success' };
+      return { kind, get title() { return t('hud.actions.text.chomp'); }, emoji: BLOCK_KIND_EMOJI[kind], activationTarget: 3, armourTarget: null, get detail() { return t('hud.actions.text.pinsTheTargetOn'); } };
   }
 }
 
@@ -577,13 +578,13 @@ export function actingHasActed(game: GameJson, playerId: string): boolean {
  *  StepInitSelecting clears standingUp; ActingPlayer.hasActed() is false until a step, block, foul, pass or skill
  *  use). The End row says so. Once the player has acted it is a real End Activation. */
 export function endActivationRowLabel(game: GameJson | null | undefined, playerId: string | null | undefined, commandUnanswered = false): string {
-  if (!game || !playerId || commandUnanswered) return 'End Activation';
+  if (!game || !playerId || commandUnanswered) return t('hud.actions.text.endActivation');
   const acting = game.actingPlayer as { playerId?: string | null; currentMove?: number; standingUp?: boolean } | undefined;
-  if (String(acting?.playerId ?? '') !== playerId) return 'End Activation';
+  if (String(acting?.playerId ?? '') !== playerId) return t('hud.actions.text.endActivation');
   // Movement already spent without the stand-up flag is a step taken, whatever the hasMoved flag says (belt and braces:
   // the 3 MA of a pending stand-up are not a step).
   const stepped = (Number(acting?.currentMove) || 0) > 0 && acting?.standingUp !== true;
-  return actingHasActed(game, playerId) || stepped ? 'End Activation' : 'Cancel Activation';
+  return actingHasActed(game, playerId) || stepped ? t('hud.actions.text.endActivation') : t('hud.actions.text.cancelActivation');
 }
 
 /** PlayerState.hasTacklezones():230-233 — base STANDING|MOVING|BLOCKED, not confused, not hypnotized. */
@@ -913,8 +914,8 @@ export function furiousOutburstCoordinatePrompt(game: GameJson): string | null {
     ? game.fieldModel.playerDataArray.find((player) => player.playerId === defenderId)
     : null;
   return defender && (Number(defender.playerState ?? 0) & 0x01000) !== 0
-    ? 'Select square to stab from'
-    : 'Select square to end in';
+    ? t('hud.actions.text.selectSquareToStab')
+    : t('hud.actions.text.selectSquareToEnd');
 }
 
 type BombPromptActing = {
@@ -934,7 +935,7 @@ export function allYouCanEatSecondBombPrompt(game: GameJson, playerId: string): 
   if (acting?.hasPassed === true || acting?.mustCompleteAction !== true || game.passCoordinate) return null;
   const used = findUsedSkills(game, playerId).map((s) => s.toLowerCase().replace(/[^a-z]/g, ''));
   return used.includes('allyoucaneat') && hasSkill(game, playerId, 'All You Can Eat')
-    ? 'All You Can Eat - throw the second bomb: select a target square'
+    ? t('hud.actions.text.allYouCanEat')
     : null;
 }
 
@@ -958,7 +959,7 @@ export function caughtBombThrowPrompt(game: GameJson, playerId: string): string 
     ...((game.teamAway as { playerArray?: { playerId: string; playerName?: string }[] })?.playerArray ?? []),
   ];
   const name = roster.find((p) => p.playerId === playerId)?.playerName;
-  return `${name || 'Your player'} has the bomb - select a square to throw it`;
+  return t('hud.actions.text.p0HasTheBomb', { p0: name || 'Your player' });
 }
 
 /**
@@ -1532,7 +1533,7 @@ export function jumpActionOffer(
     && !!(game.actingPlayer as { leaping?: boolean } | undefined)?.leaping;
   return {
     action: 'jump',
-    label: leaping ? `Don't ${verb}` : verb,
+    label: leaping ? t('hud.actions.text.donTVerb', { verb }) : verb,
     kind: 'declare',
     enabled: true,
   };
@@ -1549,7 +1550,7 @@ export function onTheBallReactionAvailability(game: GameJson): { jumpAvailable: 
   const jump = jumpAvailable(game, actingId);
   return {
     jumpAvailable: jump,
-    boundingLeapSkill: jump && hasUnusedSkillNamed(game, actingId, 'Bounding Leap') ? 'Bounding Leap' : null,
+    boundingLeapSkill: jump && hasUnusedSkillNamed(game, actingId, 'Bounding Leap') ? data('Bounding Leap') : null,
   };
 }
 
@@ -2696,7 +2697,7 @@ function hasBigGuyActivationNegatrait(game: GameJson, playerId: string): boolean
  *  `Roll Bone Head & End Activation`, several negatraits joined with ` / `, `Roll & End Activation` if none is readable. */
 export function bigGuyRollEndLabel(game: GameJson | null | undefined, playerId: string): string {
   const owned = game && playerId ? BIG_GUY_ACTIVATION_NEGATRAITS.filter((skill) => hasSkill(game, playerId, skill)) : [];
-  return owned.length ? `Roll ${owned.join(' / ')} & End Activation` : 'Roll & End Activation';
+  return owned.length ? t('hud.actions.text.rollP0EndActivation', { p0: owned.join(' / ') }) : t('hud.actions.text.rollEndActivation');
 }
 
 /** SECURE THE BALL availability — a FAITHFUL port of upstream LogicModule.isSecureTheBallActionAvailable:332
@@ -2763,7 +2764,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
   if (ctx.bigGuyActivateRollPlayerId !== undefined
       && standing && !negativeState && isBigGuy(game, playerId) && hasBigGuyActivationNegatrait(game, playerId)) {
     out.push({
-      action: 'move', label: 'Activate', kind: 'declare', enabled: true, ruleId: BIG_GUY_ACTIVATE_RULE_ID,
+      action: 'move', get label() { return t('hud.actions.text.activate'); }, kind: 'declare', enabled: true, ruleId: BIG_GUY_ACTIVATE_RULE_ID,
       reason: 'Roll on the first step, or when you end the activation without moving',
     });
   }
@@ -2785,7 +2786,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
   const recoverFromGaze = !!(ps & FLAG_HYPNOTIZED) && !preventsRecoverFromGaze(game, playerId);
   const recoverFromEyeGouge = !!(ps & FLAG_EYE_GOUGED) && !!(ps & FLAG_ACTIVE);
   if (!prone && (recoverFromConfusion || recoverFromGaze || recoverFromEyeGouge)) {
-    out.push({ action: 'removeConfusion', label: 'Recover', kind: 'declare', enabled: true });
+    out.push({ action: 'removeConfusion', get label() { return t('hud.actions.text.recover'); }, kind: 'declare', enabled: true });
   }
   // A prone player may Stand Up (stand and stop). Upstream ALSO offers MOVE and BLITZ from prone —
   // isMoveActionAvailable/isBlitzActionAvailable gate on PlayerState.isAbleToMove() which is TRUE for
@@ -2804,13 +2805,13 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // Owner ruling 08-17 (supersedes 2026-08-05 label-prefix): a prone free-stand (Jump Up) no longer prefixes
     // row text — it renders the skill icon inline, MOVE ROW ONLY. Other rows below are plain labels again.
     const jumpUpFreeStand = prone && canStandUpForFree(game, playerId);
-    out.push({ action: 'move', label: 'Move', kind: 'declare', enabled: true, icon: jumpUpFreeStand ? 'Jump Up' : undefined });
+    out.push({ action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, icon: jumpUpFreeStand ? 'Jump Up' : undefined });
     // Owner 08-24: Pogo/Leap are first-class activation choices, not acting-player-only UI decorations. Selecting
     // this row sends Move with leaping=true; ordinary Jump appears here only when a down adjacent player enables it.
     const jump = jumpActionOffer(game, playerId, 'activation');
     if (jump) out.push(jump);
     // #187: Move leads; Stand-up-and-End follows (prone-only; the distinct stand-&-END item vs a bare Move = stand-and-walk, #97).
-    if (prone) out.push({ action: 'standUp', label: 'Stand up and End Activation', kind: 'declare', enabled: true });
+    if (prone) out.push({ action: 'standUp', get label() { return t('hud.actions.text.standUpAndEnd'); }, kind: 'declare', enabled: true });
     // Owner 2026-07-14 (#12): a PRONE player gets the full MOVE-FAMILY declare set, not just Stand Up + Move —
     // upstream's availability predicates make Foul/Pass/Hand-off/Gaze/Throw-Team-Mate available from prone (the
     // server folds the 3-MA stand-up into the action). Cited vs LogicModule.java: isFoulActionAvailable (L355 —
@@ -2836,7 +2837,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // #183/BA-1 (Meero SR-173): the `'blitz'` (Blitz! kickoff) turnMode forbids a standalone Block — gate the branch,
     // which also covers the property-keyed alternatives and the separate Chomp entry below.
     if (blockActionAllowed(game) && (standing || (prone && canStandUpForFree(game, playerId))) && adjacentBlockableEnemyIds(game, playerId).length > 0) {
-      out.push({ action: 'block', label: 'Block', kind: 'declare', enabled: true });
+      out.push({ action: 'block', get label() { return t('hud.actions.text.block'); }, kind: 'declare', enabled: true });
       // #207/SR-241: the four block-alternative rows use the same property-keyed offer set as the Blitz chooser.
       // Every row still declares NORMAL `block`; only the later clientBlock's existing USING_* flag changes.
       for (const offer of blockAlternativeOffers(game, playerId)) {
@@ -2873,23 +2874,23 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     const kickEmBlitzOk = kickEmBlitzAvailable(game, playerId);
     const furiousOutburstOk = furiousOutburstAvailable(game, playerId);
     const thenIStartedBlastinOk = thenIStartedBlastinAvailable(game, playerId);
-    if (viciousVinesOk) out.push({ action: 'viciousVines', label: 'Vicious Vines', kind: 'declare', enabled: true });
-    if (theFlashingBladeOk) out.push({ action: 'theFlashingBlade', label: 'The Flashing Blade', kind: 'declare', enabled: true });
+    if (viciousVinesOk) out.push({ action: 'viciousVines', get label() { return t('hud.actions.text.viciousVines'); }, kind: 'declare', enabled: true });
+    if (theFlashingBladeOk) out.push({ action: 'theFlashingBlade', get label() { return t('hud.actions.text.theFlashingBlade'); }, kind: 'declare', enabled: true });
     // Beer Barrel Bash! (Meero SR-154): a plain top-level declare, `throwKey` (the upstream `PlayerAction.THROW_KEG`
     // JSON key — an upstream TYPO, sent verbatim). Enters the THROW_KEG state; Fives' target-arm sends
     // CLIENT_THROW_KEG{target} on the target click (co-land seam, cross-referenced). ⚠ leaping fidelity: the generic
     // `declareAction` send passes `leaping: isJumping()` while upstream passes false for the keg — these AGREE
     // because a fresh select-menu declare has no jump toggled (isJumping reads the mid-move leaping flag, which is
     // clear before the first move); checked, not assumed, per the invisible-divergence lesson this seam taught.
-    if (beerBarrelBashOk) out.push({ action: 'throwKey', label: 'Throw Keg', kind: 'declare', enabled: true });
+    if (beerBarrelBashOk) out.push({ action: 'throwKey', get label() { return t('hud.actions.text.throwKeg'); }, kind: 'declare', enabled: true });
     // Star S8 SELECT declares (bb2025 SelectLogicModule:80-87/:212-244): each sends its exact PlayerAction wire
     // token via the generic declare (leaping=false, matching upstream's literal `false` argument). Blastin' is
     // the pair declare — declareAction chases the acting-player command with the skill's CLIENT_USE_SKILL
     // (SelectLogicModule:240-244); the server flips turnMode:thenIStartedBlastin for the target beat.
-    if (kickEmBlockOk) out.push({ action: 'kickEmBlock', label: "Kick 'Em", kind: 'declare', enabled: true });
-    if (kickEmBlitzOk) out.push({ action: 'kickEmBlitz', label: "Kick 'em - Blitz", kind: 'declare', enabled: true });
-    if (furiousOutburstOk) out.push({ action: 'furiousOutburst', label: 'Furious Outburst', kind: 'declare', enabled: true });
-    if (thenIStartedBlastinOk) out.push({ action: 'thenIStartedBlastin', label: "Blastin' Solves Everything", kind: 'declare', enabled: true });
+    if (kickEmBlockOk) out.push({ action: 'kickEmBlock', get label() { return t('hud.actions.text.kickEm'); }, kind: 'declare', enabled: true });
+    if (kickEmBlitzOk) out.push({ action: 'kickEmBlitz', get label() { return t('hud.actions.text.kickEmBlitz'); }, kind: 'declare', enabled: true });
+    if (furiousOutburstOk) out.push({ action: 'furiousOutburst', get label() { return t('hud.actions.text.furiousOutburst'); }, kind: 'declare', enabled: true });
+    if (thenIStartedBlastinOk) out.push({ action: 'thenIStartedBlastin', get label() { return t('hud.actions.text.blastinSolvesEverything'); }, kind: 'declare', enabled: true });
     // #58 (SR-54): MULTIPLE BLOCK — a `canBlockTwoAtOnce` carrier (the BB2025 "Multiple Block" skill) with >1
     // adjacent blockable opponent may block TWO at once. Mirrors upstream `isMultiBlockActionAvailable`
     // (LogicModule.java:300-316), NARROWED to the canBlockTwoAtOnce limb only — CITE-THE-MECHANISM (ML-9): the
@@ -2906,7 +2907,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
         && (standing || (prone && canStandUpForFree(game, playerId)))
         && hasSkill(game, playerId, 'Multiple Block') // canBlockTwoAtOnce grantor; canceller-set = {} (BB2025: nothing cancels it)
         && adjacentBlockableEnemyIds(game, playerId).length > 1) {
-      out.push({ action: 'multipleBlock', label: 'Multiple Block', kind: 'declare', enabled: true });
+      out.push({ action: 'multipleBlock', get label() { return t('hud.actions.text.multipleBlock'); }, kind: 'declare', enabled: true });
     }
     // A.4 BLITZ: Move + one block if the team hasn't blitzed this turn AND a standing enemy sits within move
     // distance (owner o66ad #8 — no dead Blitz declare when nobody's reachable). Declare `blitzMove`; the server
@@ -2916,7 +2917,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
       // Fork StepEndSelecting: standUpBlitz → setBlitzUsed + endGenerator = "stand up AND END blitz" (skill-gated,
       // ends the activation — the owner-observed bug). blitzMove → blitzMoveGenerator = the real move+block, with
       // the 3-MA stand-up folded into the first squares. So the SAME declare stands + walks + blocks from prone.
-      out.push({ action: 'blitzMove', label: 'Blitz', kind: 'declare', enabled: true });
+      out.push({ action: 'blitzMove', get label() { return t('hud.actions.text.blitz'); }, kind: 'declare', enabled: true });
     }
     // HYPNOTIC GAZE (owner o66al): a player carrying the skill may GAZE — verbatim-shaped on upstream's blitz
     // (SelectLogicModule bb2025: `case GAZE → sendActingPlayer(GAZE_MOVE)`; GazeMoveLogicModule extends
@@ -2924,7 +2925,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // server roll). Offered for a standing gazer with a standing enemy within move distance (same gate as Blitz).
     if (chargeRestrictedSpecialActionAllowed(game)
         && hasSkill(game, playerId, 'hypnoticGaze') && blitzableEnemyExists(game, playerId, p)) {
-      out.push({ action: 'gazeMove', label: 'Hypnotic Gaze', kind: 'declare', enabled: true });
+      out.push({ action: 'gazeMove', get label() { return t('hud.actions.text.hypnoticGaze'); }, kind: 'declare', enabled: true });
     }
     // FOUL (owner o66j #8 + o66r #6/#12): a standing player may Foul once per turn (foulUsed) whenever a DOWN
     // enemy exists to WALK to — NOT only when already adjacent (that blocked walk-to-foul). Declared `foulMove`
@@ -2937,14 +2938,14 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
       // Owner 09-28 (Spec S4, UAT #4): the label alone tells the coach WHY a second foul is legal — the action
       // token (`foulMove`), enablement and wire are unchanged. Consumers must keep matching on `action`, never
       // on this label text (audited: order66Interaction/moveRail/coachBrain all match `foulMove`, never 'Foul').
-      const foulLabel = hasSkill(game, playerId, 'Sneakiest of the Lot') ? 'Foul - Sneakiest of the Lot' : 'Foul';
+      const foulLabel = hasSkill(game, playerId, 'Sneakiest of the Lot') ? t('hud.actions.foulLabel.foulSneakiestOfThe') : 'Foul';
       // S42: the server has ONE foul declare; the chainsaw is a flag on the terminal clientFoul. A Chainsaw carrier
       // therefore gets two rows on the same `foulMove` token, and the row picked is the coach's Foul / Chainsaw choice.
       // P0 10-18 (owner: "Users should be offered Foul (Chainsaw) on the context menu"): the chainsaw row LEADS and reads
       // "Foul (Chainsaw)" (a Looney's foul went out without the saw - g1954531 #322; which control produced the plain pick
       // is not recorded, Astra); the plain row follows.
       if (ctx.foulVariants === true && hasSkill(game, playerId, 'Chainsaw')) {
-        out.push({ action: 'foulMove', label: `${foulLabel} (Chainsaw)`, kind: 'declare', enabled: true, usingChainsaw: true });
+        out.push({ action: 'foulMove', get label() { return t('hud.actions.text.foullabelChainsaw', { foulLabel }); }, kind: 'declare', enabled: true, usingChainsaw: true });
         out.push({ action: 'foulMove', label: foulLabel, kind: 'declare', enabled: true, usingChainsaw: false });
       } else {
         out.push({ action: 'foulMove', label: foulLabel, kind: 'declare', enabled: true });
@@ -2966,7 +2967,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     if (ballAvailable) {
       const regularPassAvailable = !teamTurnFlag(game, side, 'passUsed') && !preventsRegularPassOrHandOver(game, playerId);
       if (regularPassAvailable) {
-        out.push({ action: 'passMove', label: `Pass${treacherousSuffix}`, kind: 'declare', enabled: true });
+        out.push({ action: 'passMove', get label() { return t('hud.actions.text.passTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
         // Owner 08-21: Shot to Nothing is elected only after the ordinary Pass declaration's exact
         // server echo. It is deliberately absent here: no second declaration row and no pre-ack use.
       }
@@ -2991,12 +2992,12 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
         && (ableToMove || isBallCarrier(game, playerId) || treacherous) // S7: :391 `|| treacherousAvailable`
         && (!prone || gameOptionEnabled(game, 'allowSpecialActionsFromProne'))
         && !preventsPuntAction(game, playerId)) {
-      out.push({ action: 'puntMove', label: `Punt${treacherousSuffix}`, kind: 'declare', enabled: true });
+      out.push({ action: 'puntMove', get label() { return t('hud.actions.text.puntTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
     }
     if (ballAvailable
         && !teamTurnFlag(game, side, 'handOverUsed')
         && !preventsRegularPassOrHandOver(game, playerId)) {
-      out.push({ action: 'handOverMove', label: `Hand-off${treacherousSuffix}`, kind: 'declare', enabled: true });
+      out.push({ action: 'handOverMove', get label() { return t('hud.actions.text.handOffTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
     }
     // THROW BOMB (Bombardier) — verified vs upstream LogicModule.isThrowBombActionAvailable (L319-329):
     // standing (!isProneOrStunned) + the enableThrowBombAction skill property (Bombardier) + !turnData.bombUsed
@@ -3006,19 +3007,19 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // target click rides CLIENT_PASS (sendPassTarget) — the same command playerThrowBomb sends.
     if (chargeRestrictedSpecialActionAllowed(game)
         && standing && hasSkill(game, playerId, 'bombardier') && !teamTurnFlag(game, side, 'bombUsed')) {
-      out.push({ action: 'throwBomb', label: 'Throw Bomb', kind: 'declare', enabled: true });
+      out.push({ action: 'throwBomb', get label() { return t('hud.actions.text.throwBomb'); }, kind: 'declare', enabled: true });
       // Star S7: SelectLogicModule(bb2025):293-297 — BOMB available + unused canGainHailMary ⇒
       // SHOT_TO_NOTHING_BOMB. Composite: throwBomb declare + paired use-skill (store). No treacherous
       // label influence on the bomb variant (ClientStateSelect(bb2025):323-339 renames pass-side rows only).
       if (hasUnusedGrantor(game, playerId, [SHOT_TO_NOTHING_SKILL])) {
-        out.push({ action: 'shotToNothingBomb', label: 'Shot to Nothing Bomb', kind: 'declare', enabled: true, ruleId: 'shotToNothing' });
+        out.push({ action: 'shotToNothingBomb', get label() { return t('hud.actions.text.shotToNothingBomb'); }, kind: 'declare', enabled: true, ruleId: 'shotToNothing' });
       }
     }
     // ALL YOU CAN EAT (#223b): a separate top-level commitment before bomb one. Upstream SelectLogicModule:207-209
     // sends ALL_YOU_CAN_EAT with leaping=false. The generic declare's isJumping() agrees for this fresh select-menu
     // declare: no jump has been toggled before the activation's first move, so the server-synced leaping flag is false.
     if (allYouCanEatAvailable(game, playerId)) {
-      out.push({ action: 'allYouCanEat', label: 'All You Can Eat — Two Bombs', kind: 'declare', enabled: true });
+      out.push({ action: 'allYouCanEat', get label() { return t('hud.actions.text.allYouCanEat2'); }, kind: 'declare', enabled: true });
     }
     // THROW TEAM-MATE (owner o66am, PASS-rail — verified vs upstream SelectLogicModule bb2025 'case
     // THROW_TEAM_MATE -> sendActingPlayer(THROW_TEAM_MATE_MOVE)'; ThrowTeamMateLogicModule extends MoveLogicModule).
@@ -3033,14 +3034,14 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // `{"modelChangeId":"turnDataSetTtmUsed","modelChangeKey":"home"/"away",...}` for BOTH sides. KTM already had
     // its `ktmUsed` gate (below, pre-existing) — TTM was the sole gap in the once-per-turn class.
     if (!teamTurnFlag(game, side, 'ttmUsed') && hasSkill(game, playerId, 'throwTeamMate') && hasThrowableTeammate(game, playerId)) {
-      out.push({ action: 'throwTeamMateMove', label: 'Throw Team-Mate', kind: 'declare', enabled: true });
+      out.push({ action: 'throwTeamMateMove', get label() { return t('hud.actions.text.throwTeamMate'); }, kind: 'declare', enabled: true });
     }
     // BB2025 LogicModule.java:472-475 + TtmMechanic.java:74-75: KTM needs its skill, a kickable
     // Right Stuff team-mate, and the acting team's `ktmUsed` flag clear (TurnData.java:460).
     if (!teamTurnFlag(game, side, 'ktmUsed')
         && hasSkill(game, playerId, 'kickTeamMate')
         && hasThrowableTeammate(game, playerId)) {
-      out.push({ action: 'kickTeamMateMove', label: 'Kick Team-Mate', kind: 'declare', enabled: true });
+      out.push({ action: 'kickTeamMateMove', get label() { return t('hud.actions.text.kickTeamMate'); }, kind: 'declare', enabled: true });
     }
     // SECURE THE BALL (owner o66j fix; #8 order = last): grab a LOOSE, MOVING ball (in play + moving + not used
     // this turn) — NOT a settled-carrier action. Occludes whenever the ball isn't a live moving ball. #218 (owner-fg
@@ -3049,7 +3050,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // the `standing || prone` enclosure (:1133) + the `!(ps & FLAG_ACTIVE)` early-return (:1108), so a STUNNED/inactive
     // player never reaches here ⇒ post-drop = offered to standing-OR-prone only, byte-faithful to upstream's isActive gate.
     if (isSecureTheBallAvailable(game, playerId)) {
-      out.push({ action: 'secureTheBall', label: 'Secure the Ball', kind: 'declare', enabled: true });
+      out.push({ action: 'secureTheBall', get label() { return t('hud.actions.text.secureTheBall'); }, kind: 'declare', enabled: true });
     }
     // Owner 09-28 (Spec S5, UAT #5; coordinator review 09-28 — ownership gate + ordering + real-condition fixes):
     // a star special rule the LOCAL COACH'S OWN player HAS but cannot elect right now must say so, not vanish
@@ -3066,12 +3067,12 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
       // Coach-elected star DECLARE rows (built above): one disabled row per rule, added ONLY when none of that
       // rule's own rows were just pushed (its exact offer predicate, computed once above and reused here).
       const starRuleNotAvailable: { skills: readonly string[]; label: string; enabledNow: boolean }[] = [
-        { skills: CAN_BLOCK_OVER_DISTANCE_SKILLS, label: 'Vicious Vines', enabledNow: viciousVinesOk },
-        { skills: CAN_STAB_AND_MOVE_SKILLS, label: 'The Flashing Blade', enabledNow: theFlashingBladeOk },
-        { skills: CAN_THROW_KEG_SKILLS, label: 'Throw Keg', enabledNow: beerBarrelBashOk },
-        { skills: KICK_EM_SKILLS, label: "Kick 'em", enabledNow: kickEmBlockOk || kickEmBlitzOk },
-        { skills: FURIOUS_OUTBURST_SKILLS, label: 'Furious Outburst', enabledNow: furiousOutburstOk },
-        { skills: BLASTIN_SKILLS, label: "Blastin' Solves Everything", enabledNow: thenIStartedBlastinOk },
+        { skills: CAN_BLOCK_OVER_DISTANCE_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.viciousVines'); }, enabledNow: viciousVinesOk },
+        { skills: CAN_STAB_AND_MOVE_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.theFlashingBlade'); }, enabledNow: theFlashingBladeOk },
+        { skills: CAN_THROW_KEG_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.throwKeg'); }, enabledNow: beerBarrelBashOk },
+        { skills: KICK_EM_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.kickEm'); }, enabledNow: kickEmBlockOk || kickEmBlitzOk },
+        { skills: FURIOUS_OUTBURST_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.furiousOutburst'); }, enabledNow: furiousOutburstOk },
+        { skills: BLASTIN_SKILLS, get label() { return t('hud.actions.starRuleNotAvailable.blastinSolvesEverything'); }, enabledNow: thenIStartedBlastinOk },
       ];
       for (const rule of starRuleNotAvailable) {
         if (rule.enabledNow) continue;
@@ -3081,7 +3082,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
         // it is never matched by any wire-action or label lookup.
         out.push({
           action: 'starRuleNotAvailable',
-          label: `${rule.label} - Not Available`,
+          get label() { return t('hud.actions.text.labelNotAvailable', { label: rule.label }); },
           kind: 'declare',
           enabled: false,
           reason: 'Not available right now',
@@ -3156,7 +3157,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
         if (usableNow) continue;
         out.push({
           action: 'starRuleNotAvailable',
-          label: `${rule.label} - Not Available`,
+          get label() { return t('hud.actions.text.labelNotAvailable', { label: rule.label }); },
           kind: 'declare',
           enabled: false,
           reason: 'Not available right now',
@@ -3269,11 +3270,11 @@ function availableActionsRaw(
   // a candidate gets MOVE only while actingPlayer==null && playerState.isAbleToMove(); the acting mover gets
   // END_MOVE; playerInteraction gates on own-team + isActive. Block/Blitz/Foul/Pass are never offered.
   if (state === 'KICKOFF_RETURN' || state === 'PASS_BLOCK') {
-    if (clickedIsActing) return [{ action: '', label: 'End Activation', kind: 'endMove', enabled: true }];
+    if (clickedIsActing) return [{ action: '', get label() { return t('hud.actions.text.endActivation'); }, kind: 'endMove', enabled: true }];
     const ps = Number(p?.playerState ?? 0);
     const mine = !!p && playerSideIsHome(game, selectedPlayerId) === (ctx.myIsHome ?? true);
     if (!actingId && mine && (ps & FLAG_ACTIVE) && onTheBallPlayerStateIsAbleToMove(ps)) {
-      return [{ action: 'move', label: 'Move', kind: 'declare', enabled: true }];
+      return [{ action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true }];
     }
     return [];
   }
@@ -3315,7 +3316,7 @@ function availableActionsRaw(
   // already routes turnMode thenIStartedBlastin → CLIENT_END_TURN. Neither state joins declaredActionStates: the
   // predicate-gated extras there (trio/CotD/wisdom/…) are NOT in these modules' actionContext upstream.
   if (state === 'FURIOUS_OUTBURST' || state === 'THEN_I_STARTED_BLASTIN') {
-    return [{ action: '', label: 'End Activation', kind: 'endMove', enabled: true }];
+    return [{ action: '', get label() { return t('hud.actions.text.endActivation'); }, kind: 'endMove', enabled: true }];
   }
   // Star S8: KICK_EM_BLOCK joins the state-keyed list (KickEmBlockLogicModule extends the mixed BlockLogicModule —
   // its actionContext inherits the block-family extras and END_MOVE); KICK_EM_BLITZ was already present.
@@ -3369,31 +3370,31 @@ function availableActionsRaw(
     // #236: upstream MoveLogicModule.java:427-428 offers FUMBLEROOSKIE in the mid-activation context alongside
     // END_MOVE; BlitzLogicModule.java:86 includes the same action. It is a no-payload use command, not a declare.
     if (fumblerooskiStates.has(state) && fumblerooskieAvailable(game, actingId)) {
-      out.push({ action: 'fumblerooskie', label: 'Fumblerooski — Drop Ball', kind: 'declare', enabled: true });
+      out.push({ action: 'fumblerooskie', get label() { return t('hud.actions.text.fumblerooskiDropBall'); }, kind: 'declare', enabled: true });
     }
     // #221: upstream adds Raiding Party to Move/Block and the declared-action extensions, never the fresh Select
     // declare set. Its pick is CLIENT_USE_SKILL, intercepted by the view rather than sent as CLIENT_ACTING_PLAYER.
     if (wisdomAndRaidingPartyStates.has(state)
         && wideRailPreActionModeForPlayerAction('raidingParty', actingAction) === 'staged'
         && raidingPartyAvailable(game, actingId)) {
-      out.push({ action: 'raidingParty', label: 'Raiding Party — Reposition Team-Mate', kind: 'declare', enabled: true });
+      out.push({ action: 'raidingParty', get label() { return t('hud.actions.text.raidingPartyRepositionTeam'); }, kind: 'declare', enabled: true });
     }
     // #310 / owner 08-20: normal play uses the unified exact-ack election. This canonical row also covers
     // SELECT_BLITZ_TARGET so a reconnect snapshot retains an explicit, guarded Catch of the Day route.
     if (wideRailPreActionModeForPlayerAction('catchOfTheDay', actingAction) === 'staged'
         && catchOfTheDayAvailable(game, actingId)) {
-      out.push({ action: 'catchOfTheDay', label: 'Catch of the Day', kind: 'declare', enabled: true });
+      out.push({ action: 'catchOfTheDay', get label() { return t('hud.actions.text.catchOfTheDay'); }, kind: 'declare', enabled: true });
     }
     if (wideRailPreActionModeForPlayerAction('blackInk', actingAction) === 'staged'
         && blackInkAvailable(game, actingId)) {
-      out.push({ action: 'blackInk', label: 'Black Ink', kind: 'declare', enabled: true });
+      out.push({ action: 'blackInk', get label() { return t('hud.actions.text.blackInk'); }, kind: 'declare', enabled: true });
     }
     // #226: upstream offers Wisdom only after an action is declared and before the acting player acts. Its dedicated
     // no-payload command is intercepted by the view; target and skill selection are server-owned dialogs.
     if (wisdomAndRaidingPartyStates.has(state)
         && wideRailPreActionModeForPlayerAction('wisdomOfTheWhiteDwarf', actingAction) === 'staged'
         && wisdomAvailable(game, actingId)) {
-      out.push({ action: 'wisdom', label: 'Wisdom of the White Dwarf', kind: 'declare', enabled: true });
+      out.push({ action: 'wisdom', get label() { return t('hud.actions.text.wisdomOfTheWhite'); }, kind: 'declare', enabled: true });
     }
     // Star S4 — the gaze trio rides the shared registry-mounted use-skill election (ONE action id; the
     // ruleId selects the STAR_RULE_REGISTRY row and the store's generic sender commits CLIENT_USE_SKILL).
@@ -3425,7 +3426,7 @@ function availableActionsRaw(
           // the generic "- Not Available" row can never sit beside it.
           out.push({
             action: 'starRuleNotAvailable',
-            label: `${starUseSkillElection(ruleId)?.label ?? 'Excuse Me, Are You a Zoat?'} - select the blitz target first`,
+            get label() { return t('hud.actions.text.p0SelectTheBlitz', { p0: starUseSkillElection(ruleId)?.label ?? 'Excuse Me, Are You a Zoat?' }); },
             kind: 'declare',
             enabled: false,
             reason: 'Select the blitz target first',
@@ -3461,7 +3462,7 @@ function availableActionsRaw(
     // acting playerAction (PU-1), so once the vomit is declared it returns false and only End Activation remains — no
     // double-offer. Wire = the generic declareAction; the target click rides the live star-block route (e8bd87b4 + 6e88f4db).
     if (putridRegurgitationStates.has(state) && putridRegurgitationAvailable(game, actingId)) {
-      out.push({ action: 'putridRegurgitationBlitz', label: 'Projectile Vomit', kind: 'declare', enabled: true });
+      out.push({ action: 'putridRegurgitationBlitz', get label() { return t('hud.actions.text.projectileVomit'); }, kind: 'declare', enabled: true });
     }
     // Star S3: upstream adds ILL_CARRY_YOU in the Move(+plugin)/Blitz/Block/Bomb/Foul/HandOver/Pass/Punt/
     // SelectBlitzTarget modules — the declared rails, never the fresh Select menu. Pick-up (used=true) is the
@@ -3471,26 +3472,26 @@ function availableActionsRaw(
     if (illCarryYouStates.has(state)
         && wideRailPreActionModeForPlayerAction('illCarryYou', actingAction) === 'staged'
         && illCarryYouAvailable(game, actingId)) {
-      out.push({ action: 'illCarryYou', label: "I'll Carry You — Pick Up Team-Mate", kind: 'declare', enabled: true });
+      out.push({ action: 'illCarryYou', get label() { return t('hud.actions.text.iLlCarryYou'); }, kind: 'declare', enabled: true });
     }
     if (state === 'SELECT_BLITZ_TARGET') {
       if (wideRailPreActionModeForPlayerAction('frenziedRush', actingAction) === 'staged'
           && frenziedRushAvailable(game, actingId)) {
-        out.push({ action: 'frenziedRush', label: 'Frenzied Rush', kind: 'declare', enabled: true });
+        out.push({ action: 'frenziedRush', get label() { return t('hud.actions.text.frenziedRush'); }, kind: 'declare', enabled: true });
       }
       if (wideRailPreActionModeForPlayerAction('slashingNails', actingAction) === 'staged'
           && slashingNailsAvailable(game, actingId)) {
-        out.push({ action: 'slashingNails', label: 'Slashing Nails', kind: 'declare', enabled: true });
+        out.push({ action: 'slashingNails', get label() { return t('hud.actions.text.slashingNails'); }, kind: 'declare', enabled: true });
       }
     }
     if (state === 'MOVE' && canPlaceCarriedPlayerNow(game, actingId)) {
-      out.push({ action: 'placeCarriedPlayer', label: 'Place Carried Player And End Action', kind: 'declare', enabled: true });
+      out.push({ action: 'placeCarriedPlayer', get label() { return t('hud.actions.text.placeCarriedPlayerAnd'); }, kind: 'declare', enabled: true });
     }
     // In-action escalation mirrors `bb2025/PuntLogicModule.java:116-123`: only PUNT_MOVE while the acting player
     // actually has the ball offers ClientAction.PUNT. The generic declare sender preserves the current jumping flag,
     // matching `PuntLogicModule.java:100-107`, and sends the exact `punt` id (`PlayerAction.java:34`).
     if (state === 'PUNT' && actingAction === 'puntMove' && isBallCarrier(game, actingId)) {
-      out.push({ action: 'punt', label: 'Punt', kind: 'declare', enabled: true });
+      out.push({ action: 'punt', get label() { return t('hud.actions.text.punt'); }, kind: 'declare', enabled: true });
     }
     // Spec S15B #3: the store holds a live activate intent for this unmoved mover, so the End row rolls the negatrait.
     const rollsOnEnd = state === 'MOVE' && !!actingId && ctx.bigGuyActivateRollPlayerId === actingId

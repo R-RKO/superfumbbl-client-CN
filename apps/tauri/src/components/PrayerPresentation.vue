@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { $t } from '../i18n';
 defineProps<{
   announcement: { icon: string; text: string; lines?: string[]; seq: number } | null;
   wait: { coach: string; seq: number } | null;
@@ -10,7 +11,7 @@ defineProps<{
   <div v-if="announcement" :key="'pr-' + announcement.seq" class="masterchef-splash prayer-announcement"
     role="status" aria-live="polite">
     <span class="masterchef-icon">{{ announcement.icon }}</span>
-    <img v-if="portrait" class="prayer-recipient-portrait" :src="portrait" alt="Prayer recipient sprite" />
+    <img v-if="portrait" class="prayer-recipient-portrait" :src="portrait" :alt="$t('dialogs.prayerPresentation.masterchefSplash.prayerRecipientSprite')" />
     <span class="prayer-copy">
       <span class="masterchef-head">{{ announcement.text }}</span>
       <span v-for="line in announcement.lines ?? []" :key="line" class="prayer-effect-line">{{ line }}</span>
@@ -18,8 +19,8 @@ defineProps<{
   </div>
   <div v-else-if="wait" :key="'prayer-wait-' + wait.seq" class="yesno-card prayer-choice-wait"
     role="status" aria-live="polite">
-    <div class="yesno-text">{{ wait.coach }} is making a Prayers to Nuffle choice…</div>
-    <div class="coin-wait-sub">Waiting…</div>
+    <div class="yesno-text">{{ $t('dialogs.prayerPresentation.yesnoCard.coachIsMakingA', { coach: wait.coach }) }}</div>
+    <div class="coin-wait-sub">{{ $t('dialogs.prayerPresentation.yesnoCard.waiting') }}</div>
   </div>
 </template>
 

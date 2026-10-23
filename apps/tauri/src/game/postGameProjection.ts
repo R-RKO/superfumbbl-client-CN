@@ -18,6 +18,8 @@ import type { EndGameStatsProjection } from './endGameHudProjection';
 import { isStarOrMercenary, playerProgress, type ValuePosition } from './playerValue';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import type { RosterInjuryBadge } from './rosterLevelArt';
+import { $t } from '../i18n';
+import { luckAttackDisplay, luckHeadDisplay, luckOutcomeDisplay, luckTailDisplay } from './luckLabelDisplay';
 
 export type Side = 'home' | 'away';
 
@@ -397,7 +399,7 @@ export function pgBarChart(counts: number[], expectedShare: number[], labels: st
     return { label: labels[i] ?? String(i + 1), count, expected: expected[i]!, x, y: PG_CHART_BASE - h, w, h, ey: PG_CHART_BASE - expected[i]! * scale };
   });
   // the expected count as a dotted step line across each bar (a horizontal line when every share is equal)
-  const expectedPath = bars.map((b, i) => `${i === 0 ? 'M' : 'L'}${(i * slot).toFixed(1)} ${b.ey.toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${b.ey.toFixed(1)}`).join(' ');
+  const expectedPath = bars.map((b, i) => `${i === 0 ? 'M' : 'L'}${(i * slot).toFixed(1)} ${b.ey.toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${b.ey.toFixed(1)}`).join(' '); // SVG path DATA (i18n:data)
   return { bars, expectedPath, total };
 }
 /**
@@ -433,18 +435,18 @@ export const PG_GAUGE_CURVE = (() => {
 export function pgOdds(like: Likelihood): string {
   if (!like.measured || like.n === 0) return '—';
   const odds = oneInOdds(like);
-  return odds ? `1 in ${odds.n.toLocaleString()}${odds.capped ? '+' : ''}` : 'about average';
+  return odds ? $t('pg.odds.oneIn', { n: `${odds.n.toLocaleString()}${odds.capped ? '+' : ''}` }) : $t('pg.odds.aboutAverage');
 }
 export function pgLuck(like: Likelihood): string {
-  if (!like.measured) return 'not measured';
-  return like.n === 0 ? 'no rolls' : like.average ? 'about average' : like.zShown > 0 ? 'lucky' : 'unlucky';
+  if (!like.measured) return $t('pg.luck.notMeasured');
+  return like.n === 0 ? $t('pg.luck.noRolls') : like.average ? $t('pg.odds.aboutAverage') : like.zShown > 0 ? $t('pg.luck.lucky') : $t('pg.luck.unlucky');
 }
 /** The sentence behind the number, for the hover text and screen readers. */
 export function pgOddsSentence(like: Likelihood): string {
-  if (!like.measured) return 'not measured';
-  if (like.n === 0) return 'no rolls';
-  if (like.average) return 'about what fair dice give on the rolls that were made';
-  return `fair dice do this ${like.zShown > 0 ? 'well or better' : 'badly or worse'} ${pgOdds(like)} times on the rolls that were made`;
+  if (!like.measured) return $t('pg.luck.notMeasured');
+  if (like.n === 0) return $t('pg.luck.noRolls');
+  if (like.average) return $t('pg.sentence.average');
+  return like.zShown > 0 ? $t('pg.sentence.better', { odds: pgOdds(like) }) : $t('pg.sentence.worse', { odds: pgOdds(like) });
 }
 /** The marker is drawn only for a measured row with at least one trial. */
 export function pgHasMarker(like: Likelihood): boolean { return like.measured && like.n > 0; }
@@ -486,14 +488,13 @@ export function pgPlayerDetail(game: GameJson | null, playerId: string): string 
   }
   return playerId;
 }
-const PG_NOT_MEASURED = 'Not measured for this game';
+const pgNotMeasured = (): string => $t('pg.notMeasuredForGame');
 const exp1 = (v: number | undefined) => (v ?? 0).toFixed(1);
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-function unmeasuredNote(n: number): string { return n > 0 ? ` · ${n} not measured` : ''; }
-function unmeasuredStat(n: number): PgLikelihoodStat[] { return n > 0 ? [{ label: 'Not measured', value: String(n) }] : []; }
+function unmeasuredNote(n: number): string { return n > 0 ? $t('pg.unmeasuredNote', { n }) : ''; }
+function unmeasuredStat(n: number): PgLikelihoodStat[] { return n > 0 ? [{ get label() { return $t('cards.postGame.text.notMeasured'); }, value: String(n) }] : []; }
 function pgLikelihoodRow(key: PgLikelihoodRow['key'], label: string, like: Likelihood, summary: string, stats: PgLikelihoodStat[], extra = ''): PgLikelihoodRow {
-  if (!like.measured) return { key, label, like, summary: PG_NOT_MEASURED, stats: [{ label: '', value: PG_NOT_MEASURED }], detail: 'This game was saved before the likelihood was measured from results. Watch the replay to measure it.' };
-  if (like.n === 0) return { key, label, like, summary: `No rolls${unmeasuredNote(like.unmeasured)}`, stats: [{ label: '', value: 'No rolls' }, ...unmeasuredStat(like.unmeasured)], detail: 'no rolls' };
+  if (!like.measured) return { key, label, like, summary: pgNotMeasured(), stats: [{ label: '', value: pgNotMeasured() }], get detail() { return $t('cards.postGame.text.thisGameWasSaved'); } };
+  if (like.n === 0) return { key, label, like, get summary() { return $t('cards.postGame.text.noRollsP0', { p0: unmeasuredNote(like.unmeasured) }); }, stats: [{ label: '', value: $t('cards.postGame.text.noRolls') }, ...unmeasuredStat(like.unmeasured)], get detail() { return $t('cards.postGame.text.noRolls2'); } };
   const odds = pgOddsSentence(like);
   const sentence = odds.charAt(0).toUpperCase() + odds.slice(1);
   return { key, label, like, summary: summary + unmeasuredNote(like.unmeasured), stats: [...stats, ...unmeasuredStat(like.unmeasured)], detail: extra ? `${sentence} · ${extra}` : sentence };
@@ -505,36 +506,36 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
   const armour = c('armour'), action = c('action'), block = c('block'), turns = t.luck?.turns?.c ?? {};
   // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled line.
   // Owner 10-13: armour and injury cover only the rolls the team made against its opponent, so there is one figure per row.
-  const armourValue = n(armour.theirRolls) ? `${n(armour.theirBroken)} broken of ${n(armour.theirRolls)} (${exp1(armour.theirExpected)} expected)` : '';
+  const armourValue = n(armour.theirRolls) ? $t('cards.postGame.armourValue.p0BrokenOfP1', { p0: n(armour.theirBroken), p1: n(armour.theirRolls), p2: exp1(armour.theirExpected) }) : '';
   const armourParts = armourValue ? [armourValue] : [];
-  const armourStats = armourValue ? [{ label: 'Armour', value: armourValue }] : [];
+  const armourStats = armourValue ? [{ get label() { return $t('cards.postGame.armourStats.armour'); }, value: armourValue }] : [];
   // Owner 10-15: the injury row is TURNS LOST (turnsLost.ts): the turns the opponents' victims missed against the turns
   // expected from every attack made (a block's chance to knock down included). Its "Injuries" figure is that number.
   const turnsLike = turnsLikelihood(t);
-  const turnsValue = `${plural(n(turns.lost), 'turn', 'turns')} (${exp1(turns.expected)} expected)`;
-  const removals = `${plural(n(turns.casualties), 'casualty', 'casualties')}, ${plural(n(turns.kos), 'KO', 'KOs')}, ${plural(n(turns.stuns), 'stun', 'stuns')}`;
+  const turnsValue = $t('cards.postGame.turnsValue.p0P1Expected', { n: n(turns.lost), p1: exp1(turns.expected) });
+  const removals = $t('pg.removals', { cas: n(turns.casualties), ko: n(turns.kos), stun: n(turns.stuns) });
   // Owner 10-15: each KO recovery roll credited to an attacker is its own trial (turnsLost.ts header)
-  const recoveries = `${n(turns.recoveries)} rolled, ${n(turns.recoveryFails)} failed`;
+  const recoveries = $t('cards.postGame.recoveries.p0RolledP1Failed', { p0: n(turns.recoveries), p1: n(turns.recoveryFails) });
   const blockLike = blockLikelihood(t);
   const actionLike = actionLikelihood(t);
-  const blockGood = `${n(block.good)} (${exp1(block.goodExpected)} expected)`;
-  const blockBad = `${n(block.bad)} (${exp1(block.badExpected)} expected)`;
+  const blockGood = $t('cards.postGame.blockGood.p0P1Expected', { p0: n(block.good), p1: exp1(block.goodExpected) });
+  const blockBad = $t('cards.postGame.blockBad.p0P1Expected', { p0: n(block.bad), p1: exp1(block.badExpected) });
   return [
-    pgLikelihoodRow('all', 'All dice', all, `${plural(all.n, 'roll', 'rolls')} measured`, [{ label: 'Rolls measured', value: String(all.n) }],
-      'armour, injury, action and block rolls together'),
-    pgLikelihoodRow('armour', 'Armour', armourLikelihood(t), armourParts.join(' · '), armourStats, 'armour broken against the fair chance of breaking that armour'),
-    pgInjuryDiceRow(pgLikelihoodRow('turns', 'Injury dice', turnsLike, `${turnsValue} · ${removals} · KO recoveries ${recoveries} · ${plural(n(turns.attacks), 'attack', 'attacks')}`,
-      [{ label: 'Injuries', value: turnsValue }, { label: 'Results', value: removals }, { label: 'KO recoveries', value: recoveries }, { label: 'Attacks', value: String(n(turns.attacks)) }],
-      `turns the victims missed against the turns expected from every attack made: ${turnsValue}`)),
+    pgLikelihoodRow('all', $t('pg.row.all'), all, $t('pg.summary.rollsMeasured', { n: all.n }), [{ get label() { return $t('cards.postGame.text.rollsMeasured'); }, value: String(all.n) }],
+      $t('pg.extra.all')),
+    pgLikelihoodRow('armour', $t('pg.row.armour'), armourLikelihood(t), armourParts.join(' · '), armourStats, $t('pg.extra.armour')),
+    pgInjuryDiceRow(pgLikelihoodRow('turns', $t('pg.row.injury'), turnsLike, $t('pg.summary.injury', { turnsValue, removals, recoveries, attacks: n(turns.attacks) }),
+      [{ get label() { return $t('cards.postGame.text.injuries'); }, value: turnsValue }, { get label() { return $t('cards.postGame.text.results'); }, value: removals }, { get label() { return $t('cards.postGame.text.koRecoveries'); }, value: recoveries }, { get label() { return $t('cards.postGame.text.attacks'); }, value: String(n(turns.attacks)) }],
+      $t('pg.extra.injury', { turnsValue }))),
     pgLuckRow(t),
     pgCutShortRow(t),
-    pgLikelihoodRow('action', 'Action dice', actionLike, `${n(action.passed)} of ${actionLike.n} passed · ${exp1(action.expected)} expected`,
-      [{ label: 'Passed', value: `${n(action.passed)} of ${actionLike.n}` }, { label: 'Expected', value: exp1(action.expected) }],
-      'every D6 rolled against a target number, rerolled rolls included'),
-    pgLikelihoodRow('block', 'Block dice', blockLike,
-      `Defender down available ${blockGood} · attacker down forced ${blockBad} · ${plural(blockLike.n, 'roll', 'rolls')}`,
-      [{ label: 'Defender down available', value: blockGood }, { label: 'Attacker down forced', value: blockBad }, { label: 'Rolls', value: String(blockLike.n) }],
-      'what each block roll offered whoever picked the die, for these two players'),
+    pgLikelihoodRow('action', $t('pg.row.action'), actionLike, $t('pg.summary.action', { passed: n(action.passed), n: actionLike.n, expected: exp1(action.expected) }),
+      [{ get label() { return $t('cards.postGame.text.passed'); }, value: $t('pg.passedOf', { passed: n(action.passed), n: actionLike.n }) }, { get label() { return $t('cards.postGame.text.expected'); }, value: exp1(action.expected) }],
+      $t('pg.extra.action')),
+    pgLikelihoodRow('block', $t('pg.row.block'), blockLike,
+      $t('pg.summary.block', { blockGood, blockBad, n: blockLike.n }),
+      [{ get label() { return $t('cards.postGame.text.defenderDownAvailable'); }, value: blockGood }, { get label() { return $t('cards.postGame.text.attackerDownForced'); }, value: blockBad }, { get label() { return $t('cards.postGame.text.rolls'); }, value: String(blockLike.n) }],
+      $t('pg.extra.block')),
   ];
 }
 /** A signed figure to one decimal: "+6.2", "−3.1" (a minus sign, not a hyphen), "0.0" at zero. */
@@ -557,22 +558,25 @@ export function pgGamesOdds(like: Likelihood): { like: Likelihood; value: string
   const average = tail >= 0.5;
   const games: Likelihood = { ...like, tail, average, zShown: average ? 0 : Math.sign(z) * -normalInv(Math.max(tail, 1 / LUCK_ODDS_CAP)) };
   const odds = pgOdds(games);
-  return { like: games, value: average ? odds : `${odds} games` };
+  return { like: games, value: average ? odds : $t('cards.postGame.text.oddsGames', { odds }) };
 }
 function pgInjuryDiceRow(row: PgLikelihoodRow): PgLikelihoodRow {
   if (!row.like.measured || row.like.n === 0) return row;
   const { like, value } = pgGamesOdds(row.like);
+  // i18n (Astra r1 #8): whole sentences with the odds as a value (no string surgery on a localised message)
+  const odds = pgOdds(like);
   const title = like.average
-    ? 'about the turns lost fair dice deal in an ordinary game'
-    : `fair dice deal ${like.zShown > 0 ? 'this many turns lost or more' : 'this few turns lost or fewer'} ${value.replace(' games', '')} games (z ${pgSigned(row.like.z)})`;
+    ? $t('pg.injuryTitle.average')
+    : like.zShown > 0 ? $t('pg.injuryTitle.more', { odds, z: pgSigned(row.like.z) }) : $t('pg.injuryTitle.fewer', { odds, z: pgSigned(row.like.z) });
   const sentence = title.charAt(0).toUpperCase() + title.slice(1);
   return { ...row, like, value, valueAverage: like.average, valueTitle: sentence, detail: sentence, sentence: title };
 }
 /** One Turns lost trial as a line of the Luck story: "<outcome> on <attack>, turn <N>: +x.x". */
 export function pgSwingLine(rec: TurnsAttackRecord): string {
-  const attack = rec.recovery ? `KO recovery of ${rec.victimName}` : rec.fall ? `${rec.victimName}'s own ${rec.label}` : `${rec.label} vs ${rec.victimName}`;
-  const when = rec.half === 1 ? `turn ${rec.turn}` : rec.half === 2 ? `turn ${rec.turn} of half 2` : `turn ${rec.turn} of overtime`;
-  return `${rec.outcome} on ${attack}, ${when}: ${pgSigned(rec.actual - rec.expected)}`;
+  const label = luckAttackDisplay(rec.label);
+  const attack = rec.recovery ? $t('cards.postGame.attack.koRecoveryOfVictimname', { victimName: rec.victimName }) : rec.fall ? $t('cards.postGame.attack.victimnameSOwnLabel', { victimName: rec.victimName, label }) : $t('cards.postGame.attack.labelVsVictimname', { label, victimName: rec.victimName });
+  // i18n (Astra r1 #8): outcome and turn phrase are localised whole; rec.outcome itself stays invariant data.
+  return $t('cards.postGame.text.outcomeOnAttackWhen', { outcome: luckOutcomeDisplay(rec.outcome), attack, when: pgWhenText(rec.half, rec.turn), p3: pgSigned(rec.actual - rec.expected) });
 }
 /**
  * Owner 10-16: the LUCK row counts UNLIKELY EVENTS (luckBreaks.ts): "N lucky breaks (E expected)", its hover the bad
@@ -599,8 +603,8 @@ export function pgTeamBreaks(t: DiceTally): LuckBreaks | null {
 export function pgCutShortLine(e: CutShortEntry): string { return pgCutShortParts(e).map((part) => typeof part === 'string' ? part : part.name).join(''); }
 /** Owner 10-17: the same line as tokens (the roller is a name chip). */
 export function pgCutShortParts(e: CutShortEntry): PgStatPart[] {
-  const flag = e.streak ? ' (first action, second turn in a row)' : e.firstAction ? ' (first action)' : '';
-  return [`${e.cost.toFixed(1)} of a turn: ${e.label}, `, { playerId: e.player, name: e.playerName || e.player }, `, ${pgWhen(e)}${flag}`];
+  const flag = e.streak ? $t('cards.postGame.cutShort.firstActionStreak') : e.firstAction ? $t('cards.postGame.cutShort.firstAction') : '';
+  return [$t('cards.postGame.text.p0OfATurn', { p0: e.cost.toFixed(1), label: e.label }), { playerId: e.player, name: e.playerName || e.player }, `, ${pgWhen(e)}${flag}`];
 }
 /**
  * Owner 10-16: TURNS CUT SHORT, its own line under Luck (turnsCutShort.ts): the share of each turn the team lost to its
@@ -610,19 +614,23 @@ export function pgCutShortParts(e: CutShortEntry): PgStatPart[] {
  */
 function pgCutShortRow(t: DiceTally): PgLikelihoodRow {
   const c = t.cutShort;
-  if (!c) return pgLikelihoodRow('cut', 'Turns cut short', NOT_MEASURED, '', [], '');
+  if (!c) return pgLikelihoodRow('cut', $t('cards.postGame.text.turnsCutShort'), NOT_MEASURED, '', [], '');
   const z = c.variance > 1e-12 ? (c.actual - c.expected) / Math.sqrt(c.variance) : 0;
   const like: Likelihood = { measured: true, n: c.rolls, unmeasured: 0, score: c.actual, expected: c.expected, z, tail: 1, average: Math.abs(z) < 0.5, zShown: Math.max(-4, Math.min(4, -z)) };
-  if (c.rolls === 0 && c.log.length === 0) return pgLikelihoodRow('cut', 'Turns cut short', { ...like, n: 0 }, '', [], '');
-  const value = `${c.actual.toFixed(1)} (${c.expected.toFixed(1)} expected)`;
-  const diff = `${pgSigned(c.actual - c.expected)} turns against expected`;
+  if (c.rolls === 0 && c.log.length === 0) return pgLikelihoodRow('cut', $t('cards.postGame.text.turnsCutShort'), { ...like, n: 0 }, '', [], '');
+  const value = $t('cards.postGame.value.p0P1Expected', { p0: c.actual.toFixed(1), p1: c.expected.toFixed(1) });
+  const diff = $t('cards.postGame.diff.p0TurnsAgainstExpected', { p0: pgSigned(c.actual - c.expected) });
   return {
-    key: 'cut', label: 'Turns cut short', like, value, valueTitle: diff, valueAverage: like.average, sentence: `${value}; ${diff}`, summary: `${value} · ${diff}`, detail: diff,
-    stats: [{ label: 'Turns cut short', value: c.actual.toFixed(1) }, { label: 'Expected', value: c.expected.toFixed(1) },
+    key: 'cut', get label() { return $t('cards.postGame.text.turnsCutShort'); }, like, value, valueTitle: diff, valueAverage: like.average, sentence: `${value}; ${diff}`, summary: `${value} · ${diff}`, detail: diff,
+    stats: [{ get label() { return $t('cards.postGame.text.turnsCutShort'); }, value: c.actual.toFixed(1) }, { get label() { return $t('cards.postGame.text.expected'); }, value: c.expected.toFixed(1) },
       ...(c.log.length ? [{ label: '', value: 'Turnovers' }, ...c.log.map((e) => ({ label: '', value: pgCutShortLine(e), parts: pgCutShortParts(e) }))] : [])],
   };
 }
-const pgWhen = (e: { half: number; turn: number }) => e.half <= 1 ? `turn ${e.turn}` : e.half === 2 ? `turn ${e.turn} of half 2` : `turn ${e.turn} of overtime`;
+/** i18n (Astra r1 #8): the turn phrase as one whole message per half. */
+function pgWhenText(half: number, turn: number): string {
+  return half <= 1 ? $t('cards.postGame.when.turn', { turn }) : half === 2 ? $t('cards.postGame.when.turnHalf2', { turn }) : $t('cards.postGame.when.turnOvertime', { turn });
+}
+const pgWhen = (e: { half: number; turn: number }) => pgWhenText(e.half, e.turn);
 /** One break as a story line: "1 in 6: 5+ dodge made, Bob, turn 3". */
 export function pgBreakLine(e: BreakEntry): string {
   return `${oneInX(e.p)}: ${e.label}, ${e.playerName || e.player}, ${pgWhen(e)}`;
@@ -633,28 +641,30 @@ export function pgBreakParts(e: BreakEntry): PgStatPart[] {
   const who = { playerId: e.player, name: e.playerName || e.player };
   const tail = `, ${pgWhen(e)}`;
   if (e.victim && e.labelHead != null && e.labelTail != null) {
-    return [`${oneInX(e.p)}: ${e.labelHead}`, { playerId: e.victim, name: e.victimName || e.victim }, `${e.labelTail}, `, who, tail].filter((part) => part !== '');
+    return [`${oneInX(e.p)}: ${luckHeadDisplay(e.labelHead)}`, { playerId: e.victim, name: e.victimName || e.victim }, `${luckTailDisplay(e.labelTail)}, `, who, tail].filter((part) => part !== '');
   }
   return [`${oneInX(e.p)}: ${e.label}, `, who, tail];
 }
-const breaksText = (n: number, e: number, kind: 'lucky' | 'bad') => `${n} ${kind} ${n === 1 ? 'break' : 'breaks'} (${e.toFixed(1)} expected)`;
+const breaksText = (n: number, e: number, kind: 'lucky' | 'bad') => kind === 'lucky'
+  ? $t('cards.postGame.breaksText.lucky', { n, expected: e.toFixed(1) })
+  : $t('cards.postGame.breaksText.bad', { n, expected: e.toFixed(1) });
 function pgLuckRow(t: DiceTally): PgLikelihoodRow {
   const b = pgTeamBreaks(t);
-  if (!b) return pgLikelihoodRow('luck', 'Luck', NOT_MEASURED, '', [], '');
+  if (!b) return pgLikelihoodRow('luck', $t('cards.postGame.text.luck'), NOT_MEASURED, '', [], '');
   const z = b.luckyVar > 1e-12 ? (b.lucky - b.luckyExpected) / Math.sqrt(b.luckyVar) : 0;
   const like: Likelihood = { measured: true, n: b.events, unmeasured: 0, score: b.lucky, expected: b.luckyExpected, z, tail: 1, average: Math.abs(z) < 0.5, zShown: Math.max(-4, Math.min(4, z)) };
-  if (b.events === 0) return pgLikelihoodRow('luck', 'Luck', like, '', [], '');
+  if (b.events === 0) return pgLikelihoodRow('luck', $t('cards.postGame.text.luck'), like, '', [], '');
   const value = breaksText(b.lucky, b.luckyExpected, 'lucky');
   const bad = breaksText(b.bad, b.badExpected, 'bad');
   const rarest = (lucky: boolean) => b.log.filter((e) => e.lucky === lucky).sort((x, y) => x.p - y.p || x.half - y.half || x.slot - y.slot).slice(0, 3).map((e) => ({ label: '', value: pgBreakLine(e), parts: pgBreakParts(e) }));
   const luckyLines = rarest(true), badLines = rarest(false);
   const title = `${bad.charAt(0).toUpperCase()}${bad.slice(1)}`;
   return {
-    key: 'luck', label: 'Luck', like, value, valueTitle: title, valueAverage: like.average, sentence: `${value}; ${bad}`,
+    key: 'luck', get label() { return $t('cards.postGame.text.luck'); }, like, value, valueTitle: title, valueAverage: like.average, sentence: `${value}; ${bad}`,
     summary: `${value} · ${bad}`, detail: title,
-    stats: [{ label: 'Lucky breaks', value: `${b.lucky} (${b.luckyExpected.toFixed(1)} expected)` }, { label: 'Bad breaks', value: `${b.bad} (${b.badExpected.toFixed(1)} expected)` },
-      ...(luckyLines.length ? [{ label: '', value: 'Rarest lucky breaks' }, ...luckyLines] : []),
-      ...(badLines.length ? [{ label: '', value: 'Rarest bad breaks' }, ...badLines] : [])],
+    stats: [{ get label() { return $t('cards.postGame.text.luckyBreaks'); }, value: $t('cards.postGame.text.luckyP1Expected', { lucky: b.lucky, p1: b.luckyExpected.toFixed(1) }) }, { get label() { return $t('cards.postGame.text.badBreaks'); }, value: $t('cards.postGame.text.badP1Expected', { bad: b.bad, p1: b.badExpected.toFixed(1) }) },
+      ...(luckyLines.length ? [{ label: '', value: $t('cards.postGame.text.rarestLuckyBreaks') }, ...luckyLines] : []),
+      ...(badLines.length ? [{ label: '', value: $t('cards.postGame.text.rarestBadBreaks') }, ...badLines] : [])],
   };
 }
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
@@ -750,12 +760,12 @@ export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; lo
   // 1-2-3-4-5-6-5-4-3-2-1 / 36 triangle), then dodge D6 by face.
   // Owner 09-23: "D6 distribution" leads and the "action" (every other) D6 sits right under it.
   const charts: PgDiceChartRow[] = [
-    { key: 'd6', title: 'D6 distribution', chart: pgBarChart(t.d6.slice(1), even, faces) },
-    { key: 'action', title: 'Action dice', chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
-    { key: 'block', title: 'Block dice', chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
-    { key: 'armour', title: 'Armour dice', chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
-    { key: 'injury', title: 'Injury dice', chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
-    { key: 'dodge', title: 'Dodge dice', chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
+    { key: 'd6', get title() { return $t('cards.postGame.charts.d6Distribution'); }, chart: pgBarChart(t.d6.slice(1), even, faces) },
+    { key: 'action', get title() { return $t('cards.postGame.charts.actionDice'); }, chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
+    { key: 'block', get title() { return $t('cards.postGame.charts.blockDice'); }, chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
+    { key: 'armour', get title() { return $t('cards.postGame.charts.armourDice'); }, chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
+    { key: 'injury', get title() { return $t('cards.postGame.charts.injuryDice'); }, chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
+    { key: 'dodge', get title() { return $t('cards.postGame.charts.dodgeDice'); }, chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
   ];
   return {
     team: surface?.team ?? fallbackTeam, logo: surface?.logo ?? '', charts,

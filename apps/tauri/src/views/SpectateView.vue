@@ -44,7 +44,7 @@ import {
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
   PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, serverMoveSquareRolls, squareAnchor, worldToSquare,
-  displayDiceSide, playerServerSide, teamServerSide, disturbingPresenceTagText, type BlockDieSide } from '@fumbbl40k/ffb-pitch';
+  displayDiceSide, playerServerSide, teamServerSide, disturbingPresenceTagText, type BlockDieSide, pitchLabel } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
@@ -347,7 +347,7 @@ function chompRefusedAgainst(attackerId: string, defenderId: string, kind: Block
   if (kind !== 'chomp' || !g || chompAvailableAgainst(g, attackerId, defenderId)) return false;
   const sq = playerSquareById(defenderId);
   const p = sq ? renderer?.squareToCanvas(sq) : null;
-  showToast('Chomp cannot be used on that player again', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+  showToast($t('hud.text.chompCannotBeUsed'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
   return true;
 }
 function o66SendStandaloneBlock(attackerId: string, defenderId: string, kind: BlockKind | null) {
@@ -513,6 +513,11 @@ import ReplayTelestrator from '../components/ReplayTelestrator.vue';
 // they are incorporated on the next build (Vite ?raw import, header row skipped).
 import givethanksRaw from '../assets/givethanks.csv?raw';
 import signSayingsRaw from '../assets/signsayings.csv?raw';
+import { $t, data, terms, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { playerStateLabel, playerStateToken } from '../game/playerStateToken';
+import { shownLogLine } from '../game/logShown';
 const GIVE_THANKS: string[] = givethanksRaw
   .split(/\r?\n/).slice(1).map((s) => s.trim()).filter(Boolean);
 /** Owner 09-21: two-line crowd SAYINGS for the placards (signsayings.csv: `top,bottom` per line) — mixed with the
@@ -522,7 +527,7 @@ const SIGN_SAYINGS: { top: string; bottom: string }[] = signSayingsRaw
   .map((line) => { const [top = '', bottom = ''] = line.split(',').map((part) => part.trim()); return { top, bottom }; })
   .filter((entry) => entry.top && entry.bottom);
 /** Owner 2026-07-06: crowd QUIPS keyed by the FFB skill name the fans react to. */
-const CROWD_QUIPS: Record<string, string> = { fend: 'Get fended, nerd!', 'stand firm': 'Like a rock!', taunt: 'Get taunted, nerd!' }; // owner 09-25: Taunt joins the blue crowd quips
+const CROWD_QUIPS: Record<string, string> = { get fend() { return $t('hud.crowdQuips.getFendedNerd'); }, get 'stand firm'() { return $t('hud.crowdQuips.likeARock'); }, get taunt() { return $t('hud.crowdQuips.getTauntedNerd'); } }; // owner 09-25: Taunt joins the blue crowd quips
 
 // Upstream artwork is neither bundled nor fetched. A FUMBBL URL is only a stable
 // lookup key for an installed local pack (or an existing pre-policy cache hit).
@@ -804,7 +809,8 @@ const chatBubbleTimes = computed(() => chatEntries.value.map((e) => e.time));
 // Owner 2026-07-08: chat lives ONLY in the Chat tab now — occlude 'talk' lines from
 // the Log pane so it stays a pure event log.
 const logEntries = computed(() => {
-  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical', settings.logStyle === 'fumbbl');
+  // i18n (Astra r2): client-authored lines are stored in English and shown in the current language
+  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical', settings.logStyle === 'fumbbl').map(shownLogLine);
   // Owner 10-15 (Graphical block flow): a line whose Graphical version is null is left out there (another row says it)
   if (settings.logStyle !== 'graphical') return entries;
   // owner 10-16 (evening): the coach's block-die choice joins the block's dice row
@@ -1798,7 +1804,7 @@ const interceptWaitText = computed(() => {
   // Owner 09-05: a short toast line — the pass result and destination already read on the pitch (dice pill,
   // destination marker), so the wait line names only what we are waiting for.
   void w;
-  return 'Waiting for interceptor choice';
+  return $t('hud.interceptWaitText.waitingForInterceptorChoice');
 });
 // Owner 09-15: the candidate interceptors the server offered ride the wait object — the viewer sees the ✋ tips.
 watch(
@@ -2036,7 +2042,7 @@ function acquiredSkills(player: PlayerJson, team: { roster: unknown }): string {
 // owner 2026-07-02 (UI-5): HD-2D removed from the picker (set stays parked);
 // FUMBBL's checker-disc mode replaces it
 const SPRITE_SET_LABELS: Record<string, string> = {
-  classic: 'Super FUMBBL', checkers: 'Checkers', chess: 'Chess', walk: 'Super FUMBBL',
+  get classic() { return $t('hud.spriteSetLabels.superFumbbl'); }, get checkers() { return $t('hud.spriteSetLabels.checkers'); }, get chess() { return $t('hud.spriteSetLabels.chess'); }, get walk() { return $t('hud.spriteSetLabels.superFumbbl'); },
 };
 /** Owner 09-15: the checker discs are ORIGINAL art (67af2368), so the mode is offered always — the 09-04 pack gate
  *  (FUMBBL iconsets) no longer applies. Owner 09-05: no separate Classic mode — mods ride the chain. */
@@ -2044,7 +2050,7 @@ const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => ['walk', 
 
 /** Match11: all display states, including a real Off state, live on the quick bar. */
 const TZ_MODES = ['opposition', 'friendly', 'both', 'off'] as const;
-const TZ_LABELS: Record<string, string> = { opposition: 'Opposition', friendly: 'Friendly', both: 'Relevant to the selected player', off: 'Off' }; // owner 10-13: 'both' = the zones relevant to the selection
+const TZ_LABELS: Record<string, string> = { get opposition() { return $t('hud.tzLabels.opposition'); }, get friendly() { return $t('hud.tzLabels.friendly'); }, get both() { return $t('hud.tzLabels.relevantToTheSelected'); }, get off() { return $t('hud.tzLabels.off'); } }; // owner 10-13: 'both' = the zones relevant to the selection
 /** Owner 10-12: spectate and replay cycle their own absolute modes (none -> home -> away -> all), stored separately;
  *  play keeps TZ_MODES / settings.tackleZoneMode exactly as before. */
 const spectatorTackleZones = computed(() => usesSpectatorTackleZones(props.mode));
@@ -2053,7 +2059,7 @@ const tackleZonesActive = computed(() => spectatorTackleZones.value
   : settings.tackleZoneMode !== 'off');
 const tackleZonesTitle = computed(() => spectatorTackleZones.value
   ? spectatorTackleZoneTitle(settings.spectatorTackleZoneMode)
-  : `Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`);
+  : $t('hud.tackleZonesTitle.tackleZonesP0', { p0: TZ_LABELS[settings.tackleZoneMode] }));
 /** What the renderer draws for spectators: held at 'none' in play so play's zones stay the o66OppTzActive path only. */
 const rendererSpectatorTackleZoneMode = computed<SpectatorTackleZoneMode>(() => spectatorTzForRenderer(props.mode, settings));
 
@@ -2072,8 +2078,8 @@ const SKILL_MODES = ['icons', 'markings'] as const;
 type SkillMode = (typeof SKILL_MODES)[number];
 const SKILL_MODE_SHORT: Record<SkillMode, string> = { icons: '🖼', markings: 'ABC' };
 const SKILL_MODE_LABELS: Record<SkillMode, string> = {
-  icons: 'Skill icons',
-  markings: 'Skill markings',
+  get icons() { return $t('hud.skillModeLabels.skillIcons'); },
+  get markings() { return $t('hud.skillModeLabels.skillMarkings'); },
 };
 const skillMode = computed<SkillMode>(() => settings.skillDisplay === 'markings' ? 'markings' : 'icons');
 // Retained only for the renderer's compatibility signature; pack choice is the shared snapshot.
@@ -2192,7 +2198,7 @@ const reportHost: BugReportHost = {
   /** Which SERVICE that id belongs to — derived from the active server target, never guessed. */
   gameService: () => gameServiceFromTarget(settings.activeServerTarget),
   wireLogPath: () => reportWireLogPath.value,
-  noWireLogLine: 'Wire log: none (verbose wire logging is off in Settings)',
+  get noWireLogLine() { return $t('hud.noWireLogLine'); },
   logEntries: () => gameStore.state.log,
   devLogEntries: () => gameStore.state.devLog,
   context: () => {
@@ -2289,12 +2295,12 @@ function onReportSent() {
 // the Sneakiest of the Lot-aware label (Spec S4) lives there. Unreachable in shipped builds (settings.ts pins
 // order66=true); left as-is on purpose, not touched by S4.
 const ACTION_BUTTONS: { mode: ActionMode; label: string; icon: string }[] = [
-  { mode: 'move', label: 'Move', icon: '🏃' },
-  { mode: 'blitz', label: 'Blitz', icon: '⚡' },
-  { mode: 'foul', label: 'Foul', icon: '🦶' },
-  { mode: 'pass', label: 'Pass', icon: '🏈' },
-  { mode: 'handoff', label: 'Handoff', icon: '✋' },
-  { mode: 'auto', label: 'Auto', icon: '🤖' },
+  { mode: 'move', get label() { return $t('hud.actionButtons.move'); }, icon: '🏃' },
+  { mode: 'blitz', get label() { return $t('hud.actionButtons.blitz'); }, icon: '⚡' },
+  { mode: 'foul', get label() { return $t('hud.actionButtons.foul'); }, icon: '🦶' },
+  { mode: 'pass', get label() { return $t('hud.actionButtons.pass'); }, icon: '🏈' },
+  { mode: 'handoff', get label() { return $t('hud.actionButtons.handoff'); }, icon: '✋' },
+  { mode: 'auto', get label() { return $t('hud.actionButtons.auto'); }, icon: '🤖' },
 ];
 const actionMode = ref<ActionMode>('auto');
 
@@ -2628,7 +2634,7 @@ function diceSideOfPlayer(playerId: unknown): BlockDieSide | null {
 function diceSideOfServerSide(side: 'home' | 'away' | null | undefined): BlockDieSide | null {
   return displayDiceSide(side ?? null, gameStore.mySeat.value);
 }
-function blockFaceLabel(v: number): string { return PitchRenderer.blockFaceLabel(v); }
+function blockFaceLabel(v: number): string { return pitchLabel(PitchRenderer.blockFaceLabel(v)); } // Modern localises; the static label stays English for Classic
 const bpDieMode = ref<null | 'pro' | 'consummate' | 'multiBlockDice' | 'singleBlockDie'>(null);
 const bpSelectedDice = ref(new Set<number>());
 // Owner 09-05: dice TUMBLE — when new block dice land (the roll, and every re-roll) the faces cycle at random
@@ -3014,8 +3020,8 @@ const blockPartialOptions = computed(() => {
   const bp = gameStore.state.blockPartial;
   if (!bp) return [] as { kind: 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice'; label: string; skill: string }[];
   const out: { kind: 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice'; label: string; skill: string }[] = [];
-  if (bp.brawler) out.push({ kind: 'brawler', label: 'Brawler', skill: 'Brawler' });
-  if (bp.pro) out.push({ kind: 'pro', label: 'Pro', skill: 'Pro' });
+  if (bp.brawler) out.push({ kind: 'brawler', get label() { return $t('hud.blockPartialOptions.brawler'); }, skill: 'Brawler' });
+  if (bp.pro) out.push({ kind: 'pro', get label() { return $t('hud.blockPartialOptions.pro'); }, skill: 'Pro' });
   if (bp.consummate) out.push({ kind: 'consummate', label: bp.consummateLabel ?? 'Consummate', skill: bp.consummateLabel ?? 'Consummate Professional' });
   if (bp.singleBlockDieLabel) out.push({ kind: 'singleBlockDie', label: bp.singleBlockDieLabel, skill: bp.singleBlockDie ?? bp.singleBlockDieLabel });
   if (bp.multiBlockDiceLabel) out.push({ kind: 'multiBlockDice', label: bp.multiBlockDiceLabel, skill: bp.multiBlockDice ?? bp.multiBlockDiceLabel });
@@ -3203,7 +3209,7 @@ const mbrArmedHintText = computed(() => {
   const dm = mbrDieMode.value;
   if (!dm) return null;
   const row = multiBlockRows.value.find((r) => r.targetId === dm.targetId);
-  const label = dm.kind === 'pro' ? 'Pro' : (row?.consummateLabel ?? 'Consummate Professional');
+  const label = dm.kind === 'pro' ? 'Pro' : (row?.consummateLabel ?? $t('hud.mbrArmedHintText.consummateProfessional'));
   return armedRerollHintText(label);
 });
 
@@ -3765,18 +3771,18 @@ watch(() => gameStore.state.negatraitCue?.seq, () => {
     if (cue.successful) return label;
     if (!namedPlayer) return `${label}!`;
     switch (label) {
-      case 'Really Stupid': return `${namedPlayer} is Really Stupid!`;
+      case 'Really Stupid': return $t('hud.text.namedplayerIsReallyStupid', { namedPlayer });
       case 'Bone Head':
-      case 'Bone-Head': return `${namedPlayer} is Boneheaded`;
+      case 'Bone-Head': return $t('hud.text.namedplayerIsBoneheaded', { namedPlayer });
       case 'Animal Savagery':
         return cue.hasTarget === false
-          ? `${namedPlayer} wants to lash out but nobody is there!`
-          : `${namedPlayer} lashes out!`;
-      case 'Unchannelled Fury': return `${namedPlayer} has nowhere to channel their fury!`;
-      case 'Blood Lust': return `${namedPlayer} thirsts for blood!`;
-      case 'Pro': return `${namedPlayer} tries to use pro but fails!`;
-      case 'Take Root': return `${namedPlayer} takes root!`;
-      case 'Wild Animal': return `${namedPlayer} won't listen!`;
+          ? $t('hud.text.namedplayerWantsToLash', { namedPlayer })
+          : $t('hud.text.namedplayerLashesOut', { namedPlayer });
+      case 'Unchannelled Fury': return $t('hud.text.namedplayerHasNowhereTo', { namedPlayer });
+      case 'Blood Lust': return $t('hud.text.namedplayerThirstsForBlood', { namedPlayer });
+      case 'Pro': return $t('hud.text.namedplayerTriesToUse', { namedPlayer });
+      case 'Take Root': return $t('hud.text.namedplayerTakesRoot', { namedPlayer });
+      case 'Wild Animal': return $t('hud.text.namedplayerWonTListen', { namedPlayer });
       default: return `${label}!`;
     }
   })();
@@ -4176,7 +4182,7 @@ watch(
       const iconSqD = liveD && liveD[0] >= 0 && liveD[0] < 26 && liveD[1] >= 0 && liveD[1] < 15 ? ([liveD[0], liveD[1]] as [number, number]) : su.square;
       renderer.playSkillIconFade(iconSqD, su.skill, true);
       const pd = su.anchored ? renderer.feetToCanvas(su.square, true) : renderer.playerFeetScreenPos(su.playerId, su.square);
-      showToast(`${su.name} does not use ${su.skill}`, pd?.x ?? 0, pd?.y ?? 44, 3000, true);
+      showToast($t('hud.text.nameDoesNotUse', { name: su.name, skill: su.skill }), pd?.x ?? 0, pd?.y ?? 44, 3000, true);
       cancelAnimationFrame(skillToastRaf);
       if (!su.anchored) followSkillToast(su.playerId, su.square);
       return;
@@ -4195,7 +4201,7 @@ watch(
     // does NOT chase the live token; everything else RAF-follows the token as before.
     // Owner 09-05: the pill sits BELOW the token (the skill icon stays on the player, both are kept).
     const p0 = su.anchored ? renderer.feetToCanvas(su.square, true) : renderer.playerFeetScreenPos(su.playerId, su.square);
-    showToast(su.toast ?? `${su.name} used ${su.skill}`, p0?.x ?? 0, p0?.y ?? 44, 3000, true);
+    showToast(su.toast ?? $t('hud.text.nameUsedSkill', { name: su.name, skill: su.skill }), p0?.x ?? 0, p0?.y ?? 44, 3000, true);
     cancelAnimationFrame(skillToastRaf);
     if (!su.anchored) followSkillToast(su.playerId, su.square);
     // Owner 09-09: the same report's pill on the OTHER player (Tentacles: the held mover) — static at their feet.
@@ -4797,7 +4803,7 @@ watch(() => gameStore.state.selectSkill?.seq, () => { reactivePromptDragPos.sele
 // Owner 10-05: the Raise the Dead position pick - upstream PositionChoiceMode.RAISE_DEAD header "Select position for raised player"
 const selectPositionTitle = computed(() => {
   const mode = String(gameStore.state.selectPosition?.mode ?? '').toUpperCase();
-  return mode === 'RAISE_DEAD' ? 'Raise the Dead - choose the position of the raised player' : 'Choose a position';
+  return mode === 'RAISE_DEAD' ? $t('hud.selectPositionTitle.raiseTheDeadChoose') : $t('hud.selectPositionTitle.chooseAPosition');
 });
 watch(() => gameStore.state.keywordChoice?.seq, () => { reactivePromptDragPos.keywordChoice = null; });
 watch(() => gameStore.state.cardChoice?.seq, () => { reactivePromptDragPos.cardChoice = null; });
@@ -4872,8 +4878,8 @@ const rerollPromptTeamReRolls = computed<number | null>(() => {
 const rerollLonerCopy = computed(() => {
   const value = gameStore.state.reRollPrompt?.lonerValue;
   return value
-    ? `The player is a loner and you must roll a ${value} first before you can reroll.`
-    : 'The player is a loner and the reroll is not guaranteed to help.';
+    ? $t('hud.rerollLonerCopy.thePlayerIsA', { value })
+    : $t('hud.rerollLonerCopy.thePlayerIsA2');
 });
 
 // Pass alone gets its server-reported throw classification beside the rolled die. Exact-match the raw
@@ -5217,7 +5223,7 @@ function loadNamedSetup(name: string) {
   if (gameStore.loadSavedSetup(name)) lastLoadedSavedSetupName.value = name;
 }
 function deleteNamedSetup(name: string) {
-  if (window.confirm(`Delete saved setup "${name}"? This cannot be undone.`)) gameStore.deleteSavedSetup(name);
+  if (window.confirm($t('hud.text.deleteSavedSetupName', { name }))) gameStore.deleteSavedSetup(name);
 }
 // Owner 2026-07-15 (click-to-place): the currently click-selected setup player + whether it's on the pitch,
 // so the card can echo what's selected and the right next-tap instruction (place vs move/return).
@@ -5648,9 +5654,9 @@ onBeforeUnmount(() => cancelAnimationFrame(shadowingRaf));
 // Owner 10-05: the panel names the shadower (the server's first eligible id, as the pill anchor does)
 const shadowerName = computed(() => {
   const id = shadowingPick.value?.eligibleIds[0]; const g = gameStore.game.value;
-  if (!id || !g) return 'Your player';
+  if (!id || !g) return $t('hud.shadowerName.yourPlayer');
   const pl = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((x) => x.playerId === id);
-  return pl?.playerName || 'Your player';
+  return pl?.playerName || $t('hud.shadowerName.yourPlayer');
 });
 function answerShadowing(shadow: boolean) {
   const p = gameStore.state.playerPick;
@@ -5706,9 +5712,9 @@ onBeforeUnmount(() => cancelAnimationFrame(tentaclesRaf));
 // Owner 10-05: the panel names the auto-selected tentacler
 const tentaclerName = computed(() => {
   const id = tentaclerId.value; const g = gameStore.game.value;
-  if (!id || !g) return 'Your player';
+  if (!id || !g) return $t('hud.tentaclerName.yourPlayer');
   const pl = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((x) => x.playerId === id);
-  return pl?.playerName || 'Your player';
+  return pl?.playerName || $t('hud.tentaclerName.yourPlayer');
 });
 function answerTentacles(use: boolean) {
   const p = gameStore.state.playerPick;
@@ -6411,7 +6417,7 @@ function inducePanel(role: InducementRole): PanelView {
     dimmed: role === 'underdog' && inducePhase.value === 'overdog',
     // A finished leg rebuilt from the model (rejoin): an empty set is "not known", not "bought nothing" (the server
     // can hold a confirmed purchase outside the model until both coaches have answered).
-    emptyNote: active ? 'Nothing selected yet.' : confirmed ? (mine && reveal?.mineFromModel ? 'Your choices are locked in.' : 'No inducements.') : 'Waiting…',
+    emptyNote: active ? $t('hud.text.nothingSelectedYet') : confirmed ? (mine && reveal?.mineFromModel ? $t('hud.text.yourChoicesAreLocked') : $t('hud.text.noInducements')) : $t('hud.text.waiting'),
   };
 }
 const induceOverdogPanel = computed(() => inducePanel('overdog'));
@@ -6481,7 +6487,7 @@ function presetChoiceFor(seat: 'home' | 'away') {
   const positions = (team.roster as { positionArray?: { positionId: string; positionName?: string }[] }).positionArray ?? [];
   const stars = (team.playerArray ?? []).filter((player) => player.playerType === 'Star').map((player) => ({
     positionId: player.positionId, playerId: player.playerId,
-    name: player.playerName || positions.find((position) => position.positionId === player.positionId)?.positionName || 'Star Player',
+    name: player.playerName || positions.find((position) => position.positionId === player.positionId)?.positionName || $t('hud.stars.starPlayer'),
   }));
   return { items, stars };
 }
@@ -6498,7 +6504,7 @@ function presetPanel(seat: 'home' | 'away', role: InducementRole): PanelView {
     cards: induceRevealCards(presetChoiceFor(seat), team),
     editable: false,
     dimmed: false,
-    emptyNote: replayInducementsOpen.value ? 'Nothing bought.' : 'No predefined inducements.',
+    emptyNote: replayInducementsOpen.value ? $t('hud.text.nothingBought') : $t('hud.text.noPredefinedInducements'),
   };
 }
 const presetHomePanel = computed(() => presetPanel('home', 'overdog'));
@@ -6651,7 +6657,7 @@ async function copyUnknownDetails() {
     await navigator.clipboard.writeText(gameStore.unknownCallDetails());
     unknownCopyStatus.value = 'Copied ✓';
   } catch {
-    unknownCopyStatus.value = 'Copy failed';
+    liveSetHere(unknownCopyStatus, 'value', () => $t('hud.text.copyFailed'));
   }
   setTimeout(() => (unknownCopyStatus.value = ''), 2000);
 }
@@ -6670,7 +6676,7 @@ function exportUnknownLog() {
 function screenshotUnknown() {
   // capture the render canvas as a PNG download (the pitch state at this moment)
   const canvas = pitchHost.value?.querySelector('canvas') as HTMLCanvasElement | null;
-  if (!canvas) { unknownCopyStatus.value = 'No canvas'; return; }
+  if (!canvas) { liveSetHere(unknownCopyStatus, 'value', () => $t('hud.text.noCanvas')); return; }
   try {
     canvas.toBlob((blob) => {
       if (!blob) return;
@@ -6681,9 +6687,9 @@ function screenshotUnknown() {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
-    unknownCopyStatus.value = 'Screenshot saved ✓';
+    liveSetHere(unknownCopyStatus, 'value', () => $t('hud.text.screenshotSaved'));
   } catch {
-    unknownCopyStatus.value = 'Screenshot failed (canvas taint)';
+    liveSetHere(unknownCopyStatus, 'value', () => $t('hud.text.screenshotFailedCanvasTaint'));
   }
   setTimeout(() => (unknownCopyStatus.value = ''), 2500);
 }
@@ -7293,8 +7299,8 @@ const o66MiniPhase = computed<{ prompt: string; quickSnap: boolean } | null>(() 
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return null;
   switch (deriveClientState(g, o66Ctx())) {
-    case 'HIGH_KICK': return { prompt: 'High Kick — click a player to move under the ball, then Confirm.', quickSnap: false };
-    case 'QUICK_SNAP': return { prompt: 'Quick Snap — click a player, then a highlighted square; Confirm when done.', quickSnap: true };
+    case 'HIGH_KICK': return { prompt: $t('hud.o66MiniPhase.highKickClickA'), quickSnap: false };
+    case 'QUICK_SNAP': return { prompt: $t('hud.o66MiniPhase.quickSnapClickA'), quickSnap: true };
     default: return null;
   }
 });
@@ -7535,7 +7541,7 @@ let targetDeclareRaf = 0;
 const targetDeclarePrompt = computed(() => {
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return null;
-  return deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET' ? 'Choose a blitz target' : null;
+  return deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET' ? $t('hud.targetDeclarePrompt.chooseABlitzTarget') : null;
 });
 // Owner 10-15: choosing the target is what spends the team's Blitz (and rolls the player's negatraits), so say so
 // where the target is chosen / confirmed. Server state only: the acting player's skills.
@@ -7550,7 +7556,7 @@ const blitzCostNote = computed(() => {
 });
 /** The Confirm Blitz bar is up and the team's Blitz is not yet spent: the note sits above it. */
 const blitzConfirmCostNote = computed(() => {
-  if (aggroConfirmLabel.value !== 'Confirm Blitz' && o66PendingConfirmLabel.value !== 'Confirm Blitz') return null;
+  if (aggroConfirmKind.value !== 'confirmBlitz' && o66PendingConfirmKind.value !== 'blitz') return null; // kinds, not labels
   const g = gameStore.game.value;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (actingTeamBlitzUsed(g, actingId) === true) return null;
@@ -7717,7 +7723,7 @@ function armHandOffAtDestination(g: NonNullable<typeof gameStore.game.value>, ac
   if (handOffReceiverIdsFrom(g, actingId, dest).includes(receiverId)
       && renderer.armPlannedHandOff(receiverId, sq ? handOffCatchTargetAt(g, sq) : null)) return true;
   const p = sq ? renderer.squareToCanvas(sq) : null;
-  showToast(`Not adjacent to ${squareLabel(dest[0], dest[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+  showToast($t('hud.text.notAdjacentToP0', { p0: squareLabel(dest[0], dest[1]) }), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
   return true;
 }
 /** Confirming a Hand-off card armed from a planned destination: ONE planner plan walks the route one acked square at
@@ -7814,7 +7820,7 @@ function aggroCueLabel(): string | null {
   if (special && ag.stage === 2) return `${BLOCK_KIND_EMOJI[special]} ${BLOCK_KIND_LABEL[special]}`;
   const g = gameStore.game.value;
   if (ag.stage === 2 && g && deriveClientState(g, o66Ctx()) === 'BLITZ') return '✊';
-  if (ag.kind === 'blitz') return '🎯 Declare Blitz?';
+  if (ag.kind === 'blitz') return $t('hud.text.declareBlitz');
   return ag.stage === 2 ? '✊' : null; // block: fist only once declared
 }
 watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, o66PendingHandOff, o66PendingFoul, o66PendingGaze, o66AggroStage], () => {
@@ -7825,7 +7831,7 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
     let label = o66PendingThrowKind.value === 'fireball' ? '🔥'
       : o66PendingThrowKind.value === 'bomb' ? '💣' : '🏈';
     const agLabel = aggroCueLabel();
-    if (o66PendingPunt.value) { sq = o66PendingPunt.value; label = 'Punt scatter preview'; }
+    if (o66PendingPunt.value) { sq = o66PendingPunt.value; label = $t('hud.step.puntScatterPreview'); }
     else if (o66PassDestination.value) sq = o66PassDestination.value;
     else if (o66PendingPass.value) sq = o66PendingPass.value;
     else if (o66PendingHandOff.value) sq = playerSquareById(o66PendingHandOff.value);
@@ -8008,12 +8014,12 @@ const boundingLeapSkillNow = computed(() => {
 const jumpVerb = computed(() => {
   const g = gameStore.game.value;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  if (!g || !actingId) return 'Jump';
+  if (!g || !actingId) return data('Jump'); // the verb is a key (JUMP_GERUND), not shown
   return jumpVerbForPlayer(g, actingId);
 });
 /** ON-state wording for the badge, kept as an explicit map rather than verb+"ing" guessing. */
-const JUMP_GERUND: Readonly<Record<string, string>> = { Jump: 'Jumping', Leap: 'Leaping', Pogo: 'Pogoing' };
-const jumpGerund = computed(() => JUMP_GERUND[jumpVerb.value] ?? 'Jumping');
+const JUMP_GERUND: Readonly<Record<string, string>> = { get Jump() { return $t('hud.jumpBadge.jumping'); }, get Leap() { return $t('hud.jumpBadge.leaping'); }, get Pogo() { return $t('hud.jumpBadge.pogoing'); } };
+const jumpGerund = computed(() => JUMP_GERUND[jumpVerb.value] ?? $t('hud.jumpBadge.jumping'));
 const jumpBadgeOn = computed(() => {
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return false;
@@ -8583,8 +8589,8 @@ const popupPlayer = computed<{ player: PlayerJson; side: 'home' | 'away' } | nul
 
 /** Hover text for the star badge: the rule's name and whether it has been used. */
 function starBadgeTitle(badge: { rules: string[]; usedRules: string[]; used: boolean }): string {
-  if (!badge.rules.length) return 'Star player';
-  return badge.used ? `Star player - ${badge.usedRules.join(', ')} used` : `Star player - ${badge.rules.join(', ')}`;
+  if (!badge.rules.length) return $t('hud.text.starPlayer');
+  return badge.used ? $t('hud.text.starPlayerP0Used', { p0: badge.usedRules.join(', ') }) : $t('hud.text.starPlayerP0', { p0: badge.rules.join(', ') });
 }
 const popupInfo = computed(() => {
   const entry = popupPlayer.value;
@@ -8654,7 +8660,7 @@ const popupInfo = computed(() => {
     // does here. See cardInjuryLines.
     injuries: [
       ...cardInjuryLines(player.lastingInjuries, pdata ? baseState(pdata.playerState) : null, playerResult?.seriousInjury as string | null | undefined),
-      ...(player.recoveringInjury && !onPitchNow ? [`Recovering: ${player.recoveringInjury}`] : []),
+      ...(player.recoveringInjury && !onPitchNow ? [$t('hud.popupInfo.recoveringRecoveringinjury', { recoveringInjury: player.recoveringInjury })] : []),
     ],
   };
 });
@@ -8968,8 +8974,8 @@ function o66SurfaceState(g: GameJson): ClientStateId {
 function showMidActivationToast(g: GameJson, actingId: string) {
   const actorSq = playerSquareById(actingId);
   const p = actorSq ? renderer?.squareToCanvas(actorSq) : null;
-  const actorName = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === actingId)?.playerName || 'Your player';
-  showToast(`${actorName} is mid-activation — End Activation first`, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+  const actorName = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === actingId)?.playerName || $t('hud.actorName.yourPlayer');
+  showToast($t('hud.text.actornameIsMidActivation', { actorName }), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
 }
 function selectO66LocalMover(playerId: string) {
   o66LocalSelection.value = playerId;
@@ -9462,7 +9468,7 @@ function showFriendlyLeftClickMenu(playerId: string, x: number, y: number): bool
   if (!g || !gameStore.iControl(playerId)) return false;
   const actions = availableActions(g, o66Ctx(), playerId);
   const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(actions), playerId, () => {});
-  if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+  if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
   placeCtxMenu(items, x, y, playerId);
   autoShowPopup(playerId);
   return true;
@@ -9702,16 +9708,16 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
     }
     if (deriveClientState(g, o66Ctx()) === 'PASS' && !isHailMaryPassAction(g) && target.playerId === actingId) {
       // Owner o66r: FUMBBL-client behaviour — a declared passer gets "Show pass template" (throw from rest).
-      items.unshift({ label: 'Show pass template', action: () => { passTemplateForced.value = true; o66ArmPassTemplate(actingId); ctxMenu.visible = false; } }); // #250 case ②
+      items.unshift({ get label() { return $t('hud.text.showPassTemplate'); }, action: () => { passTemplateForced.value = true; o66ArmPassTemplate(actingId); ctxMenu.visible = false; } }); // #250 case ②
     }
     // #252 (owner-fg 07-29): "Throw Pass" arms free-select on the declared passer (Tarkin R-1 a3fca567).
     if (canFreeSelectPass(g, o66Ctx()) && target.playerId === actingId) {
-      items.unshift({ label: 'Throw Pass', action: () => { gameStore.armFreeSelectPass(); ctxMenu.visible = false; } });
+      items.unshift({ get label() { return $t('hud.text.throwPass'); }, action: () => { gameStore.armFreeSelectPass(); ctxMenu.visible = false; } });
     }
     // S6: Bounding Leap on every upstream Jump-legal movement state; exact CLIENT_USE_SKILL.
     if (target.playerId === actingId && boundingLeapSkillNow.value) {
       items.unshift({
-        label: 'Bounding Leap',
+        get label() { return $t('hud.text.boundingLeap'); },
         action: () => { gameStore.useBoundingLeap(); ctxMenu.visible = false; },
       });
     }
@@ -9768,7 +9774,7 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
   }
   const items = assembleActingPlayerRows(target, x, y);
   // R1: the disabled placeholder is presentation-only and never participates in disposition.
-  if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+  if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
   placeCtxMenu(items, x, y, target.playerId);
 }
 
@@ -9977,7 +9983,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     }
     ctxMenu.x = Math.min(Math.max(x, 4), Math.max((pitchHost.value?.clientWidth ?? 300) - 130, 4));
     ctxMenu.y = Math.max(y, 4);
-    ctxMenu.items = [{ label: "Opponent's turn — spectating", disabled: true }];
+    ctxMenu.items = [{ get label() { return $t('hud.text.opponentSTurnSpectating'); }, disabled: true }];
     ctxMenu.visible = true;
     return;
   }
@@ -10059,14 +10065,14 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
 
   if (target.isOpposition) {
     if (!selectedId) {
-      items.push({ label: 'Select one of your players first', disabled: true });
+      items.push({ get label() { return $t('hud.text.selectOneOfYour'); }, disabled: true });
     } else {
       const attackerIsHome = selectedIsHome();
       const reachable = r.canApproach(target.square);
       // Q6: Block raises the contextual dice preview (no dedicated button)
       if (!target.isDown && adjacentToPathEnd(target.square)) {
         items.push({
-          label: 'Block',
+          get label() { return $t('hud.text.block'); },
           action: () => {
             r.previewBlock(target.playerId, x, y);
             plannedAction.value = 'Block';
@@ -10099,11 +10105,11 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         });
       }
       if (target.isDown && r.canJumpOver(target.square)) {
-        items.push({ label: 'Jump over', action: () => void r.planJumpOver(target.square) });
+        items.push({ get label() { return $t('hud.text.jumpOver'); }, action: () => void r.planJumpOver(target.square) });
       }
       const specials = specialsOf(selectedId);
       items.push({
-        label: 'Special',
+        get label() { return $t('hud.text.special'); },
         children: specials.length
           ? specials.map((skill) => ({
               label: skill,
@@ -10112,13 +10118,13 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
                 plannedAction.value = skill;
               },
             }))
-          : [{ label: 'None available', disabled: true }],
+          : [{ get label() { return $t('hud.text.noneAvailable'); }, disabled: true }],
       });
-      if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+      if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
     }
   } else if (target.activationSpent) {
     // Q8: nothing actionable renders for a spent player
-    items.push({ label: 'Already activated', disabled: true });
+    items.push({ get label() { return $t('hud.text.alreadyActivated'); }, disabled: true });
   } else {
     const distracted = target.isConfused || target.isHypnotized;
     const suffix = distracted ? ' (distracted)' : '';
@@ -10129,7 +10135,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     };
     // owner 2026-07-03 r3: the Move item is just "Activate"; the others drop the
     // "Declare " prefix (Blitz/Foul/Pass/Handoff).
-    items.push({ label: 'Activate', action: declare('move', 'Move') });
+    items.push({ get label() { return $t('hud.text.activate'); }, action: declare('move', 'Move') });
     for (const [mode, label] of [['blitz', 'Blitz'], ['foul', 'Foul'], ['pass', 'Pass'], ['handoff', 'Handoff']] as [ActionMode, string][]) {
       // Q8 (revised): spent declarations stay visible, shaded "— used"
       const used = !budgetAvailable(mode, target.isHomeTeam);
@@ -10140,11 +10146,11 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
       });
     }
     if (target.isDown && selectedId && selectedId !== target.playerId && r.canJumpOver(target.square)) {
-      items.push({ label: 'Jump over', action: () => void r.planJumpOver(target.square) });
+      items.push({ get label() { return $t('hud.text.jumpOver'); }, action: () => void r.planJumpOver(target.square) });
     }
     const specials = specialsOf(target.playerId);
     items.push({
-      label: 'Special',
+      get label() { return $t('hud.text.special'); },
       children: specials.length
         ? specials.map((skill) => ({
             label: skill,
@@ -10153,7 +10159,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
               plannedAction.value = skill;
             },
           }))
-        : [{ label: 'None available', disabled: true }],
+        : [{ get label() { return $t('hud.text.noneAvailable'); }, disabled: true }],
     });
   }
 
@@ -10166,7 +10172,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     const starRules = starRulesOf(target.playerId);
     if (starRules.length) {
       items.push({
-        label: '★ Star Rules',
+        get label() { return $t('hud.text.starRules'); },
         children: starRules.map((rule) => ({
           label: rule,
           disabled: true, // informational — server-enforced, no client action
@@ -10180,12 +10186,12 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // Alt+Shift + left-click shortcuts). Clear appears once anything is marked.
   const sq = target.square;
   const markChildren: MenuItem[] = [
-    { label: 'Mark Square  (Shift+Click)', action: () => r.toggleMarkSquare(sq) },
-    { label: 'Mark Row  (Ctrl+Shift+Click)', action: () => r.markRow(sq) },
-    { label: 'Mark Column  (Alt+Shift+Click)', action: () => r.markColumn(sq) },
+    { get label() { return $t('hud.markChildren.markSquareShiftClick'); }, action: () => r.toggleMarkSquare(sq) },
+    { get label() { return $t('hud.markChildren.markRowCtrlShift'); }, action: () => r.markRow(sq) },
+    { get label() { return $t('hud.markChildren.markColumnAltShift'); }, action: () => r.markColumn(sq) },
   ];
-  if (r.hasMarks()) markChildren.push({ label: 'Clear all marks', action: () => r.clearMarks() });
-  items.push({ label: 'Mark…', children: markChildren });
+  if (r.hasMarks()) markChildren.push({ get label() { return $t('hud.text.clearAllMarks'); }, action: () => r.clearMarks() });
+  items.push({ get label() { return $t('hud.text.mark'); }, children: markChildren });
 
   const host = pitchHost.value!;
   // Owner (2026-07-03): the declare-action menu was tangling with the bottom
@@ -10358,7 +10364,7 @@ function confirmPassCard(): void {
   const square = passConfirmCard.value?.square ?? null;
   if (plannedFrom && g && square && !passTargetInRangeFrom(g, plannedFrom, square)) {
     const p = renderer?.squareToCanvas(square);
-    showToast(`Out of range from ${squareLabel(plannedFrom[0], plannedFrom[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+    showToast($t('hud.text.outOfRangeFrom', { p0: squareLabel(plannedFrom[0], plannedFrom[1]) }), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
     cancelPassCard();
     return;
   }
@@ -10707,9 +10713,9 @@ function o66ConfirmPending(): boolean {
 function showQuickClickBlitzUnavailable(targetId: string, reason: 'modern' | 'used' | 'unavailable' | 'unreachable' = 'unavailable') {
   const sq = playerSquareById(targetId);
   const p = sq ? renderer?.squareToCanvas(sq) : null;
-  const text = reason === 'used' ? 'Blitz has already been used this turn'
-    : reason === 'unreachable' ? 'Can’t reach a square next to that target'
-      : 'Declare Blitz from the Context Menu';
+  const text = reason === 'used' ? $t('hud.text.blitzHasAlreadyBeen')
+    : reason === 'unreachable' ? $t('hud.text.canTReachA')
+      : $t('hud.text.declareBlitzFromThe');
   showToast(text, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
 }
 /** Fives lane 08-19: confirm the current aggressive stage. Blitz revalidates the menu offer before declaring. */
@@ -10802,15 +10808,25 @@ function confirmAggroStage(): boolean {
   return true;
 }
 /** Bottom confirm-bar label for the armed Blitz/Block stage (null = no bar). */
-const aggroConfirmLabel = computed(() => {
+/** i18n (Astra r2): the bar's KIND is the discriminator code compares; the label is derived from it at render. */
+type AggroConfirmKind = 'special' | 'confirmBlock' | 'confirmBlitz' | 'declareBlock';
+const aggroConfirmKind = computed<AggroConfirmKind | null>(() => {
   const st = o66AggroStage.value;
   if (!st) return null;
-  const special = selectedAggroBlockKind.value;
-  if (special && st.stage === 2) return `Confirm ${BLOCK_KIND_LABEL[special]}`;
+  if (selectedAggroBlockKind.value && st.stage === 2) return 'special';
   const g = gameStore.game.value;
-  if (st.stage === 2 && g && deriveClientState(g, o66Ctx()) === 'BLITZ') return 'Confirm Block';
-  if (st.kind === 'blitz') return 'Confirm Blitz';
-  return st.stage === 1 ? 'Declare Block' : 'Confirm Block';
+  if (st.stage === 2 && g && deriveClientState(g, o66Ctx()) === 'BLITZ') return 'confirmBlock';
+  if (st.kind === 'blitz') return 'confirmBlitz';
+  return st.stage === 1 ? 'declareBlock' : 'confirmBlock';
+});
+const aggroConfirmLabel = computed(() => {
+  const kind = aggroConfirmKind.value;
+  const special = selectedAggroBlockKind.value;
+  if (kind === 'special' && special) return $t('hud.aggroConfirmLabel.confirmP0', { p0: BLOCK_KIND_LABEL[special] });
+  if (kind === 'confirmBlock') return $t('hud.aggroConfirmLabel.confirmBlock');
+  if (kind === 'confirmBlitz') return $t('hud.aggroConfirmLabel.confirmBlitz');
+  if (kind === 'declareBlock') return $t('hud.aggroConfirmLabel.declareBlock');
+  return null;
 });
 /** Owner 10-08: the armed gaze victim can be sent from the gazer's current square (the store's send-time mirror). */
 const canConfirmArmedGaze = computed(() => {
@@ -10820,17 +10836,28 @@ const canConfirmArmedGaze = computed(() => {
 });
 /** #48 (owner, confirm-bar parity): the bottom confirm-bar label for a nominated o66 PUNT, MOVE route or FOUL.
  *  Click/Space both confirm via o66ConfirmPending. Pass/hand-off stay single-click (EX-1) → no bar. */
-const o66PendingConfirmLabel = computed(() => {
+type O66PendingConfirmKind = 'punt' | 'foul' | 'gaze' | 'blitz' | 'move';
+const o66PendingConfirmKind = computed<O66PendingConfirmKind | null>(() => {
   if (!settings.order66 || !gameStore.isPlaying.value || !gameStore.myTurn.value) return null;
   if (o66AggroStage.value || o66PendingLeftClickBlitzPlan.value) return null;
-  if (o66PendingPunt.value) return 'Confirm Punt';
-  if (o66PendingFoul.value) return 'Confirm Foul';
-  if (canConfirmArmedGaze.value) return 'Confirm Gaze';
+  if (o66PendingPunt.value) return 'punt';
+  if (o66PendingFoul.value) return 'foul';
+  if (canConfirmArmedGaze.value) return 'gaze';
   if (o66PendingMove.value) {
     const g = gameStore.game.value;
-    return g && deriveClientState(g, o66Ctx()) === 'BLITZ' ? 'Confirm Blitz' : 'Confirm Move';
+    return g && deriveClientState(g, o66Ctx()) === 'BLITZ' ? 'blitz' : 'move';
   }
   return null;
+});
+const o66PendingConfirmLabel = computed(() => {
+  switch (o66PendingConfirmKind.value) {
+    case 'punt': return $t('hud.o66PendingConfirmLabel.confirmPunt');
+    case 'foul': return $t('hud.o66PendingConfirmLabel.confirmFoul');
+    case 'gaze': return $t('hud.o66PendingConfirmLabel.confirmGaze');
+    case 'blitz': return $t('hud.o66PendingConfirmLabel.confirmBlitz');
+    case 'move': return $t('hud.o66PendingConfirmLabel.confirmMove');
+    default: return null;
+  }
 });
 
 /** Esc clears an undeclared preview locally or cancels a declared action with its state-specific wire; otherwise it closes the popup, ends the activation, then opens Game Menu. */
@@ -11563,6 +11590,7 @@ onMounted(async () => {
   }
 
   const mountedRenderer = new PitchRenderer();
+  mountedRenderer.localiseLabels = true; // i18n (Astra r2 #14): the Modern pitch draws localised words; Classic stays English
   renderer = mountedRenderer;
   // Owner 09-28 (S7 v3): seed the splash-showing flag now the renderer exists — the turnover watcher's `immediate` pass
   // ran (and returned) while `renderer` was still null, so nothing seeded it. A mount mid-splash must suspend the backstop.
@@ -11986,7 +12014,7 @@ onMounted(async () => {
           const plannedFrom = plannedPassDestination();
           if (plannedFrom && !passTargetInRangeFrom(g, plannedFrom, ix.square)) {
             const p = renderer?.squareToCanvas(ix.square);
-            showToast(`Out of range from ${squareLabel(plannedFrom[0], plannedFrom[1])}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+            showToast($t('hud.text.outOfRangeFrom', { p0: squareLabel(plannedFrom[0], plannedFrom[1]) }), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
             return;
           }
           // Receiver-click Pass uses the same two-click nominate/confirm rail as square targeting.
@@ -12020,7 +12048,7 @@ onMounted(async () => {
               const reason = gazeConfirmRefusalReason(g, { ...gameStore.state.gazeIntent!, victimId: playerId });
               const vsq = playerSquareById(playerId);
               const p = vsq ? renderer?.squareToCanvas(vsq) : null;
-              showToast(`Can't gaze — ${reason ?? 'the target is not legal'}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              showToast($t('hud.text.canTGazeP0', { p0: reason ?? 'the target is not legal' }), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
               return;
             }
             if (gazeClick === 'approach') {
@@ -12040,7 +12068,7 @@ onMounted(async () => {
               if (step.kind === 'unreachable') {
                 const vsq = playerSquareById(playerId);
                 const p = vsq ? renderer?.squareToCanvas(vsq) : null;
-                showToast(step.surrounded ? "Can't gaze — the target is surrounded" : "Can't gaze — too far to reach this turn",
+                showToast(step.surrounded ? $t('hud.text.canTGazeThe') : $t('hud.text.canTGazeToo'),
                   p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
                 disarmGazeVictim();
                 return;
@@ -12109,7 +12137,7 @@ onMounted(async () => {
             // 1st click: NOMINATE — never arm a doomed plan (o66ContactReach); teach WHY, plot the walk + 🥾 cue.
             if (reach && reach.status !== 'PATH') {
               const p = vsq ? renderer?.squareToCanvas(vsq) : null;
-              showToast(reach.status === 'SURROUNDED' ? "Can't foul — the victim is surrounded" : "Can't foul — too far to reach this turn",
+              showToast(reach.status === 'SURROUNDED' ? $t('hud.text.canTFoulThe') : $t('hud.text.canTFoulToo'),
                 p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
               o66PendingFoul.value = null;
               return;
@@ -12134,7 +12162,7 @@ onMounted(async () => {
               // 08-11: fouls ride the blitz rail — declare from the context menu, then boot in FOUL state). The old
               // MOVE-state click-to-declare-foul retires (same shape as the auto-blitz retirement); teach the coach.
               const p = enemySq ? renderer?.squareToCanvas(enemySq) : null;
-              showToast('Declare Foul from the player menu before choosing a victim', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              showToast($t('hud.text.declareFoulFromThe'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
               o66PendingFoul.value = null;
               return;
             }
@@ -12146,7 +12174,7 @@ onMounted(async () => {
               const ap = g.actingPlayer as { currentMove?: number; playerAction?: string } | undefined;
               if (Number(ap?.currentMove ?? 0) > 0 && String(ap?.playerAction ?? '') === 'move') {
                 const p = enemySq ? renderer?.squareToCanvas(enemySq) : null;
-                showToast("Can't block after moving — a Blitz must be declared before moving", p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+                showToast($t('hud.text.canTBlockAfter'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
                 return;
               }
             }
@@ -12155,7 +12183,7 @@ onMounted(async () => {
             // declare too (declareAction), this is the teachable surface.
             if (movesRandomly(g, actActingId)) {
               const p = enemySq ? renderer?.squareToCanvas(enemySq) : null;
-              showToast('Ball and Chain can only take a Move action', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              showToast($t('hud.text.ballAndChainCan'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
               o66AggroStage.value = null;
               return;
             }
@@ -12167,7 +12195,7 @@ onMounted(async () => {
             // and would have pre-armed a target past the router gate. Teachable toast, no declare.
             if (!adjacent && !canBeBlocked(g, playerId)) {
               const p = enemySq ? renderer?.squareToCanvas(enemySq) : null;
-              showToast('Can’t blitz a downed player — a blitz can only target a standing enemy', p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              showToast($t('hud.text.canTBlitzA'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
               return;
             }
             if (!adjacent) {
@@ -12306,7 +12334,7 @@ onMounted(async () => {
               }
             };
             const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, refresh);
-            if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+            if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
             placeCtxMenu(items, clickX, clickY, ix.playerId);
             autoShowPopup(ix.playerId);
             return;
@@ -12316,7 +12344,7 @@ onMounted(async () => {
           // server-derived legal declare list the right-click menu already uses. Ordinary players are unchanged.
           if (hasWideRailActivationRule(g, ix.playerId)) {
             const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, () => {});
-            if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+            if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
             placeCtxMenu(items, clickX, clickY, ix.playerId);
             autoShowPopup(ix.playerId);
             return;
@@ -12341,7 +12369,7 @@ onMounted(async () => {
             // Move not offered): the action menu, as upstream's click.
             {
               const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, () => {});
-              if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
+              if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
               placeCtxMenu(items, clickX, clickY, ix.playerId);
               autoShowPopup(ix.playerId);
               return;
@@ -12406,8 +12434,8 @@ onMounted(async () => {
     const handOffFrom = req?.mode === 'handoff' && settings.order66 ? (renderer?.plannedPassOrigin() ?? null) : null;
     actionModal.value = req
       ? { seq: req.seq, mode: req.mode, targetId: req.targetId, rollText: req.rollText,
-          ...(passFrom ? { note: `Pass from ${squareLabel(passFrom[0], passFrom[1])} after moving` } : {}),
-          ...(handOffFrom ? { note: `Hand-off from ${squareLabel(handOffFrom[0], handOffFrom[1])} after moving` } : {}) }
+          ...(passFrom ? { get note() { return $t('hud.text.passFromP0After', { p0: squareLabel(passFrom[0], passFrom[1]) }); } } : {}),
+          ...(handOffFrom ? { get note() { return $t('hud.text.handOffFromP0', { p0: squareLabel(handOffFrom[0], handOffFrom[1]) }); } } : {}) }
       : null;
     if (passFrom && req) { renderer?.setPassRuler(passFrom, req.targetSquare as [number, number]); actionModalPassRuler = true; }
     else if (actionModalPassRuler) { actionModalPassRuler = false; renderer?.setPassRuler(hailMaryPassRulerFrom(), null); }
@@ -13218,14 +13246,14 @@ function openCreateGame() {
 }
 async function loadLibrary() {
   const coach = resolveJoinCreds().coach;
-  if (!coach) { cgStatus.value = 'Set your Super FUMBBL coach name first (Settings → Connection).'; return; }
+  if (!coach) { liveSetHere(cgStatus, 'value', () => $t('hud.text.setYourSuperFumbbl')); return; }
   try {
     const d = await botGet('library', { coach });
     cgLibrary.value = (d.teams as LibraryTeam[]) ?? [];
-    if (cgLibrary.value.length === 0) cgStatus.value = 'Your library is empty — import a team to get started.';
+    if (cgLibrary.value.length === 0) liveSetHere(cgStatus, 'value', () => $t('hud.text.yourLibraryIsEmpty'));
   } catch (e) {
     cgLibrary.value = [];
-    cgStatus.value = `Couldn't load your library (${errText(e)}). Is the Tournament Bot reachable?`;
+    liveSetHere(cgStatus, 'value', () => $t('hud.text.couldnTLoadYour', { p0: errText(e) }));
   }
 }
 function onOpponentInput() {
@@ -13245,25 +13273,25 @@ async function ingestTeam() {
   const team = cgIngestInput.value.trim();
   if (!team) return;
   const coach = resolveJoinCreds().coach;
-  cgBusy.value = true; cgStatus.value = 'Importing team from FUMBBL…';
+  cgBusy.value = true; liveSetHere(cgStatus, 'value', () => $t('hud.text.importingTeamFromFumbbl'));
   try {
     const d = await botPost('library/ingest', { coach, team });
     cgIngestInput.value = '';
     await loadLibrary();
     const t = d.team as LibraryTeam | undefined;
-    cgStatus.value = `✓ Imported “${t?.teamName ?? team}”.`
+    liveSetHere(cgStatus, 'value', () => $t('hud.text.importedP0', { p0: t?.teamName ?? team })
       + (d.raceWarning ? ` ⚠ ${String(d.raceWarning)}` : '')
-      + (d.needsRestart ? ' (playable after the next fork restart)' : '');
+      + (d.needsRestart ? ' (playable after the next fork restart)' : ''));
   } catch (e) {
-    cgStatus.value = `Import failed (${errText(e)}).`;
+    liveSetHere(cgStatus, 'value', () => $t('hud.text.importFailedP0', { p0: errText(e) }));
   } finally { cgBusy.value = false; }
 }
 function selectTeam(t: LibraryTeam) { cgSelectedTeam.value = t; cgChooseOpen.value = false; }
 async function startChallenge() {
   const team = cgSelectedTeam.value;
   const opponent = cgOpponent.value.trim();
-  if (!team) { cgStatus.value = 'Choose a team first.'; return; }
-  if (!opponent) { cgStatus.value = 'Enter an opponent name.'; return; }
+  if (!team) { liveSetHere(cgStatus, 'value', () => $t('hud.text.chooseATeamFirst')); return; }
+  if (!opponent) { liveSetHere(cgStatus, 'value', () => $t('hud.text.enterAnOpponentName')); return; }
   const creds = resolveJoinCreds();
   cgBusy.value = true; cgStatus.value = '';
   try {
@@ -13271,11 +13299,11 @@ async function startChallenge() {
     cgBusy.value = false;
     if (d.status === 'matched') { onMatched(d); return; }
     cgWaiting.value = true;
-    cgStatus.value = `Waiting for ${opponent} to accept the challenge…`;
+    liveSetHere(cgStatus, 'value', () => $t('hud.text.waitingForOpponentTo', { opponent }));
     startMatchPoll();
   } catch (e) {
     cgBusy.value = false;
-    cgStatus.value = `Couldn't start the challenge (${errText(e)}).`;
+    liveSetHere(cgStatus, 'value', () => $t('hud.text.couldnTStartThe', { p0: errText(e) }));
   }
 }
 function startMatchPoll() {
@@ -13294,7 +13322,7 @@ function onMatched(d: Record<string, unknown>) {
   if (jnlp) {
     const req = parseJnlp(jnlp);
     if (req.fork && req.mode === 'player' && req.teamId && (req.gameName || req.gameId)) {
-      cgStatus.value = `Matched with ${opponent} — launching ${req.gameName ? `“${req.gameName}”` : `game ${req.gameId}`}…`;
+      liveSetHere(cgStatus, 'value', () => req.gameName ? $t('hud.matchedLaunchingName', { opponent, name: req.gameName }) : $t('hud.matchedLaunchingGame', { opponent, gameId: req.gameId }));
       createGameOpen.value = false; ui.browserOpen = false;
       applyServerTarget('fork');
       // Server-SCHEDULED match: buildForkJnlp embeds the scheduled -gameId → join that specific game.
@@ -13306,19 +13334,32 @@ function onMatched(d: Record<string, unknown>) {
       return;
     }
   }
-  cgStatus.value = `Matched with ${opponent}, but the server returned no valid JNLP.`;
+  liveSetHere(cgStatus, 'value', () => $t('hud.text.matchedWithOpponentBut', { opponent }));
 }
 async function cancelChallenge() {
   stopMatchPoll(); cgWaiting.value = false;
   const coach = resolveJoinCreds().coach;
   try { await botGet('cancel', { coach }); } catch { /* best effort */ }
-  cgStatus.value = 'Challenge cancelled.';
+  liveSetHere(cgStatus, 'value', () => $t('hud.text.challengeCancelled'));
 }
 onBeforeUnmount(() => { stopMatchPoll(); if (cgSuggestTimer) clearTimeout(cgSuggestTimer); });
 
 // --- B3-9: FUMBBL game browser + ffblive.jnlp intake ---
 const browserMatches = ref<BrowserMatch[]>([]);
-const browserStatus = ref('');
+/** i18n (Astra r1 #3): the list status is a DISCRIMINATOR; its text is derived at render, so a poll can compare it
+ *  in any locale and a language switch re-renders it. */
+type BrowserListStatus = { kind: 'none' } | { kind: 'loading' } | { kind: 'empty' } | { kind: 'local' } | { kind: 'error'; detail: string };
+const browserListStatus = ref<BrowserListStatus>({ kind: 'none' });
+const browserStatus = computed(() => {
+  const s = browserListStatus.value;
+  switch (s.kind) {
+    case 'loading': return $t('hud.text.loadingLiveGames');
+    case 'empty': return $t('hud.text.noLiveGamesRight');
+    case 'local': return $t('hud.text.theLocalSuperFumbbl');
+    case 'error': return $t('hud.text.failedToLoadP0', { p0: s.detail });
+    default: return '';
+  }
+});
 const jnlpInput = ref<HTMLInputElement | null>(null);
 const dropJnlpInput = ref<HTMLInputElement | null>(null); // S44: the Open JNLP control of the official "Connection closed" prompt
 // Owner 2026-07-06: filter the live-game list by ANY rendered string (id, team names,
@@ -13386,17 +13427,16 @@ onBeforeUnmount(() => stopBrowserPoll());
 async function refreshBrowser() {
   if (settings.activeServerTarget !== 'fumbbl') {
     browserMatches.value = [];
-    browserStatus.value =
-      'The local Super FUMBBL server has no live-game list — enter a Game id and Spectate, or Load demo.';
+    browserListStatus.value = { kind: 'local' };
     return;
   }
-  browserStatus.value = 'Loading live games…';
+  browserListStatus.value = { kind: 'loading' };
   try {
     const res = await fetch(`${FUMBBL_SITE}/api/match/current`);
     browserMatches.value = (await res.json()) as BrowserMatch[];
-    browserStatus.value = browserMatches.value.length ? '' : 'No live games right now.';
+    browserListStatus.value = browserMatches.value.length ? { kind: 'none' } : { kind: 'empty' };
   } catch (error) {
-    browserStatus.value = `Failed to load: ${error instanceof Error ? error.message : error}`;
+    browserListStatus.value = { kind: 'error', detail: String(error instanceof Error ? error.message : error) };
   }
 }
 
@@ -13423,8 +13463,8 @@ async function pollBrowser() {
     const res = await fetch(`${FUMBBL_SITE}/api/match/current`);
     const incoming = (await res.json()) as BrowserMatch[];
     mergeMatches(incoming);
-    if (browserStatus.value === '' || browserStatus.value === 'No live games right now.')
-      browserStatus.value = browserMatches.value.length ? '' : 'No live games right now.';
+    if (browserListStatus.value.kind === 'none' || browserListStatus.value.kind === 'empty')
+      browserListStatus.value = browserMatches.value.length ? { kind: 'none' } : { kind: 'empty' };
   } catch {
     /* transient failure — keep the current rows and try again next tick */
   }
@@ -13467,12 +13507,12 @@ async function fumbblLoginNoJnlp() {
   const teamId = fumbblNoJnlpTeamId.value.trim();
   const coach = settings.coach.trim();
   fumbblLoginError.value = null;
-  if (!teamId) { fumbblLoginError.value = 'Enter your FUMBBL team id.'; return; }
-  if (!coach) { fumbblLoginError.value = 'Set your FUMBBL coach name in Settings → Connection.'; return; }
+  if (!teamId) { liveSetHere(fumbblLoginError, 'value', () => $t('hud.text.enterYourFumbblTeam')); return; }
+  if (!coach) { liveSetHere(fumbblLoginError, 'value', () => $t('hud.text.setYourFumbblCoach')); return; }
   fumbblLoginBusy.value = true;
   try {
     const auth = await mintFumbblToken(); // the seam — throws FumbblCredentialsMissing until creds are set
-    const teamName = (await fetchTeamName(teamId)) ?? `Team ${teamId}`;
+    const teamName = (await fetchTeamName(teamId)) ?? $t('hud.teamName.teamTeamid', { teamId });
     applyServerTarget('fumbbl');
     ui.settingsOpen = false;
     // Populate the lobby with exactly the shape a parsed JNLP produces. This legacy
@@ -13484,9 +13524,9 @@ async function fumbblLoginNoJnlp() {
     void refreshBrowser();
     gameStore.appendSystemNotice(`FUMBBL login ready as ${coach} (${teamName}) — no JNLP. Enter a game name to create/join a match.`);
   } catch (e) {
-    fumbblLoginError.value = e instanceof FumbblCredentialsMissing
+    liveSetHere(fumbblLoginError, 'value', () => e instanceof FumbblCredentialsMissing
       ? e.message
-      : `FUMBBL login failed: ${e instanceof Error ? e.message : String(e)}`;
+      : $t('hud.text.fumbblLoginFailedP0', { p0: e instanceof Error ? e.message : String(e) }));
   } finally {
     fumbblLoginBusy.value = false;
   }
@@ -13511,13 +13551,13 @@ async function openJnlpFile(event: Event) {
 // panels, and the Log/Chat/Roster tabs, before opening a player card in-game.
 interface TourStep { sel: string; text: string; place: 'above' | 'below' | 'left' | 'right'; }
 const TOUR_STEPS: TourStep[] = [
-  { sel: '.config-bar', text: 'Quick bar — settings, tackle zones, sprite style, skill display, stadium, Auto Director, the roster (helmet), and report a bug.', place: 'above' },
-  { sel: '.director-btn', text: '🎬 Auto Director — auto-zoom + track the action (the camera follows the ball & the acting player). Toggle it off for a calm, static camera you pan yourself.', place: 'above' },
-  { sel: '.end-turn', text: 'End Turn — ends the active turn. (In the demo it advances play.)', place: 'below' },
-  { sel: '.coach-panel.home', text: "Coach panels — each side's team, coach, score, inducements and turn number. The ACTIVE coach's panel grows.", place: 'below' },
-  { sel: '.tabs button[title="Log"]', text: 'Log — the play-by-play: dice rolls, blocks, injuries and events.', place: 'above' },
-  { sel: '.tabs button[title="Chat"]', text: 'Chat — talk with the coaches and other spectators.', place: 'above' },
-  { sel: '.tabs button.roster-tab', text: "Roster — both teams' full rosters and player stats.", place: 'above' },
+  { sel: '.config-bar', get text() { return $t('hud.tourSteps.quickBarSettingsTackle'); }, place: 'above' },
+  { sel: '.director-btn', get text() { return $t('hud.tourSteps.autoDirectorAutoZoom'); }, place: 'above' },
+  { sel: '.end-turn', get text() { return $t('hud.tourSteps.endTurnEndsThe'); }, place: 'below' },
+  { sel: '.coach-panel.home', get text() { return $t('hud.tourSteps.coachPanelsEachSide'); }, place: 'below' },
+  { sel: '.tabs button[title="Log"]', get text() { return $t('hud.tourSteps.logThePlayBy'); }, place: 'above' },
+  { sel: '.tabs button[title="Chat"]', get text() { return $t('hud.tourSteps.chatTalkWithThe'); }, place: 'above' },
+  { sel: '.tabs button.roster-tab', get text() { return $t('hud.tourSteps.rosterBothTeamsFull'); }, place: 'above' },
 ];
 const TOUR_MS = 3000;
 const tourActive = ref(false);
@@ -13579,7 +13619,7 @@ function finishTour() {
   if (first && renderer?.onPlayerClick) renderer.onPlayerClick(first.playerId, 200, 200);
   tourArrow.x = -999; tourArrow.y = -999; // arrow off-screen for the finale
   tourToast.x = window.innerWidth / 2; tourToast.y = Math.round(window.innerHeight * 0.16); tourToast.anchor = 'top';
-  tourText.value = "That's the tour! This is a player card — click any player to open theirs. Drag panels to taste and explore the demo. Enjoy!";
+  liveSetHere(tourText, 'value', () => $t('hud.text.thatSTheTour'));
   if (tourTimer) clearTimeout(tourTimer);
   tourTimer = setTimeout(endTour, 5500);
 }
@@ -13594,19 +13634,10 @@ watch(() => ui.tutorialTick, (v) => { if (v > 0) startTour(); });
 /** Owner 2026-07-04f: the roster LOCATION/STATUS label — Reserves / KO'd / the
  *  casualty type (Badly Hurt / Seriously Hurt / Dead) / Sent off / On pitch. */
 function playerState(player: PlayerJson): string {
-  const data = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === player.playerId);
-  if (!data) return '—';
-  if (rendersOnPitch(data.playerState)) return 'On pitch';
-  switch (baseState(data.playerState)) {
-    case PlayerStateBase.KNOCKED_OUT: return "KO'd";
-    case PlayerStateBase.BADLY_HURT: return 'Badly Hurt';
-    case PlayerStateBase.SERIOUS_INJURY: return 'Seriously Hurt';
-    case PlayerStateBase.RIP: return 'Dead';
-    case PlayerStateBase.BANNED: return 'Sent off';
-    case PlayerStateBase.MISSING: return 'Missing next game';
-    case PlayerStateBase.RESERVE:
-    default: return 'Reserves';
-  }
+  const pd = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === player.playerId);
+  if (!pd) return '—';
+  // i18n (Astra r1/r2 #4): an invariant STATE TOKEN (game/playerStateToken.ts); playerStateLabel renders it.
+  return playerStateToken(pd.playerState);
 }
 
 /** Owner 2026-07-04f: the roster POSITION NAME (Position Rings sheet key), never
@@ -13735,7 +13766,7 @@ watch(
     const roster = (oppTeam.roster as { positionArray?: { positionId: string; positionName?: string }[] }).positionArray ?? [];
     const stars = (oppTeam.playerArray ?? [])
       .filter((p) => (p as { playerType?: string }).playerType === 'Star')
-      .map((p) => ({ positionId: p.positionId, name: p.playerName || (roster.find((q) => q.positionId === p.positionId)?.positionName ?? 'Star Player'), playerId: p.playerId }));
+      .map((p) => ({ positionId: p.positionId, name: p.playerName || (roster.find((q) => q.positionId === p.positionId)?.positionName ?? $t('hud.stars.starPlayer')), playerId: p.playerId }));
     gameStore.revealOpponentInducements({ items, stars });
   },
 );
@@ -13805,14 +13836,14 @@ const skillChoiceArmorDice = computed<number[] | null>(() => {
 function weatherEffect(weather: string): string {
   const w = weather.toLowerCase();
   if (w.includes('blizzard'))
-    return 'Blizzard — only Quick and Short passes may be attempted; −1 to any Rush (Go-For-It fails on a 1–2).';
+    return $t('hud.text.blizzardOnlyQuickAnd');
   if (w.includes('rain') || w.includes('pour'))
-    return 'Pouring Rain — −1 to any Agility test to Catch, Pick Up, or attempt an Interception.';
+    return $t('hud.text.pouringRain1To');
   if (w.includes('swelter') || w.includes('heat'))
-    return 'Sweltering Heat — at the end of the drive, D3 random players from each team faint and go to the Reserves box.';
+    return $t('hud.text.swelteringHeatAtThe');
   if (w.includes('sunny'))
-    return 'Very Sunny — a glorious day: −1 to any Passing Ability test.';
-  return 'Nice Weather (Perfect Conditions) — nothing but the sound of leather on flesh; no effect.';
+    return $t('hud.text.verySunnyAGlorious');
+  return $t('hud.text.niceWeatherPerfectConditions');
 }
 
 /** B8-2/B8-3: which of the 9 die-face cells carry a pip for a value 1..6. */
@@ -13863,16 +13894,18 @@ const passiveSkillDecisionText = computed(() => {
   // Owner 09-15: once the skill is USED and its follow-up choice is open, the card reads "is using".
   if (choice.using) return reactiveSkillUsingText(gameStore.game.value, choice.playerId, choice.label);
   // S40: with a modifying skill the decision names both skills.
-  const names = choice.modifyingSkill ? `${choice.label} or ${prettySkillName(choice.modifyingSkill)}` : choice.label;
+  const names = choice.modifyingSkill ? $t('hud.passiveSkillDecisionText.labelOrP1', { label: choice.label, p1: prettySkillName(choice.modifyingSkill) }) : choice.label;
   return reactiveSkillDecisionText(gameStore.game.value, choice.playerId, names);
 });
-const endTurnButtonText = computed(() => {
-  if (!gameStore.myTurn.value) return "Opponent's Turn";
+const endTurnButtonKind = computed<'opponent' | 'endTurn' | 'confirmSetup'>(() => {
+  if (!gameStore.myTurn.value) return 'opponent';
   const game = gameStore.game.value;
-  if (!game || !gameStore.isPlaying.value) return 'End Turn';
+  if (!game || !gameStore.isPlaying.value) return 'endTurn';
   const clientState = deriveClientState(game, o66Ctx());
-  return clientState === 'SETUP' || clientState === 'SOLID_DEFENCE' ? 'Confirm Setup' : 'End Turn';
+  return clientState === 'SETUP' || clientState === 'SOLID_DEFENCE' ? 'confirmSetup' : 'endTurn';
 });
+const endTurnButtonText = computed(() => endTurnButtonKind.value === 'opponent' ? $t('hud.endTurnButtonText.opponentSTurn')
+  : endTurnButtonKind.value === 'confirmSetup' ? $t('hud.endTurnButtonText.confirmSetup') : $t('hud.endTurnButtonText.endTurn'));
 
 // Turn clock (owner 2026-07-02): COUNTDOWN from 4 minutes, or the league's `turntime` game option when the match
 // carries one. #39 ①: the remaining time = turnLimit − the RAW server turnTime (state.gameClock, no local tick).
@@ -13889,10 +13922,10 @@ const turnLimitMs = computed(() => {
 const gameOver = computed(() => gameStore.state.endGame.phase !== 'idle');
 const finalPresentationReady = computed(() => gameStore.state.endGame.finalPresentationReady);
 const END_GAME_PHASE_LABELS = {
-  idle: '', initializing: 'End Game · Initializing', assignTouchdowns: 'End Game · Assign Touchdowns',
-  penaltyShootout: 'End Game · Penalty Shootout', mvp: 'End Game · MVP', winnings: 'End Game · Winnings',
-  dedicatedFans: 'End Game · Dedicated Fans', playerLoss: 'End Game · Player Loss',
-  statistics: 'End Game · Statistics', complete: 'Final',
+  idle: '', get initializing() { return $t('hud.endGamePhaseLabels.endGameInitializing'); }, get assignTouchdowns() { return $t('hud.endGamePhaseLabels.endGameAssignTouchdowns'); },
+  get penaltyShootout() { return $t('hud.endGamePhaseLabels.endGamePenaltyShootout'); }, get mvp() { return $t('hud.endGamePhaseLabels.endGameMvp'); }, get winnings() { return $t('hud.endGamePhaseLabels.endGameWinnings'); },
+  get dedicatedFans() { return $t('hud.endGamePhaseLabels.endGameDedicatedFans'); }, get playerLoss() { return $t('hud.endGamePhaseLabels.endGamePlayerLoss'); },
+  get statistics() { return $t('hud.endGamePhaseLabels.endGameStatistics'); }, get complete() { return $t('hud.endGamePhaseLabels.final'); },
 } as const;
 const endGamePhaseLabel = computed(() => END_GAME_PHASE_LABELS[gameStore.state.endGame.phase]);
 // B9-12 G9: clear the stale active-player highlight the moment the game ends,
@@ -13986,9 +14019,9 @@ const prayerBoardPick = computed(() => {
 });
 const prayerBoardTitle = computed(() => {
   const key = prayerBoardPick.value?.key ?? '';
-  if (key.startsWith('pchoice:knuckleDusters:')) return 'Knuckle Dusters';
-  if (key.startsWith('pchoice:ironMan:')) return 'Iron Man';
-  return 'Blessing of Nuffle';
+  if (key.startsWith('pchoice:knuckleDusters:')) return $t('hud.prayerBoardTitle.knuckleDusters');
+  if (key.startsWith('pchoice:ironMan:')) return $t('hud.prayerBoardTitle.ironMan');
+  return $t('hud.prayerBoardTitle.blessingOfNuffle');
 });
 // Owner audit 08-17 (P1 — Iron Man/Knuckle Dusters cannot reach every offered reserve): the
 // armed pitch/dugout crosshair (renderer.ts onPlayerPick, now dugout-aware) reaches most
@@ -14076,7 +14109,7 @@ const assignPanel = computed(() => {
 });
 const assignRosterPick = computed<RosterPick | null>(() => {
   const pick = assignPick.value;
-  return pick ? { eligibleIds: pick.eligibleIds, selectedIds: pick.picked, input: 'radio', label: 'Assign Touchdown' } : null;
+  return pick ? { eligibleIds: pick.eligibleIds, selectedIds: pick.picked, input: 'radio', get label() { return $t('hud.assignRosterPick.assignTouchdown'); } } : null;
 });
 /** A row already selected is left alone (the radio never toggles off); anything else goes to the store as before. */
 function onAssignRosterPick(playerId: string) {
@@ -14278,7 +14311,7 @@ const mvpChips = computed(() => {
   const order: ('home' | 'away')[] = mvpMySide.value === 'home' ? ['home', 'away'] : ['away', 'home'];
   return order.map((side) => {
     const r = mvpRoll.value[side];
-    const display = r.phase === 'awaiting' ? 'Pending...' : r.phase === 'none' ? 'No MVP' : (r.display || 'Pending...');
+    const display = r.phase === 'awaiting' ? 'Pending...' : r.phase === 'none' ? $t('hud.mvpChips.noMvp') : (r.display || 'Pending...');
     // Render each authoritative MVP award separately, including duplicate awards to the same player.
     const winners = (pg ? pg[side].mvps : []).map((m) => ({ id: m.playerId, name: m.name, awards: m.awards }));
     return { side, mine: side === mvpMySide.value, team: pg ? pg[side].team : '', phase: r.phase, display, flash: mvpFlashSide.value === side, portrait: mvpPortrait.value[side], winners };
@@ -14292,7 +14325,7 @@ const assignWaitingText = computed(() => {
   const teamId = gameStore.state.endGame.dialog?.teamId;
   const g = gameStore.game.value;
   const mine = g ? (gameStore.myTeamIsHome.value ? g.teamHome : g.teamAway).teamId : null;
-  return teamId && mine && teamId !== mine ? 'Waiting for opponent' : 'Waiting for server';
+  return teamId && mine && teamId !== mine ? $t('hud.assignWaitingText.waitingForOpponent') : $t('hud.assignWaitingText.waitingForServer');
 });
 const assignRoundKey = ref(0);
 let lastAssignPickSeq = -1;
@@ -14461,7 +14494,7 @@ function endTurn() {
   // is wrong, with arrows on the offending players. Only the confirmation submits (setupSubmit: the validity guard +
   // the coordinate map a Solid Defence re-setup needs).
   if (setupPhase.value) { openSetupConfirm(); return; }
-  if (endTurnButtonText.value === 'Confirm Setup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
+  if (endTurnButtonKind.value === 'confirmSetup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
   // #8: idle players → raise the confirm modal; only its "End turn" proceeds.
   const idle = unactivatedOwnIds();
   // Astra review 10-04: End Turn also ends a Hand-off / Pass that is still in progress (the active player is never
@@ -14499,17 +14532,17 @@ function cancelEndTurnWarn() {
 // #12/#231: one reusable guard owns Escape-driven activation ends plus the existing Blitz triggers. Confirm uses
 // the unchanged clear-selection + endActivation effects; decline only dismisses the modal and sends no wire.
 // `roll`/`title` (Spec S15B): a confirm opened by an explicit End gesture over a live Activate intent rolls when confirmed.
-type EndActivationConfirm = { kind: EndActivationConfirmKind; text: string; confirmLabel: string; roll?: boolean; title?: string };
+type EndActivationConfirm = { kind: EndActivationConfirmKind; text: string; confirmLabel: string; roll?: boolean; title?: string; cancels?: boolean };
 const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActivationConfirm, 'kind'>> = {
-  blitz: { text: 'Are you sure you want to end your blitz?', confirmLabel: 'End blitz' },
+  blitz: { get text() { return $t('hud.endActivationConfirmCopy.areYouSureYou'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmBlitz'); } },
   // Owner punt-① (08-12): the parallel PUNT commission specializes the copy, mirroring the blitz idiom.
-  punt: { text: 'End your punt?', confirmLabel: 'End punt' },
+  punt: { get text() { return $t('hud.endActivationConfirmCopy.endYourPunt'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmPunt'); } },
   // Owner 10-04: Hand-off and Pass get the blitz idiom - they are once per turn.
-  handOver: { text: 'Are you sure you want to end your hand-off?', confirmLabel: 'End hand-off' },
-  pass: { text: 'Are you sure you want to end your pass action?', confirmLabel: 'End pass' },
+  handOver: { get text() { return $t('hud.endActivationConfirmCopy.areYouSureYou2'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmHandOver'); } },
+  pass: { get text() { return $t('hud.endActivationConfirmCopy.areYouSureYou3'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmPass'); } },
   // Owner 10-07: a Foul gets the same idiom.
-  foul: { text: 'Are you sure you want to end your foul?', confirmLabel: 'End foul' },
-  generic: { text: 'End activation?', confirmLabel: 'End activation' },
+  foul: { get text() { return $t('hud.endActivationConfirmCopy.areYouSureYou4'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmFoul'); } },
+  generic: { get text() { return $t('hud.endActivationConfirmCopy.endActivation'); }, get confirmLabel() { return $t('hud.endActivationConfirmCopy.confirmGeneric'); } },
 };
 const endActConfirm = ref<EndActivationConfirm | null>(null);
 // (placed below the refs it reads: a watch source above them would hit the temporal dead zone at setup)
@@ -14571,36 +14604,40 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
   if (kind === 'blitz' && blitzUntouched(gameStore.game.value)) {
     endActConfirm.value = {
       kind,
-      text: 'Cancel your blitz? This player has not moved or blocked yet, so your Blitz action will be refunded for this turn.',
-      confirmLabel: 'Cancel Blitz',
-      title: 'Cancel Blitz', // owner 10-05: the pane read "END ACTIVATION"
+      get text() { return $t('hud.text.cancelYourBlitzThis'); },
+      confirmLabel: $t('hud.text.cancelBlitz'),
+      get title() { return $t('hud.text.cancelBlitz'); }, // owner 10-05: the pane read "END ACTIVATION"
     };
+    endActConfirm.value.cancels = true; // i18n 10-23: a flag, not the (localised) label text
     return;
   }
   // Owner 10-04: a Hand-off / Pass that has not started (declared, no squares moved) is still free to cancel.
   if ((kind === 'handOver' || kind === 'pass') && blitzUntouched(gameStore.game.value)) {
     endActConfirm.value = {
       kind,
-      text: kind === 'handOver' ? 'Cancel your hand-off? This player has not moved yet.' : 'Cancel your pass? This player has not moved yet.',
-      confirmLabel: kind === 'handOver' ? 'Cancel Hand-off' : 'Cancel Pass',
-      title: kind === 'handOver' ? 'Cancel Hand-off' : 'Cancel Pass',
+      text: kind === 'handOver' ? $t('hud.text.cancelYourHandOff') : $t('hud.text.cancelYourPassThis'),
+      confirmLabel: kind === 'handOver' ? $t('hud.text.cancelHandOff') : $t('hud.text.cancelPass'),
+      title: kind === 'handOver' ? $t('hud.text.cancelHandOff') : $t('hud.text.cancelPass'),
     };
+    endActConfirm.value.cancels = true; // i18n 10-23: a flag, not the (localised) label text
     return;
   }
   // Owner 10-07: the same for a declared Foul that has not started (no squares moved). Copy only; the wire is the
   // same endActivation the right-click / Escape cancel always sent.
   if (kind === 'foul' && blitzUntouched(gameStore.game.value)) {
-    endActConfirm.value = { kind, text: 'Cancel your foul? This player has not moved yet.', confirmLabel: 'Cancel Foul', title: 'Cancel Foul' };
+    endActConfirm.value = { kind, get text() { return $t('hud.text.cancelYourFoulThis'); }, confirmLabel: $t('hud.text.cancelFoul'), get title() { return $t('hud.text.cancelFoul'); } };
+    endActConfirm.value.cancels = true; // i18n 10-23: a flag, not the (localised) label text
     return;
   }
   // Owner 09-20: the same idiom for a PUNT that has not started (declared, no squares moved, nothing kicked).
   if (kind === 'punt' && blitzUntouched(gameStore.game.value)) {
     endActConfirm.value = {
       kind,
-      text: 'Cancel your punt? This player has not moved yet.',
-      confirmLabel: 'Cancel Punt',
-      title: 'Cancel Punt',
+      get text() { return $t('hud.text.cancelYourPuntThis'); },
+      confirmLabel: $t('hud.text.cancelPunt'),
+      get title() { return $t('hud.text.cancelPunt'); },
     };
+    endActConfirm.value.cancels = true; // i18n 10-23: a flag, not the (localised) label text
     return;
   }
   const actingId = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -14698,7 +14735,7 @@ function confirmEndActivation() {
   const kind = endActConfirm.value?.kind;
   const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
   // Owner 10-19: a "Cancel Blitz" etc. card; Astra r3: never over a step / block still unanswered.
-  const cancelsAction = !!endActConfirm.value?.confirmLabel?.startsWith('Cancel') && !gameStore.gameplaySendUnanswered();
+  const cancelsAction = !!endActConfirm.value?.cancels && !gameStore.gameplaySendUnanswered(); // i18n 10-23: a flag, not the (localised) label text
   // Owner 10-08: this Yes is the coach's one confirmation for the back-out. The store spends it only on the server's
   // confirmEndAction for this same Hypnotic Gaze activation (an unused gaze), so the coach is not asked a second time.
   if (endActConfirm.value) gameStore.noteEndActivationConfirmed();
@@ -14784,9 +14821,9 @@ function sendChat() {
 <template>
   <div class="spectate" :style="presentationCssVars">
     <!-- Owner 10-06: live panel-layout mode (entered from Settings > Customize UI Layout) ends with this centred button. -->
-    <div v-if="settings.uiCustomize" class="ui-customize-bar" role="toolbar" aria-label="Panel layout">
-      <span class="ui-customize-hint">Drag the ⠿ grips to move panels and the ⤡ handles to resize them.</span>
-      <button type="button" class="ui-customize-confirm" @click="confirmUiLayout">Confirm Layout</button>
+    <div v-if="settings.uiCustomize" class="ui-customize-bar" role="toolbar" :aria-label="$t('hud.uiCustomizeBar.panelLayout')">
+      <span class="ui-customize-hint">{{ $t('hud.uiCustomizeBar.dragTheGripsTo') }}</span>
+      <button type="button" class="ui-customize-confirm" @click="confirmUiLayout">{{ $t('hud.uiCustomizeBar.confirmLayout') }}</button>
     </div>
     <!-- owner 2026-07-03 r6f Option A: the green connect bar is REMOVED. The header
          "Browse" button (App.vue) opens the game browser below as the primary
@@ -14796,11 +14833,11 @@ function sendChat() {
     <!-- Owner 2026-07-09: a join failure (finished/unavailable game, timeout, or refused join) is now
          a CENTERED modal like the Reconnect/Disconnect screen — click anywhere to dismiss. -->
     <div v-if="gameStore.state.joinError" class="conn-closed-overlay" role="alertdialog" aria-modal="true"
-      title="Click to dismiss" @click="gameStore.state.joinError = null">
+      :title="$t('hud.connClosedOverlay.clickToDismiss')" @click="gameStore.state.joinError = null">
       <div class="conn-closed-card">
-        <h2>Couldn't join</h2>
+        <h2>{{ $t('hud.connClosedOverlay.couldnTJoin') }}</h2>
         <p>{{ gameStore.state.joinError }}</p>
-        <p class="hint">Click anywhere to dismiss.</p>
+        <p class="hint">{{ $t('hud.connClosedOverlay.clickAnywhereToDismiss') }}</p>
       </div>
     </div>
 
@@ -14810,26 +14847,26 @@ function sendChat() {
          fallback (spectators, or once auto-retries are exhausted). -->
     <div v-if="gameStore.state.connectionClosed" class="conn-closed-overlay" role="alertdialog" aria-modal="true">
       <div class="conn-closed-card">
-        <h2>Connection closed</h2>
+        <h2>{{ $t('hud.connClosedOverlay.connectionClosed') }}</h2>
         <p v-if="gameStore.state.connectionClosed.reconnecting" class="conn-closed-status">
           <span class="conn-spinner" aria-hidden="true"></span>
-          Reconnecting to {{ gameStore.state.connectionClosed.label }}…
+          {{ $t('hud.connClosedOverlay.reconnectingToLabel', { label: gameStore.state.connectionClosed.label }) }}
         </p>
         <p v-else>
-          Lost connection to {{ gameStore.state.connectionClosed.label }}<span v-if="gameStore.state.connectionClosed.code"> (code {{ gameStore.state.connectionClosed.code }})</span>.<span v-if="gameStore.state.connectionClosed.reason"> The server said: {{ gameStore.state.connectionClosed.reason }}</span>
+          {{ $t('hud.connClosedOverlay.lostConnectionToLabel', { label: gameStore.state.connectionClosed.label }) }}<span v-if="gameStore.state.connectionClosed.code"> {{ $t('hud.connClosedOverlay.codeCode', { code: gameStore.state.connectionClosed.code }) }}</span>.<span v-if="gameStore.state.connectionClosed.reason"> {{ $t('hud.connClosedOverlay.theServerSaidReason', { reason: gameStore.state.connectionClosed.reason }) }}</span>
         </p>
         <!-- S44: an official game has no automatic reconnect — Reconnect is one password rejoin per click, and without a saved password only a fresh JNLP can get back in. -->
         <p v-if="gameStore.state.connectionClosed.official && !gameStore.state.connectionClosed.reconnecting && !officialRejoinTarget()" class="hint">
-          {{ officialRejoinBlocker() || 'A fresh JNLP is needed to get back into this game.' }}
+          {{ officialRejoinBlocker() || $t('hud.connClosedOverlay.aFreshJnlpIs') }}
         </p>
         <p v-if="gameStore.state.connectionClosed.official && !gameStore.state.connectionClosed.reconnecting && officialRejoinTarget()?.viaJnlp" class="hint">
-          Reconnect uses your saved FUMBBL password (the JNLP cannot be used twice).
+          {{ $t('hud.connClosedOverlay.reconnectUsesYourSaved') }}
         </p>
         <div class="conn-closed-actions">
-          <button v-if="!gameStore.state.connectionClosed.reconnecting && gameStore.state.connectionClosed.official && !officialRejoinTarget()" type="button" class="primary" @click="dropJnlpInput?.click()">Open JNLP</button>
-          <button v-else-if="!gameStore.state.connectionClosed.reconnecting" type="button" class="primary" @click="gameStore.state.connectionClosed.official ? rejoinOfficialGame() : gameStore.reconnect()">Reconnect</button>
+          <button v-if="!gameStore.state.connectionClosed.reconnecting && gameStore.state.connectionClosed.official && !officialRejoinTarget()" type="button" class="primary" @click="dropJnlpInput?.click()">{{ $t('hud.connClosedOverlay.openJnlp') }}</button>
+          <button v-else-if="!gameStore.state.connectionClosed.reconnecting" type="button" class="primary" @click="gameStore.state.connectionClosed.official ? rejoinOfficialGame() : gameStore.reconnect()">{{ $t('hud.connClosedOverlay.reconnect') }}</button>
           <input ref="dropJnlpInput" type="file" accept=".jnlp,text/xml" style="display: none" @change="openJnlpFile" />
-          <button type="button" @click="gameStore.state.connectionClosed.reconnecting ? gameStore.cancelReconnect() : gameStore.disconnect()">{{ gameStore.state.connectionClosed.reconnecting ? 'Cancel' : 'Disconnect' }}</button>
+          <button type="button" @click="gameStore.state.connectionClosed.reconnecting ? gameStore.cancelReconnect() : gameStore.disconnect()">{{ gameStore.state.connectionClosed.reconnecting ? $t('hud.connClosedOverlay.cancel') : $t('hud.connClosedOverlay.disconnect') }}</button>
         </div>
       </div>
     </div>
@@ -14851,15 +14888,15 @@ function sendChat() {
       <div class="concede-card">
         <!-- #25-v2 (owner ask #1): the CONCEDING coach gets the "no MVP" explanation; spectators + the opponent see the generic notice. -->
         <template v-if="iConceded">
-          <h2>You conceded</h2>
-          <p>No MVP is awarded. Conceding forfeits the MVP, winnings and SPP.</p>
+          <h2>{{ $t('hud.concedeOverlay.youConceded') }}</h2>
+          <p>{{ $t('hud.concedeOverlay.noMvpIsAwarded') }}</p>
         </template>
         <template v-else>
-          <h2>Game conceded</h2>
-          <p><b>{{ visibleConcedeNotice.coach || visibleConcedeNotice.teamName || 'A coach' }}</b> conceded the match.</p>
+          <h2>{{ $t('hud.concedeOverlay.gameConceded') }}</h2>
+          <p><b>{{ visibleConcedeNotice.coach || visibleConcedeNotice.teamName || $t('hud.concedeOverlay.aCoach') }}</b>{{ $t('hud.concedeOverlay.concededTheMatch') }}</p>
           <p v-if="visibleConcedeNotice.coach && visibleConcedeNotice.teamName" class="concede-team">{{ visibleConcedeNotice.teamName }}</p>
         </template>
-        <button type="button" @click="dismissConcedeNotice">View result</button>
+        <button type="button" @click="dismissConcedeNotice">{{ $t('hud.concedeOverlay.viewResult') }}</button>
       </div>
     </div>
 
@@ -14868,10 +14905,10 @@ function sendChat() {
          off underneath. The only action is to leave — no reconnect (the game is gone). -->
     <div v-if="gameStore.state.gameShutdown" class="shutdown-overlay" role="alertdialog" aria-modal="true">
       <div class="shutdown-card">
-        <h2>Match ended</h2>
+        <h2>{{ $t('hud.shutdownOverlay.matchEnded') }}</h2>
         <p>{{ gameStore.state.gameShutdown.reason }}</p>
-        <p class="shutdown-sub">The server closed this match<span v-if="gameStore.state.gameShutdown.code"> (code {{ gameStore.state.gameShutdown.code }})</span>. It can't be resumed.</p>
-        <button type="button" @click="gameStore.disconnect()">Leave</button>
+        <p class="shutdown-sub">{{ $t('hud.shutdownOverlay.theServerClosedThis') }}<span v-if="gameStore.state.gameShutdown.code"> {{ $t('hud.shutdownOverlay.codeCode', { code: gameStore.state.gameShutdown.code }) }}</span>{{ $t('hud.shutdownOverlay.itCanTBe') }}</p>
+        <button type="button" @click="gameStore.disconnect()">{{ $t('hud.shutdownOverlay.leave') }}</button>
       </div>
     </div>
 
@@ -14884,29 +14921,29 @@ function sendChat() {
         <div class="gb-toolbar">
           <!-- owner 2026-07-09: the FUMBBL / Super FUMBBL server toggle moved UP to the header (server
                is chosen first, before Play/Spectate). This toolbar shows the active server as a label. -->
-          <span class="gb-server-label" :data-server="settings.activeServerTarget">{{ settings.activeServerTarget === 'fumbbl' ? 'FUMBBL' : 'Super FUMBBL' }}</span>
+          <span class="gb-server-label" :data-server="settings.activeServerTarget">{{ settings.activeServerTarget === 'fumbbl' ? 'FUMBBL' : $t('hud.superFumbbl') }}</span>
           <!-- owner 2026-07-08 (UI restructure): the fork server IP + Bot URL moved to
                Settings → Connection (out of the browser bar). -->
           <input v-model="browserFilter" type="search" class="gb-filter"
-            :placeholder="isPlayMode ? 'Filter (coach / team / id…)' : 'Filter, or type a game id + Enter to spectate'"
-            :title="isPlayMode ? 'Filter the list by any text — e.g. a coach or team name, or a game id'
-              : 'Filter the list by any text; or type an exact game id and press Enter to spectate it directly'"
+            :placeholder="isPlayMode ? $t('hud.filterCoachTeamId') : $t('hud.filterOrTypeA')"
+            :title="isPlayMode ? $t('hud.filterTheListBy')
+              : $t('hud.filterTheListBy2')"
             @keyup.enter="onFilterEnter" />
           <span v-if="browserPolling && settings.activeServerTarget === 'fumbbl'" class="gb-live"
-            title="Auto-updating every 30s (stops after 5 min)">● live</span>
-          <button type="button" class="gb-refresh" title="Refresh the list" @click="refreshBrowser()">↻</button>
-          <button type="button" class="gb-close" title="Close (back to the pitch)" @click="ui.browserOpen = false">✕</button>
+            :title="$t('hud.autoUpdatingEvery30s')">{{ $t('hud.live') }}</span>
+          <button type="button" class="gb-refresh" :title="$t('hud.refreshTheList')" @click="refreshBrowser()">↻</button>
+          <button type="button" class="gb-close" :title="$t('hud.closeBackToThe')" @click="ui.browserOpen = false">✕</button>
         </div>
 
         <!-- Lobby entry follows Play/Spectate and branch selection; FUMBBL live play remains JNLP-only. -->
         <!-- FUMBBL live-play LOBBY (owner 2026-07-09): shown after opening a FUMBBL player JNLP.
              Enter a game name to create/join a match by name, or Join a live game from the list. -->
         <div v-if="fumbblLobby" class="gb-entry gb-fumbbl-lobby">
-          <p class="hint">FUMBBL — playing as <strong>{{ fumbblLobby.coach }}</strong> with <strong>{{ fumbblLobby.teamName }}</strong>. Enter a game name (both coaches use the <em>same</em> name — the 2nd to join starts the game).</p>
+          <p class="hint">{{ $t('hud.fumbblPlayingAs') }} <strong>{{ fumbblLobby.coach }}</strong>{{ $t('hud.with') }} <strong>{{ fumbblLobby.teamName }}</strong>{{ $t('hud.enterAGameName') }} <em>{{ $t('hud.same') }}</em>{{ $t('hud.nameThe2ndTo') }}</p>
           <form class="gb-entry-row" @submit.prevent="fumbblJoinByName()">
-            <input v-model="fumbblLobbyGameName" type="text" placeholder="Game name" size="16" autofocus />
-            <button type="submit" :disabled="!fumbblLobbyGameName.trim()">Create / Join by name</button>
-            <button type="button" class="gb-close" title="Cancel this FUMBBL join" @click="clearFumbblLobby()">Cancel</button>
+            <input v-model="fumbblLobbyGameName" type="text" :placeholder="$t('hud.gbEntryRow.gameName')" size="16" autofocus />
+            <button type="submit" :disabled="!fumbblLobbyGameName.trim()">{{ $t('hud.gbEntryRow.createJoinByName') }}</button>
+            <button type="button" class="gb-close" :title="$t('hud.gbEntryRow.cancelThisFumbblJoin')" @click="clearFumbblLobby()">{{ $t('hud.gbEntryRow.cancel') }}</button>
           </form>
         </div>
         <div class="gb-entry">
@@ -14918,13 +14955,13 @@ function sendChat() {
                  create/browse-a-new-game controls, per Yularen's pinned shape. -->
             <div class="gb-mygames">
               <div class="gb-mygames-head">
-                <span class="gb-mygames-title">Your games in progress</span>
-                <button type="button" class="gb-refresh" title="Refresh your games" :disabled="myGamesLoading"
+                <span class="gb-mygames-title">{{ $t('hud.yourGamesInProgress') }}</span>
+                <button type="button" class="gb-refresh" :title="$t('hud.refreshYourGames')" :disabled="myGamesLoading"
                   @click="loadMyGames(true)">↻</button>
               </div>
-              <p v-if="myGamesLoading" class="hint">Loading your games…</p>
-              <p v-else-if="myGamesError" class="hint gb-mygames-err">Couldn't load your games — {{ myGamesError }}</p>
-              <p v-else-if="!myGames.length" class="hint">No games in progress — create or join one below, or rejoin by id.</p>
+              <p v-if="myGamesLoading" class="hint">{{ $t('hud.loadingYourGames') }}</p>
+              <p v-else-if="myGamesError" class="hint gb-mygames-err">{{ $t('hud.couldnTLoadYour', { myGamesError }) }}</p>
+              <p v-else-if="!myGames.length" class="hint">{{ $t('hud.noGamesInProgress') }}</p>
               <ul v-else class="gb-mygames-list">
                 <li v-for="g in myGames" :key="g.gameId" class="gb-mygames-row">
                   <span class="gb-mygames-vs">
@@ -14933,31 +14970,31 @@ function sendChat() {
                   <!-- inProgress = the distinct-label discriminator (false ⇒ scheduled). Time keys on scheduled-or-
                        started, never `started` alone (null on scheduled rows). -->
                   <span class="gb-mygames-status" :data-inprogress="g.inProgress">
-                    {{ g.inProgress ? (g.half ? `H${g.half} T${g.turn}` : 'in progress') : 'scheduled' }}
+                    {{ g.inProgress ? (g.half ? `H${g.half} T${g.turn}` : $t('hud.gbMygamesList.inProgress')) : 'scheduled' }}
                   </span>
-                  <button type="button" class="gb-rejoin-btn" title="Rejoin this game" @click="rejoinMyGame(g)">Rejoin</button>
+                  <button type="button" class="gb-rejoin-btn" :title="$t('hud.gbMygamesList.rejoinThisGame')" @click="rejoinMyGame(g)">{{ $t('hud.gbMygamesList.rejoin') }}</button>
                 </li>
               </ul>
             </div>
             <!-- #211: manual REJOIN BY GAME ID — the fallback beneath the rows for a game not in the list. -->
             <form class="gb-entry-row gb-entry-quick gb-rejoin" @submit.prevent="rejoinByGameId()"
-              title="Rejoin one of your in-progress games by its game id — for a game that dropped from the list above (e.g. after a disconnect)">
-              <input v-model="rejoinGameId" type="text" inputmode="numeric" placeholder="Rejoin game id" size="10"
-                title="The numeric game id of your in-progress game" />
-              <button type="submit" :disabled="!rejoinGameId.trim()">Rejoin</button>
+              :title="$t('hud.gbEntryRow.rejoinOneOfYour')">
+              <input v-model="rejoinGameId" type="text" inputmode="numeric" :placeholder="$t('hud.gbEntryRow.rejoinGameId')" size="10"
+                :title="$t('hud.gbEntryRow.theNumericGameId')" />
+              <button type="submit" :disabled="!rejoinGameId.trim()">{{ $t('hud.gbEntryRow.rejoin') }}</button>
             </form>
             <div class="gb-entry-row">
-              <button type="button" class="gb-creategame" title="Pick a team from your library + challenge an opponent by name"
-                @click="openCreateGame">Create Game ✦</button>
-              <button type="button" class="gb-import" title="Import a team from FUMBBL into your fork library (opens Create Game, where the team-import field lives)"
-                @click="openCreateGame">Import Team ↓</button>
+              <button type="button" class="gb-creategame" :title="$t('hud.gbEntryRow.pickATeamFrom')"
+                @click="openCreateGame">{{ $t('hud.gbEntryRow.createGame') }}</button>
+              <button type="button" class="gb-import" :title="$t('hud.gbEntryRow.importATeamFrom')"
+                @click="openCreateGame">{{ $t('hud.gbEntryRow.importTeam') }}</button>
             </div>
             <form class="gb-entry-row gb-entry-quick" @submit.prevent="joinPlay()"
-              title="Quick join/create by name — both coaches use the SAME name; the 2nd join starts the game">
-              <input v-model="gameName" type="text" placeholder="Game name" size="12" />
-              <input v-model="playTeamId" type="text" placeholder="Team id" size="9"
-                title="Your fork team id (the number in the FUMBBL team URL, e.g. 1272390)" />
-              <button type="submit">Play</button>
+              :title="$t('hud.gbEntryRow.quickJoinCreateBy')">
+              <input v-model="gameName" type="text" :placeholder="$t('hud.gbEntryRow.gameName')" size="12" />
+              <input v-model="playTeamId" type="text" :placeholder="$t('hud.gbEntryRow.teamId')" size="9"
+                :title="$t('hud.gbEntryRow.yourForkTeamId')" />
+              <button type="submit">{{ $t('hud.gbEntryRow.play') }}</button>
             </form>
           </template>
           <template v-else-if="isPlayMode">
@@ -14967,50 +15004,50 @@ function sendChat() {
                  token baked in at build time (see game/fumbblAuth.ts) — occluded from settings; the
                  form only shows when the build carries it, otherwise the JNLP path is the fallback. -->
             <form v-if="fumbblApiConfigured()" class="gb-entry-row gb-entry-quick" @submit.prevent="fumbblLoginNoJnlp()"
-              title="Log in to FUMBBL and mint a play token directly — no .jnlp file needed">
-              <input v-model="fumbblNoJnlpTeamId" type="text" placeholder="Team id" size="10"
-                title="Your FUMBBL team id (the number in the team URL, e.g. 1276734)" />
+              :title="$t('hud.gbEntryRow.logInToFumbbl')">
+              <input v-model="fumbblNoJnlpTeamId" type="text" :placeholder="$t('hud.gbEntryRow.teamId')" size="10"
+                :title="$t('hud.gbEntryRow.yourFumbblTeamId')" />
               <button type="submit" :disabled="fumbblLoginBusy || !fumbblNoJnlpTeamId.trim()">
-                {{ fumbblLoginBusy ? 'Logging in…' : 'Log in (no JNLP)' }}
+                {{ fumbblLoginBusy ? $t('hud.gbEntryRow.loggingIn') : $t('hud.gbEntryRow.logInNoJnlp') }}
               </button>
             </form>
             <p v-if="fumbblLoginError" class="hint gb-fumbbl-err">{{ fumbblLoginError }}</p>
             <div class="gb-entry-row">
               <button type="button" class="gb-creategame" disabled
-                title="FUMBBL-live play runs through FUMBBL's own client — use Log in or Open .jnlp">Create Game ✦</button>
+                :title="$t('hud.gbEntryRow.fumbblLivePlayRuns')">{{ $t('hud.gbEntryRow.createGame') }}</button>
               <button type="button" @click="jnlpInput?.click()"
-                title="Open a FUMBBL .jnlp — the classic path if you don't use API login">Open .jnlp…</button>
+                :title="$t('hud.gbEntryRow.openAFumbblJnlp')">{{ $t('hud.gbEntryRow.openJnlp') }}</button>
             </div>
           </template>
           <!-- Testbed shortcuts (dev): demos + captured-block replay. -->
           <details class="gb-testbed">
-            <summary>Testbed ▸</summary>
+            <summary>{{ $t('hud.testbed') }}</summary>
             <div class="gb-entry-row">
-              <button type="button" class="gb-demo" @click="gameStore.loadDemo(); ui.browserOpen = false">Load demo</button>
-              <button type="button" class="gb-demo" title="Replay a real captured block through the live pipeline (no server)"
-                @click="gameStore.demoReplayBlock(); ui.browserOpen = false">Replay block</button>
-              <button type="button" class="gb-demo" title="Throw Team-Mate through the full sequence on a fresh demo game"
-                @click="gameStore.loadDemo().then(() => gameStore.demoThrowTeamMate()); ui.browserOpen = false">Throw team-mate</button>
-              <button type="button" class="gb-demo" title="Changing-weather gust — the ball scatters along random directions"
-                @click="gameStore.loadDemo().then(() => gameStore.demoWeatherScatter()); ui.browserOpen = false">Weather gust</button>
+              <button type="button" class="gb-demo" @click="gameStore.loadDemo(); ui.browserOpen = false">{{ $t('hud.gbEntryRow.loadDemo') }}</button>
+              <button type="button" class="gb-demo" :title="$t('hud.gbEntryRow.replayARealCaptured')"
+                @click="gameStore.demoReplayBlock(); ui.browserOpen = false">{{ $t('hud.gbEntryRow.replayBlock') }}</button>
+              <button type="button" class="gb-demo" :title="$t('hud.gbEntryRow.throwTeamMateThrough')"
+                @click="gameStore.loadDemo().then(() => gameStore.demoThrowTeamMate()); ui.browserOpen = false">{{ $t('hud.gbEntryRow.throwTeamMate') }}</button>
+              <button type="button" class="gb-demo" :title="$t('hud.gbEntryRow.changingWeatherGustThe')"
+                @click="gameStore.loadDemo().then(() => gameStore.demoWeatherScatter()); ui.browserOpen = false">{{ $t('hud.gbEntryRow.weatherGust') }}</button>
             </div>
           </details>
           <input ref="jnlpInput" type="file" accept=".jnlp,text/xml" style="display: none" @change="openJnlpFile" />
         </div>
 
         <p v-if="browserStatus" class="hint">{{ browserStatus }}</p>
-        <p v-else-if="filteredMatches.length === 0" class="hint">No games match “{{ browserFilter }}”.</p>
+        <p v-else-if="filteredMatches.length === 0" class="hint">{{ $t('hud.noGamesMatchBrowserfilter', { browserFilter }) }}</p>
         <table v-else>
           <tbody>
-            <tr v-for="m in filteredMatches" :key="m.id" class="gb-row" title="Double-click to spectate"
+            <tr v-for="m in filteredMatches" :key="m.id" class="gb-row" :title="$t('hud.gbRow.doubleClickToSpectate')"
               @dblclick="spectateMatch(m.id)">
               <td class="gb-id">{{ m.id }}</td>
-              <td>{{ m.teams[0]?.name }} <em>({{ m.teams[0]?.coach }}, {{ m.teams[0]?.race }})</em></td>
+              <td>{{ m.teams[0]?.name }} <em>({{ m.teams[0]?.coach }}, {{ terms(m.teams[0]?.race) }})</em></td>
               <td class="gb-score">{{ m.teams[0]?.score }}–{{ m.teams[1]?.score }}</td>
-              <td>{{ m.teams[1]?.name }} <em>({{ m.teams[1]?.coach }}, {{ m.teams[1]?.race }})</em></td>
+              <td>{{ m.teams[1]?.name }} <em>({{ m.teams[1]?.coach }}, {{ terms(m.teams[1]?.race) }})</em></td>
               <td class="gb-half">{{ m.half === 0 ? 'pre-kick' : `H${m.half} T${m.turn}` }}</td>
               <td>
-                <button @click="spectateMatch(m.id)">Spectate</button>
+                <button @click="spectateMatch(m.id)">{{ $t('hud.gbRow.spectate') }}</button>
               </td>
             </tr>
           </tbody>
@@ -15027,57 +15064,56 @@ function sendChat() {
     <MatchNoticeCard v-if="betaNoticeOpen" test-id="match-beta-notice" :title="BETA_NOTICE_TITLE" :text="BETA_NOTICE_TEXT"
       :buttons="[{ label: BETA_NOTICE_BUTTON, primary: true }]" @choose="acknowledgeMatchBetaNotice" />
     <MatchNoticeCard v-else-if="switchWatcherCard && !reportOpen" test-id="switch-watcher-card" :title="switchWatcherCard.title"
-      :text="switchWatcherCard.text" :buttons="[{ label: 'Report', primary: true }, { label: 'Not now', cancel: true }]"
+      :text="switchWatcherCard.text" :buttons="[{ label: $t('hud.report'), primary: true }, { label: $t('hud.notNow'), cancel: true }]"
       :escape-index="1" @choose="answerSwitchWatcherCard" />
 
     <div v-if="createGameOpen" class="modal-backdrop cg-backdrop" @click.self="createGameOpen = false">
       <div class="cg-menu">
         <div class="cg-head">
-          <h2>Create Game</h2>
+          <h2>{{ $t('hud.cgMenu.createGame') }}</h2>
           <button class="cg-close" @click="createGameOpen = false">✕</button>
         </div>
 
         <template v-if="!cgWaiting">
-          <label class="cg-field">Opponent
+          <label class="cg-field">{{ $t('hud.cgMenu.opponent') }}
             <input v-model="cgOpponent" @input="onOpponentInput" type="text" autocomplete="off"
-              placeholder="opponent coach name" />
+              :placeholder="$t('hud.cgMenu.opponentCoachName')" />
           </label>
           <ul v-if="cgSuggestions.length" class="cg-suggest">
             <li v-for="s in cgSuggestions" :key="s" @click="pickSuggestion(s)">{{ s }}</li>
           </ul>
 
-          <span class="cg-field-label">Your team</span>
+          <span class="cg-field-label">{{ $t('hud.cgMenu.yourTeam') }}</span>
           <button type="button" class="cg-teambtn" @click="cgChooseOpen = !cgChooseOpen">
-            <template v-if="cgSelectedTeam">{{ cgSelectedTeam.teamName }} — {{ cgSelectedTeam.race }} · TV
-              {{ cgSelectedTeam.teamValue ?? '?' }} · {{ (cgSelectedTeam.gold ?? 0).toLocaleString() }}g</template>
-            <template v-else>Choose team ▾</template>
+            <template v-if="cgSelectedTeam">{{ $t('hud.cgMenu.teamnameRaceTvP2', { teamName: cgSelectedTeam.teamName, race: cgSelectedTeam.race, p2: cgSelectedTeam.teamValue ?? '?', p3: (cgSelectedTeam.gold ?? 0).toLocaleString() }) }}</template>
+            <template v-else>{{ $t('hud.cgMenu.chooseTeam') }}</template>
           </button>
 
           <div v-if="cgChooseOpen" class="cg-library">
-            <div class="cg-library-head"><span>Your library</span>
-              <button type="button" class="cg-refresh" title="Reload" @click="loadLibrary">↻</button>
+            <div class="cg-library-head"><span>{{ $t('hud.cgMenu.yourLibrary') }}</span>
+              <button type="button" class="cg-refresh" :title="$t('hud.cgMenu.reload')" @click="loadLibrary">↻</button>
             </div>
             <ul v-if="cgLibrary.length" class="cg-teamlist">
               <li v-for="t in cgLibrary" :key="t.teamId" class="cg-teamcard"
                 :class="{ selected: cgSelectedTeam?.teamId === t.teamId }" @click="selectTeam(t)">
                 <span class="cg-teamname">{{ t.teamName }}<span v-if="t.forkLoadable === false"
-                  class="cg-warn" title="No matching fork roster — may not load"> ⚠</span></span>
-                <span class="cg-teammeta">{{ t.race }} · TV {{ t.teamValue ?? '?' }} · {{ (t.gold ?? 0).toLocaleString() }}g</span>
+                  class="cg-warn" :title="$t('hud.cgMenu.noMatchingForkRoster')"> ⚠</span></span>
+                <span class="cg-teammeta">{{ $t('hud.cgMenu.raceTvP1P2', { race: t.race, p1: t.teamValue ?? '?', p2: (t.gold ?? 0).toLocaleString() }) }}</span>
               </li>
             </ul>
-            <p v-else class="hint">No teams in your library yet.</p>
+            <p v-else class="hint">{{ $t('hud.cgMenu.noTeamsInYour') }}</p>
             <div class="cg-ingest">
-              <input v-model="cgIngestInput" type="text" placeholder="FUMBBL team id or URL"
+              <input v-model="cgIngestInput" type="text" :placeholder="$t('hud.cgMenu.fumbblTeamIdOr')"
                 @keydown.enter.prevent="ingestTeam" />
-              <button type="button" :disabled="cgBusy" @click="ingestTeam">Import Team</button>
+              <button type="button" :disabled="cgBusy" @click="ingestTeam">{{ $t('hud.cgMenu.importTeam') }}</button>
             </div>
           </div>
 
           <p v-if="cgStatus" class="hint cg-status">{{ cgStatus }}</p>
           <div class="cg-actions">
-            <button type="button" class="cg-cancel" @click="createGameOpen = false">Cancel</button>
+            <button type="button" class="cg-cancel" @click="createGameOpen = false">{{ $t('hud.cgMenu.cancel') }}</button>
             <button type="button" class="cg-create" :disabled="cgBusy || !cgSelectedTeam || !cgOpponent.trim()"
-              @click="startChallenge">{{ cgBusy ? 'Working…' : 'Create Game' }}</button>
+              @click="startChallenge">{{ cgBusy ? $t('hud.cgMenu.working') : $t('hud.cgMenu.createGame') }}</button>
           </div>
         </template>
 
@@ -15085,7 +15121,7 @@ function sendChat() {
           <div class="cg-waiting">
             <div class="cg-spinner">⏳</div>
             <p>{{ cgStatus }}</p>
-            <button type="button" class="cg-cancel" @click="cancelChallenge">Cancel challenge</button>
+            <button type="button" class="cg-cancel" @click="cancelChallenge">{{ $t('hud.cgMenu.cancelChallenge') }}</button>
           </div>
         </template>
       </div>
@@ -15096,12 +15132,12 @@ function sendChat() {
         :class="settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
         :style="hudAccessibilityStyle">
         <div v-if="precisionHint" class="crosshair-precision-hint" data-testid="crosshair-precision-hint"
-          :style="{ left: `${precisionHint.x}px`, top: `${precisionHint.y}px` }">Precision</div>
+          :style="{ left: `${precisionHint.x}px`, top: `${precisionHint.y}px` }">{{ $t('hud.precision') }}</div>
         <input v-if="markLabelField" ref="markLabelInputEl" v-model="markLabelField.value"
           class="mark-label-field" :class="`mark-label-${markLabelField.request.kind}`" type="text"
-          aria-label="Mark label" autocomplete="off" spellcheck="false"
+          :aria-label="$t('hud.markLabel')" autocomplete="off" spellcheck="false"
           :maxlength="markLabelField.request.kind === 'player' ? PLAYER_MARK_LABEL_MAX_CHARS : SQUARE_MARK_LABEL_MAX_CHARS"
-          :placeholder="markLabelField.request.kind === 'player' ? 'Label' : 'Label (Enter)'"
+          :placeholder="markLabelField.request.kind === 'player' ? $t('hud.label') : $t('hud.labelEnter')"
           :style="{ left: `${markLabelField.left}px`, top: `${markLabelField.top}px` }"
           @keydown="onMarkLabelKeydown" @keyup.stop @keypress.stop
           @pointerdown.stop @pointerup.stop @click.stop @contextmenu.stop @wheel.stop
@@ -15126,9 +15162,9 @@ function sendChat() {
         <div v-if="homePanel && !inducePhaseOpen" class="coach-panel home ui-panel" :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['coach-home'] }"
           :data-playing="homePanel.playing" :style="customPanelStyle('coach-home')">
           <template v-if="settings.uiCustomize">
-            <span class="ui-grip" title="Drag to move" @pointerdown="startPanelMove('coach-home', $event)">⠿</span>
-            <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('coach-home', $event)"></span>
-            <button class="ui-reset" title="Reset to default" @click="resetPanel('coach-home')">↺</button>
+            <span class="ui-grip" :title="$t('hud.coachPanel.dragToMove')" @pointerdown="startPanelMove('coach-home', $event)">⠿</span>
+            <span class="ui-resizer" :title="$t('hud.coachPanel.dragToResize')" @pointerdown="startPanelResize('coach-home', $event)"></span>
+            <button class="ui-reset" :title="$t('hud.coachPanel.resetToDefault')" @click="resetPanel('coach-home')">↺</button>
           </template>
           <div class="logo-col">
             <img v-if="homePanel.logo" class="race-logo" :src="homePanel.logo" alt="" />
@@ -15136,9 +15172,9 @@ function sendChat() {
           <div class="coach-lines">
             <div class="coach-name">{{ homePanel.coach }}</div>
             <div class="team-title">{{ homePanel.teamName }}</div>
-            <div v-if="homePanel.chips.length" class="inducements" aria-label="Team resources and inducements">
+            <div v-if="homePanel.chips.length" class="inducements" :aria-label="$t('hud.coachPanel.teamResourcesAndInducements')">
               <span v-for="(chip, chipIndex) in homePanel.chips" :key="`${chipIndex}:${chip.icon}:${chip.label}`" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
-                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
+                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">{{ $t('hud.coachPanel.fans') }}<br />+{{ chip.count }}</span>
                 <template v-else>
                   <img :src="resourceIcon(chip.icon)" alt="" />
                   <b class="inducement-quantity">{{ chip.count }}</b>
@@ -15148,10 +15184,10 @@ function sendChat() {
           </div>
           <div class="active-indicator" role="status" :data-active="homePanel.playing"
             :aria-hidden="!homePanel.playing"
-            :title="homePanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label"><span><DisplayCaps text="Current" /></span><span><DisplayCaps text="Player" /></span></span>
+            :title="homePanel.playing ? $t('hud.coachPanel.thisCoachIsActivating') : $t('hud.coachPanel.thisCoachIsWaiting')">
+            <span class="active-label"><span><DisplayCaps :text="$t('hud.coachPanel.current')" /></span><span><DisplayCaps :text="$t('hud.coachPanel.player')" /></span></span>
           </div>
-          <div v-if="homePrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
+          <div v-if="homePrayers.length" class="prayer-tag" role="list" :aria-label="$t('hud.coachPanel.prayersToNuffleIn')">
             <div v-for="pr in homePrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
               <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ sentenceCaseLine(pr.label) }}</span>
             </div>
@@ -15163,9 +15199,9 @@ function sendChat() {
         <div v-if="awayPanel && !inducePhaseOpen" class="coach-panel away ui-panel" :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['coach-away'] }"
           :data-playing="awayPanel.playing" :style="customPanelStyle('coach-away')">
           <template v-if="settings.uiCustomize">
-            <span class="ui-grip" title="Drag to move" @pointerdown="startPanelMove('coach-away', $event)">⠿</span>
-            <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('coach-away', $event)"></span>
-            <button class="ui-reset" title="Reset to default" @click="resetPanel('coach-away')">↺</button>
+            <span class="ui-grip" :title="$t('hud.coachPanel.dragToMove')" @pointerdown="startPanelMove('coach-away', $event)">⠿</span>
+            <span class="ui-resizer" :title="$t('hud.coachPanel.dragToResize')" @pointerdown="startPanelResize('coach-away', $event)"></span>
+            <button class="ui-reset" :title="$t('hud.coachPanel.resetToDefault')" @click="resetPanel('coach-away')">↺</button>
           </template>
           <div class="logo-col">
             <img v-if="awayPanel.logo" class="race-logo" :src="awayPanel.logo" alt="" />
@@ -15173,9 +15209,9 @@ function sendChat() {
           <div class="coach-lines">
             <div class="coach-name">{{ awayPanel.coach }}</div>
             <div class="team-title">{{ awayPanel.teamName }}</div>
-            <div v-if="awayPanel.chips.length" class="inducements" aria-label="Team resources and inducements">
+            <div v-if="awayPanel.chips.length" class="inducements" :aria-label="$t('hud.coachPanel.teamResourcesAndInducements')">
               <span v-for="(chip, chipIndex) in awayPanel.chips" :key="`${chipIndex}:${chip.icon}:${chip.label}`" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' || chip.icon === CHEERING_FANS_CHIP_ICON ? chip.icon : 'inducement'" :title="chip.label">
-                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">FANS<br />+{{ chip.count }}</span>
+                <span v-if="chip.icon === CHEERING_FANS_CHIP_ICON" class="inducement-fans" aria-hidden="true">{{ $t('hud.coachPanel.fans') }}<br />+{{ chip.count }}</span>
                 <template v-else>
                   <img :src="resourceIcon(chip.icon)" alt="" />
                   <b class="inducement-quantity">{{ chip.count }}</b>
@@ -15185,10 +15221,10 @@ function sendChat() {
           </div>
           <div class="active-indicator" role="status" :data-active="awayPanel.playing"
             :aria-hidden="!awayPanel.playing"
-            :title="awayPanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label"><span><DisplayCaps text="Current" /></span><span><DisplayCaps text="Player" /></span></span>
+            :title="awayPanel.playing ? $t('hud.coachPanel.thisCoachIsActivating') : $t('hud.coachPanel.thisCoachIsWaiting')">
+            <span class="active-label"><span><DisplayCaps :text="$t('hud.coachPanel.current')" /></span><span><DisplayCaps :text="$t('hud.coachPanel.player')" /></span></span>
           </div>
-          <div v-if="awayPrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
+          <div v-if="awayPrayers.length" class="prayer-tag" role="list" :aria-label="$t('hud.coachPanel.prayersToNuffleIn')">
             <div v-for="pr in awayPrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
               <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ sentenceCaseLine(pr.label) }}</span>
             </div>
@@ -15203,29 +15239,29 @@ function sendChat() {
         <div v-if="hud" class="hud-center scoreboard ui-panel" :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive.scoreboard, 'flat-hud': settings.flatRender }"
           :style="customPanelStyle('scoreboard')">
           <template v-if="settings.uiCustomize">
-            <span class="ui-grip" title="Drag to move" @pointerdown="startPanelMove('scoreboard', $event)">⠿</span>
-            <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('scoreboard', $event)"></span>
-            <button class="ui-reset" title="Reset to default" @click="resetPanel('scoreboard')">↺</button>
+            <span class="ui-grip" :title="$t('hud.uiPanel.dragToMove')" @pointerdown="startPanelMove('scoreboard', $event)">⠿</span>
+            <span class="ui-resizer" :title="$t('hud.uiPanel.dragToResize')" @pointerdown="startPanelResize('scoreboard', $event)"></span>
+            <button class="ui-reset" :title="$t('hud.uiPanel.resetToDefault')" @click="resetPanel('scoreboard')">↺</button>
           </template>
-          <span class="sb-cell sb-half">{{ gameOver ? endGamePhaseLabel : hud.half === 1 ? '1st Half' : hud.half === 2 ? '2nd Half' : hud.half === 0 ? 'Pre-Game' : hud.half >= 3 ? 'Overtime' : `Half ${hud.half}` }}</span>
+          <span class="sb-cell sb-half">{{ gameOver ? endGamePhaseLabel : hud.half === 1 ? $t('hud.uiPanel.n1stHalf') : hud.half === 2 ? $t('hud.uiPanel.n2ndHalf') : hud.half === 0 ? $t('hud.uiPanel.preGame') : hud.half >= 3 ? $t('hud.uiPanel.overtime') : $t('hud.uiPanel.halfHalf', { half: hud.half }) }}</span>
           <span class="sb-cell sb-score"><b class="score-home">{{ hud.scoreHome }}</b> – <b class="score-away">{{ hud.scoreAway }}</b></span>
           <span class="sb-cell sb-weather" :title="weatherEffect(hud.weather)">
-            <small>WEATHER</small><span aria-hidden="true">{{ hud.weatherIcon }}</span>
+            <small>{{ $t('hud.uiPanel.weather') }}</small><span aria-hidden="true">{{ hud.weatherIcon }}</span>
           </span>
           <span class="sb-cell sb-turn home" :data-active="homePanel?.playing ?? false"
-            :title="`${homePanel?.coach ?? 'Home'} — turn ${homePanel?.turnNr ?? 0}`">Turn {{ homePanel?.turnNr ?? 0 }}</span>
+            :title="$t('hud.uiPanel.p0TurnP1', { p0: homePanel?.coach ?? $t('hud.uiPanel.home'), p1: homePanel?.turnNr ?? 0 })">{{ $t('hud.uiPanel.turnP0', { p0: homePanel?.turnNr ?? 0 }) }}</span>
           <button v-if="gameStore.isPlaying.value" class="sb-cell end-turn"
             :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction"
             :data-opponent="!gameStore.myTurn.value"
-            :data-setup="endTurnButtonText === 'Confirm Setup'"
-            :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : setupPhase ? 'Confirm your setup' : 'End the current turn (or kick-off mini-phase)'"
+            :data-setup="endTurnButtonKind === 'confirmSetup'"
+            :title="!gameStore.myTurn.value ? $t('hud.uiPanel.waitingForOpponent') : endTurnUnavailableDuringReaction ? $t('hud.uiPanel.endTurnUnavailableDuring') : setupPhase ? $t('hud.uiPanel.confirmYourSetup') : $t('hud.uiPanel.endTheCurrentTurn')"
             @click="endTurn()">{{ endTurnButtonText }}<PadGlyph name="View" class="end-turn-glyph" /></button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
-            :title="`${awayPanel?.coach ?? 'Away'} — turn ${awayPanel?.turnNr ?? 0}`">Turn {{ awayPanel?.turnNr ?? 0 }}</span>
+            :title="$t('hud.uiPanel.p0TurnP1', { p0: awayPanel?.coach ?? $t('hud.uiPanel.away'), p1: awayPanel?.turnNr ?? 0 })">{{ $t('hud.uiPanel.turnP0', { p0: awayPanel?.turnNr ?? 0 }) }}</span>
           <!-- Owner 10-13: pitch flip badge, hangs under the scoreboard (moves/scales with it); counted by the HUD clearance. -->
           <span v-if="settings.pitchFlipped" class="pitch-flip-badge" data-panel-overhang
-            title="The pitch view is flipped (Settings > Display, or the Pitch flip key)"
-            aria-label="The pitch view is flipped (Settings > Display, or the Pitch flip key)"><i class="pfb-glyph" aria-hidden="true">&#8645;</i><span class="pfb-full">PITCH FLIPPED</span><span class="pfb-short">FLIPPED</span></span>
+            :title="$t('hud.uiPanel.thePitchViewIs')"
+            :aria-label="$t('hud.uiPanel.thePitchViewIs')"><i class="pfb-glyph" aria-hidden="true">&#8645;</i><span class="pfb-full">{{ $t('hud.uiPanel.pitchFlipped') }}</span><span class="pfb-short">{{ $t('hud.uiPanel.flipped') }}</span></span>
         </div>
         <!-- #18a (owner tester): passive "opponent reviewing dice" indicator near the scorebar. Bound
              directly to state.opponentReviewingDice — DERIVED each frame in-store (keyed on the block
@@ -15233,27 +15269,27 @@ function sendChat() {
              self-clears on every exit path (pick / reroll / timeout / turnover / disconnect). Existence
              only — never the dice values/count/result. -->
         <div v-if="gameStore.state.opponentReviewingDice" class="opp-reviewing-dice">
-          <span class="ord-dot"></span>Opponent reviewing dice…
+          <span class="ord-dot"></span>{{ $t('hud.opponentReviewingDice') }}
         </div>
         <div v-if="hud" class="turn-timer" :class="{ 'flat-hud': settings.flatRender }" :data-timeout="hud.timeoutEnforced" :style="timerStyle"
-          title="Drag to move" @pointerdown="startTimerDrag">
+          :title="$t('hud.dragToMove')" @pointerdown="startTimerDrag">
           <template v-if="gameOver">🏁 {{ endGamePhaseLabel }}</template>
-          <template v-else-if="hud.timeoutEnforced">TIME OUT</template>
+          <template v-else-if="hud.timeoutEnforced">{{ $t('hud.timeOut') }}</template>
           <template v-else>⏳ {{ turnClock }}</template>
           <button v-if="hud.timeoutPossible && !gameOver && !hud.timeoutEnforced && !timeoutCalled" class="call-timeout"
             :disabled="!gameStore.isPlaying.value || gameStore.myTurn.value"
             :title="gameStore.isPlaying.value && !gameStore.myTurn.value
-              ? 'Force a timeout on your opponent — their clock ran out'
-              : 'Only the waiting coach can call a timeout'"
+              ? $t('hud.forceATimeoutOn')
+              : $t('hud.onlyTheWaitingCoach')"
             @click="onCallTimeout">
-            Call time-out
+            {{ $t('hud.callTimeOut') }}
           </button>
           <!-- #14b T-3 (Fives): caller-side honesty copy. Display-only — replaces the
                button after the click until the server confirms via timeoutEnforced (then
                the box shows TIME OUT). Only the waiting coach reaches this (button is
                disabled for the active side + spectators, A-4). -->
           <span v-else-if="timeoutCalled && !gameOver && !hud.timeoutEnforced" class="call-timeout-note">
-            Time-out called — opponent's turn ends on their next action
+            {{ $t('hud.timeOutCalledOpponent') }}
           </span>
         </div>
         <!-- BB3-style config buttons (owner 2026-07-02); positioned under the
@@ -15262,20 +15298,20 @@ function sendChat() {
           :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['config-bar'], 'bar-right': settings.bottomBarsSwapped, 'bar-left': !settings.bottomBarsSwapped, 'endgame-front': endGameFront }"
           :style="configBarStyle">
           <template v-if="settings.uiCustomize">
-            <span class="ui-grip" title="Drag to move" @pointerdown="startPanelMove('config-bar', $event)">⠿</span>
-            <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('config-bar', $event)"></span>
-            <button class="ui-reset" title="Reset to default" @click="resetPanel('config-bar')">↺</button>
+            <span class="ui-grip" :title="$t('hud.configBar.dragToMove')" @pointerdown="startPanelMove('config-bar', $event)">⠿</span>
+            <span class="ui-resizer" :title="$t('hud.configBar.dragToResize')" @pointerdown="startPanelResize('config-bar', $event)"></span>
+            <button class="ui-reset" :title="$t('hud.configBar.resetToDefault')" @click="resetPanel('config-bar')">↺</button>
           </template>
-          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)" data-tour="hud-menu" data-quick-tip="menu"
+          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" :title="$t('hud.configBar.gameMenuEsc')" data-tour="hud-menu" data-quick-tip="menu"
             @click="quickToggleGameMenu()">⚙</QuickBarButton>
           <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" data-pad-action="tackleZones" data-quick-tip="tackleZones" :title="tackleZonesTitle"
             @click="cycleTackleZones()">🛡</QuickBarButton>
           <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites" data-pad-action="sprites" data-quick-tip="sprites"
-            :title="`Sprites: ${spriteChoiceLabel}`"
+            :title="$t('hud.configBar.spritesSpritechoicelabel', { spriteChoiceLabel })"
             @click="cycleSprites()">👤</QuickBarButton>
           <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills" data-pad-action="skillDisplay" data-quick-tip="skillDisplay"
-            :data-skill-mode="skillMode" :aria-label="`Skill display: ${SKILL_MODE_LABELS[skillMode]}`"
-            :title="`Skill display: ${SKILL_MODE_LABELS[skillMode]} (toggle Icons/Markings)`"
+            :data-skill-mode="skillMode" :aria-label="$t('hud.configBar.skillDisplayP0', { p0: SKILL_MODE_LABELS[skillMode] })"
+            :title="$t('hud.configBar.skillDisplayP0Toggle', { p0: SKILL_MODE_LABELS[skillMode] })"
             @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
           <!-- collapse-log button removed (owner 2026-07-03): the log panel has
                its own ▾ collapse button on its title bar. -->
@@ -15283,15 +15319,15 @@ function sendChat() {
           <!-- Owner 2026-07-03: Auto Director — one toggle for the automatic camera
                work (zoom + track + nudge to the action). Off = a calm static cam. -->
           <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director" data-pad-action="autoDirector" data-quick-tip="autoDirector"
-            :title="settings.autoDirector ? 'Auto Director: On (auto zoom and track the action)' : 'Auto Director: Off (calm, static camera)'"
+            :title="settings.autoDirector ? $t('hud.configBar.autoDirectorOnAuto') : $t('hud.configBar.autoDirectorOffCalm')"
             @click="toggleAutoDirector()">🎬</QuickBarButton>
           <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
                opt-in via Settings > UI. -->
           <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn" data-pad-action="roster" data-quick-tip="roster"
-            :title="`Roster (${keyLabel(settings.rosterKey)}): every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
+            :title="$t('hud.configBar.rosterP0EveryPlayer', { p0: keyLabel(settings.rosterKey) })" :aria-label="$t('hud.configBar.rosterP0', { p0: keyLabel(settings.rosterKey) })"
             @click="quickToggleRoster()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
-          <QuickBarButton class="report-btn" data-tour="hud-report" data-quick-tip="report" title="Report an issue: sends your description with the wire log"
-            @click="quickOpenReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
+          <QuickBarButton class="report-btn" data-tour="hud-report" data-quick-tip="report" :title="$t('hud.configBar.reportAnIssueSends')"
+            @click="quickOpenReport()"><span class="report-bug">🐞</span><span class="report-label">{{ $t('hud.configBar.report') }}</span></QuickBarButton>
           <div class="quick-brand-menu">
             <div class="quick-match-controls">
             <!-- Owner 10-21 / 10-22: connection signal-bars icon at the row's left end, beside the spectator controls, always
@@ -15305,17 +15341,17 @@ function sendChat() {
               ref="spectatorPauseButton" class="quick-spectator-pause" type="button"
               :class="{ 'go-live-action': gameStore.spectatorReview.value.active }"
               :disabled="gameStore.spectatorReview.value.active ? !gameStore.spectatorReview.value.controls?.canGoLive : !gameStore.spectatorReview.value.canPause"
-              :aria-label="gameStore.spectatorReview.value.active ? 'Go to live' : 'Pause spectator view'"
-              :title="gameStore.spectatorReview.value.feedStale ? (gameStore.spectatorReview.value.active ? 'Live feed unavailable — GO TO LIVE reconnects.' : 'Pause unavailable — recorded history was interrupted; reconnect to restore it.') : gameStore.spectatorReview.value.active ? 'Go to live — jump to the latest received match position.' : gameStore.spectatorReview.value.canPause ? 'Pause your view; the match continues.' : 'Waiting for match data'"
+              :aria-label="gameStore.spectatorReview.value.active ? $t('hud.configBar.spectate.goToLive') : $t('hud.configBar.spectate.pauseSpectatorView')"
+              :title="gameStore.spectatorReview.value.feedStale ? (gameStore.spectatorReview.value.active ? $t('hud.configBar.spectate.liveFeedUnavailableGo') : $t('hud.configBar.spectate.pauseUnavailableRecordedHistory')) : gameStore.spectatorReview.value.active ? $t('hud.configBar.spectate.goToLiveJump') : gameStore.spectatorReview.value.canPause ? $t('hud.configBar.spectate.pauseYourViewThe') : $t('hud.configBar.spectate.waitingForMatchData')"
               @pointerdown.stop @contextmenu.stop.prevent @keydown.stop
               @click.stop="gameStore.spectatorReview.value.active ? gameStore.goToLiveSpectatorView() : gameStore.pauseSpectatorView()"
-            ><template v-if="gameStore.spectatorReview.value.active"><span class="go-live-arrow" aria-hidden="true">↩</span><span>LIVE</span><span class="go-live-dot" aria-hidden="true"></span></template><span v-else class="quick-pause-icon" aria-hidden="true">Ⅱ</span></button>
+            ><template v-if="gameStore.spectatorReview.value.active"><span class="go-live-arrow" aria-hidden="true">↩</span><span>{{ $t('hud.configBar.spectate.live') }}</span><span class="go-live-dot" aria-hidden="true"></span></template><span v-else class="quick-pause-icon" aria-hidden="true">Ⅱ</span></button>
             <button v-if="!gameStore.state.demoMode && gameStore.state.spectatorCount > 0"
               ref="liveChip" class="quick-live" :class="{ expanded: liveSpectatorsExpanded }"
               :data-flash="liveFlashing"
               :aria-expanded="liveSpectatorsExpanded"
-              :aria-label="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
-              :title="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
+              :aria-label="$t('hud.configBar.spectatorcountSpectatorP1Connected', { spectatorCount: gameStore.state.spectatorCount })"
+              :title="$t('hud.configBar.spectatorcountSpectatorP1Connected', { spectatorCount: gameStore.state.spectatorCount })"
               @click="toggleLiveSpectators"
               @pointerenter="liveListPointer(true)" @pointerleave="liveListPointer(false)">
               <span class="quick-live-row">
@@ -15327,21 +15363,21 @@ function sendChat() {
                  overflow can clip it; fixed-positioned in the direction that has room. -->
             <Teleport to="body">
               <div v-if="liveSpectatorsExpanded && gameStore.state.spectatorCount > 0" ref="liveList" class="quick-live-list"
-                   role="dialog" aria-label="Spectators" :style="liveListStyle"
+                   role="dialog" :aria-label="$t('hud.configBar.spectators')" :style="liveListStyle"
                    @pointerenter="liveListPointer(true)" @pointerleave="liveListPointer(false)" @keydown.esc.stop="closeLiveSpectators">
                 <div class="quick-live-header">
                   <span class="quick-live-dot" aria-hidden="true">●</span><b>{{ gameStore.state.spectatorCount }}</b>
-                  <span class="quick-live-detail">watching live</span>
+                  <span class="quick-live-detail">{{ $t('hud.configBar.watchingLive') }}</span>
                 </div>
                 <div v-if="gameStore.state.spectatorNames.length" class="quick-live-names" tabindex="0">
                   <span v-for="name in gameStore.state.spectatorNames" :key="name" class="quick-live-name" :title="name">{{ name }}</span>
                 </div>
               </div>
             </Teleport>
-            <img ref="quickSuperLogo" class="quick-super-logo" :src="quickSuperLogoSrc" alt="Super FUMBBL" />
+            <img ref="quickSuperLogo" class="quick-super-logo" :src="quickSuperLogoSrc" :alt="$t('hud.configBar.superFumbbl')" />
             </div>
 
-            <span v-if="gameStore.spectatorReview.value.active" class="sr-only" role="status">{{ gameStore.spectatorReview.value.feedStale ? 'Live feed unavailable — GO TO LIVE reconnects' : gameStore.spectatorReview.value.phase === 'pausing' ? 'Pausing…' : 'Reviewing recorded match position' }}</span>
+            <span v-if="gameStore.spectatorReview.value.active" class="sr-only" role="status">{{ gameStore.spectatorReview.value.feedStale ? $t('hud.configBar.liveFeedUnavailableGo') : gameStore.spectatorReview.value.phase === 'pausing' ? $t('hud.configBar.pausing') : $t('hud.configBar.reviewingRecordedMatchPosition') }}</span>
           </div>
         </nav>
         <!-- Owner 10-12: a quick-bar press pops that button's tooltip (new state) for 1.5 s. -->
@@ -15389,53 +15425,53 @@ function sendChat() {
           :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :style="panelStyle"
           @mouseenter="onLogHover(true)" @mouseleave="onLogHover(false)"
           @pointerdown.capture="chatOverInduce.onPanelPointerDown" @focusin="chatOverInduce.onPanelFocusIn" @focusout="chatOverInduce.onPanelFocusOut">
-          <span v-if="!panelCollapsed" class="log-resizer" data-tour="hud-log-resize" role="button" aria-label="Resize Log window"
-            title="Resize Log window" @pointerdown="startLogResize">⤡</span>
+          <span v-if="!panelCollapsed" class="log-resizer" data-tour="hud-log-resize" role="button" :aria-label="$t('hud.logPanel.resizeLogWindow')"
+            :title="$t('hud.logPanel.resizeLogWindow')" @pointerdown="startLogResize">⤡</span>
           <!-- Owner 2026-07-03 r6f: stencil tabs — each tab is the stencil word in
                the ALPHA-RELEASE style (white-outlined, opposition-red), Log/Chat
                keeping their 📋/💬 emoji; Roster is the word only. -->
           <nav class="tabs" @pointerdown="startPanelDrag">
-            <span class="drag-grip" data-tour="hud-log-grip" title="Drag to move the window" aria-hidden="true">⠿</span>
-            <button class="stencil-tab" data-tour="hud-log-tab" data-pad-action="logExpand" title="Log" :data-active="panelTab === 'log'"
-              @click="panelTab = 'log'; panelCollapsed = false"><span class="tab-emoji">📋</span><span class="tab-stencil">LOG</span></button>
+            <span class="drag-grip" data-tour="hud-log-grip" :title="$t('hud.logPanel.dragToMoveThe')" aria-hidden="true">⠿</span>
+            <button class="stencil-tab" data-tour="hud-log-tab" data-pad-action="logExpand" :title="$t('hud.logPanel.log')" :data-active="panelTab === 'log'"
+              @click="panelTab = 'log'; panelCollapsed = false"><span class="tab-emoji">📋</span><span class="tab-stencil">{{ $t('hud.logPanel.log2') }}</span></button>
             <!-- Owner 08-19 (2nd): ROSTER before CHAT in the tab row. -->
             <!-- Owner 10-02: opt-in (Settings > UI › Roster tab in the chat dock); the Helmet pop-out is the default. -->
-            <button v-if="settings.chatDockRosterTab" class="stencil-tab roster-tab" title="Roster" :data-active="panelTab === 'roster'" :disabled="!gameStore.game.value"
+            <button v-if="settings.chatDockRosterTab" class="stencil-tab roster-tab" :title="$t('hud.logPanel.roster')" :data-active="panelTab === 'roster'" :disabled="!gameStore.game.value"
               @click="panelTab = 'roster'; panelCollapsed = false"><img class="tab-icon" :src="helmetIconUrl"
-                alt="Roster" title="American football icons created by justicon — Flaticon (flaticon.com/free-icons/american-football)" /><span class="tab-stencil">ROSTER</span></button>
+                :alt="$t('hud.logPanel.roster')" :title="$t('hud.logPanel.americanFootballIconsCreated')" /><span class="tab-stencil">{{ $t('hud.logPanel.roster2') }}</span></button>
             <!-- Owner 08-19: while chat is POPPED OUT the tab leaves the row entirely (the old
                  click-to-redock tab is retired) — the popout's own dock (⤓) button is the sole
                  way back. -->
-            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" data-tour="hud-chat-tab" data-pad-action="openChat" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
-              :aria-label="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
+            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" data-tour="hud-chat-tab" data-pad-action="openChat" :title="gameStore.spectatorReview.value.active ? $t('hud.logPanel.liveChat') : $t('hud.logPanel.chat')"
+              :aria-label="gameStore.spectatorReview.value.active ? $t('hud.logPanel.liveChat') : $t('hud.logPanel.chat')"
               :data-active="panelTab === 'chat'"
               :class="{ 'has-badge': chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden), 'live-chat-tab': gameStore.spectatorReview.value.active }"
-              @click="openLiveChat"><span class="tab-emoji">💬</span><span v-if="gameStore.spectatorReview.value.active" class="tab-stencil live-chat-copy">LIVE CHAT</span><span v-else class="tab-stencil">CHAT</span><span
+              @click="openLiveChat"><span class="tab-emoji">💬</span><span v-if="gameStore.spectatorReview.value.active" class="tab-stencil live-chat-copy">{{ $t('hud.logPanel.liveChat2') }}</span><span v-else class="tab-stencil">{{ $t('hud.logPanel.chat2') }}</span><span
                 v-if="chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden)" class="chat-badge">{{ chatUnread > 99 ? '99+' : chatUnread }}</span></button>
             <!-- Pop-Out Chat control. Own class (not .collapse) so it keeps a fixed, never-
                  shrinking slot in the tab bar — the old build reused .collapse and the bar
                  could squeeze it. data-testid is the owner's live-verify handle. -->
             <button v-if="panelTab === 'chat' && !settings.chatDisabled && !settings.chatPoppedOut"
-              class="popout-btn" data-testid="chat-popout" title="Pop chat out into a floating window"
+              class="popout-btn" data-testid="chat-popout" :title="$t('hud.logPanel.chat.popChatOutInto')"
               @click="popOutChat">⧉</button>
-            <button class="collapse" data-tour="hud-log-settings" title="Window settings"
+            <button class="collapse" data-tour="hud-log-settings" :title="$t('hud.logPanel.windowSettings')"
               @click="panelSettingsOpen = !panelSettingsOpen">⚙</button>
-            <button class="collapse" :title="panelCollapsed ? 'Expand' : 'Minimize (docks to the buttons)'"
+            <button class="collapse" :title="panelCollapsed ? $t('hud.logPanel.expand') : $t('hud.logPanel.minimizeDocksToThe')"
               @click="panelCollapsed = !panelCollapsed">{{ panelCollapsed ? '▴' : '▾' }}</button>
           </nav>
 
           <div v-if="panelSettingsOpen && !panelCollapsed" class="panel-settings">
-            <label>Opacity
+            <label>{{ $t('hud.logPanel.opacity') }}
               <input v-model.number="settings.logOpacity" type="range" min="0.15" max="1" step="0.05" />
             </label>
-            <label data-tour="hud-log-size">Text size
+            <label data-tour="hud-log-size">{{ $t('hud.logPanel.textSize') }}
               <input v-model.number="settings.logFontSize" type="range" min="9" max="22" step="0.5" />
             </label>
-            <label data-tour="hud-log-font">Font
+            <label data-tour="hud-log-font">{{ $t('hud.logPanel.font') }}
               <select v-model="settings.logFont">
-                <option value="nuffle">Nuffle</option>
-                <option value="arial">Arial</option>
-                <option value="mono">Monospace</option>
+                <option value="nuffle">{{ $t('hud.logPanel.nuffle') }}</option>
+                <option value="arial">{{ $t('hud.logPanel.arial') }}</option>
+                <option value="mono">{{ $t('hud.logPanel.monospace') }}</option>
               </select>
             </label>
             <!-- Owner 10-16: search the active tab (Log or Chat), right-aligned in this bar. -->
@@ -15455,7 +15491,7 @@ function sendChat() {
 </span></template><template v-else><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></span></template></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
-                New events ↓
+                {{ $t('hud.logPanel.log.newEvents') }}
               </button>
             </div>
 
@@ -15471,8 +15507,8 @@ function sendChat() {
                     <span class="nr">{{ p.playerNr }}</span>
                     <span class="pname">{{ p.playerName }}</span>
                     <span class="acquired">{{ acquiredSkills(p, rosterSide === 'home' ? gameStore.game.value.teamHome : gameStore.game.value.teamAway) }}</span>
-                    <span class="pos">{{ positionLabel(p, rosterSide === 'home' ? gameStore.game.value.teamHome : gameStore.game.value.teamAway) }}</span>
-                    <span class="loc" :data-status="playerState(p)">{{ playerState(p) }}</span>
+                    <span class="pos">{{ terms(positionLabel(p, rosterSide === 'home' ? gameStore.game.value.teamHome : gameStore.game.value.teamAway)) }}</span>
+                    <span class="loc" :data-status="playerState(p)">{{ playerStateLabel(playerState(p)) }}</span>
                   </li>
                 </ul>
               </div>
@@ -15491,7 +15527,7 @@ function sendChat() {
             :pos="settings.chatPopPos" :size="settings.chatPopSize" :opacity="settings.logOpacity"
             @update:pos="settings.chatPopPos = $event" @update:size="settings.chatPopSize = $event"
             @dock="dockChat">
-            <button v-if="reviewChatHidden" class="live-chat-opt-in" @click="openLiveChat">Live chat — may reveal newer events<span v-if="chatUnread"> ({{ chatUnread > 99 ? '99+' : chatUnread }})</span></button>
+            <button v-if="reviewChatHidden" class="live-chat-opt-in" @click="openLiveChat">{{ $t('hud.logPanel.liveChatMayReveal') }}<span v-if="chatUnread"> ({{ chatUnread > 99 ? '99+' : chatUnread }})</span></button>
             <div v-else class="log-holder">
               <!-- Owner 10-16: Settings > Display > Log > Chat style. Bubbles (default) = ChatBubbleRows inside this same <pre>
                    (scroll, follow and onLogScroll unchanged; .chat-bubbles anchors the stack to the bottom); Text = the
@@ -15501,19 +15537,19 @@ function sendChat() {
               <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" /><template v-else><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
 </span></template></pre>
               <button v-if="chatNewEvents" class="new-events" @click="jumpToBottom('chat')">
-                New messages ↓
+                {{ $t('hud.logPanel.newMessages') }}
               </button>
             </div>
             <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
-              <textarea ref="chatInputEl" v-model="chatInput" data-pad-action="virtualKeyboard" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
+              <textarea ref="chatInputEl" v-model="chatInput" data-pad-action="virtualKeyboard" rows="1" :placeholder="gameStore.spectatorReview.value.active ? $t('hud.logPanel.liveChatEnter') : $t('hud.logPanel.chatEnterHelpFor')" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
             </form>
           </ChatDock>
         </div>
         <ConfirmActionButton v-if="queuedSteps > 0 && !settings.spectatorClean && !settings.hideConfirmBar" class="confirm-move"
           :disabled="!gameStore.state.demoMode && !gameStore.isPlaying.value"
-          :label="`Confirm ${plannedAction ?? 'move'} · ${queuedSteps} ${queuedSteps === 1 ? 'square' : 'squares'}`"
+          :label="plannedAction ? $t('hud.confirmMove.action', { action: terms(plannedAction), n: queuedSteps }) : $t('hud.confirmMove.move', { n: queuedSteps })"
           :shortcut-code="settings.confirmKey"
-          :title="gameStore.isPlaying.value ? 'Send the move to the server' : gameStore.state.demoMode ? 'Execute the queued move' : 'Execution arrives with play mode (M4)'"
+          :title="gameStore.isPlaying.value ? $t('hud.sendTheMoveTo') : gameStore.state.demoMode ? $t('hud.executeTheQueuedMove') : $t('hud.executionArrivesWithPlay')"
           @activate="confirmMove()" />
         <!-- Owner 2026-07-13 (#7): the bottom Confirm-Blitz / Confirm-Block bar — mirrors the move-confirm bar
              (same Space binding shown), shown while the Blitz/Block stage is armed. Clickable too. -->
@@ -15556,7 +15592,7 @@ function sendChat() {
         <div v-if="gameStore.state.coinToss" class="coin-toss" :class="{ 'cine-hold': settings.clickDismissCinematics }">
           <!-- B9-13: the coach's CALLED side shown before the flip resolves -->
           <div class="coin-call">
-            {{ gameStore.state.coinToss.coach }} calls
+            {{ $t('hud.coachCalls', { coach: gameStore.state.coinToss.coach }) }}
             <span class="coin-call-side">
               <img v-if="gameStore.state.coinToss.called === 'heads'" :src="coinSkullUrl" class="coin-call-skull" alt="" />
               {{ gameStore.state.coinToss.called.toUpperCase() }}
@@ -15564,13 +15600,13 @@ function sendChat() {
           </div>
           <div class="coin-lift">
             <div class="coin" :data-result="gameStore.state.coinToss.result">
-              <div class="coin-face heads"><img :src="coinSkullUrl" class="coin-skull" alt="heads" /></div>
+              <div class="coin-face heads"><img :src="coinSkullUrl" class="coin-skull" :alt="$t('hud.heads')" /></div>
               <div class="coin-face tails">T</div>
             </div>
           </div>
           <div class="coin-caption">
             {{ gameStore.state.coinToss.result.toUpperCase() }} —
-            {{ gameStore.state.coinToss.coach }} {{ gameStore.state.coinToss.won ? 'wins the toss' : 'loses the toss' }}
+            {{ gameStore.state.coinToss.coach }} {{ gameStore.state.coinToss.won ? $t('hud.winsTheToss') : $t('hud.losesTheToss') }}
           </div>
         </div>
 
@@ -15579,7 +15615,7 @@ function sendChat() {
              single Confirm that dismisses (mutual — server waits for both coaches). home* is THIS
              coach's team (per-recipient mirror). Copy = "Penalty Shootout" (owner 2026-07-13). -->
         <div v-if="visiblePenaltyShootout" class="penalty-shootout">
-          <div class="ps-title">Penalty Shootout</div>
+          <div class="ps-title">{{ $t('hud.penaltyShootout') }}</div>
           <div class="ps-score">
             <span class="ps-team" :class="{ 'ps-win': visiblePenaltyShootout.homeWins }">{{ visiblePenaltyShootout.homeName }}</span>
             <span class="ps-tally">{{ visiblePenaltyShootout.scoreHome }}&nbsp;–&nbsp;{{ visiblePenaltyShootout.scoreAway }}</span>
@@ -15588,16 +15624,16 @@ function sendChat() {
           <ol class="ps-rounds">
             <li v-for="(r, i) in visiblePenaltyShootout.rounds" :key="i" class="ps-round">
               <span class="ps-round-label">{{ r.label }}</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :side="diceSideOfServerSide('home')" :label="`${visiblePenaltyShootout.homeName} rolled ${r.home}`" />
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :side="diceSideOfServerSide('home')" :label="$t('hud.homenameRolledHome', { homeName: visiblePenaltyShootout.homeName, home: r.home })" />
               <span class="ps-vs">vs</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :side="diceSideOfServerSide('away')" :label="`${visiblePenaltyShootout.awayName} rolled ${r.away}`" />
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :side="diceSideOfServerSide('away')" :label="$t('hud.awaynameRolledAway', { awayName: visiblePenaltyShootout.awayName, away: r.away })" />
               <span class="ps-round-win">{{ r.homeWon ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }}</span>
             </li>
           </ol>
           <div class="ps-result">
-            {{ visiblePenaltyShootout.homeWins ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }} wins the shootout
+            {{ $t('hud.p0WinsTheShootout', { p0: visiblePenaltyShootout.homeWins ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }) }}
           </div>
-          <button class="ps-confirm" @click="closePenaltyShootout">{{ gameStore.isPlaying.value ? 'Proceed to MVPs and upload' : 'Close' }}</button>
+          <button class="ps-confirm" @click="closePenaltyShootout">{{ gameStore.isPlaying.value ? $t('hud.proceedToMvpsAnd') : $t('hud.close') }}</button>
         </div>
 
         <!-- Owner 2026-07-08: full-screen shader while inducements are chosen/revealed. -->
@@ -15615,10 +15651,10 @@ function sendChat() {
           :picks="inducePicks" :options="induceOptions" :cap="gameStore.state.inducementBuy?.availableGold ?? 0"
           :blade="induceBlade" :cards="induceCards" :selector-limits="induceLimits"
           :confirm-pending="induceConfirmPending" :preset-mode="inducementsReadOnlyReview"
-          :preset-label="replayInducementsOpen ? 'INDUCEMENTS' : 'PRESET ROSTERS'" :preset-status="replayInducementsOpen ? '✔ Bought' : '✔ Assigned'"
-          :preset-banner="replayInducementsOpen ? 'Replay Review' : 'Tournament Mode'" :preset-heading="replayInducementsOpen ? 'Inducements Bought' : 'Predefined Inducements'"
-          :preset-note="replayInducementsOpen ? 'What each coach bought before kick-off. Close to keep watching, or pick a turn from the Turns list.' : 'These inducements were assigned by the tournament or league. Review both teams before kick-off.'"
-          :preset-action="replayInducementsOpen ? 'Close' : 'Acknowledge'"
+          :preset-label="replayInducementsOpen ? 'INDUCEMENTS' : $t('hud.presetRosters')" :preset-status="replayInducementsOpen ? '✔ Bought' : '✔ Assigned'"
+          :preset-banner="replayInducementsOpen ? $t('hud.replayReview') : $t('hud.tournamentMode')" :preset-heading="replayInducementsOpen ? $t('hud.inducementsBought') : $t('hud.predefinedInducements')"
+          :preset-note="replayInducementsOpen ? $t('hud.whatEachCoachBought') : $t('hud.theseInducementsWereAssigned')"
+          :preset-action="replayInducementsOpen ? $t('hud.close') : $t('hud.acknowledge')"
           :opp-cards="induceOppCards" :opp-cap="induceOppMoney?.cap ?? 0"
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
           @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgeInducementsReview"
@@ -15628,7 +15664,7 @@ function sendChat() {
              under the phase. It carries the unread count for chat that arrived under the panes, and steps aside
              while the dock is raised. -->
         <button v-if="inducePhaseOpen && !chatRaisedOverInducements" type="button" class="induce-chat-btn" data-testid="induce-chat-btn"
-          :title="induceChatButtonIsChat ? 'Bring the chat in front of the inducements' : 'Bring the log in front of the inducements'"
+          :title="induceChatButtonIsChat ? $t('hud.bringTheChatIn') : $t('hud.bringTheLogIn')"
           @click="openChatOverInducements"><span aria-hidden="true">{{ induceChatButtonIsChat ? '💬' : '📋' }}</span><span class="induce-chat-btn-label">{{ induceChatButtonIsChat ? 'CHAT' : 'LOG' }}</span><span
             v-if="induceChatButtonIsChat && induceChatButtonUnread > 0" class="induce-chat-btn-badge" data-testid="induce-chat-unread">{{ induceChatButtonUnread > 99 ? '99+' : induceChatButtonUnread }}</span></button>
         <!-- Owner 09-25: the END-OF-GAME pane is components/PostGamePanel.vue (Result window + MVP/Stats/Roster tabs + the
@@ -15642,12 +15678,12 @@ function sendChat() {
             <!-- Owner 08-19: the spectate seat's exit pair — appears with the MVP stage and REMAINS once the final panel
                  lands. Routes via the blade shell (never the deprecated legacy browser overlay). -->
             <div v-if="spectatorExitVisible" class="pg-window pg-exit">
-              <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
-              <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">Spectate Another Game</button>
+              <button type="button" class="pg-action" @click="onEndGameExit('menu')">{{ $t('hud.returnToMenu') }}</button>
+              <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">{{ $t('hud.spectateAnotherGame') }}</button>
             </div>
             <!-- Owner 09-23: the play seat's Return to Menu sits centred under the tab card (was header-right since 09-15). -->
             <div v-else-if="mode !== 'spectate'" class="pg-window pg-exit">
-              <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
+              <button type="button" class="pg-action" @click="onEndGameExit('menu')">{{ $t('hud.returnToMenu') }}</button>
             </div>
           </template>
         </PostGamePanel>
@@ -15664,14 +15700,14 @@ function sendChat() {
              random player is affected. Plays AFTER the kick-off event splash. -->
         <div v-if="gameStore.state.weatherCine" class="weather-cine" :class="{ 'cine-hold': settings.clickDismissCinematics, 'wc-changing': gameStore.state.weatherCine.changing }">
           <!-- Owner 10-02 (S97): the Changing Weather kick-off event shows only the new weather - no dice throw. -->
-          <div class="wc-title">{{ gameStore.state.weatherCine.changing ? 'Changing Weather' : 'Weather Roll' }}</div>
+          <div class="wc-title">{{ gameStore.state.weatherCine.changing ? $t('hud.changingWeather') : $t('hud.weatherRoll') }}</div>
           <div v-if="!gameStore.state.weatherCine.changing" class="wc-dice">
-            <D6Face class="wc-die from-north" :value="gameStore.state.weatherCine.roll[0] ?? 0" :label="`Weather die ${gameStore.state.weatherCine.roll[0] ?? 0}`" />
-            <D6Face class="wc-die from-south" :value="gameStore.state.weatherCine.roll[1] ?? 0" :label="`Weather die ${gameStore.state.weatherCine.roll[1] ?? 0}`" />
+            <D6Face class="wc-die from-north" :value="gameStore.state.weatherCine.roll[0] ?? 0" :label="$t('hud.weatherDieP0', { p0: gameStore.state.weatherCine.roll[0] ?? 0 })" />
+            <D6Face class="wc-die from-south" :value="gameStore.state.weatherCine.roll[1] ?? 0" :label="$t('hud.weatherDieP0', { p0: gameStore.state.weatherCine.roll[1] ?? 0 })" />
           </div>
           <div class="wc-caption">
             <span class="wc-icon">{{ weatherEmoji(gameStore.state.weatherCine.weather) }}</span>
-            <span class="wc-weather">{{ gameStore.state.weatherCine.weather }}</span>
+            <span class="wc-weather">{{ terms(gameStore.state.weatherCine.weather) }}</span>
           </div>
         </div>
 
@@ -15679,10 +15715,10 @@ function sendChat() {
           <span class="masterchef-icon">🤢</span>
           <span class="dodgy-snack-lines">
             <span class="masterchef-head">
-              Dodgy Snack affects {{ gameStore.state.dodgySnackAnnouncement.players.join(', ') }}
+              {{ $t('hud.masterchefSplash.dodgySnackAffectsP0', { p0: gameStore.state.dodgySnackAnnouncement.players.join(', ') }) }}
             </span>
             <span v-for="(name, i) in gameStore.state.dodgySnackAnnouncement.sentOff" :key="i" class="masterchef-head dodgy-snack-sentoff">
-              {{ name }} is sent off for this drive
+              {{ $t('hud.masterchefSplash.nameIsSentOff', { name }) }}
             </span>
           </span>
         </div>
@@ -15694,13 +15730,13 @@ function sendChat() {
           <!-- Dice sit ABOVE the splash (between the turn timer and the banner),
                rendered over the top of it. -->
           <div class="ko-dice">
-            <D6Face class="ko-die" :value="gameStore.state.kickoffCine.roll[0] ?? 0" :label="`Kick-off die ${gameStore.state.kickoffCine.roll[0] ?? 0}`" />
-            <D6Face class="ko-die" :value="gameStore.state.kickoffCine.roll[1] ?? 0" :label="`Kick-off die ${gameStore.state.kickoffCine.roll[1] ?? 0}`" />
+            <D6Face class="ko-die" :value="gameStore.state.kickoffCine.roll[0] ?? 0" :label="$t('hud.kickOffDieP0', { p0: gameStore.state.kickoffCine.roll[0] ?? 0 })" />
+            <D6Face class="ko-die" :value="gameStore.state.kickoffCine.roll[1] ?? 0" :label="$t('hud.kickOffDieP0', { p0: gameStore.state.kickoffCine.roll[1] ?? 0 })" />
           </div>
           <img v-if="gameStore.state.kickoffCine.img" :src="gameStore.state.kickoffCine.img" class="ko-splash" alt="" />
           <!-- Event name only when there is NO FUMBBL banner (it would otherwise
                duplicate the banner text). Rendered large for Weather Change. -->
-          <div v-else class="ko-name-big">{{ gameStore.state.kickoffCine.result }}</div>
+          <div v-else class="ko-name-big">{{ terms(gameStore.state.kickoffCine.result) }}</div>
           <!-- Owner 09-24: the result under the banner — "<Team> wins" / the acting team — in that side's colour. -->
           <div v-if="gameStore.state.kickoffCine.outcome" class="ko-outcome" :data-side="gameStore.state.kickoffCine.outcome.side">
             {{ gameStore.state.kickoffCine.outcome.text }}
@@ -15712,7 +15748,7 @@ function sendChat() {
              gated behind the clickDismiss setting); a "Click to Skip" hint sits at the bottom. -->
         <div v-if="gameStore.cineShowing.value" class="cine-dismiss"
           @click="gameStore.dismissCine()">
-          <span class="cine-dismiss-hint">Click to Skip</span>
+          <span class="cine-dismiss-hint">{{ $t('hud.clickToSkip') }}</span>
         </div>
 
         <!-- Owner: skill-use choice — <skillICON><D6 pips><N+> when a roll is
@@ -15723,17 +15759,17 @@ function sendChat() {
         <div v-if="gameStore.state.skillChoice?.mine" v-pad-focus class="skill-choice"
           v-prompt-dodge="promptDodge('skillChoice', gameStore.state.skillChoice.seq, skillChoicePos.ready)"
           :style="reactivePromptStyle('skillChoice', skillChoicePos.ready ? { x: skillChoicePos.x, y: skillChoicePos.y } : undefined)"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
+          :title="$t('hud.dragToMove')" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
           <img v-if="skillSilhouette" class="sc-silhouette" :src="skillSilhouette" alt="" />
-          <div class="sc-title">{{ modifierSkillCardCopy?.title ?? hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? 'Use juggernaut to push the player?' : `Use ${gameStore.state.skillChoice.label}?`)) }}</div>
-          <div v-if="gameStore.state.skillChoice.injuryResult" class="sc-subtext">Current injury: {{ gameStore.state.skillChoice.injuryResult }}</div>
+          <div class="sc-title">{{ modifierSkillCardCopy?.title ?? hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? $t('hud.useJuggernautToPush') : $t('hud.useLabel', { label: gameStore.state.skillChoice.label }))) }}</div>
+          <div v-if="gameStore.state.skillChoice.injuryResult" class="sc-subtext">{{ $t('hud.currentInjuryInjuryresult', { injuryResult: gameStore.state.skillChoice.injuryResult }) }}</div>
           <div v-if="swoopCardCopy" class="sc-subtext">{{ swoopCardCopy.body }}</div>
           <!-- #225(b) (owner-fg 07-29): Crushing Blow — show the ACTUAL rolled armour dice (🛡 + the [d6,d6]) ABOVE
                the CB body so the coach reads the roll vs AV before deciding the +1. Guarded ⇒ absent for any other
                skill / when no armour roll is live (generic body renders as before). -->
           <div v-if="skillChoiceArmorDice" class="sc-cb-armour">
             <span class="sc-cb-emoji" aria-hidden="true">🛡️</span>
-            <D6Face v-for="(d, di) in skillChoiceArmorDice" :key="di" class="sc-die sc-cb-die" :value="d" :side="diceSideOfPlayer(gameStore.state.skillChoice?.playerId)" :label="`Armour die ${d}`" />
+            <D6Face v-for="(d, di) in skillChoiceArmorDice" :key="di" class="sc-die sc-cb-die" :value="d" :side="diceSideOfPlayer(gameStore.state.skillChoice?.playerId)" :label="$t('hud.armourDieD', { d })" />
           </div>
           <div v-if="!passSkillCardCopy && modifierSkillCardCopy?.resultLine" class="sc-subtext">{{ modifierSkillCardCopy.resultLine }}</div>
           <div v-if="passSkillCardCopy" class="sc-pass-result">
@@ -15744,33 +15780,33 @@ function sendChat() {
           <div v-else-if="hmpScatterSkillCardCopy" class="sc-subtext">{{ hmpScatterSkillCardCopy.contextLine }}</div>
           <div v-else class="sc-body">
             <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-icon"
-              :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" :alt="gameStore.state.skillChoice.skill" />
+              :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" :alt="terms(gameStore.state.skillChoice.skill)" />
             <!-- Owner 2026-07-08: no art for this skill (e.g. Taunt) → fill the icon slot with the
                  same glyph placeholder the pitch markings use (markerGlyph → 'T'), not a blank. -->
             <span v-else class="sc-glyph" aria-hidden="true">{{ markerGlyph(gameStore.state.skillChoice.skill) }}</span>
             <template v-if="gameStore.state.skillChoice.minimumRoll > 0">
-              <D6Face class="sc-die" :value="gameStore.state.skillChoice.minimumRoll" :side="diceSideOfPlayer(gameStore.state.skillChoice.playerId)" :label="`Needed ${gameStore.state.skillChoice.minimumRoll}`" />
+              <D6Face class="sc-die" :value="gameStore.state.skillChoice.minimumRoll" :side="diceSideOfPlayer(gameStore.state.skillChoice.playerId)" :label="$t('hud.neededMinimumroll', { minimumRoll: gameStore.state.skillChoice.minimumRoll })" />
               <span class="sc-needed">+</span>
             </template>
             <span v-else class="sc-name">{{ gameStore.state.skillChoice.label }}</span>
           </div>
           <div v-if="modifierSkillCardCopy" class="sc-actions sc-actions-three">
-            <button class="sc-yes" :title="gameStore.state.skillChoice.label" :aria-label="`Use ${gameStore.state.skillChoice.label}`" @click="gameStore.resolveSkillUse(true)">
+            <button class="sc-yes" :title="gameStore.state.skillChoice.label" :aria-label="$t('hud.useLabel2', { label: gameStore.state.skillChoice.label })" @click="gameStore.resolveSkillUse(true)">
               <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-btn-icon"
                 :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" alt="" />
               <template v-else>{{ gameStore.state.skillChoice.label }}</template>
             </button>
-            <button class="sc-yes" :title="modifierSkillCardCopy.modifierLabel" :aria-label="`Use ${modifierSkillCardCopy.modifierLabel}`" @click="gameStore.resolveSkillUse(true, 'modifier')">
+            <button class="sc-yes" :title="modifierSkillCardCopy.modifierLabel" :aria-label="$t('hud.useModifierlabel', { modifierLabel: modifierSkillCardCopy.modifierLabel })" @click="gameStore.resolveSkillUse(true, 'modifier')">
               <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.modifyingSkill!, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-btn-icon"
                 :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.modifyingSkill!, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" alt="" />
               <template v-else>{{ modifierSkillCardCopy.modifierLabel }}</template>
             </button>
-            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">None</button>
+            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">{{ $t('hud.none') }}</button>
           </div>
           <div v-else class="sc-actions">
             <!-- Owner 08-18 (Swoop copy): "Swoop" / "Scatter Normally" (was Glide / Land now); wire answers byte-identical. -->
-            <button class="sc-yes" @click="gameStore.resolveSkillUse(true)">{{ swoopCardCopy?.accept ?? 'Yes' }}</button>
-            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">{{ swoopCardCopy?.decline ?? 'No' }}</button>
+            <button class="sc-yes" @click="gameStore.resolveSkillUse(true)">{{ swoopCardCopy?.accept ?? $t('hud.yes') }}</button>
+            <button class="sc-no" data-pad-cancel @click="gameStore.resolveSkillUse(false)">{{ swoopCardCopy?.decline ?? $t('hud.no') }}</button>
           </div>
         </div>
         <div v-else-if="gameStore.state.skillChoice && skillChoicePos.ready"
@@ -15780,26 +15816,26 @@ function sendChat() {
           <div class="fu-title">{{ passiveSkillDecisionText }}</div>
         </div>
 
-        <PitchConfirmationPanel v-if="wideRailActivationPrompt" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Special Ability"
+        <PitchConfirmationPanel v-if="wideRailActivationPrompt" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.specialAbility')"
           v-prompt-dodge="promptDodge('wideRailActivation', wideRailActivationPrompt.seq)"
-          label="Activation special confirmation">
-          <div>Use a special before continuing {{ wideRailActivationPrompt.playerAction }}?</div>
+          :label="$t('hud.activationSpecialConfirmation')">
+          <div>{{ $t('hud.useASpecialBefore', { playerAction: wideRailActivationPrompt.playerAction }) }}</div>
           <template #actions>
             <div class="rr-options">
               <button v-for="option in wideRailActivationPrompt.options" :key="option.ruleId" class="rr-use"
                 @click="acceptWideRailActivationRule(option.ruleId)">{{ option.label }}</button>
-              <button class="rr-decline" data-pad-cancel @click="declineWideRailActivationRules()">Continue without a special</button>
+              <button class="rr-decline" data-pad-cancel @click="declineWideRailActivationRules()">{{ $t('hud.continueWithoutASpecial') }}</button>
             </div>
           </template>
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="furiousOutburstInstruction" class="pitch-instruction" title="Furious Outburst"
-          label="Furious Outburst square selection" compact>
+        <PitchConfirmationPanel v-if="furiousOutburstInstruction" class="pitch-instruction" :title="$t('hud.furiousOutburst')"
+          :label="$t('hud.furiousOutburstSquareSelection')" compact>
           {{ furiousOutburstInstruction }}
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="bombThrowInstruction" class="pitch-instruction" title="Throw Bomb"
-          label="Bomb square selection" compact>
+        <PitchConfirmationPanel v-if="bombThrowInstruction" class="pitch-instruction" :title="$t('hud.throwBomb')"
+          :label="$t('hud.bombSquareSelection')" compact>
           {{ bombThrowInstruction }}
         </PitchConfirmationPanel>
 
@@ -15813,8 +15849,7 @@ function sendChat() {
                 <span v-for="(on, i) in pipPattern(gameStore.state.fanFactorCine.home.roll)" :key="i"
                   class="pip" :data-on="on"></span>
               </div>
-              <div class="fan-math">{{ gameStore.state.fanFactorCine.home.fans }} fans + {{ gameStore.state.fanFactorCine.home.roll }}
-                = <b>{{ gameStore.state.fanFactorCine.home.total }}</b></div>
+              <div class="fan-math">{{ $t('hud.fansFansRoll', { fans: gameStore.state.fanFactorCine.home.fans, roll: gameStore.state.fanFactorCine.home.roll }) }} <b>{{ gameStore.state.fanFactorCine.home.total }}</b></div>
             </div>
             <div class="fan-side away" :data-leader="gameStore.state.fanFactorCine.leader === 'away'">
               <div class="fan-coach">{{ gameStore.state.fanFactorCine.awayCoach }}</div>
@@ -15822,18 +15857,15 @@ function sendChat() {
                 <span v-for="(on, i) in pipPattern(gameStore.state.fanFactorCine.away.roll)" :key="i"
                   class="pip" :data-on="on"></span>
               </div>
-              <div class="fan-math">{{ gameStore.state.fanFactorCine.away.fans }} fans + {{ gameStore.state.fanFactorCine.away.roll }}
-                = <b>{{ gameStore.state.fanFactorCine.away.total }}</b></div>
+              <div class="fan-math">{{ $t('hud.fansFansRoll', { fans: gameStore.state.fanFactorCine.away.fans, roll: gameStore.state.fanFactorCine.away.roll }) }} <b>{{ gameStore.state.fanFactorCine.away.total }}</b></div>
             </div>
           </div>
           <div class="fan-splash">
             <template v-if="gameStore.state.fanFactorCine.leader === 'tie'">
-              Fan factor is even ({{ gameStore.state.fanFactorCine.home.total }} each)
+              {{ $t('hud.fanSplash.fanFactorIsEven', { total: gameStore.state.fanFactorCine.home.total }) }}
             </template>
             <template v-else>
-              {{ gameStore.state.fanFactorCine.leader === 'home' ? gameStore.state.fanFactorCine.homeCoach : gameStore.state.fanFactorCine.awayCoach }}
-              has <b>+{{ gameStore.state.fanFactorCine.diff }}</b> fan factor over
-              {{ gameStore.state.fanFactorCine.leader === 'home' ? gameStore.state.fanFactorCine.awayCoach : gameStore.state.fanFactorCine.homeCoach }}
+              {{ $t('hud.fanSplash.p0Has', { p0: gameStore.state.fanFactorCine.leader === 'home' ? gameStore.state.fanFactorCine.homeCoach : gameStore.state.fanFactorCine.awayCoach }) }} <b>+{{ gameStore.state.fanFactorCine.diff }}</b> {{ $t('hud.fanSplash.fanFactorOverP0', { p0: gameStore.state.fanFactorCine.leader === 'home' ? gameStore.state.fanFactorCine.awayCoach : gameStore.state.fanFactorCine.homeCoach }) }}
             </template>
           </div>
         </div>
@@ -15843,9 +15875,9 @@ function sendChat() {
              08-13 per owner — templates + Saved Setups are the fill path; the
              setupAutoFill store machinery is retained for template apply's reuse.) -->
         <PitchConfirmationPanel v-if="opponentSetupNotice" class="opponent-setup-notice"
-          title="Opponent is setting up" label="Opponent is setting up" compact
+          :title="$t('hud.opponentSetupNotice.opponentIsSettingUp')" :label="$t('hud.opponentSetupNotice.opponentIsSettingUp')" compact
           :position-style="{ top: '18%', right: 'max(18px, env(safe-area-inset-right))', left: 'auto', transform: 'none', width: 'min(280px, calc(100% - 36px))', minWidth: '0', maxWidth: 'none' }">
-          Waiting for their formation…
+          {{ $t('hud.opponentSetupNotice.waitingForTheirFormation') }}
         </PitchConfirmationPanel>
 
         <!-- Owner 2026-07-14 (setup overhaul #1): the big left SETUP WINDOW is deprecated — the reserve CHIPS
@@ -15853,22 +15885,22 @@ function sendChat() {
              and this is now a COMPACT rules+actions card pinned to the RIGHT, over the dugout. -->
         <!-- SPEC setup-templates §1 (Madden panel), §3-3o (the 15 templates), MIRROR OPTION §3c. -->
         <section v-if="setupPhase && setupTemplateSide && !setupBrowserClosed" ref="setupTemplatePanelEl"
-          class="setup-template-panel" aria-label="Setup formations" :style="setupBrowserStyle"
+          class="setup-template-panel" :aria-label="$t('hud.setupTemplatePanel.setupFormations')" :style="setupBrowserStyle"
           @pointerdown="startSetupBrowserResize">
           <div class="setup-template-title setup-template-windowbar" @pointerdown="startSetupBrowserDrag">
             <span class="setup-template-grip" aria-hidden="true">⠿</span>
             <div class="setup-template-tabs">
               <button class="setup-template-tab" :class="{ active: setupPanelSection === 'templates' }"
-                @click="setupPanelSection = 'templates'">TEMPLATES</button>
+                @click="setupPanelSection = 'templates'">{{ $t('hud.setupTemplatePanel.templates') }}</button>
               <button class="setup-template-tab" :class="{ active: setupPanelSection === 'saved' }"
-                @click="showSavedSetups">SAVED SETUPS</button>
+                @click="showSavedSetups">{{ $t('hud.setupTemplatePanel.savedSetups') }}</button>
             </div>
             <button v-if="setupPanelSection === 'saved'" class="setup-collapse-button" type="button"
               :aria-expanded="!savedSetupsCollapsed" @pointerdown.stop
               @click.stop="savedSetupsCollapsed = !savedSetupsCollapsed">
-              {{ savedSetupsCollapsed ? 'Expand' : 'Collapse' }}
+              {{ savedSetupsCollapsed ? $t('hud.setupTemplatePanel.expand') : $t('hud.setupTemplatePanel.collapse') }}
             </button>
-            <button class="setup-close-button" type="button" aria-label="Close formations panel" title="Close"
+            <button class="setup-close-button" type="button" :aria-label="$t('hud.setupTemplatePanel.closeFormationsPanel')" :title="$t('hud.setupTemplatePanel.close')"
               data-testid="setup-browser-close" @pointerdown.stop @click.stop="setupBrowserClosed = true">✕</button>
           </div>
           <div v-if="setupPanelSection === 'templates'" class="setup-template-list">
@@ -15887,7 +15919,7 @@ function sendChat() {
               </div>
               <div class="setup-template-name">{{ card.template.name }}</div>
               <label v-if="!card.template.symmetric" class="setup-template-mirror" @click.stop @keydown.stop>
-                <input v-model="setupTemplateMirrored[card.template.id]" type="checkbox" @click.stop /> Mirror
+                <input v-model="setupTemplateMirrored[card.template.id]" type="checkbox" @click.stop /> {{ $t('hud.setupTemplatePanel.mirror') }}
               </label>
             </div>
           </div>
@@ -15895,27 +15927,27 @@ function sendChat() {
             <form class="saved-setup-save" @submit.prevent="saveNamedSetup">
               <!-- IDbTableTeamSetups.LENGTH_NAME=40; UtilServerSetup.saveTeamSetup:82-83 replaces equal names. -->
               <input v-model="savedSetupName" class="saved-setup-input" maxlength="40"
-                aria-label="Saved setup name" placeholder="Setup name" />
+                :aria-label="$t('hud.setupTemplatePanel.savedSetupName')" :placeholder="$t('hud.setupTemplatePanel.setupName')" />
               <button class="setup-btn" type="submit"
                 :disabled="!savedSetupName.trim() || !gameStore.state.savedSetupListReceived || gameStore.state.savedSetupSave?.status === 'saving'">
-                {{ gameStore.state.savedSetupSave?.status === 'saving' ? 'Saving…' : 'Save' }}
+                {{ gameStore.state.savedSetupSave?.status === 'saving' ? $t('hud.setupTemplatePanel.saving') : $t('hud.setupTemplatePanel.save') }}
               </button>
-              <div class="saved-setup-help">Saving an existing name replaces it.</div>
+              <div class="saved-setup-help">{{ $t('hud.setupTemplatePanel.savingAnExistingName') }}</div>
               <div v-if="gameStore.state.savedSetupSave" class="saved-setup-status"
                 :class="gameStore.state.savedSetupSave.status" :role="gameStore.state.savedSetupSave.status === 'failed' ? 'alert' : 'status'">
                 <template v-if="gameStore.state.savedSetupSave.status === 'saving'">
-                  Saving “{{ gameStore.state.savedSetupSave.name }}” to the server…
+                  {{ $t('hud.setupTemplatePanel.savingNameToThe', { name: gameStore.state.savedSetupSave.name }) }}
                 </template>
                 <template v-else-if="gameStore.state.savedSetupSave.status === 'saved'">
-                  Saved “{{ gameStore.state.savedSetupSave.name }}”.
+                  {{ $t('hud.setupTemplatePanel.savedName', { name: gameStore.state.savedSetupSave.name }) }}
                 </template>
                 <template v-else>
-                  The server did not confirm “{{ gameStore.state.savedSetupSave.name }}”. Try saving again.
+                  {{ $t('hud.setupTemplatePanel.theServerDidNot', { name: gameStore.state.savedSetupSave.name }) }}
                 </template>
               </div>
             </form>
-            <div v-if="!gameStore.state.savedSetupListReceived" class="setup-empty">Loading saved setups...</div>
-            <div v-else-if="savedSetupCards.length === 0" class="setup-empty">No saved setups for this team.</div>
+            <div v-if="!gameStore.state.savedSetupListReceived" class="setup-empty">{{ $t('hud.setupTemplatePanel.loadingSavedSetups') }}</div>
+            <div v-else-if="savedSetupCards.length === 0" class="setup-empty">{{ $t('hud.setupTemplatePanel.noSavedSetupsFor') }}</div>
             <div v-for="card in savedSetupCards" :key="card.name" class="setup-template-card saved-setup-card"
               :class="{ active: lastLoadedSavedSetupName === card.name }">
               <div v-if="card.preview" class="setup-template-preview" aria-hidden="true"
@@ -15927,11 +15959,11 @@ function sendChat() {
               </div>
               <!-- SERVER_TEAM_SETUP_LIST exposes names only (IJsonOption.java:386), never squares.
                    Private-fork capture / a possible upstream extension is FLAGGED FOR MEERO stage-2. -->
-              <div v-else class="setup-template-preview saved-setup-placeholder">Preview unavailable</div>
+              <div v-else class="setup-template-preview saved-setup-placeholder">{{ $t('hud.setupTemplatePanel.previewUnavailable') }}</div>
               <div class="setup-template-name">{{ card.name }}</div>
               <div class="saved-setup-actions">
-                <button class="setup-btn" type="button" @click="loadNamedSetup(card.name)">Load</button>
-                <button class="setup-btn saved-setup-delete" type="button" @click="deleteNamedSetup(card.name)">Delete</button>
+                <button class="setup-btn" type="button" @click="loadNamedSetup(card.name)">{{ $t('hud.setupTemplatePanel.load') }}</button>
+                <button class="setup-btn saved-setup-delete" type="button" @click="deleteNamedSetup(card.name)">{{ $t('hud.setupTemplatePanel.delete') }}</button>
               </div>
             </div>
           </div>
@@ -15940,28 +15972,28 @@ function sendChat() {
         <div v-if="setupPhase && (setupCardClosed || (setupTemplateSide && setupBrowserClosed))" class="setup-reopen-tabs"
           data-testid="setup-reopen-tabs">
           <button v-if="setupCardClosed" class="setup-btn" type="button" data-testid="setup-card-reopen"
-            @click="setupCardClosed = false">Setup rules</button>
+            @click="setupCardClosed = false">{{ $t('hud.setupRules') }}</button>
           <button v-if="setupTemplateSide && setupBrowserClosed" class="setup-btn" type="button" data-testid="setup-browser-reopen"
-            @click="setupBrowserClosed = false">Formations</button>
+            @click="setupBrowserClosed = false">{{ $t('hud.formations') }}</button>
         </div>
 
         <div v-if="setupPhase && !setupCardClosed" ref="setupCardEl" class="setup-panel setup-card">
-          <button class="setup-close-button setup-card-close" type="button" aria-label="Close setup panel" title="Close"
+          <button class="setup-close-button setup-card-close" type="button" :aria-label="$t('hud.setupPanel.closeSetupPanel')" :title="$t('hud.setupPanel.close')"
             data-testid="setup-card-close" @click="setupCardClosed = true">✕</button>
-          <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE' : 'SET UP YOUR TEAM' }}</div>
+          <div class="setup-title">{{ solidDefenceSetup ? $t('hud.setupPanel.solidDefence') : $t('hud.setupPanel.setUpYourTeam') }}</div>
           <!-- StepApplyKickoffResult.handleSolidDefense: only the players the server selected may be moved;
                everything else on the pitch is deactivated and inert. -->
           <div v-if="solidDefenceSetup" class="setup-selected" data-solid-defence>
-            Only your <b>{{ solidDefenceMovableCount }}</b> selected player<span v-if="solidDefenceMovableCount !== 1">s</span>
-            may be moved — the rest of the team is locked in place.
+            {{ $t('hud.setupPanel.onlyYour') }} <b>{{ solidDefenceMovableCount }}</b>{{ $t('hud.setupPanel.selectedPlayer') }}<span v-if="solidDefenceMovableCount !== 1">s</span>
+            {{ $t('hud.setupPanel.mayBeMovedThe') }}
           </div>
           <div v-if="solidDefenceError" class="setup-selected" data-solid-defence-error role="alert">
-            The referee rejected that setup: you moved <b>{{ solidDefenceError.amount }}</b> player<span v-if="solidDefenceError.amount !== 1">s</span>
-            rather than the allowed <b>{{ solidDefenceError.limit }}</b>. Correct it and press Confirm Setup again.
-            <button class="setup-btn" type="button" @click="gameStore.dismissSolidDefenceError()">Dismiss</button>
+            {{ $t('hud.setupPanel.theRefereeRejectedThat') }} <b>{{ solidDefenceError.amount }}</b>{{ $t('hud.setupPanel.player') }}<span v-if="solidDefenceError.amount !== 1">s</span>
+            {{ $t('hud.setupPanel.ratherThanTheAllowed') }} <b>{{ solidDefenceError.limit }}</b>{{ $t('hud.setupPanel.correctItAndPress') }}
+            <button class="setup-btn" type="button" @click="gameStore.dismissSolidDefenceError()">{{ $t('hud.setupPanel.dismiss') }}</button>
           </div>
           <div v-if="setupPhase.setupErrors.length" class="setup-selected" data-setup-error role="alert">
-            <b>SETUP REJECTED</b> — correct the formation and press Confirm Setup again.
+            <b>{{ $t('hud.setupPanel.setupRejected') }}</b> {{ $t('hud.setupPanel.correctTheFormationAnd') }}
             <ul>
               <li v-for="message in setupPhase.setupErrors" :key="message">{{ message }}</li>
             </ul>
@@ -15969,28 +16001,28 @@ function sendChat() {
           <ul class="setup-conditions">
             <li :class="{ ok: setupPhase.validation.losOk }">
               <span class="setup-mark">{{ setupPhase.validation.losOk ? '✓' : '✗' }}</span>
-              At least {{ setupPhase.validation.requiredOnLos }} on the line ({{ setupPhase.validation.onLos }}/{{ setupPhase.validation.requiredOnLos }})
+              {{ $t('hud.setupPanel.atLeastRequiredonlosOn', { requiredOnLos: setupPhase.validation.requiredOnLos, onLos: setupPhase.validation.onLos, requiredOnLos2: setupPhase.validation.requiredOnLos }) }}
             </li>
             <li :class="{ ok: setupPhase.validation.leftOk }">
               <span class="setup-mark">{{ setupPhase.validation.leftOk ? '✓' : '✗' }}</span>
-              Max {{ setupPhase.validation.maxPerWideZone }} in the {{ wideZoneWord('left', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.leftWide }})
+              {{ $t('hud.setupPanel.maxMaxperwidezoneInThe', { maxPerWideZone: setupPhase.validation.maxPerWideZone, p1: wideZoneWord('left', setupWideWordsSwapped), leftWide: setupPhase.validation.leftWide }) }}
             </li>
             <li :class="{ ok: setupPhase.validation.rightOk }">
               <span class="setup-mark">{{ setupPhase.validation.rightOk ? '✓' : '✗' }}</span>
-              Max {{ setupPhase.validation.maxPerWideZone }} in the {{ wideZoneWord('right', setupWideWordsSwapped) }} wide zone ({{ setupPhase.validation.rightWide }})
+              {{ $t('hud.setupPanel.maxMaxperwidezoneInThe2', { maxPerWideZone: setupPhase.validation.maxPerWideZone, p1: wideZoneWord('right', setupWideWordsSwapped), rightWide: setupPhase.validation.rightWide }) }}
             </li>
             <li :class="{ ok: setupPhase.validation.countOk }">
               <span class="setup-mark">{{ setupPhase.validation.countOk ? '✓' : '✗' }}</span>
-              Placed {{ setupPhase.validation.placed }}/{{ setupPhase.validation.required }}
+              {{ $t('hud.setupPanel.placedPlacedRequired', { placed: setupPhase.validation.placed, required: setupPhase.validation.required }) }}
             </li>
           </ul>
           <!-- Owner 10-08: the "Selected: <player> — click a square ..." line is gone; it kept resizing the panel on
                every selection and the placement gestures no longer need explaining here. -->
           <div v-if="activeInput === 'controller'" class="setup-pad-hints" data-testid="setup-pad-hints">
-            <span><PadGlyph name="DpadLeft" /><PadGlyph name="DpadRight" /> players</span>
-            <span><PadGlyph name="LB" /> line of scrimmage</span>
-            <span><PadGlyph name="RB" /> reserves</span>
-            <span><PadGlyph name="View" /> confirm</span>
+            <span><PadGlyph name="DpadLeft" /><PadGlyph name="DpadRight" />{{ $t('hud.setupPanel.players') }}</span>
+            <span><PadGlyph name="LB" />{{ $t('hud.setupPanel.lineOfScrimmage') }}</span>
+            <span><PadGlyph name="RB" />{{ $t('hud.setupPanel.reserves') }}</span>
+            <span><PadGlyph name="View" />{{ $t('hud.setupPanel.confirm') }}</span>
           </div>
           <!-- Owner 10-03: the pane carries no confirm (the scoreboard's Confirm Setup opens the setup confirmation) nor
                Concede (a prompt asks when conceding is legal); owner 10-05: nor a Reserve button - a placed player goes
@@ -16000,13 +16032,13 @@ function sendChat() {
         <!-- ClientStateSwarming.java:10-27: dedicated setup-shaped placement without formation controls. Owner
              (this window): reserves now drag straight from the dugout, same idiom as normal setup — the per-player
              chip list is gone, replaced by the reserve-count readout used by the setup panel above. -->
-        <div v-if="swarmingPhase" class="setup-panel setup-card" aria-label="Swarming placement">
-          <div class="setup-title">SWARMING</div>
+        <div v-if="swarmingPhase" class="setup-panel setup-card" :aria-label="$t('hud.setupPanel.swarmingPlacement')">
+          <div class="setup-title">{{ $t('hud.setupPanel.swarming') }}</div>
           <div v-if="swarmingPhase.error" class="setup-selected">
-            Too many Swarming players: {{ swarmingPhase.error.actual }} placed, {{ swarmingPhase.error.allowed }} allowed.
+            {{ $t('hud.setupPanel.tooManySwarmingPlayers', { actual: swarmingPhase.error.actual, allowed: swarmingPhase.error.allowed }) }}
           </div>
           <div v-if="swarmingPhase.setupErrors.length" class="setup-selected" role="alert">
-            <b>Setup rejected — correct these rules:</b>
+            <b>{{ $t('hud.setupPanel.setupRejectedCorrectThese') }}</b>
             <ul class="setup-conditions">
               <li v-for="message in swarmingPhase.setupErrors" :key="message">
                 <span class="setup-mark">✗</span>{{ message }}
@@ -16014,19 +16046,19 @@ function sendChat() {
             </ul>
           </div>
           <div v-else-if="swarmingPhase.recoveredWithoutOffer" class="setup-selected">
-            Swarming placement recovered after reconnect. The server will re-check the setup when you choose Done.
+            {{ $t('hud.setupPanel.swarmingPlacementRecoveredAfter') }}
           </div>
           <ul class="setup-conditions">
             <li :class="{ ok: swarmingPhase.countLegal }">
               <span class="setup-mark">{{ swarmingPhase.countLegal ? '✓' : '✗' }}</span>
-              Placed {{ swarmingPhase.placedCount }}<template v-if="swarmingPhase.amount !== null">/{{ swarmingPhase.amount }}</template>
+              {{ $t('hud.setupPanel.placedPlacedcount', { placedCount: swarmingPhase.placedCount }) }}<template v-if="swarmingPhase.amount !== null">/{{ swarmingPhase.amount }}</template>
             </li>
           </ul>
           <div v-if="selectedSwarming" class="setup-selected">
-            Selected: <b>{{ swarmingPlayers.find((player) => player.playerId === selectedSwarming)?.name }}</b>. Choose a square to place the player
+            {{ $t('hud.setupPanel.selected') }} <b>{{ swarmingPlayers.find((player) => player.playerId === selectedSwarming)?.name }}</b>{{ $t('hud.setupPanel.chooseASquareTo') }}
           </div>
           <div class="setup-actions">
-            <button class="setup-btn done" :disabled="!swarmingPhase.countLegal" @click="gameStore.swarmingConfirm()">Done</button>
+            <button class="setup-btn done" :disabled="!swarmingPhase.countLegal" @click="gameStore.swarmingConfirm()">{{ $t('hud.setupPanel.done') }}</button>
           </div>
         </div>
 
@@ -16058,16 +16090,16 @@ function sendChat() {
              don't recognize. Notice + screenshot/copy/log + describe + (if it
              wants a coordinate) a pitch tile picker. -->
         <div v-if="gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.unknownPanel, pitch: unknownPickingTile }" class="unknown-call" :style="unknownCallStyle"
-          role="dialog" aria-label="Unanswered server prompt">
-          <div class="uc-head" title="Drag to move" @pointerdown="startUnknownDrag($event)">⚠ {{ gameStore.state.unknownCall.view.title }} ⠿</div>
+          role="dialog" :aria-label="$t('hud.unansweredServerPrompt')">
+          <div class="uc-head" :title="$t('hud.dragToMove')" @pointerdown="startUnknownDrag($event)">⚠ {{ gameStore.state.unknownCall.view.title }} ⠿</div>
           <div class="uc-body">
             <section class="uc-sec">
-              <h4>What is asked</h4>
+              <h4>{{ $t('hud.whatIsAsked') }}</h4>
               <p>{{ gameStore.state.unknownCall.view.what }}</p>
               <p class="uc-who">{{ gameStore.state.unknownCall.view.askedText }}</p>
             </section>
             <section v-if="gameStore.state.unknownCall.view.rows.length" class="uc-sec uc-sent">
-              <h4>What the server sent</h4>
+              <h4>{{ $t('hud.whatTheServerSent') }}</h4>
               <dl class="uc-rows">
                 <div v-for="(row, i) in gameStore.state.unknownCall.view.rows" :key="i" class="uc-row">
                   <dt>{{ row.label }}</dt>
@@ -16075,42 +16107,42 @@ function sendChat() {
                 </div>
                 <div v-if="gameStore.state.unknownCall.view.moreCount" class="uc-row">
                   <dt></dt>
-                  <dd class="uc-cut">{{ gameStore.state.unknownCall.view.moreCount }} more values in Copy details</dd>
+                  <dd class="uc-cut">{{ $t('hud.ucRow.morecountMoreValuesIn', { moreCount: gameStore.state.unknownCall.view.moreCount }) }}</dd>
                 </div>
               </dl>
             </section>
             <section class="uc-sec">
-              <h4>What you can do</h4>
-              <p class="uc-note">Nothing is sent unless you click one of these.</p>
+              <h4>{{ $t('hud.whatYouCanDo') }}</h4>
+              <p class="uc-note">{{ $t('hud.nothingIsSentUnless') }}</p>
               <div class="uc-actions">
-                <button v-if="unknownActions().canEndTurn" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endTurn'">{{ unknownActions().retryBlocked ? 'Try End Turn (still waiting for the server)' : 'Try End Turn' }}</button>
-                <button v-if="unknownActions().canEndActivation" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endActivation'">{{ unknownActions().retryBlocked ? 'Try End Activation (still waiting for the server)' : 'Try End Activation' }}</button>
-                <button v-if="unknownActions().canRejoin" class="uc-btn" @click="gameStore.rejoinFromUnknownCall()">Rejoin game</button>
-                <button class="uc-btn" @click="gameStore.hideUnknownCall()">Hide</button>
+                <button v-if="unknownActions().canEndTurn" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endTurn'">{{ unknownActions().retryBlocked ? $t('hud.tryEndTurnStill') : $t('hud.tryEndTurn') }}</button>
+                <button v-if="unknownActions().canEndActivation" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endActivation'">{{ unknownActions().retryBlocked ? $t('hud.tryEndActivationStill') : $t('hud.tryEndActivation') }}</button>
+                <button v-if="unknownActions().canRejoin" class="uc-btn" @click="gameStore.rejoinFromUnknownCall()">{{ $t('hud.rejoinGame') }}</button>
+                <button class="uc-btn" @click="gameStore.hideUnknownCall()">{{ $t('hud.hide') }}</button>
               </div>
               <div v-if="unknownConfirm" class="uc-confirm">
-                <p>{{ unknownConfirm === 'endTurn' ? 'End your turn now?' : 'End this activation now?' }} The server's question is still open, so it may refuse.</p>
+                <p>{{ unknownConfirm === 'endTurn' ? $t('hud.endYourTurnNow') : $t('hud.endThisActivationNow') }} {{ $t('hud.theServerSQuestion') }}</p>
                 <div class="uc-actions">
-                  <button class="uc-btn dismiss" tabindex="-1" @keydown.enter.prevent @keydown.space.prevent @click="confirmUnknownAttempt($event)">{{ unknownConfirm === 'endTurn' ? 'Send End Turn' : 'Send End Activation' }}</button>
-                  <button class="uc-btn" @click="unknownConfirm = null">Cancel</button>
+                  <button class="uc-btn dismiss" tabindex="-1" @keydown.enter.prevent @keydown.space.prevent @click="confirmUnknownAttempt($event)">{{ unknownConfirm === 'endTurn' ? $t('hud.sendEndTurn') : $t('hud.sendEndActivation') }}</button>
+                  <button class="uc-btn" @click="unknownConfirm = null">{{ $t('hud.cancel') }}</button>
                 </div>
               </div>
               <p v-if="gameStore.state.unknownCall.attempt" class="uc-outcome" :data-status="gameStore.state.unknownCall.attempt.status">{{ gameStore.state.unknownCall.attempt.text }}</p>
-              <p class="uc-note">Conceding is not offered here. If you concede and then choose to keep playing, the server drops its question.</p>
+              <p class="uc-note">{{ $t('hud.concedingIsNotOffered') }}</p>
             </section>
             <section class="uc-sec">
-              <h4>Report this</h4>
+              <h4>{{ $t('hud.reportThis') }}</h4>
               <div class="uc-actions">
-                <button class="uc-btn" @click="screenshotUnknown()">📸 Screenshot</button>
-                <button class="uc-btn" @click="copyUnknownDetails()">📋 Copy details</button>
-                <button class="uc-btn" @click="exportUnknownLog()">📄 Export log</button>
+                <button class="uc-btn" @click="screenshotUnknown()">{{ $t('hud.screenshot') }}</button>
+                <button class="uc-btn" @click="copyUnknownDetails()">{{ $t('hud.copyDetails') }}</button>
+                <button class="uc-btn" @click="exportUnknownLog()">{{ $t('hud.exportLog') }}</button>
               </div>
               <span v-if="unknownCopyStatus" class="uc-status">{{ unknownCopyStatus }}</span>
               <label class="uc-describe">
-                <span>What happened when this occurred?</span>
+                <span>{{ $t('hud.whatHappenedWhenThis') }}</span>
                 <textarea rows="2" :value="gameStore.state.unknownCall.description"
                   @input="gameStore.setUnknownCallDescription(($event.target as HTMLTextAreaElement).value)"
-                  placeholder="Describe the action you took…"></textarea>
+                  :placeholder="$t('hud.describeTheActionYou')"></textarea>
               </label>
             </section>
             <!-- coordinate response -->
@@ -16118,61 +16150,61 @@ function sendChat() {
               <template v-if="unknownPickingTile">
                 <span class="uc-coord-prompt">
                   {{ gameStore.state.unknownCall.eligible
-                    ? 'Select one of the highlighted squares.'
-                    : 'Click any tile on the pitch to return its coordinate.' }}
+                    ? $t('hud.ucCoordPrompt.selectOneOfThe')
+                    : $t('hud.ucCoordPrompt.clickAnyTileOn') }}
                 </span>
               </template>
               <button v-else class="uc-btn coord" @click="armUnknownTilePick()">
-                🎯 This call wants a coordinate — pick a tile
+                {{ $t('hud.thisCallWantsA') }}
               </button>
             </div>
           </div>
         </div>
         <button v-if="gameStore.state.unknownCall?.hidden" type="button" class="unknown-call-chip"
-          @click="gameStore.showUnknownCall()">⚠ Unanswered server prompt</button>
+          @click="gameStore.showUnknownCall()">{{ $t('hud.unknownCallChip.unansweredServerPrompt') }}</button>
 
         <!-- Owner 2026-07-04d: persistent ADMIN BROADCAST (serverAdminMessage),
              top-right; the player must Acknowledge to clear. -->
         <div v-if="gameStore.state.adminMessage" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.info }" class="admin-message center-left-notice">
-          <div class="admin-message-head">⚠ Admin broadcast</div>
+          <div class="admin-message-head">{{ $t('hud.centerLeftNotice.adminBroadcast') }}</div>
           <div class="admin-message-body">{{ gameStore.state.adminMessage }}</div>
-          <button class="admin-message-ack" @click="gameStore.dismissAdminMessage()">Acknowledge</button>
+          <button class="admin-message-ack" @click="gameStore.dismissAdminMessage()">{{ $t('hud.centerLeftNotice.acknowledge') }}</button>
         </div>
 
         <!-- Owner 2026-07-10: server-side messages (concede-not-granted, weather change, …) as a center-left
              modal instead of a chat toast. Sits just below the admin broadcast if both are up. -->
         <div v-if="serverNoticeVisible" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.info }" class="admin-message center-left-notice server-notice">
-          <div class="admin-message-head">Server message</div>
+          <div class="admin-message-head">{{ $t('hud.centerLeftNotice.serverMessage') }}</div>
           <div class="admin-message-body">{{ gameStore.state.infoNotice?.text }}</div>
-          <button class="admin-message-ack" @click="gameStore.state.infoNotice = null">Dismiss</button>
+          <button class="admin-message-ack" @click="gameStore.state.infoNotice = null">{{ $t('hud.centerLeftNotice.dismiss') }}</button>
         </div>
 
         <!-- Generic selectSkill dialog. Skill icons (or plaintext when using markers). -->
         <div v-if="gameStore.state.selectSkill" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
           :class="{ 'intensive-training-card': intensiveTrainingSelect }"
           v-prompt-dodge="promptDodge('selectSkill', gameStore.state.selectSkill.seq)"
-          :style="reactivePromptStyle('selectSkill', intensiveCardPos ?? undefined)" title="Drag to move"
+          :style="reactivePromptStyle('selectSkill', intensiveCardPos ?? undefined)" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('selectSkill', $event)">
           <IntensiveTrainingChoice v-if="intensiveTrainingSelect"
             :player-name="gameStore.state.selectSkill.playerName" :portrait="selectSkillPortrait"
             :skills="gameStore.state.selectSkill.skills" interactive @choose="gameStore.resolveSelectSkill($event)" />
           <template v-else>
-          <div class="yesno-text">Pick a skill for {{ gameStore.state.selectSkill.playerName }}</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.pickASkillFor', { playerName: gameStore.state.selectSkill.playerName }) }}</div>
           <div class="skill-select-list">
             <button v-for="sk in gameStore.state.selectSkill.skills" :key="sk"
               class="skill-select-opt" @click="gameStore.resolveSelectSkill(sk)">
               <img v-if="settings.skillDisplay === 'icons' && playerOwnedSkillIconUrl(sk, effectiveIconStyle, playerSideById(gameStore.state.selectSkill.playerId))"
-                :src="playerOwnedSkillIconUrl(sk, effectiveIconStyle, playerSideById(gameStore.state.selectSkill.playerId))" class="skill-select-icon" :alt="sk" />
-              <span>{{ sk }}</span>
+                :src="playerOwnedSkillIconUrl(sk, effectiveIconStyle, playerSideById(gameStore.state.selectSkill.playerId))" class="skill-select-icon" :alt="terms(sk)" />
+              <span>{{ terms(sk) }}</span>
             </button>
-            <span v-if="gameStore.state.selectSkill.skills.length === 0" class="setup-empty">— no skills offered —</span>
+            <span v-if="gameStore.state.selectSkill.skills.length === 0" class="setup-empty">{{ $t('hud.yesnoCard.noSkillsOffered') }}</span>
           </div>
           </template>
         </div>
 
         <!-- Weather Mage: every button is an exact name/modifier pair offered by DialogSelectWeather. -->
         <div v-if="gameStore.state.selectWeather" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card">
-          <div class="yesno-text">Choose the weather</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.chooseTheWeather') }}</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.selectWeather.options" :key="option.name"
               class="skill-select-opt" @click="gameStore.resolveSelectWeather(option.name)">
@@ -16195,7 +16227,7 @@ function sendChat() {
             </button>
           </div>
           <div v-if="gameStore.state.selectPosition.minSelects === 0" class="yesno-actions">
-            <button class="rr-decline" data-pad-cancel @click="gameStore.resolveSelectPosition(null)">Cancel</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.resolveSelectPosition(null)">{{ $t('hud.yesnoCard.cancel') }}</button>
           </div>
         </div>
 
@@ -16206,7 +16238,7 @@ function sendChat() {
             <button v-for="option in gameStore.state.inducementUse.options"
               :key="`${option.kind}:${option.value}`" class="skill-select-opt"
               @click="gameStore.resolveUseInducement(option.kind, option.value)">
-              <span>{{ option.kind === 'card' ? 'Card: ' : '' }}{{ option.label }}</span>
+              <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.label) }}</span>
             </button>
             <button class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
           </div>
@@ -16214,20 +16246,20 @@ function sendChat() {
 
         <!-- #8 (owner tester): voluntary End-Turn guard — a client-side confirm when own players
              are still unactivated (server acted-flag count, Meero C-8). NOT a server dialog. -->
-        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="End Turn?" label="End turn confirmation"
+        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.endTurn')" :label="$t('hud.endTurnConfirmation')"
           :position-style="reactivePromptStyle('endTurnWarn')" draggable
           @drag-start="startReactivePromptDrag('endTurnWarn', $event)">
-          <template v-if="endTurnWarnBallAction">Your {{ END_TURN_ACTION_NOUN[endTurnWarnBallAction] }} has not been completed. </template>
-          <template v-if="endTurnWarnCount > 0">{{ endTurnWarnCount }} of your players {{ endTurnWarnCount === 1 ? 'has' : 'have' }} not activated yet.</template>
+          <template v-if="endTurnWarnBallAction">{{ $t('hud.yourP0HasNot', { p0: END_TURN_ACTION_NOUN[endTurnWarnBallAction] }) }} </template>
+          <template v-if="endTurnWarnCount > 0">{{ $t('hud.endturnwarncountOfYourPlayers', { endTurnWarnCount }) }}</template>
           <template #actions>
-            <button class="rr-use" @click="confirmEndTurnAnyway()">End turn</button>
-            <button class="rr-decline" data-pad-cancel @click="cancelEndTurnWarn()">Go back</button>
+            <button class="rr-use" @click="confirmEndTurnAnyway()">{{ $t('hud.endTurn2') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelEndTurnWarn()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Owner 10-03: Confirm Setup asks first; an illegal setup lists what is wrong (arrows mark the offenders). -->
-        <PitchConfirmationPanel v-if="setupConfirm" v-pad-focus="{ pitch: true, priority: PAD_FOCUS_PRIORITY.confirmation }" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup'"
-          label="Setup confirmation" test-id="setup-confirm"
+        <PitchConfirmationPanel v-if="setupConfirm" v-pad-focus="{ pitch: true, priority: PAD_FOCUS_PRIORITY.confirmation }" :title="setupConfirm.problems.length ? $t('hud.setupNotLegal') : $t('hud.confirmSetup')"
+          :label="$t('hud.setupConfirmation')" test-id="setup-confirm"
           :position-style="reactivePromptStyle('setupConfirm')" draggable
           @drag-start="startReactivePromptDrag('setupConfirm', $event)">
           <template v-if="setupConfirm.problems.length">
@@ -16235,93 +16267,93 @@ function sendChat() {
               <li v-for="problem in setupConfirm.problems" :key="problem">{{ problem }}</li>
             </ul>
           </template>
-          <template v-else>Lock in the setup?</template>
+          <template v-else>{{ $t('hud.lockInTheSetup') }}</template>
           <!-- Astra review 10-03: a rejection from the server is shown here too, not only in the pane. -->
           <div v-if="setupConfirm.refereeErrors.length" class="setup-confirm-referee">
-            The referee rejected the last setup:
+            {{ $t('hud.theRefereeRejectedThe') }}
             <ul class="setup-confirm-problems">
               <li v-for="message in setupConfirm.refereeErrors" :key="message">{{ message }}</li>
             </ul>
           </div>
           <template #actions>
-            <button v-if="!setupConfirm.problems.length" class="rr-use" data-pad-key="View" @click="confirmSetupNow()">Confirm setup</button>
-            <button class="rr-decline" data-pad-cancel @click="cancelSetupConfirm()">Go back</button>
+            <button v-if="!setupConfirm.problems.length" class="rr-use" data-pad-key="View" @click="confirmSetupNow()">{{ $t('hud.confirmSetup2') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelSetupConfirm()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Owner 10-03: conceding at setup is offered as a question (it left the setup pane). -->
-        <PitchConfirmationPanel v-if="concedeOffer && !setupConfirm" title="Concede?" label="Concede offer" test-id="concede-offer"
+        <PitchConfirmationPanel v-if="concedeOffer && !setupConfirm" :title="$t('hud.concede')" :label="$t('hud.concedeOffer')" test-id="concede-offer"
           :position-style="reactivePromptStyle('concedeOffer')" draggable
           @drag-start="startReactivePromptDrag('concedeOffer', $event)">
-          You have {{ concedeOffer.available }} player{{ concedeOffer.available === 1 ? '' : 's' }} available for this drive, so you are allowed to concede. Do you want to concede the match?
+          {{ $t('hud.youHaveAvailablePlayer', { available: concedeOffer.available }) }}
           <template #actions>
-            <button class="rr-use" @click="answerConcedeOffer(true)">Concede</button>
-            <button class="rr-decline" @click="answerConcedeOffer(false)">Keep playing</button>
+            <button class="rr-use" @click="answerConcedeOffer(true)">{{ $t('hud.concede2') }}</button>
+            <button class="rr-decline" @click="answerConcedeOffer(false)">{{ $t('hud.keepPlaying') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- #12/#231: the single shared confirmation surface for every guarded end-activation trigger. -->
-        <PitchConfirmationPanel v-if="endActConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="endActConfirm.title ?? 'End Activation?'" label="End activation confirmation"
+        <PitchConfirmationPanel v-if="endActConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="endActConfirm.title ?? $t('hud.endActivation')" :label="$t('hud.endActivationConfirmation')"
           :position-style="reactivePromptStyle('endActConfirm')" draggable
           @drag-start="startReactivePromptDrag('endActConfirm', $event)">
           {{ endActConfirm.text }}
           <template #actions>
             <button class="rr-use" @click="confirmEndActivation()">{{ endActConfirm.confirmLabel }}</button>
-            <button class="rr-decline" data-pad-cancel @click="cancelEndActivation()">Go back</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelEndActivation()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- #91 (owner): declared-but-unconfirmed blitz + a floor-tile click → "convert to a plain Move?". Accept
              un-consumes the blitz (server-safe) and moves; right-click (or Keep Blitz) dismisses with NO wire,
              leaving the blitz declaration pending. -->
-        <PitchConfirmationPanel v-if="blitzMoveModalTile" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Keep Blitz?" label="Blitz conversion confirmation"
+        <PitchConfirmationPanel v-if="blitzMoveModalTile" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.keepBlitz')" :label="$t('hud.blitzConversionConfirmation')"
           :position-style="reactivePromptStyle('blitzMove')" draggable
           @drag-start="startReactivePromptDrag('blitzMove', $event)" @contextmenu.prevent="dismissBlitzMoveModal()">
-          You've declared a Blitz. Convert to a plain Move instead?
+          {{ $t('hud.youVeDeclaredA') }}
           <template #actions>
-            <button class="rr-use" @click="acceptBlitzMoveConvert()">Convert to Move</button>
-            <button class="rr-decline" data-pad-cancel @click="dismissBlitzMoveModal()">Keep Blitz</button>
+            <button class="rr-use" @click="acceptBlitzMoveConvert()">{{ $t('hud.convertToMove') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="dismissBlitzMoveModal()">{{ $t('hud.keepBlitz2') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Owner 2026-07-06 (note 4/5): BB2025 selectKeyword — the injured player's
              coach picks a keyword to hate (Getting Even / Hatred). N options, one pick. -->
         <div v-if="gameStore.state.keywordChoice" v-pad-focus="{ mandatory: true }" class="yesno-card select-skill-card"
-          :style="reactivePromptStyle('keywordChoice')" title="Drag to move"
+          :style="reactivePromptStyle('keywordChoice')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('keywordChoice', $event)">
-          <div class="yesno-text">{{ gameStore.state.keywordChoice.playerName }} — choose a keyword to hate</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.playernameChooseAKeyword', { playerName: gameStore.state.keywordChoice.playerName }) }}</div>
           <div class="skill-select-list">
             <button v-for="kw in gameStore.state.keywordChoice.keywords" :key="kw"
               class="skill-select-opt" @click="gameStore.resolveKeyword([kw])">
               <span>{{ kw }}</span>
             </button>
-            <span v-if="gameStore.state.keywordChoice.keywords.length === 0" class="setup-empty">— no keywords offered —</span>
+            <span v-if="gameStore.state.keywordChoice.keywords.length === 0" class="setup-empty">{{ $t('hud.yesnoCard.noKeywordsOffered') }}</span>
           </div>
         </div>
 
         <!-- Owner 2026-07-04d: minimal BUY-CARD menu — pick a card or Done. -->
         <div v-if="gameStore.state.cardChoice" v-pad-focus class="yesno-card card-buy-menu"
-          :style="reactivePromptStyle('cardChoice')" title="Drag to move"
+          :style="reactivePromptStyle('cardChoice')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('cardChoice', $event)">
-          <div class="yesno-text">Buy a card? <span class="card-gold">{{ gameStore.state.cardChoice.availableGold }}gp</span></div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.buyACard') }} <span class="card-gold">{{ $t('hud.yesnoCard.availablegoldGp', { availableGold: gameStore.state.cardChoice.availableGold }) }}</span></div>
           <div class="card-buy-list">
             <button v-for="opt in gameStore.state.cardChoice.options" :key="opt.selection"
               class="card-buy-opt" @click="gameStore.resolveCardChoice(opt.selection)">
-              <span class="card-buy-name">{{ opt.name }}</span>
+              <span class="card-buy-name">{{ terms(opt.name) }}</span>
               <span class="card-buy-desc">{{ opt.description }}</span>
             </button>
           </div>
-          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveCardChoice(null)">Done</button>
+          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveCardChoice(null)">{{ $t('hud.yesnoCard.done') }}</button>
         </div>
 
         <!-- case 478: BUY CARDS WITH GOLD — spend inducement gold on random cards drawn from
              per-type decks. Click a deck to buy one (server draws + re-shows to loop), or Done. -->
         <div v-if="gameStore.state.cardBuy" v-pad-focus class="yesno-card card-buy-menu"
-          :style="reactivePromptStyle('cardBuy')" title="Drag to move"
+          :style="reactivePromptStyle('cardBuy')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('cardBuy', $event)">
-          <div class="yesno-text">Buy cards
-            <span class="card-gold">{{ fmtGold(gameStore.state.cardBuy.availableGold) }}gp</span>
-            <span class="card-buy-budget">· up to {{ gameStore.state.cardBuy.availableCards }} more</span>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.buyCards') }}
+            <span class="card-gold">{{ $t('hud.yesnoCard.p0Gp', { p0: fmtGold(gameStore.state.cardBuy.availableGold) }) }}</span>
+            <span class="card-buy-budget">{{ $t('hud.yesnoCard.upToAvailablecardsMore', { availableCards: gameStore.state.cardBuy.availableCards }) }}</span>
           </div>
           <div class="card-buy-list">
             <button v-for="d in gameStore.state.cardBuy.decks" :key="d.cardType"
@@ -16329,25 +16361,25 @@ function sendChat() {
               :disabled="d.nrOfCards <= 0 || gameStore.state.cardBuy.availableCards <= 0"
               @click="gameStore.resolveBuyCard(d.cardType)">
               <span class="card-buy-name">{{ cardTypeLabel(d.cardType) }}</span>
-              <span class="card-buy-desc">{{ d.nrOfCards }} in deck</span>
+              <span class="card-buy-desc">{{ $t('hud.yesnoCard.nrofcardsInDeck', { nrOfCards: d.nrOfCards }) }}</span>
             </button>
           </div>
-          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveBuyCard(null)">Done</button>
+          <button class="sendoff-btn pass card-buy-done" data-pad-cancel @click="gameStore.resolveBuyCard(null)">{{ $t('hud.yesnoCard.done') }}</button>
         </div>
 
 
         <!-- Owner 2026-07-04d: interactive COIN CALL — Heads/Tails buttons, each
              with the coin side beside it (heads = FUMBBL skull, tails = T). -->
         <div v-if="gameStore.state.coinChoicePrompt" v-pad-focus="{ mandatory: true }" class="yesno-card coin-choice-card"
-          :style="reactivePromptStyle('coinChoice')" title="Drag to move"
+          :style="reactivePromptStyle('coinChoice')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('coinChoice', $event)">
-          <div class="yesno-text">Call the coin toss</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.callTheCoinToss') }}</div>
           <div class="coin-choice-actions">
             <button class="sendoff-btn argue" @click="gameStore.resolveCoinChoice(true)">
-              Heads <span class="coin-side heads"><img :src="coinSkullUrl" alt="" /></span>
+              {{ $t('hud.yesnoCard.heads') }} <span class="coin-side heads"><img :src="coinSkullUrl" alt="" /></span>
             </button>
             <button class="sendoff-btn pass" @click="gameStore.resolveCoinChoice(false)">
-              Tails <span class="coin-side tails">T</span>
+              {{ $t('hud.yesnoCard.tails') }} <span class="coin-side tails">T</span>
             </button>
           </div>
         </div>
@@ -16358,25 +16390,25 @@ function sendChat() {
           :key="gameStore.state.pregameWait.seq" class="yesno-card coin-wait-card">
           <div class="coin-wait-spinner" />
           <div class="yesno-text">{{ gameStore.state.pregameWait.text }}</div>
-          <div class="coin-wait-sub">Waiting…</div>
+          <div class="coin-wait-sub">{{ $t('hud.yesnoCard.waiting') }}</div>
         </div>
 
         <!-- Gate Kick/Receive behind the queued coin-result cine so result always precedes the choice. -->
         <div v-if="gameStore.state.receiveChoicePrompt && !gameStore.cineShowing.value" v-pad-focus="{ mandatory: true }" class="yesno-card coin-choice-card"
-          :style="reactivePromptStyle('receiveChoice')" title="Drag to move"
+          :style="reactivePromptStyle('receiveChoice')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('receiveChoice', $event)">
-          <div class="toss-winner-splash">🪙 {{ gameStore.state.receiveChoicePrompt.winner }} won the toss!</div>
-          <div class="yesno-text">Kick or receive?</div>
+          <div class="toss-winner-splash">{{ $t('hud.yesnoCard.winnerWonTheToss', { winner: gameStore.state.receiveChoicePrompt.winner }) }}</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.kickOrReceive') }}</div>
           <div class="coin-choice-actions">
-            <button class="sendoff-btn argue" @click="gameStore.resolveReceiveChoice(true)">Receive</button>
-            <button class="sendoff-btn pass" @click="gameStore.resolveReceiveChoice(false)">Kick</button>
+            <button class="sendoff-btn argue" @click="gameStore.resolveReceiveChoice(true)">{{ $t('hud.yesnoCard.receive') }}</button>
+            <button class="sendoff-btn pass" @click="gameStore.resolveReceiveChoice(false)">{{ $t('hud.yesnoCard.kick') }}</button>
           </div>
         </div>
 
         <!-- Owner 2026-07-04 (interaction catalog 0.2): generic YES/NO prompt —
              renders any accompanying server text verbatim. -->
         <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq" v-pad-focus
-          title="Confirm" label="Confirmation" :position-style="reactivePromptStyle('yesNo')" draggable
+          :title="$t('hud.confirm')" :label="$t('hud.confirmation')" :position-style="reactivePromptStyle('yesNo')" draggable
           :spaced="!!gameStore.state.yesNo.bullets"
           @drag-start="startReactivePromptDrag('yesNo', $event)">
           <div v-if="gameStore.state.yesNo.bullets" class="pitch-confirm-bulleted">
@@ -16395,44 +16427,44 @@ function sendChat() {
         <div v-if="gameStore.state.bloodlust && gameStore.state.bloodlust.stage !== 'bite'" :key="'bl-' + gameStore.state.bloodlust.seq"
           v-pad-focus class="skill-choice reroll-bar bloodlust-card"
           :style="reactivePromptStyle('bloodlust', bloodlustPos.ready ? { x: bloodlustPos.x, y: bloodlustPos.y } : undefined)"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('bloodlust', $event)">
+          :title="$t('hud.rerollBar.dragToMove')" @pointerdown="startReactivePromptDrag('bloodlust', $event)">
           <!-- Owner W37 mock: the RE-ROLL beat restructures to 3 lines — headline states the failure plainly
                (vampire name rides here since the mock drops it from line 1), the rolled d6 sits alone on its
                own line, then "Reroll?" + the source buttons + the X decline (replacing the old "Keep" text
                button, matching the ✕-decline idiom used by the generic reroll card's rr-decline-chip).
                Decision/bite beats keep the original title + button-row layout untouched. -->
           <div v-if="gameStore.state.bloodlust.stage === 'reroll'" class="sc-title bl-title">
-            <span class="bl-marker" aria-hidden="true">🩸</span> {{ gameStore.state.bloodlust.vampire }} failed bloodlust
+            <span class="bl-marker" aria-hidden="true">🩸</span> {{ $t('hud.rerollBar.vampireFailedBloodlust', { vampire: gameStore.state.bloodlust.vampire }) }}
           </div>
-          <div v-else class="sc-title"><span class="bl-marker" aria-hidden="true">🩸</span> Bloodlust — {{ gameStore.state.bloodlust.vampire }}</div>
+          <div v-else class="sc-title"><span class="bl-marker" aria-hidden="true">🩸</span> {{ $t('hud.rerollBar.bloodlustVampire', { vampire: gameStore.state.bloodlust.vampire }) }}</div>
           <div class="bl-opts">
             <template v-if="gameStore.state.bloodlust.stage === 'reroll'">
               <div v-if="gameStore.state.bloodlust.roll != null" class="rr-prompt-line">
                 <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.bloodlust.roll" :side="diceSideOfPlayer(gameStore.state.bloodlust.playerId)"
-                  :label="`Rolled ${gameStore.state.bloodlust.roll}`" />
+                  :label="$t('hud.rerollBar.rolledRoll', { roll: gameStore.state.bloodlust.roll })" />
               </div>
               <div v-if="bloodlustTastyMorselAvailable" class="rr-prompt-line bl-special-available">
                 {{ TASTY_MORSEL_AVAILABLE_COPY }}
               </div>
               <div class="rr-prompt-line rr-question bl-reroll-row">
-                <span>Reroll?</span>
+                <span>{{ $t('hud.rerollBar.reroll') }}</span>
                 <button v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source" class="bl-opt"
-                  :title="'Reroll: ' + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
-                  <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" alt="Team reroll" />
+                  :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
+                  <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
                   <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
                     :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
                   <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
                 </button>
-                <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel title="Keep the roll"
+                <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.keepTheRoll')"
                   @click="gameStore.resolveBloodlustReroll(null)">✕</button>
               </div>
             </template>
             <template v-else-if="gameStore.state.bloodlust.stage === 'decision'">
               <button class="bl-opt" @click="gameStore.resolveBloodlustDecision(true)">
-                {{ gameStore.state.bloodlust.changeToMove ? 'Change to move' : 'Move first' }}
+                {{ gameStore.state.bloodlust.changeToMove ? $t('hud.rerollBar.changeToMove') : $t('hud.rerollBar.moveFirst') }}
               </button>
               <button class="bl-opt bl-feed" @click="gameStore.resolveBloodlustDecision(false)">
-                Feed &amp; perform {{ gameStore.state.bloodlust.action }}
+                {{ $t('hud.rerollBar.feedPerformAction', { action: gameStore.state.bloodlust.action }) }}
               </button>
             </template>
           </div>
@@ -16442,7 +16474,7 @@ function sendChat() {
         <!-- #237 (owner-fg 07-29): the Pick-Me-Up prompt variant has its own movable body. -->
         <div v-if="gameStore.state.playerPick && gameStore.state.playerPick.key.startsWith('pchoice:pickMeUp')"
           class="pickmeup-splash" :style="{ ...reactivePromptStyle('pickMeUp', pickMeUpTitleAnchor), bottom: 'auto' }"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('pickMeUp', $event)">Choose players to pick up</div>
+          :title="$t('hud.pickmeupSplash.dragToMove')" @pointerdown="startReactivePromptDrag('pickMeUp', $event)">{{ $t('hud.pickmeupSplash.choosePlayersToPick') }}</div>
 
         <!-- Owner 2026-07-15: the MVP NOMINATION uses its own roster-summary modal (below), not the bottom
              pick-bar — hide the bar for the mvp pick so the two don't stack. -->
@@ -16455,22 +16487,22 @@ function sendChat() {
           :declinable="chargePick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <ChargePickPanel v-else-if="dwarfenWisdomPick" v-pad-focus="{ pitch: true }" title="Dwarfen Wisdom"
-          label="Dwarfen Wisdom player selection" :roll="dwarfenWisdomPick.roll"
+        <ChargePickPanel v-else-if="dwarfenWisdomPick" v-pad-focus="{ pitch: true }" :title="$t('hud.dwarfenWisdom')"
+          :label="$t('hud.dwarfenWisdomPlayerSelection')" :roll="dwarfenWisdomPick.roll"
           :max="dwarfenWisdomPick.maxPicks" :selected="dwarfenWisdomPick.picked.length"
           :confirm-disabled="dwarfenWisdomPick.picked.length < dwarfenWisdomPick.minPicks"
           :declinable="dwarfenWisdomPick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
         <ChargePickPanel v-else-if="prayerBoardPick" v-pad-focus="{ pitch: true }" :title="prayerBoardTitle"
-          :label="`${prayerBoardTitle} player selection`"
+          :label="$t('hud.prayerboardtitlePlayerSelection', { prayerBoardTitle })"
           :max="prayerBoardPick.maxPicks" :selected="prayerBoardPick.picked.length"
           :confirm-disabled="prayerBoardPick.picked.length < prayerBoardPick.minPicks"
           :declinable="prayerBoardPick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
         <PitchConfirmationPanel v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && !pickMeUpPrompt"
-          v-pad-focus="{ pitch: true }" title="Select Players" label="Player selection confirmation" :position-style="reactivePromptStyle('playerPick')"
+          v-pad-focus="{ pitch: true }" :title="$t('hud.selectPlayers')" :label="$t('hud.playerSelectionConfirmation')" :position-style="reactivePromptStyle('playerPick')"
           draggable @drag-start="startReactivePromptDrag('playerPick', $event)">
           <span>{{ gameStore.state.playerPick.prompt }}</span>
           <span v-if="gameStore.state.playerPick.confirm && gameStore.state.playerPick.maxPicks > 1" class="pick-count">
@@ -16479,23 +16511,23 @@ function sendChat() {
           <template #actions>
             <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
               :disabled="gameStore.state.playerPick.picked.length < gameStore.state.playerPick.minPicks || gameStore.state.playerPick.picked.length === 0"
-              @click="gameStore.confirmPlayerPick()">Confirm</button>
+              @click="gameStore.confirmPlayerPick()">{{ $t('hud.confirm') }}</button>
             <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" data-pad-cancel
-              @click="gameStore.resolvePlayerPick(null)">Decline</button>
+              @click="gameStore.resolvePlayerPick(null)">{{ $t('hud.decline') }}</button>
             <button v-if="rosterPickFallback" class="pick-decline" type="button"
-              @click="rosterPickFallbackOpen = !rosterPickFallbackOpen">{{ rosterPickFallbackOpen ? 'Hide list' : 'Pick from roster' }}</button>
+              @click="rosterPickFallbackOpen = !rosterPickFallbackOpen">{{ rosterPickFallbackOpen ? $t('hud.hideList') : $t('hud.pickFromRoster') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Pick-Me-Up remains token/scoreboard anchored; it is a contextual election, not a global confirm. -->
         <div v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && pickMeUpPrompt"
           v-pad-focus="{ pitch: true }" class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('playerPick', $event)">
+          :title="$t('hud.playerPickBar.dragToMove')" @pointerdown="startReactivePromptDrag('playerPick', $event)">
           <span class="pick-prompt">{{ gameStore.state.playerPick.prompt }}</span>
           <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
             :disabled="gameStore.state.playerPick.picked.length < gameStore.state.playerPick.minPicks || gameStore.state.playerPick.picked.length === 0"
-            @click="gameStore.confirmPlayerPick()">Confirm</button>
-          <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" data-pad-cancel @click="gameStore.resolvePlayerPick(null)">Decline</button>
+            @click="gameStore.confirmPlayerPick()">{{ $t('hud.playerPickBar.confirm') }}</button>
+          <button v-if="gameStore.state.playerPick.declinable" class="pick-decline" data-pad-cancel @click="gameStore.resolvePlayerPick(null)">{{ $t('hud.playerPickBar.decline') }}</button>
         </div>
 
         <div v-if="rosterPickFallback && rosterPickFallbackOpen" class="roster-pick-fallback-panel">
@@ -16509,15 +16541,15 @@ function sendChat() {
         <!-- Triage #4 (owner 08-11): SHADOWING pill — a position-anchored Confirm/Decline at the shadower (the
              reactive-election / follow-up idiom), replacing the bottom bar for this class. Same playerPick wire. -->
         <!-- Owner 10-05: the Shadowing chip rides the modern confirmation panel too (Tentacles / pick-me-up language). -->
-        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" v-pad-focus title="Shadow the runner?" label="Shadowing decision"
+        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" v-pad-focus :title="$t('hud.shadowTheRunner')" :label="$t('hud.shadowingDecision')"
           compact draggable test-id="shadowing-panel"
           v-prompt-dodge="promptDodge('shadowing', shadowingPick.seq)"
           :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('shadowing', $event)">
-          <span>{{ shadowerName }} can follow the runner</span>
+          <span>{{ $t('hud.shadowernameCanFollowThe', { shadowerName }) }}</span>
           <template #actions>
-            <button class="rr-use" @click="answerShadowing(true)">Shadow</button>
-            <button v-if="shadowingPick.declinable" class="rr-decline" data-pad-cancel @click="answerShadowing(false)">Decline</button>
+            <button class="rr-use" @click="answerShadowing(true)">{{ $t('hud.shadow') }}</button>
+            <button v-if="shadowingPick.declinable" class="rr-decline" data-pad-cancel @click="answerShadowing(false)">{{ $t('hud.decline') }}</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -16525,22 +16557,22 @@ function sendChat() {
              (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects).
              Owner 10-05: the card is the modern confirmation panel (the pick-me-up / End Turn? language), still
              anchored beside the tentacler and draggable. -->
-        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" v-pad-focus title="Use Tentacles?" label="Tentacles decision"
+        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" v-pad-focus :title="$t('hud.useTentacles')" :label="$t('hud.tentaclesDecision')"
           compact draggable test-id="tentacles-panel"
           v-prompt-dodge="promptDodge('tentacles', tentaclesPick.seq)"
           :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('tentacles', $event)">
-          <span>{{ tentaclerName }} can try to hold the runner</span>
+          <span>{{ $t('hud.tentaclernameCanTryTo', { tentaclerName }) }}</span>
           <template #actions>
-            <button class="rr-use" @click="answerTentacles(true)">Use</button>
-            <button v-if="tentaclesPick.declinable" class="rr-decline" data-pad-cancel @click="answerTentacles(false)">Decline</button>
+            <button class="rr-use" @click="answerTentacles(true)">{{ $t('hud.use') }}</button>
+            <button v-if="tentaclesPick.declinable" class="rr-decline" data-pad-cancel @click="answerTentacles(false)">{{ $t('hud.decline') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Triage #10 (owner 08-11): "Your opponent is deciding…" just below the block dice while it's THEIR pick
              (state.opponentReviewingDice — never on your own picks; clears when the pick resolves). -->
         <div v-if="gameStore.state.opponentReviewingDice && oppDecidingPos" class="opp-deciding-note"
-          :style="{ left: oppDecidingPos.x + 'px', top: oppDecidingPos.y + 'px' }">Your opponent is deciding…</div>
+          :style="{ left: oppDecidingPos.x + 'px', top: oppDecidingPos.y + 'px' }">{{ $t('hud.yourOpponentIsDeciding') }}</div>
 
         <!-- Owner 09-08: parked at the deciding player's token (same pill as the passive skill decision); the
              top-centre cue remains only when the player has no on-screen token. -->
@@ -16558,37 +16590,37 @@ function sendChat() {
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S48: Charge — same card, dock and drag slot as On the Ball (they never stand together: kickoff vs kickoffReturn/passBlock). -->
-        <OnTheBallWaitingModal v-if="gameStore.state.chargeWaiting" title="Charge!" notice-id="charge-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.chargeWaiting" :title="$t('hud.charge')" notice-id="charge-waiting"
           :message="gameStore.state.chargeWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S62 (owner 10-01): Solid Defence — the kicking coach picks, then repositions; every other seat waits on them. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.solidDefenceWaiting" title="Solid Defence" notice-id="solid-defence-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.solidDefenceWaiting" :title="$t('hud.solidDefence')" notice-id="solid-defence-waiting"
           :message="gameStore.state.solidDefenceWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S99 (owner 10-02): Pick-Me-Up - the coach with prone players is choosing who stands; every other seat waits on them. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.pickMeUpWaiting" title="Pick-Me-Up" notice-id="pick-me-up-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.pickMeUpWaiting" :title="$t('hud.pickMeUp')" notice-id="pick-me-up-waiting"
           :message="gameStore.state.pickMeUpWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- Owner 10-05: "Waiting for <Coach> to choose a push direction" - every seat but the choosing coach. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting && pushWaitingShown" title="Push" notice-id="push-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting && pushWaitingShown" :title="$t('hud.push')" notice-id="push-waiting"
           :message="gameStore.state.pushWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- Owner 10-07: the other coach's reroll decision on a failed pass / catch (incl. a scattered ball's catch). -->
-        <OnTheBallWaitingModal v-if="gameStore.state.reRollWaiting" title="Reroll" notice-id="reroll-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.reRollWaiting" :title="$t('hud.reroll')" notice-id="reroll-waiting"
           :message="gameStore.state.reRollWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S57 (owner 09-30): Touchback — the receiving coach nominates the ball carrier; every other seat waits on them. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.touchbackWaiting" title="Touchback" notice-id="touchback-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.touchbackWaiting" :title="$t('hud.touchback')" notice-id="touchback-waiting"
           :message="gameStore.state.touchbackWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S91 (owner 10-01): Kick-off - the kicking coach is aiming the kick; every other seat waits on them. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.kickoffWaiting" title="Kick-off" notice-id="kickoff-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.kickoffWaiting" :title="$t('hud.kickOff')" notice-id="kickoff-waiting"
           :message="gameStore.state.kickoffWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
@@ -16601,15 +16633,15 @@ function sendChat() {
              the button label, the maximum, the team and the eligible players. -->
         <!-- Owner 09-29: ASSIGN TOUCHDOWN (concede) - its own end-game step before the MVP step; one pick, answered here. -->
         <EndGamePickPane v-if="assignScreenActive" v-pad-focus kind="assign-touchdown" data-testid="assign-touchdown-pane"
-          :pick="assignRosterPick" :round-key="assignRoundKey" title="Assign Touchdown" :max="1"
-          confirm-label="Assign Touchdown" :confirm-disabled="!assignPick || assignPick.picked.length !== 1"
+          :pick="assignRosterPick" :round-key="assignRoundKey" :title="$t('hud.assignTouchdown')" :max="1"
+          :confirm-label="$t('hud.assignTouchdown')" :confirm-disabled="!assignPick || assignPick.picked.length !== 1"
           :waiting-text="assignWaitingText" idle-label="Assign Touchdown"
           :side="assignPanel?.side ?? mvpMySide" :only-ids="assignPanel?.onlyIds ?? []" :teams="assignPanel?.teams ?? null" :portrait="pgRosterPortrait" :local-side="mvpMySide"
           :skill-mode="skillMode" :icon-style="effectiveIconStyle" :extras="assignPanel?.extras ?? null"
           @pick="onAssignRosterPick" @confirm="gameStore.confirmPlayerPick()">
           <template #banner>
             <div v-if="assignAwarded.length" class="mvp-screen-result" data-testid="assign-touchdown-awarded">
-              <span class="mvp-screen-final">Awarded {{ assignAwarded.length }}</span>
+              <span class="mvp-screen-final">{{ $t('hud.awardedAssignawarded', { assignAwarded: assignAwarded.length }) }}</span>
               <span v-for="a in assignAwarded" :key="a.key" class="mvp-screen-team">{{ a.name }}</span>
             </div>
           </template>
@@ -16620,25 +16652,25 @@ function sendChat() {
              turn; the button is inert while it's the opponent's turn) · Continue once both sides resolve. -->
         <EndGamePickPane v-if="mvpScreenActive" v-pad-focus kind="mvp" data-testid="mvp-nominate-pane"
           :pick="mvpRosterPick" :round-key="mvpRoundKey" :title="mvpPick?.prompt ?? ''" :max="mvpPick?.maxPicks ?? 0"
-          confirm-label="Nominate MVP's" :confirm-disabled="!mvpPick || mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
-          :waiting-text="mvpWaiting ? 'Waiting for opponent' : null" :idle-label="mvpBothResolved ? 'Continue' : 'Nominate MVP\'s'" :idle-disabled="!mvpBothResolved"
+          :confirm-label="$t('hud.nominateMvpS')" :confirm-disabled="!mvpPick || mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
+          :waiting-text="mvpWaiting ? $t('hud.waitingForOpponent') : null" :idle-label="mvpBothResolved ? $t('hud.continue') : $t('hud.nominateMvpS')" :idle-disabled="!mvpBothResolved"
           :side="mvpMySide" :teams="rosterPopoutTeams" :portrait="pgRosterPortrait" :local-side="mvpMySide"
           :skill-mode="skillMode" :icon-style="effectiveIconStyle" :extras="mvpRosterExtras"
           @pick="(playerId: string) => gameStore.resolvePlayerPick(playerId)" @confirm="gameStore.confirmPlayerPick()"
           @idle="mvpDismissed = true; postGamePhase = 'stats'">
           <template #banner>
               <div v-if="mvpResult" class="mvp-screen-result">
-                <span class="mvp-screen-final">Final</span>
+                <span class="mvp-screen-final">{{ $t('hud.final') }}</span>
                 <span class="mvp-screen-team">{{ mvpResult.homeTeam }}</span>
                 <b>{{ mvpResult.homeScore }}</b><span class="mvp-screen-dot">·</span><b>{{ mvpResult.awayScore }}</b>
                 <span class="mvp-screen-team">{{ mvpResult.awayTeam }}</span>
               </div>
               <div class="mvp-screen-chips">
                 <div v-for="c in mvpChips" :key="c.side" class="mvp-screen-chip" :class="{ 'mvp-flash': c.flash, mine: c.mine }">
-                  <div class="mvp-screen-chip-team">{{ c.team }}<span v-if="c.mine" class="mvp-screen-you"> (you)</span></div>
+                  <div class="mvp-screen-chip-team">{{ c.team }}<span v-if="c.mine" class="mvp-screen-you">{{ $t('hud.mvpScreenChip.you') }}</span></div>
                   <!-- #44: winner portrait at roulette end — the in-game sprite portrait, revealed on 'landed'. -->
                   <img v-if="c.phase === 'landed' && c.portrait" class="mvp-screen-portrait" :src="c.portrait" alt="" />
-                  <div class="mvp-screen-chip-mvp"><span class="mvp-screen-mvp-lbl">MVP:</span>
+                  <div class="mvp-screen-chip-mvp"><span class="mvp-screen-mvp-lbl">{{ $t('hud.mvpScreenChip.mvp') }}</span>
                     <!-- #105: cycling/awaiting/none show the roulette/status text; landed shows the FIRST winner
                          reactively off side.mvps (NOT the frozen roulette display, so a reorder can't desync it). -->
                     <span class="mvp-screen-mvp-name" :data-phase="c.phase"><i v-if="c.phase === 'landed'" class="mvp-screen-star" aria-hidden="true"></i>{{ c.phase === 'landed' ? (c.winners[0]?.name ?? c.display) : c.display }}</span>
@@ -16650,7 +16682,7 @@ function sendChat() {
                        winner as its OWN full row matching the HEAD row's style — reuses `.mvp-screen-chip-mvp` markup
                        ("MVP:" label + starred accent name + ×N badge) instead of a bare small name line. -->
                   <div v-if="c.phase === 'landed'" v-for="w in c.winners.slice(1)" :key="w.id" class="mvp-screen-chip-mvp mvp-screen-extra">
-                    <span class="mvp-screen-mvp-lbl">MVP:</span>
+                    <span class="mvp-screen-mvp-lbl">{{ $t('hud.mvpScreenChip.mvp') }}</span>
                     <span class="mvp-screen-mvp-name" data-phase="landed"><i class="mvp-screen-star" aria-hidden="true"></i>{{ w.name }}</span>
                     <span v-if="w.awards > 1" class="mvp-screen-mvp-x">×{{ w.awards }}</span>
                   </div>
@@ -16663,38 +16695,37 @@ function sendChat() {
              Snap). The coach interacts (optional), then Confirm ends the mini-phase via clientEndTurn{turnMode}.
              Without this the game hung — the fix for the "high kick broke the game" report, generalised so a
              Quick Snap kickoff can't repeat it. Solid Defence is excluded (its setup-panel has its own Done). -->
-        <PitchConfirmationPanel v-if="o66MiniPhase" :title="quickSnapAllowance ? 'Quick Snap!' : 'High Kick!'"
-          :label="quickSnapAllowance ? 'Quick Snap confirmation' : 'High Kick confirmation'"
+        <PitchConfirmationPanel v-if="o66MiniPhase" :title="quickSnapAllowance ? $t('hud.quickSnap') : $t('hud.highKick')"
+          :label="quickSnapAllowance ? $t('hud.quickSnapConfirmation') : $t('hud.highKickConfirmation')"
           :test-id="quickSnapAllowance ? 'quick-snap-confirmation' : 'high-kick-confirmation'">
-          <span>{{ quickSnapAllowance ? 'Click a player, then a highlighted square.' : 'Click a player to move under the ball.' }}</span>
+          <span>{{ quickSnapAllowance ? $t('hud.clickAPlayerThen') : $t('hud.clickAPlayerTo') }}</span>
           <div v-if="quickSnapAllowance" class="quicksnap-confirm-stack">
             <span class="pick-count">
-              Moved {{ quickSnapAllowance.moved }} / {{ quickSnapAllowance.allowed }}<!--
-              -->{{ quickSnapAllowance.available !== null ? ` · ${quickSnapAllowance.available} open` : '' }}
+              {{ $t('hud.moved') }} {{ quickSnapAllowance.moved }} / {{ quickSnapAllowance.allowed }}<!--
+              -->{{ quickSnapAllowance.available !== null ? $t('hud.availableOpen', { available: quickSnapAllowance.available }) : '' }}
             </span>
             <span v-if="quickSnapAllowance.exhausted" class="pick-count">{{ quickSnapExhaustedText(quickSnapAllowance.exhausted.limitReached) }}</span>
           </div>
           <template #actions>
-            <button v-if="quickSnapAllowance" class="pick-confirm" @click="gameStore.playerEndTurn()">Confirm</button>
-            <button v-else class="pick-confirm" @click.stop="confirmHighKick()">Confirm</button>
+            <button v-if="quickSnapAllowance" class="pick-confirm" @click="gameStore.playerEndTurn()">{{ $t('hud.confirm') }}</button>
+            <button v-else class="pick-confirm" @click.stop="confirmHighKick()">{{ $t('hud.confirm') }}</button>
           </template>
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="deferredFriendlySwitch && deferredSwitchNames" title="Switch player?"
-          label="Pending player switch" test-id="deferred-friendly-switch" compact>
-          Click {{ deferredSwitchNames.to }} again to activate. {{ deferredSwitchNames.from }}'s activation ends when you do.
-          Right click or Esc to cancel.
+        <PitchConfirmationPanel v-if="deferredFriendlySwitch && deferredSwitchNames" :title="$t('hud.switchPlayer')"
+          :label="$t('hud.pendingPlayerSwitch')" test-id="deferred-friendly-switch" compact>
+          {{ $t('hud.clickToAgainTo', { to: deferredSwitchNames.to, from: deferredSwitchNames.from }) }}
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="furySecondBlockTargeting" title="Fury of the Blood God"
-          label="Fury of the Blood God second block target" test-id="fury-second-block-targeting" compact>
-          Select another player to block or right click to cancel.
+        <PitchConfirmationPanel v-if="furySecondBlockTargeting" :title="$t('hud.furyOfTheBlood')"
+          :label="$t('hud.furyOfTheBlood2')" test-id="fury-second-block-targeting" compact>
+          {{ $t('hud.selectAnotherPlayerTo') }}
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="gameStore.state.onTheBallMover" title="On the Ball"
-          label="On the Ball movement confirmation" test-id="on-the-ball-confirmation" compact>
-          Finish the reaction movement when ready.
-          <template #actions><button class="pick-confirm" @click="guardConfirmCard() || gameStore.endActivation()">End Move</button></template>
+        <PitchConfirmationPanel v-if="gameStore.state.onTheBallMover" :title="$t('hud.onTheBall')"
+          :label="$t('hud.onTheBallMovement')" test-id="on-the-ball-confirmation" compact>
+          {{ $t('hud.finishTheReactionMovement') }}
+          <template #actions><button class="pick-confirm" @click="guardConfirmCard() || gameStore.endActivation()">{{ $t('hud.endMove') }}</button></template>
         </PitchConfirmationPanel>
 
         <!-- #85 Quick Snap: after a player is selected, its valid ≤1/empty target squares carry INVISIBLE click
@@ -16707,7 +16738,7 @@ function sendChat() {
              "opponent is deciding" note; reveals only that a decision is pending, kept per no-private-overlay). -->
         <div v-if="gameStore.state.kickSkill && kickElectionTargets.length === 0"
           :key="'kick-wait-' + gameStore.state.kickSkill.seq" class="yesno-card">
-          <div class="yesno-text">Kicking coach deciding whether to use Kick…</div>
+          <div class="yesno-text">{{ $t('hud.yesnoCard.kickingCoachDecidingWhether') }}</div>
         </div>
         <!-- DialogKickSkillHandler.java:25-58: choose the server-sent semantic square; never echo a coordinate. -->
         <!-- Controller support P2b: the election's pitch buttons are one pad card (D-pad / stick move the ring, A picks);
@@ -16717,16 +16748,16 @@ function sendChat() {
           class="kick-election-target"
           :class="{ reduced: target.choice === 'kick', boundary: !target.onPitch, icon: target.iconOnly, stacked: target.stackIndex > 0 }"
           :style="{ left: target.x + 'px', top: target.y + 'px' }"
-          :aria-label="`${target.label} landing at ${target.raw[0]}, ${target.raw[1]}`"
-          :title="`${target.label} landing [${target.raw[0]},${target.raw[1]}]`"
+          :aria-label="$t('hud.labelLandingAtP1', { label: target.label, p1: target.raw[0], p2: target.raw[1] })"
+          :title="$t('hud.labelLandingP1P2', { label: target.label, p1: target.raw[0], p2: target.raw[1] })"
           @click.stop="chooseKickElection(target)">
           <template v-if="target.choice === 'kick'">
-            <img v-if="kickElectionIconUrl && !kickElectionIconFailed" :src="kickElectionIconUrl" alt="Kick"
+            <img v-if="kickElectionIconUrl && !kickElectionIconFailed" :src="kickElectionIconUrl" :alt="$t('hud.kick')"
               @error="kickElectionIconFailed = true" />
             <span v-else class="kick-election-k">K</span>
-            <span v-if="!target.onPitch" class="kick-election-label">Kick</span>
+            <span v-if="!target.onPitch" class="kick-election-label">{{ $t('hud.kick') }}</span>
           </template>
-          <span v-else-if="!target.onPitch" class="kick-election-label">Normal</span>
+          <span v-else-if="!target.onPitch" class="kick-election-label">{{ $t('hud.normal') }}</span>
         </button>
         </div>
 
@@ -16768,88 +16799,88 @@ function sendChat() {
           @cancel="o66AggroStage = null" />
         <!-- Controller support P2b (owner round 3): the controller-only block declaration ask - A Block, X the special,
              B Cancel. Specials = exactly the attack menu's offers on this target; the choice rides the menu's seams. -->
-        <PitchConfirmationPanel v-if="padBlockDeclare" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Block or special?" label="Block declaration"
+        <PitchConfirmationPanel v-if="padBlockDeclare" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.blockOrSpecial')" :label="$t('hud.blockDeclaration')"
           test-id="pad-block-declare">
           <span>{{ padBlockDeclareTargetName }}</span>
           <template #actions>
-            <button data-pad-primary data-testid="pad-block-declare-block" @click="padBlockDeclareChoose(null)">🛡️ Block</button>
+            <button data-pad-primary data-testid="pad-block-declare-block" @click="padBlockDeclareChoose(null)">{{ $t('hud.block') }}</button>
             <button v-for="(kind, ki) in padBlockDeclare.kinds" :key="kind" :data-pad-key="ki === 0 ? 'X' : undefined"
               :data-testid="`pad-block-declare-${kind}`" @click="padBlockDeclareChoose(kind)">{{ BLOCK_KIND_EMOJI[kind] }} {{ BLOCK_KIND_LABEL[kind] }}</button>
-            <button class="rr-decline" data-pad-cancel @click="padBlockDeclareCancel()">Cancel</button>
+            <button class="rr-decline" data-pad-cancel @click="padBlockDeclareCancel()">{{ $t('hud.cancel') }}</button>
           </template>
         </PitchConfirmationPanel>
         <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" v-pad-focus="{ cancel: padDismissBlockAlternative }" class="block-alt-modal"
-          :style="reactivePromptStyle('blockAlternative')" title="Drag to move"
+          :style="reactivePromptStyle('blockAlternative')" :title="$t('hud.blockAltModal.dragToMove')"
           @pointerdown="startReactivePromptDrag('blockAlternative', $event)">
           <template v-if="gameStore.state.foulChoiceHold">
-            <div class="block-alt-title">Choose the foul</div>
+            <div class="block-alt-title">{{ $t('hud.blockAltModal.chooseTheFoul') }}</div>
             <div class="block-alt-actions">
               <!-- P0 10-18: the chainsaw option leads and reads like the menu row, "Foul (Chainsaw)". -->
               <button data-pad-primary @click="chooseFoulKind(true)">
-                {{ BLOCK_KIND_EMOJI.chainsaw }} Foul (Chainsaw)
-                <small v-if="foulChoiceChainsawTarget != null">Armour {{ foulChoiceChainsawTarget }}+</small>
+                {{ $t('hud.blockAltModal.chainsawFoulChainsaw', { chainsaw: BLOCK_KIND_EMOJI.chainsaw }) }}
+                <small v-if="foulChoiceChainsawTarget != null">{{ $t('hud.blockAltModal.armourFoulchoicechainsawtarget', { foulChoiceChainsawTarget }) }}</small>
               </button>
-              <button @click="chooseFoulKind(false)">🥾 Foul</button>
+              <button @click="chooseFoulKind(false)">{{ $t('hud.blockAltModal.foul') }}</button>
             </div>
           </template>
           <template v-else-if="gameStore.state.blitzBlockChoice">
-          <div class="block-alt-title">Choose the {{ gameStore.state.blitzBlockChoice.origin === 'blitz' ? 'blitz' : 'block' }} attack</div>
+          <div class="block-alt-title">{{ $t('hud.blockAltModal.chooseTheP0Attack', { p0: gameStore.state.blitzBlockChoice.origin === 'blitz' ? 'blitz' : 'block' }) }}</div>
           <div class="block-alt-actions">
-            <button data-pad-primary @click="chooseBlitzBlockAlternative(null)">🛡️ Block</button>
+            <button data-pad-primary @click="chooseBlitzBlockAlternative(null)">{{ $t('hud.blockAltModal.block') }}</button>
             <button v-for="(offer, oi) in gameStore.state.blitzBlockChoice.offers" :key="offer.kind" :data-pad-key="oi === 0 ? 'X' : undefined"
               @click="chooseBlitzBlockAlternative(offer.kind as BlockKind)">
               {{ BLOCK_KIND_EMOJI[offer.kind as BlockKind] }} {{ offer.label }}
               <small v-if="blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) != null">
-                Armour {{ blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) }}+
+                {{ $t('hud.blockAltModal.armourP0', { p0: blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) }) }}
               </small>
             </button>
           </div>
           </template>
         </div>
         <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
-          title="Chainsaw Attack?" label="Chainsaw attack confirmation"
+          :title="$t('hud.chainsawAttack')" :label="$t('hud.chainsawAttackConfirmation')"
           :position-style="reactivePromptStyle('blockAlternative')" draggable
           @drag-start="startReactivePromptDrag('blockAlternative', $event)">
           <!-- Display only: +3 comes from upstream skill/bb2025/Chainsaw.java:47; kick-back on 1 is server-owned. -->
-          Armour {{ chainsawBlitzTarget ?? '—' }}+ · kick-back on 1
+          {{ $t('hud.armourP0KickBack', { p0: chainsawBlitzTarget ?? '—' }) }}
           <template #actions>
-            <button data-pad-cancel @click="chainsawBlitzConfirm = false">Back</button>
-            <button class="danger" data-pad-primary @click="confirmChainsawBlitz()">Use Chainsaw</button>
+            <button data-pad-cancel @click="chainsawBlitzConfirm = false">{{ $t('hud.back') }}</button>
+            <button class="danger" data-pad-primary @click="confirmChainsawBlitz()">{{ $t('hud.useChainsaw') }}</button>
           </template>
         </PitchConfirmationPanel>
 
         <!-- Owner o66aj/o66an: interactive kick placement — a top-centre MODAL tells the kicking coach to aim
              (the ball crosshair then follows the pointer over eligible squares). -->
         <div v-if="gameStore.state.kickPlacement" class="kick-aim-modal" :style="kickAimModalStyle">
-          <span class="kick-aim-modal-title">KICK-OFF</span>
-          <span class="kick-aim-modal-text">Select Target Square</span>
+          <span class="kick-aim-modal-title">{{ $t('hud.kickAimModal.kickOff') }}</span>
+          <span class="kick-aim-modal-text">{{ $t('hud.kickAimModal.selectTargetSquare') }}</span>
         </div>
         <!-- Owner 10-13: Settings > Confirm kick-off square. The clicked square waits here; Confirm sends the same
              CLIENT_KICKOFF the click sends with the setting off. Another click on the pitch re-targets (the locked
              crosshair moves with it). Like every PitchConfirmationPanel it takes the clicks under its own footprint
              (it has no backdrop); it is draggable, so a covered square stays reachable (Astra kickconfirm-1 P2). -->
         <PitchConfirmationPanel v-if="kickConfirmCard" :key="'kick-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
-          title="Confirm Kickoff?" label="Confirm Kickoff?" test-id="kickoff-square-confirm" compact
+          :title="$t('hud.confirmKickoff')" :label="$t('hud.confirmKickoff')" test-id="kickoff-square-confirm" compact
           :position-style="reactivePromptStyle('kickConfirm')" draggable
           :data-square="kickConfirmCard.square.join(',')"
           @drag-start="startReactivePromptDrag('kickConfirm', $event)">
           <template #actions>
-            <button class="rr-use" data-pad-primary @click="gameStore.confirmKickSquare()">Confirm</button>
-            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelKickSquare()">Go back</button>
+            <button class="rr-use" data-pad-primary @click="gameStore.confirmKickSquare()">{{ $t('hud.confirm') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelKickSquare()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
         <!-- Owner 10-20 (RickWreckless g1955027): free-select Pass ("Throw Pass" from the passer's menu). The first click
              on an in-template square holds it here; Confirm sends the same CLIENT_PASS the second click sent; Go back
              (or right-click / Esc) drops it and keeps free-select armed; another in-template click moves it. -->
         <PitchConfirmationPanel v-if="passConfirmCard" :key="'pass-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
-          title="Throw Pass?" label="Throw Pass?" test-id="free-select-pass-confirm" compact
+          :title="$t('hud.throwPass')" :label="$t('hud.throwPass')" test-id="free-select-pass-confirm" compact
           :position-style="reactivePromptStyle('passConfirm', passConfirmAnchor)" draggable
           :data-square="passConfirmCard.square.join(',')"
           @drag-start="startReactivePromptDrag('passConfirm', $event)">
-          Throw to {{ squareLabel(passConfirmCard.square[0], passConfirmCard.square[1]) }}?
+          {{ $t('hud.throwToP0', { p0: squareLabel(passConfirmCard.square[0], passConfirmCard.square[1]) }) }}
           <template #actions>
-            <button class="rr-use" data-pad-primary @click="confirmPassCard()">Confirm</button>
-            <button class="rr-decline" data-pad-cancel @click="cancelPassCard()">Go back</button>
+            <button class="rr-use" data-pad-primary @click="confirmPassCard()">{{ $t('hud.confirm') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="cancelPassCard()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -16859,46 +16890,46 @@ function sendChat() {
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
           @click="guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton()))">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
-          <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
-            <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
+          <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">{{ $t('hud.pass') }}
+            <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="$t('hud.passNeedsThrowroll', { throwRoll: o66TargetCue.throwRoll })" />+
             <span v-if="o66TargetCue.throwDp" class="o66-target-dp" data-testid="target-cue-pass-dp">{{ o66TargetCue.throwDp }}</span>
           </span>
           <!-- owner 10-05: the catch requirement in the same pill (accent tint, like the hover tip's catch line) -->
-          <span v-if="o66TargetCue.throwRoll != null && o66TargetCue.catchRoll != null" class="o66-target-pass-roll o66-target-catch-roll" data-testid="target-cue-catch">Catch
-            <D6Face class="o66-target-d6" :value="o66TargetCue.catchRoll" :label="`Catch needs ${o66TargetCue.catchRoll}`" />+
+          <span v-if="o66TargetCue.throwRoll != null && o66TargetCue.catchRoll != null" class="o66-target-pass-roll o66-target-catch-roll" data-testid="target-cue-catch">{{ $t('hud.catch') }}
+            <D6Face class="o66-target-d6" :value="o66TargetCue.catchRoll" :label="$t('hud.catchNeedsCatchroll', { catchRoll: o66TargetCue.catchRoll })" />+
             <span v-if="o66TargetCue.catchDp" class="o66-target-dp" data-testid="target-cue-catch-dp">{{ o66TargetCue.catchDp }}</span>
           </span>
         </div>
 
-        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" title="Cast Zap?"
-          label="Zap target confirmation" compact>
-          {{ gameStore.state.wizardTargetConfirm.playerName }} — Zap requires
+        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.castZap')"
+          :label="$t('hud.zapTargetConfirmation')" compact>
+          {{ $t('hud.playernameZapRequires', { playerName: gameStore.state.wizardTargetConfirm.playerName }) }}
           <D6Face :value="gameStore.state.wizardTargetConfirm.requiredRoll"
-            :label="`Zap needs ${gameStore.state.wizardTargetConfirm.requiredRoll}`" />+
+            :label="$t('hud.zapNeedsRequiredroll', { requiredRoll: gameStore.state.wizardTargetConfirm.requiredRoll })" />+
           <template #actions>
-            <button class="rr-use" @click="gameStore.confirmWizardTarget()">Confirm</button>
-            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelWizardTarget()">Cancel</button>
+            <button class="rr-use" @click="gameStore.confirmWizardTarget()">{{ $t('hud.confirm') }}</button>
+            <button class="rr-decline" data-pad-cancel @click="gameStore.cancelWizardTarget()">{{ $t('hud.cancel') }}</button>
           </template>
         </PitchConfirmationPanel>
         <!-- Owner ⑩ / W29: pass/bomb targeting tooltip — throw N+ and catch M+ for a standing target-square catcher
              square during free-select. Voss draws the crosshair/arrow; this is the roll surface. Pointer-transparent. -->
         <div v-if="passBombHoverTip" class="pass-hover-tip"
           :style="{ left: passBombHoverTip.x + 'px', top: passBombHoverTip.y + 'px' }">
-          <span class="pht-throw">🎯 <D6Face class="pass-hover-d6" :value="passBombHoverTip.throwRoll" :label="`Pass needs ${passBombHoverTip.throwRoll}`" />+</span>
-          <span v-if="passBombHoverTip.catchRoll != null" class="pht-catch">🧤 <D6Face class="pass-hover-d6" :value="passBombHoverTip.catchRoll" :label="`Catch needs ${passBombHoverTip.catchRoll}`" />+</span>
+          <span class="pht-throw">🎯 <D6Face class="pass-hover-d6" :value="passBombHoverTip.throwRoll" :label="$t('hud.passNeedsThrowroll', { throwRoll: passBombHoverTip.throwRoll })" />+</span>
+          <span v-if="passBombHoverTip.catchRoll != null" class="pht-catch">🧤 <D6Face class="pass-hover-d6" :value="passBombHoverTip.catchRoll" :label="$t('hud.catchNeedsCatchroll', { catchRoll: passBombHoverTip.catchRoll })" />+</span>
         </div>
-        <OnTheBallWaitingModal v-if="hailMaryPassHintVisible" title="Hail Mary Pass" message="Choose any square to target"
+        <OnTheBallWaitingModal v-if="hailMaryPassHintVisible" :title="$t('hud.hailMaryPass')" :message="$t('hud.chooseAnySquareTo')"
           notice-id="hail-mary-pass-notice" :position-style="hailMaryPassNoticeStyle" :z-index="HMP_NOTICE_Z_INDEX" />
         <OnTheBallWaitingModal v-if="placeCarriedPlayerNoticeCard" :title="placeCarriedPlayerNoticeCard.title" :message="placeCarriedPlayerNoticeCard.message"
           notice-id="place-carried-player-notice" :position-style="hailMaryPassNoticeStyle" :z-index="HMP_NOTICE_Z_INDEX" />
         <!-- Punt UX v2 (owner 08-12): draggable confirm card at the renderer's live cone centre (#237 idiom —
              re-anchors on re-aim unless the user has dragged it; hidden the instant puntConeCenter() goes null). -->
-        <PitchConfirmationPanel v-if="puntConeAnchor && o66PendingPunt" title="🏈 Punt"
-          label="Punt confirmation" :position-style="reactivePromptStyle('puntConfirm')" draggable
+        <PitchConfirmationPanel v-if="puntConeAnchor && o66PendingPunt" :title="$t('hud.punt')"
+          :label="$t('hud.puntConfirmation')" :position-style="reactivePromptStyle('puntConfirm')" draggable
           @drag-start="startReactivePromptDrag('puntConfirm', $event)">
-          Aim with the direction controls, then confirm.
+          {{ $t('hud.aimWithTheDirection') }}
           <template #actions>
-            <ConfirmActionButton class="pc-confirm" placement="inline" label="Confirm Punt"
+            <ConfirmActionButton class="pc-confirm" placement="inline" :label="$t('hud.confirmPunt')"
               :shortcut-code="settings.confirmKey" @activate="confirmPuntV2()" />
           </template>
         </PitchConfirmationPanel>
@@ -16906,13 +16937,13 @@ function sendChat() {
         <div v-if="puntReaimAnchor && o66PendingPunt && puntDirectionChoices.length" class="punt-reaim-pad"
           :style="{ left: puntReaimAnchor.x + 'px', top: puntReaimAnchor.y + 'px' }">
           <button v-for="choice in puntDirectionChoices" :key="choice.direction" type="button"
-            class="prp-nudge" :class="'prp-' + choice.direction" :title="`Aim ${choice.direction}`"
+            class="prp-nudge" :class="'prp-' + choice.direction" :title="$t('hud.aimDirection', { direction: choice.direction })"
             @click="selectPuntDirection(choice.square)">{{ choice.arrow }}</button>
         </div>
         <!-- The Jump badge is a server-state ON indicator and off-switch; the context menu remains the offer. -->
         <div v-if="jumpTogglePos" class="jump-toggle on"
           :style="{ left: jumpTogglePos.x + 'px', top: jumpTogglePos.y + 'px' }"
-          :title="`${jumpGerund} — click to turn off`"
+          :title="$t('hud.jumpgerundClickToTurn', { jumpGerund })"
           @click="toggleJumpFromBadge()">🦘 {{ jumpGerund }}</div>
 
         <!-- #236: server-confirmed Fumblerooski election badge. StepInitMoving.java:270-278 emits ballMoving=true +
@@ -16921,7 +16952,7 @@ function sendChat() {
              intersects those echoes with the same actor, so this cannot survive cancellation or activation end. -->
         <div v-if="fumblerooskiePos" class="jump-toggle on fumblerooskie-badge"
           :style="{ left: fumblerooskiePos.x + 'px', top: fumblerooskiePos.y + 'px' }"
-          title="Fumblerooski is active; keep moving to leave the ball behind">🏈 Fumblerooski active</div>
+          :title="$t('hud.fumblerooskiIsActiveKeep')">{{ $t('hud.fumblerooskiActive') }}</div>
 
         <!-- Owner 2026-07-04 (interaction catalog 28, PRIORITY): follow-up chip card
              at the block square (offset so the square stays visible); the passive
@@ -16929,11 +16960,11 @@ function sendChat() {
         <div v-if="gameStore.state.followupChoice && followupPos" v-pad-focus class="followup-chip"
           v-prompt-dodge="promptDodge('followup', gameStore.state.followupChoice.seq)"
           :style="reactivePromptStyle('followup', { x: followupPos.x, y: followupPos.y })"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('followup', $event)">
-          <div class="fu-title">Follow up?</div>
+          :title="$t('hud.followupChip.dragToMove')" @pointerdown="startReactivePromptDrag('followup', $event)">
+          <div class="fu-title">{{ $t('hud.followupChip.followUp') }}</div>
           <div class="fu-actions">
-            <button class="fu-btn follow" data-pad-primary @click="answerFollowup(true)">Follow up</button>
-            <button class="fu-btn stay" data-pad-cancel @click="answerFollowup(false)">Stay</button>
+            <button class="fu-btn follow" data-pad-primary @click="answerFollowup(true)">{{ $t('hud.followupChip.followUp2') }}</button>
+            <button class="fu-btn stay" data-pad-cancel @click="answerFollowup(false)">{{ $t('hud.followupChip.stay') }}</button>
           </div>
         </div>
         <!-- Owner 2026-07-06: the passive toast mounts to the player's HEAD — centred
@@ -16943,7 +16974,7 @@ function sendChat() {
           :style="{ left: followupPos.x + 'px', top: followupPos.y + 'px' }">
           <div class="fu-title">
             {{ gameStore.state.followupIndicator.playerName }}
-            {{ gameStore.state.followupIndicator.followed ? 'follows up' : 'stays' }}
+            {{ gameStore.state.followupIndicator.followed ? $t('hud.followupChip.followsUp') : 'stays' }}
           </div>
         </div>
 
@@ -16987,7 +17018,7 @@ function sendChat() {
           <!-- Owner 2026-07-08: a CASUALTY names the specific injury (server-resolved result);
                KO keeps the compact K.O. + name. -->
           <template v-if="view.rock">
-            <span class="ko-toast-phrase">{{ view.pill.player }} is hit by a rock!</span>
+            <span class="ko-toast-phrase">{{ $t('hud.koToast.playerIsHitBy', { player: view.pill.player }) }}</span>
           </template>
           <template v-else-if="view.casualty && view.lines">
             <!-- owner 10-05: two centred lines, the casualty always on the second; owner 10-20 (Astra P1-5): a Decay
@@ -16996,7 +17027,7 @@ function sendChat() {
               :aria-label="[...view.lines, view.decay ?? ''].join(' ').trim()"><span class="ko-toast-lead">{{ view.lines[0] }}</span><span class="ko-toast-casualty">{{ view.lines[1] }}</span><span v-if="view.decay" class="ko-toast-casualty ko-toast-decay">{{ view.decay }}</span></span>
           </template>
           <template v-else-if="view.reserves">
-            <span class="ko-toast-phrase">{{ view.pill.player }} returns to reserves</span>
+            <span class="ko-toast-phrase">{{ $t('hud.koToast.playerReturnsToReserves', { player: view.pill.player }) }}</span>
           </template>
           <template v-else>
             <span class="ko-toast-type">{{ view.ko ? 'K.O.' : view.pill.type }}</span>
@@ -17009,7 +17040,7 @@ function sendChat() {
              over. One token-anchored toast for both causes (no emoji), reads + clears fast. -->
         <div v-if="fallOverVisible && gameStore.state.fallOver && fallOverPos.ready" class="fall-toast"
           :style="{ left: fallOverPos.x + 'px', top: fallOverPos.y + 'px' }">
-          <span class="fall-toast-type">Falls over!</span>
+          <span class="fall-toast-type">{{ $t('hud.fallToast.fallsOver') }}</span>
         </div>
 
         <!-- Owner 10-20: game-load rank panel (both coaches' FUMBBL rank cards); pointer-events none, never a latch. -->
@@ -17030,7 +17061,7 @@ function sendChat() {
               <div class="turnover-text">
                 <!-- Owner 10-12: each line in sentence case (first letter capital, the rest lowercase), team names too. -->
                 <span class="turnover-coach">{{ sentenceCaseLine(gameStore.state.turnover.coach || gameStore.state.turnover.teamName, SPLASH_NAME_CASE) }}</span>
-                <span class="turnover-head">Has turned over</span>
+                <span class="turnover-head">{{ $t('hud.turnoverSplash.hasTurnedOver') }}</span>
               </div>
             </div>
 
@@ -17041,7 +17072,7 @@ function sendChat() {
               @pointerdown.stop @pointerup.stop @click.stop>
               <img class="turnover-logo" :src="splashTeamLogo(gameStore.state.turnStart.side, gameStore.state.turnStart.logo)" alt="" />
               <div class="turnover-text">
-                <span class="turnstart-head">{{ sentenceCaseLine(gameStore.state.turnStart.coach || gameStore.state.turnStart.teamName, SPLASH_NAME_CASE) }}'s turn</span>
+                <span class="turnstart-head">{{ $t('hud.turnstartSplash.p0STurn', { p0: sentenceCaseLine(gameStore.state.turnStart.coach || gameStore.state.turnStart.teamName, SPLASH_NAME_CASE) }) }}</span>
               </div>
             </div>
           </div>
@@ -17056,7 +17087,7 @@ function sendChat() {
              splash→hold→settle lifecycle). Keyed on seq so a re-detection next turn re-animates. -->
         <div v-if="stallerSplash" :key="'stall-' + stallerSplash.seq" class="staller-splash">
           <span class="staller-icon">⏱</span>
-          <span class="staller-text"><b>{{ stallerSplash.player }}</b> could be stalling!</span>
+          <span class="staller-text"><b>{{ stallerSplash.player }}</b>{{ $t('hud.stallerSplash.couldBeStalling') }}</span>
         </div>
 
         <!-- #230 (owner FINAL): the floating action-lock PILL is removed — "Opponent's Turn" now reads off the
@@ -17068,8 +17099,7 @@ function sendChat() {
         <div v-if="masterChefSplashVisible && gameStore.state.masterChefSplash" :key="'mc-' + gameStore.state.masterChefSplash.seq"
           class="masterchef-splash">
           <span class="masterchef-icon">🍲</span>
-          <span class="masterchef-head">{{ gameStore.state.masterChefSplash.team }}'s Master Chef steals
-            {{ gameStore.state.masterChefSplash.stolen }} reroll{{ gameStore.state.masterChefSplash.stolen === 1 ? '' : 's' }}!</span>
+          <span class="masterchef-head">{{ $t('hud.masterchefSplash.teamSMasterChef', { team: gameStore.state.masterChefSplash.team, stolen: gameStore.state.masterChefSplash.stolen }) }}</span>
         </div>
 
         <!-- owner ruling 08-17: Riotous Rookies splash — mirrors the Master Chef splash above (same component/style,
@@ -17078,8 +17108,7 @@ function sendChat() {
         <div v-if="riotousRookiesSplashVisible && gameStore.state.riotousRookiesSplash" :key="'rr-' + gameStore.state.riotousRookiesSplash.seq"
           class="masterchef-splash">
           <span class="masterchef-icon">🤡</span>
-          <span class="masterchef-head">{{ gameStore.state.riotousRookiesSplash.coach }} hires
-            {{ gameStore.state.riotousRookiesSplash.amount }} riotous rookie{{ gameStore.state.riotousRookiesSplash.amount === 1 ? '' : 's' }}!</span>
+          <span class="masterchef-head">{{ $t('hud.masterchefSplash.coachHiresAmountRiotous', { coach: gameStore.state.riotousRookiesSplash.coach, amount: gameStore.state.riotousRookiesSplash.amount }) }}</span>
         </div>
 
         <!-- Prayer lifetime belongs to the store FIFO: one banner at a time, then any interactive prayer dialog. -->
@@ -17087,9 +17116,9 @@ function sendChat() {
 
         <!-- #136 (owner): opponent-left connection notice — a player left the game; stays until that coach rejoins (owner 10-10). -->
         <div v-if="opponentLeftVisible && gameStore.state.opponentLeft" :key="'ol-' + gameStore.state.opponentLeft.seq"
-          class="opponent-left-toast" role="button" title="Click to dismiss" @click="gameStore.dismissOpponentLeft()">
+          class="opponent-left-toast" role="button" :title="$t('hud.opponentLeftToast.clickToDismiss')" @click="gameStore.dismissOpponentLeft()">
           <span class="opponent-left-icon">⚠</span>
-          <span class="opponent-left-text"><span><b>{{ gameStore.state.opponentLeft.coach }}</b> has left the game.</span><span>Waiting for <b>{{ gameStore.state.opponentLeft.coach }}</b> to reconnect.</span></span>
+          <span class="opponent-left-text"><span><b>{{ gameStore.state.opponentLeft.coach }}</b>{{ $t('hud.opponentLeftToast.hasLeftTheGame') }}</span><span>{{ $t('hud.opponentLeftToast.waitingFor') }} <b>{{ gameStore.state.opponentLeft.coach }}</b>{{ $t('hud.opponentLeftToast.toReconnect') }}</span></span>
         </div>
 
         <!-- g314/g315 (owner, de-escalated to icon-scale — this was firing as a full P1-style
@@ -17102,7 +17131,7 @@ function sendChat() {
           <img v-else-if="rerollToastIconKind(gameStore.state.rerollSplash, false) === 'mascot'" class="reroll-toast-icon" :src="resourceIcon('team_mascot')" alt="" />
           <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
-          <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? `${gameStore.state.rerollSplash.coach} uses ${gameStore.state.rerollSplash.source}!` }}</span>
+          <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? $t('hud.rerollToast.coachUsesSource', { coach: gameStore.state.rerollSplash.coach, source: gameStore.state.rerollSplash.source }) }}</span>
         </div>
         <!-- Owner 10-20: the Team Captain splash - the reroll toast's look, one row below it (a kept team reroll). -->
         <div v-if="gameStore.state.teamCaptainSplash" :key="'tc-' + gameStore.state.teamCaptainSplash.seq"
@@ -17123,7 +17152,7 @@ function sendChat() {
         <!-- U5 (owner UX ruling 08-11): while a Fumblerooski election is live (ball dropped, drops on the next
              move) surface a top banner below the scoreboard so the coach knows the ball is about to fall. Driven
              off fumblerooskieActive (the existing election signal), so it clears the instant the ball settles. -->
-        <div v-if="fumblerooskieActive" class="fumblerooskie-banner">Ball will drop on the next move.</div>
+        <div v-if="fumblerooskieActive" class="fumblerooskie-banner">{{ $t('hud.fumblerooskieBanner.ballWillDropOn') }}</div>
 
         <ul v-if="ctxMenu.visible" class="context-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }">
           <li v-for="(item, i) in ctxMenu.items" :key="i" :data-disabled="item.disabled ?? false"
@@ -17141,7 +17170,7 @@ function sendChat() {
              mode) to choose which die to re-roll. -->
         <div v-if="gameStore.state.blockPartial" v-pad-focus="blockDialogMine ? { mandatory: !!gameStore.state.blockPartial.pickable } : false" class="block-partial"
           :style="reactivePromptStyle('blockPartial', blockRerollPos ?? undefined)"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('blockPartial', $event)">
+          :title="$t('hud.dragToMove')" @pointerdown="startReactivePromptDrag('blockPartial', $event)">
           <BlockChooserCopy v-if="blockChooserCaptionTeamId != null" :game="gameStore.game.value"
             :choosing-team-id="blockChooserCaptionTeamId" :local-seat="blockChooserSeat"
             :spectator="blockChooserSpectator" />
@@ -17159,7 +17188,7 @@ function sendChat() {
                `opponentRerollPending` store signal (the defender's phase-1 wait isn't derivable from the
                current fields). -->
           <div v-if="gameStore.state.blockPartial.nrOfDice < 0" class="bp-uphill">
-            <div class="bp-uphill-title">UPHILL BLOCK</div>
+            <div class="bp-uphill-title">{{ $t('hud.uphillBlock') }}</div>
           </div>
           <div ref="bpDiceHost" class="bp-dice">
             <button v-for="(d, i) in bpDiceShown" :key="i"
@@ -17167,7 +17196,7 @@ function sendChat() {
               :aria-pressed="bpDieMode === 'multiBlockDice' ? bpSelectedDice.has(i) : undefined"
               :data-readonly="!blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
               :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
-              :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? 'Remove this die' : 'Select this die') : (bpDieMode ? 'Reroll this die' : (bpUphillDecision ? blockFaceLabel(d) + ' — awaiting the chooser' : (settings.order66 ? blockFaceLabel(d) : 'Keep this die')))"
+              :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? $t('hud.removeThisDie') : $t('hud.selectThisDie')) : (bpDieMode ? $t('hud.rerollThisDie') : (bpUphillDecision ? blockFaceLabel(d) + $t('hud.awaitingTheChooser') : (settings.order66 ? blockFaceLabel(d) : $t('hud.keepThisDie'))))"
               @click="clickBlockPartialDie(i)">
               <img v-if="settings.order66" :src="blockFaceUrl(d, blockPartialSide)" :alt="blockFaceLabel(d)" />
               <template v-else>{{ blockFaceLabel(d) }}</template>
@@ -17175,13 +17204,13 @@ function sendChat() {
           </div>
           <!-- #38 (owner tester): "Waiting for reroll decision" BELOW the dice while the opponent's re-roll
                decision is pending on an uphill block. Consumes Tarkin's `opponentRerollPending` (fef6e22c). -->
-          <div v-if="gameStore.state.blockPartial.opponentRerollPending" class="bp-uphill-wait">Waiting for reroll decision</div>
+          <div v-if="gameStore.state.blockPartial.opponentRerollPending" class="bp-uphill-wait">{{ $t('hud.waitingForRerollDecision') }}</div>
           <!-- Owner 09-07: watcher-side cue — the chooser still holds a TEAM re-roll (same art as the live button,
                display-only), so a spectator/opponent reads a pause as a re-roll debate. -->
           <div v-if="!blockDialogMine && gameStore.state.blockPartial.chooserTeamRerollAvailable" class="bp-actions bp-actions--watch"
-            title="The choosing coach may still use a team reroll">
+            :title="$t('hud.theChoosingCoachMay')">
             <span class="bp-team bp-team--watch">
-              <img :src="resourceIcon('re_roll')" alt="Team reroll available" />
+              <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamRerollAvailable')" />
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num">{{ blockPartialTeamReRolls }}</span>
             </span>
           </div>
@@ -17205,37 +17234,37 @@ function sendChat() {
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
             <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot"
-              class="bp-team" title="Team reroll" @click="gameStore.resolveBlockPartial('team')">
-              <img :src="resourceIcon('re_roll')" alt="Team reroll" />
+              class="bp-team" :title="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
+              <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
               <!-- #205: acting coach's team-reroll count, immediately beside the die icon (owner idiom).
                    Display-only chip; the resolve('team') answer path is untouched. -->
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                :title="`Team rerolls available: ${blockPartialTeamReRolls}`">{{ blockPartialTeamReRolls }}</span>
+                :title="$t('hud.teamRerollsAvailableBlockpartialteamrero', { blockPartialTeamReRolls })">{{ blockPartialTeamReRolls }}</span>
             </button>
             <!-- Owner 2026-07-12: distinct Team Mascot re-roll (own art) + the Mascot-then-TRR variant. -->
             <button v-if="gameStore.state.blockPartial.mascot" class="bp-team bp-mascot"
-              title="Team Mascot (no reroll if it fails)" @click="gameStore.resolveBlockPartial('mascot')">
-              <img :src="resourceIcon('team_mascot')" alt="Team Mascot" />
-              <span class="bp-sub">No TRR</span>
+              :title="$t('hud.teamMascotNoReroll')" @click="gameStore.resolveBlockPartial('mascot')">
+              <img :src="resourceIcon('team_mascot')" :alt="$t('hud.teamMascot')" />
+              <span class="bp-sub">{{ $t('hud.noTrr') }}</span>
             </button>
             <button v-if="gameStore.state.blockPartial.mascotTrr" class="bp-opt"
-              title="Team Mascot, then Team Reroll if it fails" @click="gameStore.resolveBlockPartial('mascotTrr')">
-              <span>Mascot + RR</span>
+              :title="$t('hud.teamMascotThenTeam')" @click="gameStore.resolveBlockPartial('mascotTrr')">
+              <span>{{ $t('hud.mascotRr') }}</span>
             </button>
             <!-- Owner 2026-07-12 (bug, upstream-client-verified): o66 uphill phase-1 — the attacker declines the
                  re-roll; upstream's "No Re-Roll" sends sendUseReRoll(BLOCK, null), then the SERVER flips the pick
                  to the defender (DialogBlockRollProperties buttonNoReRoll → the null-source branch). -->
             <button v-if="bpUphillDecision" class="bp-opt bp-decline"
-              title="Decline reroll — the chooser then picks the block die" @click="gameStore.resolveBlockPartial('declineReroll')">
-              <span>Decline reroll</span>
+              :title="$t('hud.declineRerollTheChooser')" @click="gameStore.resolveBlockPartial('declineReroll')">
+              <span>{{ $t('hud.declineReroll') }}</span>
             </button>
           </div>
           <div v-if="blockDialogMine && bpDieMode === 'multiBlockDice'" class="bp-hint bp-multi-select">
-            <span>{{ bpMultiSelectHintText ?? 'Select one or more dice.' }}</span>
-            <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">Reroll selected</button>
+            <span>{{ bpMultiSelectHintText ?? $t('hud.multiblockdice.selectOneOrMore') }}</span>
+            <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">{{ $t('hud.multiblockdice.rerollSelected') }}</button>
           </div>
           <div v-else-if="blockDialogMine && bpDieMode" class="bp-hint">{{ bpArmedHintText }}</div>
-          <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">Uphill block — use a reroll or decline; the chooser picks the die.</div>
+          <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">{{ $t('hud.uphillBlockUseA') }}</div>
         </div>
 
         <PrayerPresentation :announcement="null" :wait="gameStore.state.prayerChoiceWait"
@@ -17246,9 +17275,9 @@ function sendChat() {
              (answers the reRollBlockForTargets dialog TK g748 wedged on). Reuses the .bp-die block-face art. The
              re-roll affordances (team/pro/brawler/consummate) are a fast-follow — invocation being pinned w/ Tarkin. -->
         <div v-if="gameStore.state.multiBlockResolution" v-pad-focus="multiBlockDialogMine ? { mandatory: gameStore.state.multiBlockResolution.rolls.some((r) => r.isOwnChoice === true) } : false" class="multi-block-resolution"
-          :style="reactivePromptStyle('multiBlock')" title="Drag to move"
+          :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
-          <div class="mbr-title">MULTIPLE BLOCK</div>
+          <div class="mbr-title">{{ $t('hud.multipleBlock') }}</div>
           <BlockChooserCopy v-if="liveMultiBlockChoiceDialog" :game="gameStore.game.value"
             :choosing-team-id="liveMultiBlockChoosingTeamId" :local-seat="blockChooserSeat"
             :spectator="blockChooserSpectator" />
@@ -17260,7 +17289,7 @@ function sendChat() {
                 :data-armed="mbrDieMode?.targetId === row.targetId"
                 :data-readonly="mbrDieState(row).readonly"
                 :disabled="mbrDieState(row).disabled"
-                :title="mbrDieMode?.targetId === row.targetId ? 'Reroll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
+                :title="mbrDieMode?.targetId === row.targetId ? $t('hud.mbrRow.rerollThisDie') : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + $t('hud.mbrRow.notSelectableInThis'))"
                 @click="multiBlockPickDie(row, i)">
                 <img v-if="settings.order66" :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />
                 <template v-else>{{ blockFaceLabel(d) }}</template>
@@ -17271,9 +17300,9 @@ function sendChat() {
                  text (icon rides above it when icons are enabled) — same rule as the single-block blockPartial
                  options. Team Re-roll and Team Mascot below keep their existing art + count chip / caption. -->
             <div v-if="multiBlockDialogMine" class="mbr-actions">
-              <button v-if="row.brawler" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" title="Brawler" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
-                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" alt="Brawler" />
-                <span class="bp-opt-label">Brawler</span>
+              <button v-if="row.brawler" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
+                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" :alt="$t('hud.mbrRow.brawler')" />
+                <span class="bp-opt-label">{{ $t('hud.mbrRow.brawler') }}</span>
               </button>
               <!-- Hatred (Single Skull → Hatred, upstream Hatred.java): fires immediately like Brawler above —
                    answered CLIENT_USE_HATRED via sendMultiBlockHatred, not the generic reRollSource path. -->
@@ -17282,18 +17311,18 @@ function sendChat() {
                 <span class="bp-opt-label">{{ row.singleSkullLabel }}</span>
               </button>
               <button v-if="row.pro" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
-                title="Pro" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
-                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" alt="Pro" />
-                <span class="bp-opt-label">Pro</span>
+                :title="$t('hud.mbrRow.pro')" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
+                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
+                <span class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
               <button v-for="opt in row.proComposite" :key="opt.kind" class="bp-opt"
                 :title="opt.title" @click="multiBlockProComposite(row.targetId, opt.kind)">
                 <span>{{ opt.label }}</span>
               </button>
               <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
-                :title="row.consummateLabel ?? 'Consummate Professional'" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
-                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? 'Consummate'" />
-                <span class="bp-opt-label">{{ row.consummateLabel ?? 'Consummate Professional' }}</span>
+                :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
+                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
+                <span class="bp-opt-label">{{ row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional') }}</span>
               </button>
               <!-- Savage Blow (star program): reroll-ALL-dice election — rerolls the WHOLE block-dice pool at once,
                    NOT a single-die pick (canReRollAnyNumberOfBlockDice). Distinct affordance = the source icon + an
@@ -17302,24 +17331,24 @@ function sendChat() {
                    Owner 09-28 (Spec S8): the source's NAME is visible text too — the "ALL" badge alone did not
                    name the rule, only the icon and hover title did. -->
               <button v-if="row.multiBlockDiceLabel" class="bp-opt bp-savage bp-opt-icon-label"
-                :title="`${row.multiBlockDiceLabel} — reroll ALL dice`"
+                :title="$t('hud.mbrRow.multiblockdicelabelRerollAllDice', { multiBlockDiceLabel: row.multiBlockDiceLabel })"
                 @click="multiBlockRerollAllDice(row.targetId, row.multiBlockDice, row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)"
                   :src="skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)!" :alt="row.multiBlockDiceLabel" />
-                <img v-else :src="resourceIcon('re_roll')" alt="reroll" />
+                <img v-else :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.reroll')" />
                 <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
-                <span class="bp-sub">ALL</span>
+                <span class="bp-sub">{{ $t('hud.mbrRow.all') }}</span>
               </button>
-              <button v-if="row.teamRR && !row.mascot" class="bp-team" title="Team reroll" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
-                <img :src="resourceIcon('re_roll')" alt="Team reroll" />
+              <button v-if="row.teamRR && !row.mascot" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+                <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
                 <!-- #205: acting coach's team-reroll count beside the die icon (owner idiom). Display-only;
                      the multiBlockReroll('team') answer path is untouched. -->
                 <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                  :title="`Team rerolls available: ${multiBlockTeamReRolls}`">{{ multiBlockTeamReRolls }}</span>
+                  :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
               </button>
-              <button v-if="row.mascot" class="bp-team bp-mascot" title="Team Mascot (no reroll if it fails)" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
-                <img :src="resourceIcon('team_mascot')" alt="Team Mascot" />
-                <span class="bp-sub">No TRR</span>
+              <button v-if="row.mascot" class="bp-team bp-mascot" :title="$t('hud.mbrRow.teamMascotNoReroll')" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
+                <img :src="resourceIcon('team_mascot')" :alt="$t('hud.mbrRow.teamMascot')" />
+                <span class="bp-sub">{{ $t('hud.mbrRow.noTrr') }}</span>
               </button>
             </div>
           </div>
@@ -17331,11 +17360,11 @@ function sendChat() {
              target and the server re-raises for the rest. Reuses the multi-block card and block-face art. -->
         <div v-if="gameStore.state.opponentBlockSelection" v-pad-focus="{ mandatory: true }"
           class="multi-block-resolution opponent-block-selection"
-          :style="reactivePromptStyle('multiBlock')" title="Drag to move"
+          :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
-          <div class="mbr-title">MULTIPLE BLOCK</div>
+          <div class="mbr-title">{{ $t('hud.multipleBlock') }}</div>
           <div v-for="row in gameStore.state.opponentBlockSelection.rows" :key="row.targetId" class="mbr-row">
-            <span class="mbr-name">Choose the result for {{ gameStore.state.opponentBlockSelection.attacker }}'s block on {{ row.target }}</span>
+            <span class="mbr-name">{{ $t('hud.mbrRow.chooseTheResultFor', { attacker: gameStore.state.opponentBlockSelection.attacker, target: row.target }) }}</span>
             <div class="mbr-dice">
               <button v-for="(d, i) in row.dice" :key="i" class="bp-die" :class="{ 'bp-die-art': settings.order66 }"
                 :title="blockFaceLabel(d)" @click="gameStore.resolveOpponentBlockSelection(row.targetId, i)">
@@ -17350,24 +17379,23 @@ function sendChat() {
              with a server-offered source, or declines. Sources and targets are exactly the dialog's (store). -->
         <div v-if="gameStore.state.reRollForTargets" v-pad-focus="{}"
           class="multi-block-resolution reroll-for-targets"
-          :style="reactivePromptStyle('multiBlock')" title="Drag to move"
+          :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
           <div class="mbr-title">{{ gameStore.state.reRollForTargets.reRolledAction.toUpperCase() }}</div>
-          <div class="rr-prompt-line rr-question">Reroll the failed {{ gameStore.state.reRollForTargets.reRolledAction }}
-            {{ gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }}?</div>
-          <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">Loner: the reroll is not guaranteed to help.</div>
+          <div class="rr-prompt-line rr-question">{{ $t('hud.rerollTheFailedRerolledaction', { reRolledAction: gameStore.state.reRollForTargets.reRolledAction, p1: gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }) }}</div>
+          <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">{{ $t('hud.lonerTheRerollIs') }}</div>
           <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
-            <span class="mbr-name">The roll against {{ t.target }} failed<template v-if="t.minimumRoll != null">, needs {{ t.minimumRoll }}+</template></span>
+            <span class="mbr-name">{{ $t('hud.mbrRow.theRollAgainstTarget', { target: t.target }) }}<template v-if="t.minimumRoll != null">{{ $t('hud.mbrRow.needsMinimumroll', { minimumRoll: t.minimumRoll }) }}</template></span>
             <div class="mbr-actions">
               <button v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source" class="bp-opt"
-                :title="`${opt.label} on ${t.target}`" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
+                :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
                 <span class="bp-opt-label">{{ opt.label }}</span>
               </button>
             </div>
           </div>
           <div class="bp-actions">
-            <button class="bp-opt rr-decline-chip" data-pad-cancel title="No reroll"
-              @click="gameStore.resolveReRollForTargets(null)">No reroll</button>
+            <button class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rrDeclineChip.noReroll')"
+              @click="gameStore.resolveReRollForTargets(null)">{{ $t('hud.rrDeclineChip.noReroll') }}</button>
           </div>
         </div>
 
@@ -17376,12 +17404,12 @@ function sendChat() {
         <nav v-if="hasSelection && !settings.spectatorClean && !settings.order66" class="hotbar">
           <button v-for="(action, i) in hotbarActions" :key="action.mode"
             :data-active="actionMode === action.mode" :data-used="action.used" :disabled="action.used"
-            :title="action.used ? `${action.label} — used this turn` : `${action.label} (${i + 1})`"
+            :title="action.used ? $t('hud.labelUsedThisTurn', { label: action.label }) : `${action.label} (${i + 1})`"
             @click="guardConfirmCard() || setAction(action.mode)">
             <span class="hotbar-emoji">{{ action.icon }}</span>
             <span class="hotbar-nr">{{ i + 1 }}</span>
             <span class="hotbar-label">{{ action.label }}</span>
-            <span v-if="action.used" class="hotbar-used">USED</span>
+            <span v-if="action.used" class="hotbar-used">{{ $t('hud.used') }}</span>
           </button>
         </nav>
 
@@ -17393,7 +17421,7 @@ function sendChat() {
         <div v-if="actionTip.visible" class="action-roll-tip" :data-mode="actionTip.mode"
           :style="{ left: actionTip.x + 'px', top: actionTip.y + 'px' }">
           <template v-if="actionTip.mode === 'foul'">
-            <img :src="blockSkullUrl" class="action-roll-die" alt="skull" />{{ foulRollNumber(actionTip.text) }}
+            <img :src="blockSkullUrl" class="action-roll-die" :alt="$t('hud.foul.skull')" />{{ foulRollNumber(actionTip.text) }}
           </template>
           <template v-else v-for="(part, i) in d6RequirementParts(actionTip.text)" :key="i">
             <D6Face v-if="part.face" class="action-target-d6" :value="part.face" :label="part.label" />
@@ -17419,7 +17447,7 @@ function sendChat() {
           </svg>
           <div class="tour-toast" :style="tourToastStyle">
             <span>{{ tourText }}</span>
-            <button class="tour-skip" @click="endTour">Skip ✕</button>
+            <button class="tour-skip" @click="endTour">{{ $t('hud.tourToast.skip') }}</button>
           </div>
         </template>
 
@@ -17434,7 +17462,7 @@ function sendChat() {
           <div v-pad-focus="gameStore.state.reRollPrompt.mine ? {} : false" class="block-partial reroll-bar"
             :data-spectator="!gameStore.state.reRollPrompt.mine"
             :style="reactivePromptStyle('reroll', { x: rerollMenuPos.x, y: rerollMenuPos.y + 18 })"
-            title="Drag to move" @pointerdown="startReactivePromptDrag('reroll', $event)">
+            :title="$t('hud.rerollBar.dragToMove')" @pointerdown="startReactivePromptDrag('reroll', $event)">
             <!-- #205 (owner): the title-text line ("Re-roll Pick Up?" …) is DISCARDED — the on-pitch failed
                  die already carries "what happened"; this surface is just the unified idiom: the re-roll die
                  icon + the count numeral beside it + the decline ✕. Same compact idiom as the block die-pick
@@ -17445,31 +17473,31 @@ function sendChat() {
                 {{ gameStore.state.reRollPrompt.title }}
               </div>
               <div v-if="gameStore.state.reRollPrompt.result && !passRerollContext" class="rr-prompt-line">
-                <span>Result:</span>
+                <span>{{ $t('hud.rerollBar.result') }}</span>
                 <span>{{ gameStore.state.reRollPrompt.result }}</span>
               </div>
               <div v-if="gameStore.state.reRollPrompt.roll != null" class="rr-prompt-line">
-                <span>You rolled:</span>
-                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
+                <span>{{ $t('hud.rerollBar.youRolled') }}</span>
+                <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="$t('hud.rerollBar.rolledRoll', { roll: gameStore.state.reRollPrompt.roll })" />
                 <span v-if="passRerollContext">{{ passRerollContext.result }}</span>
               </div>
               <div v-if="gameStore.state.reRollPrompt.needed != null" class="rr-prompt-line">
-                <span>Needed:</span>
-                <span class="sc-needed"><D6Face :value="gameStore.state.reRollPrompt.needed" :label="`Needed ${gameStore.state.reRollPrompt.needed}`" />+</span>
+                <span>{{ $t('hud.rerollBar.needed') }}</span>
+                <span class="sc-needed"><D6Face :value="gameStore.state.reRollPrompt.needed" :label="$t('hud.rerollBar.neededNeeded', { needed: gameStore.state.reRollPrompt.needed })" />+</span>
               </div>
-              <div v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext" class="rr-prompt-line">Current roll is a FUMBLE.</div>
+              <div v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext" class="rr-prompt-line">{{ $t('hud.rerollBar.currentRollIsA') }}</div>
               <div v-for="(message, i) in gameStore.state.reRollPrompt.messages" :key="i" class="rr-prompt-line">{{ message }}</div>
               <div v-if="gameStore.state.reRollPrompt.loner" class="rr-prompt-line rr-loner-line">{{ rerollLonerCopy }}</div>
               <div class="rr-prompt-line rr-question">{{ gameStore.state.reRollPrompt.question }}</div>
             </div>
             <div v-else class="rr-context rr-context-spectator">
               <span class="rr-ctx-label">{{ gameStore.state.reRollPrompt.label }}</span>
-              <span v-if="gameStore.state.reRollPrompt.result && !passRerollContext">Result: {{ gameStore.state.reRollPrompt.result }}</span>
+              <span v-if="gameStore.state.reRollPrompt.result && !passRerollContext">{{ $t('hud.rerollBar.resultResult', { result: gameStore.state.reRollPrompt.result }) }}</span>
               <D6Face v-if="gameStore.state.reRollPrompt.roll != null" class="sc-die rr-ctx-die"
-                :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="`Rolled ${gameStore.state.reRollPrompt.roll}`" />
+                :value="gameStore.state.reRollPrompt.roll" :side="diceSideOfPlayer(gameStore.state.reRollPrompt.playerId)" :label="$t('hud.rerollBar.rolledRoll', { roll: gameStore.state.reRollPrompt.roll })" />
               <span v-if="passRerollContext">{{ passRerollContext.result }}</span>
-              <span v-if="gameStore.state.reRollPrompt.needed != null" class="sc-needed">needs <D6Face :value="gameStore.state.reRollPrompt.needed" :label="`Needed ${gameStore.state.reRollPrompt.needed}`" />+</span>
-              <span v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext">Current roll is a FUMBLE.</span>
+              <span v-if="gameStore.state.reRollPrompt.needed != null" class="sc-needed">{{ $t('hud.rerollBar.needs') }} <D6Face :value="gameStore.state.reRollPrompt.needed" :label="$t('hud.rerollBar.neededNeeded', { needed: gameStore.state.reRollPrompt.needed })" />+</span>
+              <span v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext">{{ $t('hud.rerollBar.currentRollIsA') }}</span>
               <span v-for="(message, i) in gameStore.state.reRollPrompt.messages" :key="i">{{ message }}</span>
               <span v-if="gameStore.state.reRollPrompt.loner" class="rr-loner-line">{{ rerollLonerCopy }}</span>
             </div>
@@ -17481,13 +17509,13 @@ function sendChat() {
                   <img :src="resourceIcon('re_roll')" :alt="opt.label" />
                   <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. -->
                   <span v-if="rerollPromptTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                    :title="`Team rerolls available: ${rerollPromptTeamReRolls}`">{{ rerollPromptTeamReRolls }}</span>
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls })">{{ rerollPromptTeamReRolls }}</span>
                 </button>
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
                 <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(opt.source, effectiveIconStyle) }"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
-                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Reroll with ${opt.label}`"
+                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
                   <img v-if="skillIconUrl(opt.source, effectiveIconStyle)"
@@ -17497,12 +17525,12 @@ function sendChat() {
                        same count, inline (it's the mascot art, not the plain re-roll die). Plain 'Team Mascot'
                        (no TRR) is excluded (#188 FR-1). -->
                   <span v-if="opt.source === 'Mascot TRR' && rerollPromptTeamReRolls !== null" class="rr-trr-inline"
-                    :title="`Team rerolls available: ${rerollPromptTeamReRolls}`">
-                    <img :src="resourceIcon('re_roll')" alt="Team rerolls" />{{ rerollPromptTeamReRolls }}
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls })">
+                    <img :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamRerolls')" />{{ rerollPromptTeamReRolls }}
                   </span>
                 </button>
               </template>
-              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel title="No reroll"
+              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
                 @click="gameStore.resolveReRoll(null)">✕</button>
             </div>
           </div>
@@ -17518,7 +17546,7 @@ function sendChat() {
           :data-spectator="!gameStore.state.injuryInteraction.mine"
           :data-side="gameStore.state.injuryInteraction.side"
           :style="reactivePromptStyle('injuryInteraction', { x: injuryGatePos.x, y: injuryGatePos.y + 16 })"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('injuryInteraction', $event)">
+          :title="$t('hud.contextMenu.dragToMove')" @pointerdown="startReactivePromptDrag('injuryInteraction', $event)">
           <li class="reroll-menu-title">{{ gameStore.state.injuryInteraction.label }}</li>
           <li v-for="opt in gameStore.state.injuryInteraction.options" :key="opt.key"
             class="reroll-menu-item" :title="opt.desc"
@@ -17531,21 +17559,21 @@ function sendChat() {
         <!-- Owner 2026-07-03: movable (top-left grip or the name bar) + resizable
              via a TOP-RIGHT handle -->
         <div v-if="popup.visible && popupInfo" ref="playerCardEl" class="player-card" :style="cardStyle">
-          <span class="card-grip" title="Drag to move" aria-hidden="true"
+          <span class="card-grip" :title="$t('hud.playerCard.dragToMove')" aria-hidden="true"
             @pointerdown="startCardDrag">⠿</span>
-          <span class="card-resize" title="Drag to resize" aria-hidden="true"
+          <span class="card-resize" :title="$t('hud.playerCard.dragToResize')" aria-hidden="true"
             @pointerdown="startCardResize"></span>
           <button class="close" @click="popup.visible = false">×</button>
-          <div class="card-name" :data-side="popupInfo.side" title="Drag to move"
+          <div class="card-name" :data-side="popupInfo.side" :title="$t('hud.playerCard.dragToMove')"
             @pointerdown="startCardDrag">#{{ popupInfo.nr }} {{ popupInfo.name }}</div>
-          <div class="card-position"><span class="card-position-main">{{ popupInfo.positionName }} · <span class="card-spp">SPP {{ popupInfo.spp }}</span><span v-if="popupInfo.sppEarned > 0" class="card-spp-gain"> +{{ popupInfo.sppEarned }}</span></span>
+          <div class="card-position"><span class="card-position-main">{{ terms(popupInfo.positionName) }} · <span class="card-spp">{{ $t('hud.playerCard.sppSpp', { spp: popupInfo.spp }) }}</span><span v-if="popupInfo.sppEarned > 0" class="card-spp-gain"> +{{ popupInfo.sppEarned }}</span></span>
             <!-- owner 10-05: the position's keywords ("Human, Blitzer, Norse...") -->
-            <span v-if="popupInfo.keywords.length" class="card-keywords" data-testid="card-keywords" :title="'Keywords: ' + popupInfo.keywords.join(', ')">{{ popupInfo.keywords.join(' · ') }}</span>
+            <span v-if="popupInfo.keywords.length" class="card-keywords" data-testid="card-keywords" :title="$t('hud.playerCard.keywords') + popupInfo.keywords.join(', ')">{{ popupInfo.keywords.join(' · ') }}</span>
           </div>
           <div v-if="popupInfo.status && popupInfo.status !== 'On pitch'" class="card-status"
-            :data-status="popupInfo.status">{{ popupInfo.status }}</div>
+            :data-status="popupInfo.status">{{ playerStateLabel(popupInfo.status) }}</div>
           <div v-if="popupInfo.injuries.length" class="card-injuries">
-            ⚕ {{ popupInfo.injuries.join(' · ') }}
+            ⚕ {{ popupInfo.injuries.map((x) => terms(x)).join(' · ') }}
           </div>
           <div class="card-body">
             <div class="card-stats">
@@ -17555,13 +17583,13 @@ function sendChat() {
             </div>
             <div class="card-portrait">
               <img v-if="portrait" :src="portrait" alt="" />
-              <span v-else class="portrait-missing">no portrait</span>
+              <span v-else class="portrait-missing">{{ $t('hud.playerCard.noPortrait') }}</span>
               <!-- Owner 10-03: STAR badge, top right; the red X lies over it once the server marks the star's
                    special rule used (and lifts again if the server unmarks it). -->
               <span v-if="popupInfo.starBadge" class="star-badge" data-testid="star-badge" :data-used="popupInfo.starBadge.used"
                 :title="starBadgeTitle(popupInfo.starBadge)">
-                <img class="star-badge-art" :src="starBadgeUrl" alt="Star player" />
-                <img v-if="popupInfo.starBadge.used" class="star-badge-used" :src="starBadgeUsedUrl" alt="Special rule used" />
+                <img class="star-badge-art" :src="starBadgeUrl" :alt="$t('hud.playerCard.starPlayer')" />
+                <img v-if="popupInfo.starBadge.used" class="star-badge-used" :src="starBadgeUsedUrl" :alt="$t('hud.playerCard.specialRuleUsed')" />
               </span>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { prettySkillName } from './logic/prettySkillName';
+import { t } from '../i18n';
 
 export interface PassSkillUseCardInput {
   label?: string;
@@ -52,7 +53,7 @@ export function oldProArmorDice(
 /** Exact copy projection from server-reported Pass roll fields. Missing or
  *  unexpected fields fall back to the generic skill-use card. */
 export function passSkillUseCardCopy(input: PassSkillUseCardInput | null | undefined): {
-  title: 'Use Pass?';
+  title: string; // i18n 10-23: localised 'Use Pass?'
   rollLine: string;
   needLine: string;
 } | null {
@@ -63,9 +64,9 @@ export function passSkillUseCardCopy(input: PassSkillUseCardInput | null | undef
     && input.result !== 'Fumble') return null;
   if (!Number.isInteger(input.needed) || input.needed! < 2 || input.needed! > 6) return null;
   return {
-    title: 'Use Pass?',
-    rollLine: `Rolled ${input.roll} - ${input.result}`,
-    needLine: `Need ${input.needed}+`,
+    get title() { return t('dialogs.skillUse.text.usePass'); },
+    rollLine: t('dialogs.skillUse.text.rolledRollResult', { roll: input.roll, result: input.result }),
+    needLine: t('dialogs.skillUse.text.needNeeded', { needed: input.needed }),
   };
 }
 
@@ -79,7 +80,7 @@ export function modifyingSkillCardCopy(
   if (!input || !raw) return null;
   const modifierLabel = prettySkillName(raw);
   return {
-    title: `Use ${input.label ?? 'the skill'} or ${modifierLabel}?`,
+    get title() { return t('dialogs.skillUse.text.useP0OrModifierlabel', { p0: input.label ?? 'the skill', modifierLabel }); },
     modifierLabel,
     resultLine: input.modifiedResult ? `${modifierLabel}: ${input.modifiedResult}` : null,
   };
@@ -98,8 +99,8 @@ export function hmpScatterSkillUseCardCopy(input: HmpScatterSkillUseCardInput | 
   if (!scatter.direction.trim()) return null;
   return {
     title: scatter.showNeverUse
-      ? 'Use Blast It! to reroll HMP scatters this pass?'
-      : 'Reroll this scatter?',
-    contextLine: `Scatter ${scatter.ordinal} of 3 · direction rolled ${scatter.direction}`,
+      ? t('dialogs.skillUse.text.useBlastItTo')
+      : t('dialogs.skillUse.text.rerollThisScatter'),
+    contextLine: t('dialogs.skillUse.text.scatterOrdinalOf3', { ordinal: scatter.ordinal, direction: scatter.direction }),
   };
 }

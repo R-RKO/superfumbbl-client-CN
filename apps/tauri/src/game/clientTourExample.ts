@@ -9,6 +9,7 @@ import { attackOutcomes, blockArmourTiers, blockKnockdownChance, outcomeKey, tur
 import type { PostGameSnapshot } from './postGameProjection';
 import { emptyBreaks } from './luckBreaks';
 import { emptyCutShort } from './turnsCutShort';
+import { $t } from '../i18n';
 
 export const EXAMPLE_GAME_ID = 'example';
 export const EXAMPLE_KEY = `example|${EXAMPLE_GAME_ID}`;
@@ -147,11 +148,11 @@ function tally(seed: number): DiceTally {
   // Owner 10-16: the Luck row - a few unlikely outcomes each way (the other side's mirror of each other's)
   const breaks = (t.breaks = emptyBreaks());
   const mine = odd
-    ? [{ label: '5+ dodge made', p: 2 / 6, slot: 2 }, { label: 'Injury roll: casualty', p: 6 / 36, slot: 5 }, { label: '2+ rush failed', p: 1 / 6, slot: 9 }]
-    : [{ label: '6+ pass made', p: 1 / 6, slot: 4 }, { label: 'Armour broken (10+)', p: 6 / 36, slot: 11 }];
+    ? [{ get label() { return $t('tour.mine.n5DodgeMade'); }, p: 2 / 6, slot: 2 }, { get label() { return $t('tour.mine.injuryRollCasualty'); }, p: 6 / 36, slot: 5 }, { get label() { return $t('tour.mine.n2RushFailed'); }, p: 1 / 6, slot: 9 }]
+    : [{ get label() { return $t('tour.mine.n6PassMade'); }, p: 1 / 6, slot: 4 }, { get label() { return $t('tour.mine.armourBroken10'); }, p: 6 / 36, slot: 11 }];
   const theirs = odd
-    ? [{ label: '6+ pass made', p: 1 / 6, slot: 4 }, { label: 'Armour broken (10+)', p: 6 / 36, slot: 11 }]
-    : [{ label: '5+ dodge made', p: 2 / 6, slot: 2 }, { label: 'Injury roll: casualty', p: 6 / 36, slot: 5 }, { label: '2+ rush failed', p: 1 / 6, slot: 9 }];
+    ? [{ get label() { return $t('tour.theirs.n6PassMade'); }, p: 1 / 6, slot: 4 }, { get label() { return $t('tour.theirs.armourBroken10'); }, p: 6 / 36, slot: 11 }]
+    : [{ get label() { return $t('tour.theirs.n5DodgeMade'); }, p: 2 / 6, slot: 2 }, { get label() { return $t('tour.theirs.injuryRollCasualty'); }, p: 6 / 36, slot: 5 }, { get label() { return $t('tour.theirs.n2RushFailed'); }, p: 1 / 6, slot: 9 }];
   Object.assign(breaks, { lucky: mine.length, luckyExpected: odd ? 2.4 : 2.6, luckyVar: 1.9, bad: theirs.length, badExpected: odd ? 2.6 : 2.4, badVar: 1.9, events: 40 });
   breaks.log = [...mine.map((e, i) => ({ ...e, seq: i + 1, lucky: true })), ...theirs.map((e, i) => ({ ...e, seq: i + 10, lucky: false }))]
     .map((e) => ({ ...e, player: 'example', playerName: odd ? 'Ironjaw' : 'Riverside', half: 1, turn: Math.floor(e.slot / 2) + 1 }))

@@ -25,6 +25,7 @@ import {
   takeV26UserOverrideMigration,
   type V26UserOverrideMigration,
 } from './settings';
+import { t, liveSet } from '../i18n';
 
 export const USER_FILES_INSTALL_ID = '596f757246696c657300000000000001';
 export const USER_FILES_DRAFT_ID = USER_FILES_INSTALL_ID;
@@ -645,7 +646,7 @@ export async function activateAssetAssignments(
   } catch {
     settleUnusedCandidateLeases(intent);
     if (isCurrentAssetAssignmentIntent(intent)) {
-      assetMods.error = 'The selected asset packs could not be decoded. The previous complete set is still active.';
+      liveSet(assetMods, 'error', () => t('assets.text.theSelectedAssetPacks'));
     }
     return false;
   } finally {
@@ -714,9 +715,9 @@ export async function activateBootAssetAssignments(
   // partially decoded candidate can never leak. This mutates only the runtime registry: the valid
   // durable request above remains selected and will be retried next launch.
   const fallbackActivated = await activateAssetAssignments({});
-  assetMods.error = fallbackActivated
-    ? 'The saved asset packs could not be activated at startup. Built-in presentation is active for this session; the saved selection will be retried next launch.'
-    : 'The saved asset packs and the built-in fallback could not be activated. The saved selection was retained for the next launch.';
+  liveSet(assetMods, 'error', () => fallbackActivated
+    ? t('assets.text.theSavedAssetPacks')
+    : t('assets.text.theSavedAssetPacks2'));
   return { status: 'fallback', requested, missingCapabilities };
 }
 
@@ -749,7 +750,7 @@ export async function activateSelectedSkillPack(installId: string, intent = begi
     return true;
   } catch {
     if (isCurrentSkillPackIntent(intent)) {
-      assetMods.error = 'The selected skill-icon pack could not be decoded. The previous icon set is still active.';
+      liveSet(assetMods, 'error', () => t('assets.text.theSelectedSkillIcon'));
     }
     return false;
   } finally {
@@ -772,7 +773,7 @@ export async function commitSkillPackSelection(
 /** Native picker → bounded native validation/install. The chosen source path is never persisted. */
 export async function importAssetPack(): Promise<InstalledAssetPack | null> {
   if (!inTauri() || assetMods.busy) {
-    if (!inTauri()) assetMods.error = 'Asset packs can be imported from the desktop app.';
+    if (!inTauri()) liveSet(assetMods, 'error', () => t('assets.text.assetPacksCanBe'));
     return null;
   }
   assetMods.busy = true;
@@ -791,7 +792,7 @@ export async function importAssetPack(): Promise<InstalledAssetPack | null> {
       .map((capability) => `${capability}: ${preview.coverage[capability] ?? 0}`)
       .join('\n');
     const confirmed = window.confirm(
-      `Import unverified local asset pack?\n\n${preview.name} ${preview.version}\n${formatPackSize(preview.sizeBytes)}\nSource: ${preview.source}\n${coverage}\n\nOnly presentation media will be installed.`,
+      t('assets.confirmed.importUnverifiedLocalAsset', { name: preview.name, version: preview.version, p2: formatPackSize(preview.sizeBytes), source: preview.source, coverage }),
     );
     if (!confirmed) return null;
     const installed = await invoke<InstalledAssetPack>('install_asset_pack', {
@@ -799,7 +800,7 @@ export async function importAssetPack(): Promise<InstalledAssetPack | null> {
       expectedWholePackSha256: preview.wholePackSha256,
     });
     await refreshAndReactivateAssetPacks();
-    assetMods.notice = `${installed.name} ${installed.version} installed.`;
+    liveSet(assetMods, 'notice', () => t('assets.text.nameVersionInstalled', { name: installed.name, version: installed.version }));
     return installed;
   } catch (error) {
     assetMods.error = error instanceof Error ? error.message : String(error);
@@ -818,8 +819,8 @@ export async function inspectAssetPackFile(path: string): Promise<InspectedAsset
 export function formatPackSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
   return bytes >= 1024 * 1024
-    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    : `${Math.ceil(bytes / 1024)} KB`;
+    ? t('assets.text.p0Mb', { p0: (bytes / (1024 * 1024)).toFixed(1) })
+    : t('assets.text.p0Kb', { p0: Math.ceil(bytes / 1024) });
 }
 
 export function isAssetPackLeased(installId: string): boolean {
@@ -831,17 +832,17 @@ export function isAssetPackLeased(installId: string): boolean {
 export async function removeInstalledAssetPack(installId: string): Promise<boolean> {
   requireDesktop();
   if (installId === USER_FILES_INSTALL_ID) {
-    assetMods.error = 'Your files is managed from Configured assets.';
+    liveSet(assetMods, 'error', () => t('assets.text.yourFilesIsManaged'));
     return false;
   }
   if (assignmentIds(assetMods.activeAssignments).has(installId)) {
-    assetMods.error = 'This pack is active or still finishing a previous display. Choose another pack and try again.';
+    liveSet(assetMods, 'error', () => t('assets.text.thisPackIsActive'));
     return false;
   }
   const target = assetMods.installed.find((pack) => pack.installId === installId);
   const activeFallback = assetMods.activeProviderInstallIds.includes(installId);
   if (isAssetPackLeased(installId) && !activeFallback) {
-    assetMods.error = 'This pack is active or still finishing a previous display. Choose another pack and try again.';
+    liveSet(assetMods, 'error', () => t('assets.text.thisPackIsActive'));
     return false;
   }
   const previousInstalled = assetMods.installed;
@@ -873,9 +874,9 @@ export async function removeInstalledAssetPack(installId: string): Promise<boole
       await activateAssetAssignments(assetMods.activeAssignments).catch(() => false);
     }
     const message = error instanceof Error ? error.message : String(error);
-    assetMods.error = message === 'Asset pack is active or still retiring'
-      ? 'This pack is active or still finishing a previous display. Choose another pack and try again.'
-      : message;
+    liveSet(assetMods, 'error', () => message === 'Asset pack is active or still retiring'
+      ? t('assets.text.thisPackIsActive')
+      : message);
     return false;
   }
 }

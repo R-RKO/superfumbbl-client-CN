@@ -26,6 +26,7 @@
 
 import { challengeForkCredentials, type AuthTransport, type ForkLoginOutcome } from './configWebAuth';
 import { fetchFumbblCoachTeams, type FumbblCoachTeamsResult } from './fumbblCoachTeams';
+import { t } from '../i18n';
 
 /**
  * What the dialog renders under the button. `warn` is the state that keeps the FUMBBL tab honest —
@@ -54,19 +55,19 @@ export function isChecking(state: ChallengeState): boolean {
 export function forkChallengeState(outcome: ForkLoginOutcome): ChallengeState {
   switch (outcome.kind) {
     case 'ok':
-      return { kind: 'ok', message: `✓ Verified as ${outcome.coach} on the Super FUMBBL server.` };
+      return { kind: 'ok', message: t('login.text.verifiedAsCoachOn', { coach: outcome.coach }) };
     case 'rejected':
       // The server answered and said no. This is the ONLY branch allowed to blame the credential.
-      return { kind: 'fail', message: '✗ Coach name or password incorrect.' };
+      return { kind: 'fail', message: t('login.text.coachNameOrPassword') };
     case 'unsupported':
       return {
         kind: 'fail',
-        message: "✗ This server can't check credentials (it predates the login route). Your details are saved.",
+        message: t('login.text.thisServerCanT'),
       };
     case 'unreachable':
       return {
         kind: 'fail',
-        message: `✗ Couldn't reach the Super FUMBBL server, so your details weren't checked (${outcome.detail}).`,
+        message: t('login.text.couldnTReachThe', { detail: outcome.detail }),
       };
   }
 }
@@ -83,13 +84,13 @@ export async function runForkChallenge(
   baseUrl: string,
 ): Promise<ChallengeState> {
   const trimmed = coach.trim();
-  if (!trimmed) return { kind: 'fail', message: 'Enter a coach name first.' };
-  if (!password) return { kind: 'fail', message: 'Enter a password first.' };
+  if (!trimmed) return { kind: 'fail', message: t('login.text.enterACoachName') };
+  if (!password) return { kind: 'fail', message: t('login.text.enterAPasswordFirst') };
   return forkChallengeState(await challengeForkCredentials({ coach: trimmed, password }, transport, baseUrl));
 }
 
 export function forkCheckingMessage(coach: string): string {
-  return `Checking ${coach.trim()} against the Super FUMBBL server…`;
+  return t('login.text.checkingP0AgainstThe', { p0: coach.trim() });
 }
 
 // ─── FUMBBL (official) ───────────────────────────────────────────────────────────────────────────
@@ -98,19 +99,18 @@ export function forkCheckingMessage(coach: string): string {
  * The password caveat, stated every time the name check passes. Deliberately part of the SUCCESS
  * copy rather than a footnote: the moment a user sees a tick is the moment they stop reading.
  */
-const FUMBBL_PASSWORD_CAVEAT =
-  'FUMBBL has no password check for this app, so your password is only proven when you connect.';
 
 export function fumbblCoachState(result: FumbblCoachTeamsResult, typed: string): ChallengeState {
   if (result.kind === 'not-found') {
-    return { kind: 'fail', message: `✗ No FUMBBL coach called ${typed.trim()}.` };
+    return { kind: 'fail', message: t('login.text.noFumbblCoachCalled', { p0: typed.trim() }) };
   }
   const name = result.coachName.trim() || typed.trim();
-  return { kind: 'warn', message: `✓ Coach ${name} exists on FUMBBL. ${FUMBBL_PASSWORD_CAVEAT}` };
+  // The password caveat is part of the SUCCESS copy (see above): one whole message.
+  return { kind: 'warn', message: t('login.fumbblCoachExistsCaveat', { name }) };
 }
 
 export function fumbblUnreachableState(detail: string): ChallengeState {
-  return { kind: 'fail', message: `✗ Couldn't reach fumbbl.com, so your name wasn't checked (${detail}).` };
+  return { kind: 'fail', message: t('login.text.couldnTReachFumbbl', { detail }) };
 }
 
 /**
@@ -121,9 +121,9 @@ export function fumbblUnreachableState(detail: string): ChallengeState {
 export function fumbblThrownState(error: unknown, typed: string): ChallengeState {
   const detail = (error as Error)?.message ?? String(error);
   const status = Number(/^HTTP (\d{3})$/.exec(detail)?.[1] ?? NaN);
-  if (status === 404) return { kind: 'fail', message: `✗ No FUMBBL coach called ${typed.trim()}.` };
+  if (status === 404) return { kind: 'fail', message: t('login.text.noFumbblCoachCalled', { p0: typed.trim() }) };
   if (Number.isFinite(status)) {
-    return { kind: 'fail', message: `✗ FUMBBL couldn't answer the lookup (${detail}), so your name wasn't checked.` };
+    return { kind: 'fail', message: t('login.text.fumbblCouldnTAnswer', { detail }) };
   }
   return fumbblUnreachableState(detail);
 }
@@ -137,7 +137,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
  */
 export async function runFumbblChallenge(coach: string, fetcher: FetchLike): Promise<ChallengeState> {
   const trimmed = coach.trim();
-  if (!trimmed) return { kind: 'fail', message: 'Enter a coach name first.' };
+  if (!trimmed) return { kind: 'fail', message: t('login.text.enterACoachName') };
   try {
     return fumbblCoachState(await fetchFumbblCoachTeams(trimmed, fetcher), trimmed);
   } catch (e) {
@@ -146,5 +146,5 @@ export async function runFumbblChallenge(coach: string, fetcher: FetchLike): Pro
 }
 
 export function fumbblCheckingMessage(coach: string): string {
-  return `Looking up ${coach.trim()} on FUMBBL…`;
+  return t('login.text.lookingUpP0On', { p0: coach.trim() });
 }

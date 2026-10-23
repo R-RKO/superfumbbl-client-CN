@@ -6,6 +6,7 @@
  * (targetOwnsKeys / inputOwnsKey) keeps every game shortcut off while the coach types.
  */
 import { ref } from 'vue';
+import { $t } from '../i18n';
 
 defineProps<{ modelValue: string; count: number; counter: string }>();
 const emit = defineEmits<{ 'update:modelValue': [string]; older: []; newer: []; escape: [] }>();
@@ -36,13 +37,13 @@ defineExpose({ focus: () => input.value?.focus() });
 
 <template>
   <div class="pane-search" data-testid="pane-search" @keydown="onRootKeydown">
-    <input ref="input" class="pane-search-input" type="search" placeholder="Search" aria-label="Search"
+    <input ref="input" class="pane-search-input" type="search" :placeholder="$t('hud.paneSearch.search')" :aria-label="$t('hud.paneSearch.search')"
       autocomplete="off" spellcheck="false" :value="modelValue"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)" @keydown="onKeydown" />
     <template v-if="count > 0">
-      <button type="button" class="pane-search-step" aria-label="Older match" title="Older match (Enter)" @click="emit('older')">▲</button>
+      <button type="button" class="pane-search-step" :aria-label="$t('hud.paneSearch.olderMatch')" :title="$t('hud.paneSearch.olderMatchEnter')" @click="emit('older')">▲</button>
       <span class="pane-search-count" aria-live="polite">{{ counter }}</span>
-      <button type="button" class="pane-search-step" aria-label="Newer match" title="Newer match (Shift+Enter)" @click="emit('newer')">▼</button>
+      <button type="button" class="pane-search-step" :aria-label="$t('hud.paneSearch.newerMatch')" :title="$t('hud.paneSearch.newerMatchShiftEnter')" @click="emit('newer')">▼</button>
     </template>
     <span v-else-if="modelValue.trim()" class="pane-search-count" aria-live="polite">{{ counter }}</span>
   </div>

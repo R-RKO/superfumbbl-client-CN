@@ -25,6 +25,8 @@ import type { BudgetEstimate, CashRowKey, OwnedResources, UnderdogCashRow } from
 import { canAdd, fmtGold, skillToken } from '../game/inducementsPhase';
 import { padFocusControllerMode, padFocusedControl, vPadFocus, type PadFocusOptions } from '../game/cardFocus';
 import { popUndo, reconcileUndoStack, seedUndoStack, undoTarget } from '../game/inducementUndo';
+import { $t, terms, capHead, capTail } from '../i18n';
+import { t } from '../i18n';
 
 /** A star/merc sprite resolved by the mount. Iconsets use the frame-1 sheet crop;
  *  custom assets are already-normalized standalone 64px player sprites. */
@@ -148,9 +150,9 @@ const emit = defineEmits<{
 }>();
 
 const BLADES: { id: Blade; label: string }[] = [
-  { id: 'inducements', label: 'Inducements' },
-  { id: 'stars', label: 'Star Players' },
-  { id: 'mercenaries', label: 'Mercenaries' },
+  { id: 'inducements', get label() { return t('cards.inducementsPhase.blades.inducements'); } },
+  { id: 'stars', get label() { return t('cards.inducementsPhase.blades.starPlayers'); } },
+  { id: 'mercenaries', get label() { return t('cards.inducementsPhase.blades.mercenaries'); } },
 ];
 
 /** Raised caps (README): each word's initial capital renders at 1.2em. */
@@ -160,7 +162,7 @@ function words(text: string): { head: string; rest: string; space: boolean }[] {
 
 const roleLabel = computed(() => props.presetMode
   ? props.presetLabel
-  : (props.phase === 'overdog' ? 'OVERDOG is selecting…' : 'UNDERDOG is selecting…'));
+  : (props.phase === 'overdog' ? t('cards.inducementsPhase.roleLabel.overdogIsSelecting') : t('cards.inducementsPhase.roleLabel.underdogIsSelecting')));
 const isDone = computed(() => props.phase === 'done' && !props.presetMode);
 
 /** Stars count against the upstream star cap; mercs/staff against theirs. */
@@ -208,11 +210,11 @@ const RANK_ART: Record<InducementRole, { src: string; alt: string }> = {
  *  Icon plus count only (owner 10-11: "the icon carries this information"); the name rides the tooltip + aria-label. */
 type CountKey = 'rerolls' | 'apothecaries' | 'dedicatedFans' | 'assistantCoaches' | 'cheerleaders';
 const RESOURCE_TILES: { id: CountKey; label: string; icon: string }[] = [
-  { id: 'rerolls', label: 'Team rerolls', icon: new URL('../assets/resources/re_roll.png', import.meta.url).href },
-  { id: 'apothecaries', label: 'Apothecary', icon: new URL('../assets/resources/apothecary.png', import.meta.url).href },
-  { id: 'dedicatedFans', label: 'Dedicated fans', icon: new URL('../assets/resources/dedicated_fans.png', import.meta.url).href },
-  { id: 'assistantCoaches', label: 'Assistant coaches', icon: new URL('../assets/resources/assistant_coach.png', import.meta.url).href },
-  { id: 'cheerleaders', label: 'Cheerleaders', icon: new URL('../assets/resources/cheerleader.png', import.meta.url).href },
+  { id: 'rerolls', get label() { return t('cards.inducementsPhase.resourceTiles.teamRerolls'); }, icon: new URL('../assets/resources/re_roll.png', import.meta.url).href },
+  { id: 'apothecaries', get label() { return t('cards.inducementsPhase.resourceTiles.apothecary'); }, icon: new URL('../assets/resources/apothecary.png', import.meta.url).href },
+  { id: 'dedicatedFans', get label() { return t('cards.inducementsPhase.resourceTiles.dedicatedFans'); }, icon: new URL('../assets/resources/dedicated_fans.png', import.meta.url).href },
+  { id: 'assistantCoaches', get label() { return t('cards.inducementsPhase.resourceTiles.assistantCoaches'); }, icon: new URL('../assets/resources/assistant_coach.png', import.meta.url).href },
+  { id: 'cheerleaders', get label() { return t('cards.inducementsPhase.resourceTiles.cheerleaders'); }, icon: new URL('../assets/resources/cheerleader.png', import.meta.url).href },
 ];
 /** A count the team model does not carry (null) keeps its tile, so the grid never reflows, and reads "not available":
  *  the glyph the money rows use for a value that is not known, never an invented number. The fans tile is named after
@@ -335,9 +337,9 @@ function waitingBox(panel: PanelView): { testid: string; text: string } | null {
   if (props.presetMode || panel.status === 'confirmed') return null;
   const opposition = panelRelation(panel) === 'opposition';
   if (panel.role === 'underdog' && underdogWaiting.value) {
-    return { testid: 'underdog-waiting', text: opposition ? 'Waiting for opponent…' : 'Waiting for Overdog…' };
+    return { testid: 'underdog-waiting', text: opposition ? t('cards.inducementsPhase.text.waitingForOpponent') : t('cards.inducementsPhase.text.waitingForOverdog') };
   }
-  return opposition ? { testid: `waiting-${panel.role}`, text: 'Waiting for opponent…' } : null;
+  return opposition ? { testid: `waiting-${panel.role}`, get text() { return t('cards.inducementsPhase.text.waitingForOpponent'); } } : null;
 }
 
 /** Status + funds block. A preset / replay review has no purchase, so no funds; a coach who has CONFIRMED has no
@@ -427,8 +429,8 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
           <template v-for="(w, i) in words(presetMode ? presetHeading : 'Inducements')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
         </div>
         <span class="ind-spacer" />
-        <button type="button" class="ind-btn ind-btn-neutral ind-rosters-btn" data-testid="rosters-btn" title="View both team rosters"
-          @click="emit('rosters')">📋 <span class="cap">R</span>osters</button>
+        <button type="button" class="ind-btn ind-btn-neutral ind-rosters-btn" data-testid="rosters-btn" :title="$t('cards.inducementsPhase.indPicker.viewBothTeamRosters')"
+          @click="emit('rosters')">📋 <span class="cap">{{ capHead('cards.inducementsPhase.indPicker.capRosters') }}</span>{{ capTail('cards.inducementsPhase.indPicker.capRosters') }}</button>
         <div class="ind-stencil" :data-role="phase" data-testid="phase-stencil">{{ roleLabel }}</div>
       </div>
 
@@ -453,12 +455,12 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
       </div>
 
       <div v-else-if="!canAct && !oppCards" class="ind-watch" data-testid="picker-waiting">
-        ⧗ {{ phase === 'overdog' ? 'Overdog' : 'Underdog' }} is choosing inducements…
+        ⧗ {{ phase === 'overdog' ? $t('cards.inducementsPhase.indPicker.overdog') : $t('cards.inducementsPhase.indPicker.underdog') }} {{ $t('cards.inducementsPhase.indPicker.isChoosingInducements') }}
       </div>
 
       <!-- Owner 09-21: the watching seat sees what the opponent can choose from (their prices, their budget). -->
       <div v-else-if="!canAct" class="ind-watch ind-watch-inline" data-testid="picker-waiting">
-        ⧗ {{ phase === 'overdog' ? 'Overdog' : 'Underdog' }} is choosing inducements… · budget <span class="ind-cash-gold">{{ fmtGold(oppCap ?? 0) }}</span>
+        ⧗ {{ phase === 'overdog' ? $t('cards.inducementsPhase.indPicker.overdog') : $t('cards.inducementsPhase.indPicker.underdog') }} {{ $t('cards.inducementsPhase.indPicker.isChoosingInducementsBudget') }} <span class="ind-cash-gold">{{ fmtGold(oppCap ?? 0) }}</span>
       </div>
       <div v-if="!presetMode && (canAct || oppCards)" class="ind-cardgrid" :data-blade="blade" :data-readonly="!canAct">
         <div v-for="(c, ci) in (canAct ? cards : oppCards!)[blade]" :key="c.key" class="ind-card" :data-blade="blade"
@@ -474,7 +476,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
               <span v-if="!c.portrait.url">{{ c.portrait.glyph }}</span>
             </div>
             <div class="ind-card-id">
-              <div class="ind-card-name">{{ c.name }}</div>
+              <div class="ind-card-name">{{ terms(c.name) }}</div>
               <div v-if="c.countLabel" class="ind-card-count">{{ c.countLabel }}</div>
             </div>
             <span class="ind-card-cost">{{ c.costLabel }}</span>
@@ -487,17 +489,17 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
           </div>
           <div v-if="c.skills.length" class="ind-skills">
             <span v-for="(sk, i) in c.skills" :key="sk">
-              <span :style="{ color: skillToken(sk) }">{{ sk }}</span><span v-if="i < c.skills.length - 1" class="ind-sep">, </span>
+              <span :style="{ color: skillToken(sk) }">{{ terms(sk) }}</span><span v-if="i < c.skills.length - 1" class="ind-sep">, </span>
             </span>
           </div>
           <div v-if="c.special" class="ind-special">★ {{ c.special }}</div>
         </div>
-        <div v-if="!(canAct ? cards : oppCards!)[blade].length" class="ind-empty">— nothing offered on this blade —</div>
+        <div v-if="!(canAct ? cards : oppCards!)[blade].length" class="ind-empty">{{ $t('cards.inducementsPhase.indPicker.nothingOfferedOnThis') }}</div>
       </div>
     </section>
 
     <PitchConfirmationPanel v-else class="ind-lock-panel"
-      title="Inducements Confirmed" label="Confirmed inducements" test-id="lock-banner"
+      :title="$t('cards.inducementsPhase.indLockPanel.inducementsConfirmed')" :label="$t('cards.inducementsPhase.indLockPanel.confirmedInducements')" test-id="lock-banner"
       :position-style="{ position: 'relative', top: 'auto', left: 'auto', transform: 'none', minWidth: '0', maxWidth: 'none', width: '100%' }">
       <div class="ind-lock-copy">
         <span class="ind-lock-tick" aria-hidden="true">✔</span>
@@ -505,7 +507,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
           <template v-for="(w, i) in words('Both Coaches Have Confirmed — Inducements Locked')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
         </span>
       </div>
-      <div class="ind-lock-note">Waiting for kick-off…</div>
+      <div class="ind-lock-note">{{ $t('cards.inducementsPhase.indLockPanel.waitingForKickOff') }}</div>
     </PitchConfirmationPanel>
 
     <!-- ── Mirrored side panels: local seat left in play; stable role order when passive. Owner 10-11 redesign:
@@ -551,7 +553,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
           </div>
 
           <div v-if="showFunds(panel)" class="ind-funds">
-            <span v-if="panel.status === 'selecting'" class="ind-status" data-status="selecting" :data-testid="`status-${panel.role}`"><span class="cap">S</span>ELECTING…</span>
+            <span v-if="panel.status === 'selecting'" class="ind-status" data-status="selecting" :data-testid="`status-${panel.role}`"><span class="cap">{{ capHead('cards.inducementsPhase.capSelecting') }}</span>{{ capTail('cards.inducementsPhase.capSelecting') }}</span>
             <!-- Underdog leg: petty, then scum, then treasury. Overdog leg: one pool (see cashRows). Hidden = dashes. -->
             <div class="ind-cash" :data-testid="`cash-${panel.role}`" :data-estimated="showsEstimate(panel)">
               <div v-for="row in cashRows(panel)" :key="row.label" class="ind-cash-line">
@@ -560,8 +562,8 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
               </div>
               <!-- Owner 10-12 / 10-21: worked out client side (my own while the other coach chooses, theirs always); the server's figures replace it. -->
               <div v-if="showsEstimate(panel)" class="ind-cash-est" :data-testid="`cash-estimated-${panel.role}`"
-                title="Worked out from the team values and game options. The server's figures replace it when they arrive.">
-                <span class="cap">E</span>stimated
+                :title="$t('cards.inducementsPhase.workedOutFromThe')">
+                <span class="cap">{{ capHead('cards.inducementsPhase.capEstimated') }}</span>{{ capTail('cards.inducementsPhase.capEstimated') }}
               </div>
             </div>
           </div>
@@ -585,14 +587,14 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
                     <span v-if="!c.portrait.url">{{ c.portrait.glyph }}</span>
                   </div>
                   <div class="ind-card-id">
-                    <div class="ind-card-name">{{ c.name }}</div>
+                    <div class="ind-card-name">{{ terms(c.name) }}</div>
                     <div class="ind-kind" :data-kind="c.blade">{{ c.kind }}</div>
                   </div>
                   <button v-if="panel.editable && c.removable !== false" type="button" class="ind-x" :data-testid="`remove-${c.key}`" @click="emit('remove', c.key)">✕</button>
                 </div>
                 <div v-if="c.skills.length" class="ind-skills">
                   <span v-for="(sk, i) in c.skills" :key="sk">
-                    <span :style="{ color: skillToken(sk) }">{{ sk }}</span><span v-if="i < c.skills.length - 1" class="ind-sep">, </span>
+                    <span :style="{ color: skillToken(sk) }">{{ terms(sk) }}</span><span v-if="i < c.skills.length - 1" class="ind-sep">, </span>
                   </span>
                 </div>
                 <div v-if="c.totalLabel !== null" class="ind-sum-total"><span class="ind-spacer" /><span class="ind-cash-gold">{{ c.totalLabel }}</span></div>
@@ -605,10 +607,10 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
              non-interactive plate for a coach who has confirmed. Nothing else lives down here (no coach name). -->
         <div v-if="showActions(panel) && !stacked" class="ind-foot ind-actions">
           <button type="button" class="ind-btn ind-btn-neutral" data-testid="clear-btn" @click="emit('clear')">
-            <span class="cap">C</span>lear
+            <span class="cap">{{ capHead('cards.inducementsPhase.capClear') }}</span>{{ capTail('cards.inducementsPhase.capClear') }}
           </button>
           <button type="button" class="ind-btn ind-btn-primary" data-testid="confirm-btn" :disabled="confirmPending" @click="emit('confirm')">
-            ✔ <span class="cap">C</span>onfirm
+            ✔ <span class="cap">{{ capHead('cards.inducementsPhase.capConfirm') }}</span>{{ capTail('cards.inducementsPhase.capConfirm') }}
           </button>
         </div>
         <div v-else-if="panel.status === 'confirmed'" class="ind-foot ind-actions">
@@ -620,10 +622,10 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : '�
     <!-- Single-column layout only: the local coach's Clear / Confirm, docked to the bottom of the scrolling phase. -->
     <div v-if="dockPanel" class="ind-foot ind-actions ind-dock" :class="`ind-seat-${panelColor(dockPanel)}`" data-testid="actions-dock">
       <button type="button" class="ind-btn ind-btn-neutral" data-testid="clear-btn" @click="emit('clear')">
-        <span class="cap">C</span>lear
+        <span class="cap">{{ capHead('cards.inducementsPhase.indDock.capClear') }}</span>{{ capTail('cards.inducementsPhase.indDock.capClear') }}
       </button>
       <button type="button" class="ind-btn ind-btn-primary" data-testid="confirm-btn" :disabled="confirmPending" @click="emit('confirm')">
-        ✔ <span class="cap">C</span>onfirm
+        ✔ <span class="cap">{{ capHead('cards.inducementsPhase.indDock.capConfirm') }}</span>{{ capTail('cards.inducementsPhase.indDock.capConfirm') }}
       </button>
     </div>
   </div>

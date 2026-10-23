@@ -26,6 +26,10 @@ import type { BugReportHost } from '../game/bugReportHost';
 import { bugReportSettingsSnapshot, collectBugReportEnv } from '../game/bugReportSettings';
 import { focusReportDialogIn, onReportModalKeydown } from '../game/reportModalKeys';
 import BugReportScreenshotPanel from './BugReportScreenshotPanel.vue';
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
@@ -60,18 +64,18 @@ const reportWireLogPath = computed(() => props.host.wireLogPath());
 /** The auto-attached summary the modal shows, so the tester can SEE what rides along before sending. */
 const reportAttachments = computed(() => {
   const items = [
-    `Game: ${reportGameId.value != null
-      ? `${gameServiceLabel(reportGameService.value)} ${reportGameId.value}`
-      : 'none (no game open)'}`,
-    `Build: ${APP_VERSION}`,
-    `Coach: ${settings.coach40k || settings.coach || '(not set)'}`,
+    reportGameId.value != null
+      ? t('bugReport.reportAttachments.gameService', { service: gameServiceLabel(reportGameService.value), gameId: reportGameId.value })
+      : t('bugReport.reportAttachments.gameNone'),
+    t('bugReport.reportAttachments.buildAppVersion', { APP_VERSION }),
+    t('bugReport.reportAttachments.coachP0', { p0: settings.coach40k || settings.coach || '(not set)' }),
   ];
   const wireLogName = wireLogBasename(reportWireLogPath.value);
   items.push(wireLogName
-    ? (props.host.wireLogLine ? props.host.wireLogLine(wireLogName) : `Wire log: ${wireLogName}`)
+    ? (props.host.wireLogLine ? props.host.wireLogLine(wireLogName) : t('bugReport.reportAttachments.wireLog', { name: wireLogName }))
     : props.host.noWireLogLine);
   const logLines = props.host.logEntries().length;
-  items.push(`Client log: ${logLines ? `${Math.min(logLines, 200)} recent lines` : 'empty'}`);
+  items.push(logLines ? t('bugReport.reportAttachments.clientLog', { count: Math.min(logLines, 200) }) : t('bugReport.reportAttachments.clientLogEmpty'));
   items.push(reportShotLine.value);
   return items;
 });
@@ -95,11 +99,11 @@ let reportCaptureAbort: AbortController | null = null;
 /** The Report modal's attachment line for the picture, so the summary stays the truth about what is sent. */
 const reportShotLine = computed(() => {
   const result = reportShot.value;
-  if (!result) return 'Screenshot: capturing...';
-  if (result.status !== 'ok') return 'Screenshot: none';
-  if (!reportShotInclude.value) return 'Screenshot: not included';
+  if (!result) return t('bugReport.reportShotLine.screenshotCapturing');
+  if (result.status !== 'ok') return t('bugReport.reportShotLine.screenshotNone');
+  if (!reportShotInclude.value) return t('bugReport.reportShotLine.screenshotNotIncluded');
   const { width, height, mimeType } = result.shot;
-  return `Screenshot: ${width} x ${height} ${mimeType === 'image/png' ? 'PNG' : 'JPEG'}`;
+  return t('bugReport.reportShotLine.screenshotWidthXHeight', { width, height, p2: mimeType === 'image/png' ? 'PNG' : 'JPEG' });
 });
 
 /** The host's Report entry: capture the window, then open the dialog (the host calls this through a template ref). */
@@ -218,7 +222,7 @@ async function submitReport() {
     if (screenshotDropped) {
       // Astra: the relay refused the picture as too large (413) and the report went again without it. Say so in the
       // dialog (it stays open, text cleared so nothing is sent twice) instead of a toast the coach may miss.
-      reportNotice.value = 'Your report was sent, but without the screenshot: the server said it was too large.';
+      liveSetHere(reportNotice, 'value', () => t('bugReport.text.yourReportWasSent'));
       return;
     }
     reportOpen.value = false;
@@ -243,21 +247,21 @@ defineExpose({ openReport, cancelPending, root: reportDialog });
   <div v-if="reportOpen" ref="reportDialog" class="modal-backdrop cg-backdrop" tabindex="-1" @keydown.stop="onReportKeydown" @keyup.stop>
     <div class="cg-menu br-menu">
       <div class="cg-head">
-        <h2>🐞 Report an Issue</h2>
+        <h2>{{ $t('bugReport.cgMenu.reportAnIssue') }}</h2>
         <button class="cg-close" :disabled="reportBusy" @click="reportOpen = false">✕</button>
       </div>
 
       <!-- Owner 10-13: the automatic screenshot sits ABOVE the description, first thing under the title. -->
       <BugReportScreenshotPanel v-model="reportShotInclude" :result="reportShot" :disabled="reportBusy" />
 
-      <label class="cg-field">What happened?
+      <label class="cg-field">{{ $t('bugReport.cgMenu.whatHappened') }}
         <textarea v-model="reportText" class="br-text" rows="7" :maxlength="REPORT_MAX"
-          placeholder="What did you do, what did you expect, and what happened instead?"></textarea>
+          :placeholder="$t('bugReport.cgMenu.whatDidYouDo')"></textarea>
       </label>
       <p class="hint br-count">{{ reportText.length }} / {{ REPORT_MAX }}</p>
 
       <div class="br-attach">
-        <span class="cg-field-label">Sent with your report</span>
+        <span class="cg-field-label">{{ $t('bugReport.cgMenu.sentWithYourReport') }}</span>
         <ul>
           <li v-for="line in reportAttachments" :key="line">{{ line }}</li>
         </ul>
@@ -267,10 +271,10 @@ defineExpose({ openReport, cancelPending, root: reportDialog });
       <p v-if="reportNotice" class="br-notice" data-testid="br-notice">{{ reportNotice }}</p>
 
       <div class="cg-actions">
-        <button type="button" class="cg-cancel" :disabled="reportBusy" @click="reportOpen = false">{{ reportNotice ? 'Close' : 'Cancel' }}</button>
+        <button type="button" class="cg-cancel" :disabled="reportBusy" @click="reportOpen = false">{{ reportNotice ? $t('bugReport.cgMenu.close') : $t('bugReport.cgMenu.cancel') }}</button>
         <button type="button" class="cg-create" data-testid="br-send" :disabled="reportBusy || reportSendBlocked || !reportText.trim()"
-          :title="reportSendBlocked ? 'Waiting for the screenshot' : undefined"
-          @click="submitReport">{{ reportBusy ? 'Sending…' : 'Send Report' }}</button>
+          :title="reportSendBlocked ? $t('bugReport.cgMenu.waitingForTheScreenshot') : undefined"
+          @click="submitReport">{{ reportBusy ? $t('bugReport.cgMenu.sending') : $t('bugReport.cgMenu.sendReport') }}</button>
       </div>
     </div>
   </div>

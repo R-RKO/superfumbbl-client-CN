@@ -1,5 +1,6 @@
 import { LiveSpectateHistory, spectatorCheckpointBytes } from './liveSpectateHistory';
 import { sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorCursor, type SpectatorEvent } from './spectatorCheckpoint';
+import { t, liveSet, liveValue, disposeLive } from '../../i18n';
 
 export type SpectatorPresentationSource = 'live' | 'live-review';
 export type SpectatorReviewPhase = 'live' | 'pausing' | 'paused' | 'playing' | 'seeking' | 'returning' | 'disposed';
@@ -42,14 +43,14 @@ export class LiveSpectateReview {
       this.cancel();
       this.phaseValue = 'paused';
       this.sourceValue = 'live-review';
-      this.failureValue = `Position publication failed: ${String(error)}`;
+      liveSet(this, 'failureValue', () => t('replay.text.positionPublicationFailedP0', { p0: String(error) }), this);
       this.changed();
       return false;
     }
   }
   private fits(checkpoint: SpectatorCheckpoint): boolean {
     if (spectatorCheckpointBytes(checkpoint) <= this.history.limits.activeGraphBytes) return true;
-    this.failureValue = 'History unavailable: active position exceeds the history budget';
+    liveSet(this, 'failureValue', () => t('replay.text.historyUnavailableActivePosition'), this);
     this.changed();
     return false;
   }
@@ -159,7 +160,7 @@ export class LiveSpectateReview {
     this.activeCompletion = null;
     this.candidate = null;
     try { this.adapter.cancelTransients(); }
-    catch (error) { this.failureValue = `Presentation cancellation failed: ${String(error)}`; }
+    catch (error) { liveSet(this, 'failureValue', () => t('replay.text.presentationCancellationFailedP0', { p0: String(error) }), this); }
   }
   async seek(cursor: SpectatorCursor): Promise<boolean> {
     if (this.sourceValue !== 'live-review' || this.phaseValue === 'disposed') return false;
@@ -172,7 +173,7 @@ export class LiveSpectateReview {
     if (generation !== this.presentationGeneration) return false;
     const checkpoint = this.history.checkpointAt(cursor);
     if (!checkpoint || !this.fits(checkpoint)) {
-      this.failureValue = 'Earlier history limit reached';
+      liveSet(this, 'failureValue', () => t('replay.text.earlierHistoryLimitReached'), this);
       this.phaseValue = 'paused';
       this.changed();
       return false;
@@ -228,7 +229,7 @@ export class LiveSpectateReview {
     const head = this.history.head;
     if (!head || this.history.staleReason || !this.fits(head)) {
       this.phaseValue = 'paused';
-      this.failureValue = this.history.staleReason ?? 'No trusted live position available';
+      liveSet(this, 'failureValue', () => liveValue<string | null>(this.history, 'staleReasonValue') ?? t('replay.text.noTrustedLivePosition'), this);
       this.changed();
       return false;
     }
@@ -251,6 +252,7 @@ export class LiveSpectateReview {
   get scrubMaximum(): SpectatorCursor | null { return this.scrubEnd && { ...this.scrubEnd }; }
   endScrub(): void { this.scrubEnd = null; }
   dispose(): void {
+    disposeLive(this); // its live-switch registrations go with it
     this.cancel();
     this.phaseValue = 'disposed';
     this.visibleValue = null;

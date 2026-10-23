@@ -8,6 +8,10 @@ import {
   invalidateMarkingsImports, listMarkingRules, markingRuleSubject, removeImportedMarkings, removeMarkingRule,
   splitMarkingSubject, splitTypedSkills, updateMarkingRule, type MarkingApplyTo, type MarkingRuleRow,
 } from '../game/markingRules';
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 /**
  * Owner 10-09: Settings → Skill display → "Skill markings". One flow, top to bottom:
@@ -95,16 +99,16 @@ onBeforeUnmount(() => invalidateMarkingsImports());
 
 // ── table: edit / remove one rule ───────────────────────────────────────────────────────────────────────────────────
 const APPLY_TO: { value: MarkingApplyTo; label: string; side: string }[] = [
-  { value: 'BOTH', label: 'Both teams', side: 'both teams' },
-  { value: 'OWN', label: 'My team', side: 'my team' },
-  { value: 'OPPONENT', label: 'Opposition', side: 'the opposition' },
+  { value: 'BOTH', get label() { return t('settings.skillMarkingsSettings.applyTo.bothTeams'); }, side: 'both teams' },
+  { value: 'OWN', get label() { return t('settings.skillMarkingsSettings.applyTo.myTeam'); }, side: 'my team' },
+  { value: 'OPPONENT', get label() { return t('settings.skillMarkingsSettings.applyTo.opposition'); }, side: 'the opposition' },
 ];
 const applyTo = (value: MarkingApplyTo) => APPLY_TO.find((option) => option.value === value)!;
 /** An injury-only rule has no "gained" form: an injury is never part of the position. */
 const gainedApplies = (row: MarkingRuleRow): boolean => row.skills.length > 0;
 /** "Guard is already marked "G" for my team" - names the colliding rule(s). */
 function describeConflicts(conflicts: readonly MarkingRuleRow[]): string {
-  return conflicts.map((row) => `${quoted(row.marking)} for ${applyTo(row.applyTo).side}`).join(' and ');
+  return conflicts.map((row) => t('ui.skillMarkingsSettings.text.p0ForSide', { p0: quoted(row.marking), side: applyTo(row.applyTo).side })).join(' and ');
 }
 /** The site allows a rule with a BLANK marking: it draws nothing itself and hides the markings of the rules it
  *  contains (a blank Block + Guard rule hides the Block and the Guard marking on a player with both). */
@@ -126,7 +130,7 @@ function saveEdit(row: MarkingRuleRow): void {
   if (busy.value || (!draft.marking.trim() && !isBlank(row))) return; // Save is disabled; Enter in the field must not blank a rule either
   const conflicts = findMarkingConflicts(rows.value, { skills: row.skills, injuries: row.injuries, applyTo: draft.applyTo }, row.id);
   if (conflicts.length) {
-    editError.value = `${markingRuleSubject(row)} is already marked ${describeConflicts(conflicts)}. Change or remove that marking first.`;
+    liveSetHere(editError, 'value', () => t('ui.skillMarkingsSettings.text.p0IsAlreadyMarked', { p0: markingRuleSubject(row), p1: describeConflicts(conflicts) }));
     return;
   }
   change(updateMarkingRule(currentMarkingStores(), row, { ...draft }));
@@ -152,10 +156,10 @@ function addRule(replaceExisting = false): void {
   addError.value = '';
   const typed = splitTypedSkills(newRule.skills, known.value);
   const marking = newRule.marking.trim();
-  if (!typed.length) { addConflict.value = null; addError.value = 'Enter the skill this marking is for (several skills, separated by commas, make a combination).'; return; }
-  if (!marking) { addConflict.value = null; addError.value = 'Enter the marking text.'; return; }
+  if (!typed.length) { addConflict.value = null; liveSetHere(addError, 'value', () => t('ui.skillMarkingsSettings.text.enterTheSkillThis')); return; }
+  if (!marking) { addConflict.value = null; liveSetHere(addError, 'value', () => t('ui.skillMarkingsSettings.text.enterTheMarkingText')); return; }
   const unknown = typed.filter((name) => !known.value.has(name.toLowerCase()));
-  if (unknown.length) { addConflict.value = null; addError.value = `Not a skill: ${unknown.join(', ')}.`; return; }
+  if (unknown.length) { addConflict.value = null; liveSetHere(addError, 'value', () => t('ui.skillMarkingsSettings.text.notASkillP0', { p0: unknown.join(', ') })); return; }
   // A repeated name is meaningful ("+ST, +ST" = two strength gains): the typed subject is kept as typed, never de-duplicated.
   const skills = typed.map((name) => known.value.get(name.toLowerCase())!);
   const subject = splitMarkingSubject(skills);
@@ -163,7 +167,7 @@ function addRule(replaceExisting = false): void {
   if (conflicts.length && !(replaceExisting && addConflict.value && conflicts.every((row) => addConflict.value!.ids.includes(row.id)))) {
     addConflict.value = {
       ids: conflicts.map((row) => row.id),
-      text: `${markingRuleSubject(subject)} is already marked ${describeConflicts(conflicts)}. Nothing was added.`,
+      get text() { return t('settings.skillMarkingsSettings.text.p0IsAlreadyMarked', { p0: markingRuleSubject(subject), p1: describeConflicts(conflicts) }); },
     };
     return;
   }
@@ -220,107 +224,107 @@ const vFillRange = {
 
 <template>
   <fieldset class="settings-group skill-markings" data-testid="skill-markings" :aria-busy="busy">
-    <legend>Skill markings</legend>
+    <legend>{{ $t('settings.skillMarkings.skillMarkings.skillMarkings') }}</legend>
 
     <!-- APPEARANCE (owner 10-13: was its own "Skill marking appearance" box) -->
-    <div class="mk-appearance" role="group" aria-label="How markings look on the pitch">
+    <div class="mk-appearance" role="group" :aria-label="$t('settings.skillMarkings.skillMarkings.howMarkingsLookOn')">
       <label class="mk-field">
-        <span>Color</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.color') }}</span>
         <input v-model="settings.skillMarkingColor" type="color" />
       </label>
       <label class="mk-field">
-        <span>Font</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.font') }}</span>
         <select v-model="settings.skillMarkingFont" class="mk-input">
-          <option value="arial">Arial / Helvetica</option>
-          <option value="helvetica">Helvetica / Arial</option>
-          <option value="system">System sans</option>
-          <option value="nuffle">Nuffle</option>
+          <option value="arial">{{ $t('settings.skillMarkings.skillMarkings.arialHelvetica') }}</option>
+          <option value="helvetica">{{ $t('settings.skillMarkings.skillMarkings.helveticaArial') }}</option>
+          <option value="system">{{ $t('settings.skillMarkings.skillMarkings.systemSans') }}</option>
+          <option value="nuffle">{{ $t('settings.skillMarkings.skillMarkings.nuffle') }}</option>
         </select>
       </label>
       <label class="mk-field mk-field-size">
-        <span>Size {{ settings.skillMarkingSize }}px</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.sizeSkillmarkingsizePx', { skillMarkingSize: settings.skillMarkingSize }) }}</span>
         <input v-model.number="settings.skillMarkingSize" v-fill-range type="range" min="6" max="24" step="1" />
       </label>
     </div>
-    <p class="hint">All glyphs for a player are antialiased and kept together on one line.</p>
+    <p class="hint">{{ $t('settings.skillMarkings.skillMarkings.allGlyphsForA') }}</p>
 
     <!-- SOURCE: the fumbbl.com import, a compact sub-row of this same box -->
-    <div class="mk-source" role="group" aria-label="Where the markings come from">
+    <div class="mk-source" role="group" :aria-label="$t('settings.skillMarkings.skillMarkings.whereTheMarkingsCome')">
       <p class="mk-origin" data-testid="markings-origin">
         <template v-if="settings.markingsImportCoach">
-          Imported from <b>{{ settings.markingsImportCoach }}</b> on fumbbl.com<template v-if="importedWhen"> · {{ importedWhen }}</template>
+          {{ $t('settings.skillMarkings.skillMarkings.importedFrom') }} <b>{{ settings.markingsImportCoach }}</b>{{ $t('settings.skillMarkings.skillMarkings.onFumbblCom') }}<template v-if="importedWhen"> · {{ importedWhen }}</template>
         </template>
-        <template v-else-if="rows.length">Set up here. Nothing imported.</template>
-        <template v-else>No skill markings yet. Import the ones you set up on fumbbl.com, or add your own below.</template>
+        <template v-else-if="rows.length">{{ $t('settings.skillMarkings.skillMarkings.setUpHereNothing') }}</template>
+        <template v-else>{{ $t('settings.skillMarkings.skillMarkings.noSkillMarkingsYet') }}</template>
       </p>
       <div class="mk-toolbar">
         <label class="mk-coach">
-          <span>Coach</span>
-          <input v-model="coach" type="text" spellcheck="false" autocomplete="off" placeholder="FUMBBL coach" :disabled="busy"
+          <span>{{ $t('settings.skillMarkings.skillMarkings.coach') }}</span>
+          <input v-model="coach" type="text" spellcheck="false" autocomplete="off" :placeholder="$t('settings.skillMarkings.skillMarkings.fumbblCoach')" :disabled="busy"
             data-testid="markings-coach" @keydown.enter.prevent="importMarkings" />
         </label>
         <button type="button" class="mk-btn mk-primary" data-testid="markings-import" :disabled="busy" @click="importMarkings">
-          {{ busy ? 'Importing…' : isRefresh ? 'Refresh from fumbbl.com' : 'Import from fumbbl.com' }}
+          {{ busy ? $t('settings.skillMarkings.skillMarkings.importing') : isRefresh ? $t('settings.skillMarkings.skillMarkings.refreshFromFumbblCom') : $t('settings.skillMarkings.skillMarkings.importFromFumbblCom') }}
         </button>
       </div>
       <p class="mk-status" :class="`mk-status-${status.kind}`" data-testid="markings-status"
         :role="status.kind === 'error' ? 'alert' : 'status'" aria-live="polite">{{ status.text }}</p>
       <div v-if="ambiguousReply && importedCount && !busy" class="mk-confirm" data-testid="markings-ambiguous">
-        <span>Nothing was changed. If you want them gone anyway, you can still remove the {{ importedCount }} you imported earlier.</span>
-        <button type="button" class="mk-btn mk-danger" data-testid="markings-remove-imported" @click="removeImported">Remove my imported markings anyway</button>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.nothingWasChangedIf', { importedCount }) }}</span>
+        <button type="button" class="mk-btn mk-danger" data-testid="markings-remove-imported" @click="removeImported">{{ $t('settings.skillMarkings.skillMarkings.removeMyImportedMarkings') }}</button>
       </div>
-      <p class="hint">Import replaces what the last import brought in, and removes markings you have since deleted on fumbbl.com. Markings you added or edited here are kept, unless the import has one for the same skill.</p>
+      <p class="hint">{{ $t('settings.skillMarkings.skillMarkings.importReplacesWhatThe') }}</p>
     </div>
 
     <!-- TABLE -->
-    <div v-if="rows.length" class="mk-table" role="table" aria-label="Skill markings" data-testid="markings-table">
+    <div v-if="rows.length" class="mk-table" role="table" :aria-label="$t('settings.skillMarkings.skillMarkings.skillMarkings')" data-testid="markings-table">
       <div class="mk-thead" role="row">
-        <span role="columnheader">Marking</span>
-        <span role="columnheader">Skill</span>
-        <span role="columnheader">Applies to</span>
-        <span role="columnheader" title="Only when the skill was gained, not part of the position">Gained</span>
-        <span role="columnheader" class="mk-actions-head">Actions</span>
+        <span role="columnheader">{{ $t('settings.skillMarkings.skillMarkings.marking') }}</span>
+        <span role="columnheader">{{ $t('settings.skillMarkings.skillMarkings.skill') }}</span>
+        <span role="columnheader">{{ $t('settings.skillMarkings.skillMarkings.appliesTo') }}</span>
+        <span role="columnheader" :title="$t('settings.skillMarkings.skillMarkings.onlyWhenTheSkill')">{{ $t('settings.skillMarkings.skillMarkings.gained') }}</span>
+        <span role="columnheader" class="mk-actions-head">{{ $t('settings.skillMarkings.skillMarkings.actions') }}</span>
       </div>
       <div v-for="row in rows" :key="row.id" class="mk-row" role="row" :data-rule="row.id" :data-editing="editingId === row.id">
         <template v-if="editingId !== row.id">
           <span class="mk-cell mk-marking" role="cell" data-label="Marking">
             <span v-if="!isBlank(row)" class="mk-chip" :style="chipStyle" :title="drawn(row.marking)">{{ shown(row.marking) }}</span>
-            <span v-else class="mk-blank" data-testid="markings-blank">blank</span>
+            <span v-else class="mk-blank" data-testid="markings-blank">{{ $t('settings.skillMarkings.mkRow.skillMarkings.blank') }}</span>
           </span>
           <span class="mk-cell mk-skill" role="cell" data-label="Skill" :title="markingRuleSubject(row)">
             {{ markingRuleSubject(row) }}
-            <small v-if="isBlank(row)" class="mk-tag" title="A blank rule draws nothing and hides the markings of the rules it contains">hides: {{ markingRuleSubject(row) }}</small>
-            <small v-if="row.applyRepeatedly" class="mk-tag">repeats</small>
-            <small v-if="row.imported" class="mk-tag mk-tag-imported">imported</small>
+            <small v-if="isBlank(row)" class="mk-tag" :title="$t('settings.skillMarkings.mkRow.skillMarkings.aBlankRuleDraws')">{{ $t('settings.skillMarkings.mkRow.skillMarkings.hidesP0', { p0: markingRuleSubject(row) }) }}</small>
+            <small v-if="row.applyRepeatedly" class="mk-tag">{{ $t('settings.skillMarkings.mkRow.skillMarkings.repeats') }}</small>
+            <small v-if="row.imported" class="mk-tag mk-tag-imported">{{ $t('settings.skillMarkings.mkRow.skillMarkings.imported') }}</small>
           </span>
           <span class="mk-cell" role="cell" data-label="Applies to">{{ applyTo(row.applyTo).label }}</span>
-          <span class="mk-cell" role="cell" data-label="Gained">{{ gainedApplies(row) ? (row.gainedOnly ? 'Yes' : 'No') : '—' }}</span>
+          <span class="mk-cell" role="cell" data-label="Gained">{{ gainedApplies(row) ? (row.gainedOnly ? $t('settings.skillMarkings.mkRow.skillMarkings.yes') : $t('settings.skillMarkings.mkRow.skillMarkings.no')) : '—' }}</span>
           <span class="mk-cell mk-actions" role="cell">
-            <button type="button" class="mk-btn" data-action="edit" :disabled="busy" :aria-label="`Edit the marking for ${markingRuleSubject(row)}, ${applyTo(row.applyTo).side}`" @click="startEdit(row)">Edit</button>
-            <button type="button" class="mk-btn mk-danger" data-action="remove" :disabled="busy" :aria-label="`Remove the marking for ${markingRuleSubject(row)}, ${applyTo(row.applyTo).side}`" @click="removeRule(row)">Remove</button>
+            <button type="button" class="mk-btn" data-action="edit" :disabled="busy" :aria-label="$t('settings.skillMarkings.mkRow.skillMarkings.editTheMarkingFor', { p0: markingRuleSubject(row), side: applyTo(row.applyTo).side })" @click="startEdit(row)">{{ $t('settings.skillMarkings.mkRow.skillMarkings.edit') }}</button>
+            <button type="button" class="mk-btn mk-danger" data-action="remove" :disabled="busy" :aria-label="$t('settings.skillMarkings.mkRow.skillMarkings.removeTheMarkingFor', { p0: markingRuleSubject(row), side: applyTo(row.applyTo).side })" @click="removeRule(row)">{{ $t('settings.skillMarkings.mkRow.skillMarkings.remove') }}</button>
           </span>
         </template>
         <template v-else>
           <span class="mk-cell mk-marking" role="cell" data-label="Marking">
-            <input v-model="draft.marking" class="mk-input mk-input-marking" type="text" maxlength="6" spellcheck="false" aria-label="Marking text"
+            <input v-model="draft.marking" class="mk-input mk-input-marking" type="text" maxlength="6" spellcheck="false" :aria-label="$t('settings.skillMarkings.mkRow.skillMarkings.markingText')"
               data-field="marking" :disabled="busy" @keydown.enter.prevent="saveEdit(row)" @keydown.esc.stop.prevent="cancelEdit" />
           </span>
           <span class="mk-cell mk-skill" role="cell" data-label="Skill" :title="markingRuleSubject(row)">
             {{ markingRuleSubject(row) }}
-            <label v-if="row.source === 'json'" class="mk-check mk-repeat"><input v-model="draft.applyRepeatedly" type="checkbox" data-field="repeat" :disabled="busy" /> Repeat for each time it matches</label>
+            <label v-if="row.source === 'json'" class="mk-check mk-repeat"><input v-model="draft.applyRepeatedly" type="checkbox" data-field="repeat" :disabled="busy" />{{ $t('settings.skillMarkings.mkRow.skillMarkings.repeatForEachTime') }}</label>
           </span>
           <span class="mk-cell" role="cell" data-label="Applies to">
-            <select v-model="draft.applyTo" class="mk-input" aria-label="Applies to" data-field="applyTo" :disabled="busy">
+            <select v-model="draft.applyTo" class="mk-input" :aria-label="$t('settings.skillMarkings.mkRow.skillMarkings.appliesTo')" data-field="applyTo" :disabled="busy">
               <option v-for="option in APPLY_TO" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </span>
           <span class="mk-cell" role="cell" data-label="Gained">
-            <input v-if="gainedApplies(row)" v-model="draft.gainedOnly" type="checkbox" aria-label="Gained only" data-field="gainedOnly" :disabled="busy" />
+            <input v-if="gainedApplies(row)" v-model="draft.gainedOnly" type="checkbox" :aria-label="$t('settings.skillMarkings.mkRow.skillMarkings.gainedOnly')" data-field="gainedOnly" :disabled="busy" />
             <template v-else>—</template>
           </span>
           <span class="mk-cell mk-actions" role="cell">
-            <button type="button" class="mk-btn mk-primary" data-action="save" :disabled="busy || (!draft.marking.trim() && !isBlank(row))" @click="saveEdit(row)">Save</button>
-            <button type="button" class="mk-btn" data-action="cancel" @click="cancelEdit">Cancel</button>
+            <button type="button" class="mk-btn mk-primary" data-action="save" :disabled="busy || (!draft.marking.trim() && !isBlank(row))" @click="saveEdit(row)">{{ $t('settings.skillMarkings.mkRow.skillMarkings.save') }}</button>
+            <button type="button" class="mk-btn" data-action="cancel" @click="cancelEdit">{{ $t('settings.skillMarkings.mkRow.skillMarkings.cancel') }}</button>
           </span>
           <p v-if="editError" class="mk-status mk-status-error mk-row-error" role="alert" data-testid="markings-edit-error">{{ editError }}</p>
         </template>
@@ -328,46 +332,46 @@ const vFillRange = {
     </div>
 
     <!-- ADD -->
-    <div class="mk-add" role="group" aria-label="Add a marking">
+    <div class="mk-add" role="group" :aria-label="$t('settings.skillMarkings.skillMarkings.addAMarking')">
       <label class="mk-field mk-field-skills">
-        <span>Skill</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.skill') }}</span>
         <input v-model="newRule.skills" class="mk-input" type="text" spellcheck="false" autocomplete="off" list="mk-skill-names" :disabled="busy"
-          placeholder="Block, or Block, Tackle" data-testid="markings-add-skills" @keydown.enter.prevent="addRule()" />
+          :placeholder="$t('settings.skillMarkings.skillMarkings.blockOrBlockTackle')" data-testid="markings-add-skills" @keydown.enter.prevent="addRule()" />
       </label>
       <label class="mk-field mk-field-marking">
-        <span>Marking</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.marking') }}</span>
         <input v-model="newRule.marking" class="mk-input mk-input-marking" type="text" maxlength="6" spellcheck="false" autocomplete="off" :disabled="busy"
           placeholder="B" data-testid="markings-add-marking" @keydown.enter.prevent="addRule()" />
       </label>
       <label class="mk-field">
-        <span>Applies to</span>
+        <span>{{ $t('settings.skillMarkings.skillMarkings.appliesTo') }}</span>
         <select v-model="newRule.applyTo" class="mk-input" data-testid="markings-add-applyto" :disabled="busy">
           <option v-for="option in APPLY_TO" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
       </label>
-      <label class="mk-check"><input v-model="newRule.gainedOnly" type="checkbox" data-testid="markings-add-gained" :disabled="busy" /> Gained only</label>
-      <button type="button" class="mk-btn" data-testid="markings-add" :disabled="busy" @click="addRule()">Add marking</button>
+      <label class="mk-check"><input v-model="newRule.gainedOnly" type="checkbox" data-testid="markings-add-gained" :disabled="busy" />{{ $t('settings.skillMarkings.skillMarkings.gainedOnly') }}</label>
+      <button type="button" class="mk-btn" data-testid="markings-add" :disabled="busy" @click="addRule()">{{ $t('settings.skillMarkings.skillMarkings.addMarking') }}</button>
       <datalist id="mk-skill-names"><option v-for="name in skills" :key="name" :value="name" /></datalist>
       <p v-if="addError" class="mk-status mk-status-error" role="alert" data-testid="markings-add-error">{{ addError }}</p>
       <div v-if="addConflict" class="mk-confirm" role="alert" data-testid="markings-add-conflict">
         <span>{{ addConflict.text }}</span>
-        <button type="button" class="mk-btn mk-danger" data-testid="markings-add-replace" :disabled="busy" @click="addRule(true)">Replace it</button>
-        <button type="button" class="mk-btn" data-testid="markings-add-keep" @click="addConflict = null">Keep it</button>
+        <button type="button" class="mk-btn mk-danger" data-testid="markings-add-replace" :disabled="busy" @click="addRule(true)">{{ $t('settings.skillMarkings.skillMarkings.replaceIt') }}</button>
+        <button type="button" class="mk-btn" data-testid="markings-add-keep" @click="addConflict = null">{{ $t('settings.skillMarkings.skillMarkings.keepIt') }}</button>
       </div>
     </div>
 
     <!-- FOOTER -->
     <footer class="mk-footer">
       <span class="mk-preview" data-testid="markings-preview">
-        <span class="mk-preview-label">On the pitch</span>
-        <span class="mk-chip mk-chip-sample" :style="chipStyle">{{ shown(rows.find((row) => !isBlank(row))?.marking ?? 'Ab') }}</span>
+        <span class="mk-preview-label">{{ $t('settings.skillMarkings.mkFooter.skillMarkings.onThePitch') }}</span>
+        <span class="mk-chip mk-chip-sample" :style="chipStyle">{{ shown(rows.find((row) => !isBlank(row))?.marking ?? $t('settings.skillMarkings.mkFooter.skillMarkings.ab')) }}</span>
       </span>
-      <span class="mk-count">{{ rows.length }} marking{{ rows.length === 1 ? '' : 's' }}</span>
-      <button v-if="rows.length && !clearArmed" type="button" class="mk-btn mk-danger" data-testid="markings-clear-all" :disabled="busy" @click="clearArmed = true">Clear all</button>
-      <div v-if="rows.length && clearArmed" class="mk-confirm" role="alertdialog" aria-label="Clear all skill markings" data-testid="markings-clear-confirm">
-        <span>Remove all {{ rows.length }} skill marking{{ rows.length === 1 ? '' : 's' }}? Skill icon settings are kept.</span>
-        <button type="button" class="mk-btn mk-danger" data-testid="markings-clear-yes" :disabled="busy" @click="clearAll">Clear all markings</button>
-        <button type="button" class="mk-btn" data-testid="markings-clear-no" @click="clearArmed = false">Keep them</button>
+      <span class="mk-count">{{ $t('settings.skillMarkings.mkFooter.skillMarkings.rowsMarkingP1', { rows: rows.length }) }}</span>
+      <button v-if="rows.length && !clearArmed" type="button" class="mk-btn mk-danger" data-testid="markings-clear-all" :disabled="busy" @click="clearArmed = true">{{ $t('settings.skillMarkings.mkFooter.skillMarkings.clearAll') }}</button>
+      <div v-if="rows.length && clearArmed" class="mk-confirm" role="alertdialog" :aria-label="$t('settings.skillMarkings.mkFooter.skillMarkings.clearAllSkillMarkings')" data-testid="markings-clear-confirm">
+        <span>{{ $t('settings.skillMarkings.mkFooter.skillMarkings.removeAllRowsSkill', { rows: rows.length }) }}</span>
+        <button type="button" class="mk-btn mk-danger" data-testid="markings-clear-yes" :disabled="busy" @click="clearAll">{{ $t('settings.skillMarkings.mkFooter.skillMarkings.clearAllMarkings') }}</button>
+        <button type="button" class="mk-btn" data-testid="markings-clear-no" @click="clearArmed = false">{{ $t('settings.skillMarkings.mkFooter.skillMarkings.keepThem') }}</button>
       </div>
     </footer>
   </fieldset>

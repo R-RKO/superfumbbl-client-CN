@@ -2,6 +2,8 @@
 import { computed } from 'vue';
 import { matchResultArt, type MatchResult } from '../game/matchResultArt';
 import { teamLogoUrl } from '../game/teamLogos';
+import { $t, terms } from '../i18n';
+import { t } from '../i18n';
 
 /**
  * Owner 10-06 (spec-replay-pane-revamp.md): the finished-game row the Play blade's "My Recent Games" draws, extracted
@@ -41,7 +43,7 @@ function initials(name: string | undefined): string {
 function formatTeamValue(value: number | undefined): string | undefined {
   if (!value) return undefined;
   const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
-  return `TV ${thousands.toLocaleString()}k`;
+  return t('waitingBoard.text.tvP0K', { p0: thousands.toLocaleString() });
 }
 </script>
 
@@ -53,7 +55,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
       <span class="row-text">
         <strong class="row-name">{{ left.name }}</strong>
         <small v-if="left.coach" class="row-meta row-coach">{{ left.coach }}</small>
-        <small v-if="left.race" class="row-meta row-race">{{ left.race }}</small>
+        <small v-if="left.race" class="row-meta row-race">{{ terms(left.race) }}</small>
         <small v-if="formatTeamValue(left.tv)" class="row-meta">{{ formatTeamValue(left.tv) }}</small>
       </span>
     </div>
@@ -74,13 +76,13 @@ function formatTeamValue(value: number | undefined): string | undefined {
         <span class="row-text">
           <strong class="row-name">{{ right.name }}</strong>
           <small v-if="right.coach" class="row-meta row-coach">{{ right.coach }}</small>
-          <small v-if="right.race" class="row-meta row-race">{{ right.race }}</small>
+          <small v-if="right.race" class="row-meta row-race">{{ terms(right.race) }}</small>
           <small v-if="formatTeamValue(right.tv)" class="row-meta">{{ formatTeamValue(right.tv) }}</small>
         </span>
       </div>
       <div v-else class="row-team away row-team-empty">
         <span class="row-logo logo-fallback" aria-hidden="true">?</span>
-        <span class="row-text"><strong class="row-name row-waiting">Teams unknown</strong></span>
+        <span class="row-text"><strong class="row-name row-waiting">{{ $t('waitingBoard.gameRow.teamsUnknown') }}</strong></span>
       </div>
       <slot name="actions" />
     </div>

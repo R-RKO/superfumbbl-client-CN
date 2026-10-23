@@ -1,7 +1,7 @@
 {
   "name": "@fumbbl40k/app",
   "private": true,
-  "version": "1.0.275",
+  "version": "1.0.276",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -9,7 +9,10 @@
     "build:vite": "vue-tsc --noEmit && vite build",
     "build": "tauri build",
     "tauri": "tauri",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "i18n:report": "node scripts/i18n-report.mjs",
+    "i18n:check": "node scripts/i18n-check.mjs",
+    "i18n:terms": "node scripts/build-terms.mjs"
   },
   "dependencies": {
     "@fumbbl40k/ffb-pitch": "workspace:*",

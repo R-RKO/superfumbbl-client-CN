@@ -3,6 +3,7 @@
 // untick it (chat text may be in the picture). Display only: the capture itself is bugReportScreenshot.ts, taken when
 // Report was pressed; this panel never captures anything.
 import type { ReportCaptureResult } from '../game/bugReportScreenshot';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   /** null while the capture is still being composed. */
@@ -19,21 +20,21 @@ function onToggle(event: Event): void {
 
 <template>
   <div class="br-shot" data-testid="br-shot">
-    <span class="cg-field-label">Screenshot</span>
-    <p v-if="!props.result" class="hint br-shot-pending" data-testid="br-shot-pending">Capturing screenshot...</p>
+    <span class="cg-field-label">{{ $t('bugReport.screenshot') }}</span>
+    <p v-if="!props.result" class="hint br-shot-pending" data-testid="br-shot-pending">{{ $t('bugReport.capturingScreenshot') }}</p>
     <template v-else-if="props.result.status === 'ok'">
       <img class="br-shot-thumb" data-testid="br-shot-thumb" :src="props.result.shot.dataUrl"
-        :class="{ 'br-shot-thumb-off': !props.modelValue }" alt="Screenshot of your client" />
+        :class="{ 'br-shot-thumb-off': !props.modelValue }" :alt="$t('bugReport.screenshotOfYourClient')" />
       <label class="br-shot-include">
         <input type="checkbox" data-testid="br-shot-include" :checked="props.modelValue" :disabled="props.disabled"
           @change="onToggle" />
-        Include this screenshot
+        {{ $t('bugReport.includeThisScreenshot') }}
       </label>
-      <p class="hint br-shot-note">The screenshot shows your client as it was when you opened this report.</p>
+      <p class="hint br-shot-note">{{ $t('bugReport.theScreenshotShowsYour') }}</p>
       <p v-for="note in props.result.shot.notes" :key="note" class="hint br-shot-extra">{{ note }}</p>
     </template>
     <template v-else>
-      <p class="hint br-shot-none" data-testid="br-shot-none">No screenshot could be captured.</p>
+      <p class="hint br-shot-none" data-testid="br-shot-none">{{ $t('bugReport.noScreenshotCouldBe') }}</p>
       <p v-for="note in props.result.notes" :key="note" class="hint br-shot-extra">{{ note }}</p>
     </template>
   </div>

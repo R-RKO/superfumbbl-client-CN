@@ -11,6 +11,7 @@ import {
 } from './settings';
 import { skillConfigEntryFor } from './skillConfigRows';
 import { hatredIconApplies, positionOf } from './hatredIconGate';
+import { t } from '../i18n';
 
 /**
  * Per-skill display config (owner 2026-07-03 r6f). Turns the sparse
@@ -78,12 +79,12 @@ function displayedSkills(player: PlayerJson): string[] {
 /** Owner 10-02 (S94): the INJURY rows of the per-skill table - a niggling injury and every stat bust. Their keys are
  *  the status tokens the icon rail and the marking generator already use, so one setting drives both views. */
 export const INJURY_CONFIG_KEYS: readonly { key: string; label: string }[] = [
-  { key: 'NI', label: 'Niggling Injury' },
-  { key: '-MA', label: 'Movement reduction (-MA)' },
-  { key: '-ST', label: 'Strength reduction (-ST)' },
-  { key: '-AG', label: 'Agility reduction (-AG)' },
-  { key: '-PA', label: 'Passing reduction (-PA)' },
-  { key: '-AV', label: 'Armour reduction (-AV)' },
+  { key: 'NI', get label() { return t('cards.skills.injuryConfigKeys.nigglingInjury'); } },
+  { key: '-MA', get label() { return t('cards.skills.injuryConfigKeys.movementReductionMa'); } },
+  { key: '-ST', get label() { return t('cards.skills.injuryConfigKeys.strengthReductionSt'); } },
+  { key: '-AG', get label() { return t('cards.skills.injuryConfigKeys.agilityReductionAg'); } },
+  { key: '-PA', get label() { return t('cards.skills.injuryConfigKeys.passingReductionPa'); } },
+  { key: '-AV', get label() { return t('cards.skills.injuryConfigKeys.armourReductionAv'); } },
 ];
 const INJURY_KEYS = new Set(INJURY_CONFIG_KEYS.map((entry) => entry.key));
 export function isInjuryConfigKey(key: string): boolean { return INJURY_KEYS.has(key); }

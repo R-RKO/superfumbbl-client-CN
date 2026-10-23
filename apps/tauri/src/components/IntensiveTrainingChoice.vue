@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { $t, terms } from '../i18n';
 defineProps<{
   playerName: string;
   portrait: string | null;
@@ -12,18 +13,18 @@ defineEmits<{ choose: [skill: string] }>();
 <template>
   <div class="intensive-training-choice" data-testid="intensive-training-choice">
     <div class="intensive-player">
-      <img v-if="portrait" class="intensive-portrait" :src="portrait" :alt="`${playerName} sprite`" />
+      <img v-if="portrait" class="intensive-portrait" :src="portrait" :alt="$t('dialogs.intensiveTrainingChoice.playernameSprite', { playerName })" />
       <span v-else class="intensive-portrait intensive-portrait-fallback" aria-hidden="true">🏋️</span>
       <span class="intensive-player-copy">
         <strong>{{ playerName }}</strong>
-        <span>Choose a Primary skill</span>
+        <span>{{ $t('dialogs.intensiveTrainingChoice.chooseAPrimarySkill') }}</span>
       </span>
     </div>
-    <div v-if="interactive" class="intensive-skill-list" aria-label="Primary skill selection">
+    <div v-if="interactive" class="intensive-skill-list" :aria-label="$t('dialogs.intensiveTrainingChoice.intensiveSkillList.primarySkillSelection')">
       <button v-for="skill in skills" :key="skill" type="button" @click="$emit('choose', skill)">
-        {{ skill }}
+        {{ terms(skill) }}
       </button>
-      <span v-if="skills.length === 0" class="intensive-empty">No Primary skills offered</span>
+      <span v-if="skills.length === 0" class="intensive-empty">{{ $t('dialogs.intensiveTrainingChoice.intensiveSkillList.noPrimarySkillsOffered') }}</span>
     </div>
   </div>
 </template>

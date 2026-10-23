@@ -9,6 +9,10 @@ import { botGet } from '../../game/forkChallenge';
 import { deriveForkGameRows, routeForkSpectate, type ForkGameRow } from '../../game/forkGames';
 import { competitionLabel, groupByCompetition, missingCompetitionIds, type CompetitionNames } from '../../game/spectateCompetition';
 import { teamLogoUrl } from '../../game/teamLogos';
+import { $t, useLiveSet } from '../../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../../i18n';
 
 interface BrowserMatch {
   id: number;
@@ -36,14 +40,14 @@ async function resolveCompetitionNames(matches: readonly BrowserMatch[]): Promis
       try {
         const res = await fetch(`${FUMBBL_SITE}/api/group/get/${encodeURIComponent(id)}`);
         const body = (await res.json()) as { name?: unknown };
-        competitionNameCache.groups[id] = typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : `Group ${id}`;
+        competitionNameCache.groups[id] = typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : t('spectateBrowser.text.groupId', { id });
       } catch { /* keep the id fallback; retried on a later refresh */ }
     }
     for (const id of missing.tournaments) {
       try {
         const res = await fetch(`${FUMBBL_SITE}/api/tournament/get/${encodeURIComponent(id)}`);
         const body = (await res.json()) as { name?: unknown };
-        competitionNameCache.tournaments[id] = typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : `Tournament ${id}`;
+        competitionNameCache.tournaments[id] = typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : t('spectateBrowser.text.tournamentId', { id });
       } catch { /* keep the id fallback */ }
     }
     competitionNames.value = { groups: { ...competitionNameCache.groups }, tournaments: { ...competitionNameCache.tournaments } };
@@ -58,7 +62,20 @@ const emit = defineEmits<{
 defineProps<{ tourExample?: boolean }>();
 
 const browserMatches = ref<BrowserMatch[]>([]);
-const browserStatus = ref('');
+/** i18n (Astra r1 #3): the list status is a DISCRIMINATOR; its text is derived at render, so a poll can compare it
+ *  in any locale and a language switch re-renders it. */
+type BrowserListStatus = { kind: 'none' } | { kind: 'loading' } | { kind: 'empty' } | { kind: 'local' } | { kind: 'error'; detail: string };
+const browserListStatus = ref<BrowserListStatus>({ kind: 'none' });
+const browserStatus = computed(() => {
+  const s = browserListStatus.value;
+  switch (s.kind) {
+    case 'loading': return t('spectateBrowser.text.loadingLiveGames');
+    case 'empty': return t('spectateBrowser.text.noLiveGamesRight');
+    case 'local': return t('hud.text.theLocalSuperFumbbl');
+    case 'error': return t('spectateBrowser.text.failedToLoadP0', { p0: s.detail });
+    default: return '';
+  }
+});
 const browserFilter = ref('');
 const browserPolling = ref(false);
 const forkGames = ref<ForkGameRow[]>([]);
@@ -99,7 +116,7 @@ function team(match: BrowserMatch, index: number): BrowserMatch['teams'][number]
 }
 
 function phase(match: { half: number; turn: number }): string {
-  return match.half === 0 ? 'Pre-kick' : `H${match.half} T${match.turn}`;
+  return match.half === 0 ? 'Pre-kick' : t('spectateBrowser.text.hHalfTTurn', { half: match.half, turn: match.turn });
 }
 
 // Owner 10-01: rows mirror the Play blade's game rows - crest / name / coach / race / TV | phase over score | away.
@@ -117,7 +134,7 @@ function formatTeamValue(raw: string | number | undefined): string | undefined {
   const value = Number(raw);
   if (!value || !Number.isFinite(value)) return undefined;
   const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
-  return `TV ${thousands.toLocaleString()}k`;
+  return t('spectateBrowser.text.tvP0K', { p0: thousands.toLocaleString() });
 }
 
 function onFilterEnter(): void {
@@ -141,15 +158,15 @@ function spectateFork(gameId: number): void {
 function forkErrorStatus(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return detail.toLocaleLowerCase() === 'fork server unreachable'
-    ? 'The Super FUMBBL game server is unreachable.'
+    ? t('spectateBrowser.text.theSuperFumbblGame')
     : detail;
 }
 
 async function refreshFork(): Promise<void> {
-  forkStatus.value = 'Loading live games…';
+  liveSetHere(forkStatus, 'value', () => t('spectateBrowser.text.loadingLiveGames'));
   try {
     forkGames.value = deriveForkGameRows(await botGet('games', {}));
-    forkStatus.value = forkGames.value.length ? '' : 'No live games right now.';
+    liveSetHere(forkStatus, 'value', () => forkGames.value.length ? '' : t('spectateBrowser.text.noLiveGamesRight'));
   } catch (error) {
     forkGames.value = [];
     forkStatus.value = forkErrorStatus(error);
@@ -159,7 +176,7 @@ async function refreshFork(): Promise<void> {
 async function pollFork(): Promise<void> {
   try {
     forkGames.value = deriveForkGameRows(await botGet('games', {}));
-    forkStatus.value = forkGames.value.length ? '' : 'No live games right now.';
+    liveSetHere(forkStatus, 'value', () => forkGames.value.length ? '' : t('spectateBrowser.text.noLiveGamesRight'));
   } catch {
     /* Transient failure: preserve the current rows and retry on the next poll. */
   }
@@ -182,14 +199,14 @@ function refreshForkList(): void {
 }
 
 async function refreshBrowser(): Promise<void> {
-  browserStatus.value = 'Loading live games…';
+  browserListStatus.value = { kind: 'loading' };
   try {
     const res = await fetch(`${FUMBBL_SITE}/api/match/current`);
     browserMatches.value = (await res.json()) as BrowserMatch[];
-    browserStatus.value = browserMatches.value.length ? '' : 'No live games right now.';
+    browserListStatus.value = browserMatches.value.length ? { kind: 'none' } : { kind: 'empty' };
     void resolveCompetitionNames(browserMatches.value);
   } catch (error) {
-    browserStatus.value = `Failed to load: ${error instanceof Error ? error.message : error}`;
+    browserListStatus.value = { kind: 'error', detail: String(error instanceof Error ? error.message : error) };
   }
 }
 
@@ -212,8 +229,8 @@ async function pollBrowser(): Promise<void> {
     const incoming = (await res.json()) as BrowserMatch[];
     mergeMatches(incoming);
     void resolveCompetitionNames(browserMatches.value);
-    if (browserStatus.value === '' || browserStatus.value === 'No live games right now.')
-      browserStatus.value = browserMatches.value.length ? '' : 'No live games right now.';
+    if (browserListStatus.value.kind === 'none' || browserListStatus.value.kind === 'empty')
+      browserListStatus.value = browserMatches.value.length ? { kind: 'none' } : { kind: 'empty' };
   } catch {
     /* Transient failure: preserve the current rows and retry on the next poll. */
   }
@@ -271,20 +288,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="spectate-browser" :class="{ 'theme-fumbbl': spectateSection === 'fumbbl' }" aria-label="Spectate browser">
+  <main class="spectate-browser" :class="{ 'theme-fumbbl': spectateSection === 'fumbbl' }" :aria-label="$t('spectateBrowser.spectateBrowser')">
     <header class="browser-toolbar">
       <!-- Owner ruling (08-18): FUMBBL / Super FUMBBL selector, restyled to reuse the header's own
            branded plate buttons (.server-plate / .server-plate-fumbbl / .server-plate-super — App.vue
            global <style>, not scoped, so the classes apply unchanged here). Drives spectateSection
            only — see the script comment above. -->
-      <div class="server-toggle" role="group" aria-label="Spectate server">
+      <div class="server-toggle" role="group" :aria-label="$t('spectateBrowser.spectateServer')">
         <button type="button" class="server-plate server-plate-fumbbl" :data-active="spectateSection === 'fumbbl'"
-          :aria-pressed="spectateSection === 'fumbbl'" title="FUMBBL" @click="selectSpectateServer('fumbbl')">
-          <img :src="fumbblLogoUrl" alt="FUMBBL" />
+          :aria-pressed="spectateSection === 'fumbbl'" :title="$t('spectateBrowser.fumbbl')" @click="selectSpectateServer('fumbbl')">
+          <img :src="fumbblLogoUrl" :alt="$t('spectateBrowser.fumbbl')" />
         </button>
         <button v-if="FORK_EDITION" type="button" class="server-plate server-plate-super" :data-active="spectateSection === 'fork'"
-          :aria-pressed="spectateSection === 'fork'" title="Super FUMBBL" @click="selectSpectateServer('fork')">
-          <img :src="superFumbblLogoUrl" alt="Super FUMBBL" />
+          :aria-pressed="spectateSection === 'fork'" :title="$t('spectateBrowser.superFumbbl')" @click="selectSpectateServer('fork')">
+          <img :src="superFumbblLogoUrl" :alt="$t('spectateBrowser.superFumbbl')" />
         </button>
       </div>
       <input
@@ -292,20 +309,20 @@ onBeforeUnmount(() => {
         v-model="browserFilter"
         class="browser-filter"
         type="search"
-        aria-label="Filter live games by team, coach, race or competition, or enter a game id"
-        placeholder="Filter by team, coach, race or competition — or a game id + Enter"
+        :aria-label="$t('spectateBrowser.filterLiveGamesBy')"
+        :placeholder="$t('spectateBrowser.filterByTeamCoach')"
         @keyup.enter="onFilterEnter"
       />
       <span class="toolbar-spacer" />
       <span class="live-indicator"
-        :class="{ polling: spectateSection === 'fork' ? forkPolling : browserPolling }">● Live</span>
+        :class="{ polling: spectateSection === 'fork' ? forkPolling : browserPolling }">{{ $t('spectateBrowser.live') }}</span>
       <button class="refresh-button" type="button"
-        aria-label="Refresh live games" title="Refresh live games" @click="refreshSelected">↻</button>
+        :aria-label="$t('spectateBrowser.refreshLiveGames')" :title="$t('spectateBrowser.refreshLiveGames')" @click="refreshSelected">↻</button>
     </header>
 
     <template v-if="spectateSection === 'fork'">
-      <h2 class="group-heading super-heading">▶ Super FUMBBL</h2>
-      <section class="game-list super-list" aria-label="Super FUMBBL live games" aria-live="polite">
+      <h2 class="group-heading super-heading">{{ $t('spectateBrowser.superFumbbl2') }}</h2>
+      <section class="game-list super-list" :aria-label="$t('spectateBrowser.gameList.superFumbblLiveGames')" aria-live="polite">
         <div v-if="forkStatus" class="list-status">{{ forkStatus }}</div>
         <div v-else class="rows">
           <!-- Owner 10-01: the fork's /games feed carries no race, TV or score - crests fall back to initials,
@@ -330,7 +347,7 @@ onBeforeUnmount(() => {
                   <small class="row-meta row-coach">{{ match.awayCoach || '—' }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" @click="spectateFork(match.gameId)"><DisplayCaps text="Spectate" /></button>
+              <button class="bevel spectate-button" type="button" @click="spectateFork(match.gameId)"><DisplayCaps :text="$t('spectateBrowser.gameList.spectate')" /></button>
             </div>
           </article>
         </div>
@@ -339,9 +356,9 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <!-- Owner 09-15: the "▶ FUMBBL" heading under the FUMBBL plate is gone — the plate already names the source. -->
-      <section class="game-list testbed-list" aria-label="FUMBBL live games" aria-live="polite">
+      <section class="game-list testbed-list" :aria-label="$t('spectateBrowser.gameList.fumbblLiveGames')" aria-live="polite">
         <div v-if="browserStatus" class="list-status">{{ browserStatus }}</div>
-        <div v-else-if="filteredMatches.length === 0" class="list-status">No live games match the filter.</div>
+        <div v-else-if="filteredMatches.length === 0" class="list-status">{{ $t('spectateBrowser.gameList.noLiveGamesMatch') }}</div>
         <div v-else class="rows">
           <template v-for="(group, groupIndex) in groupedMatches" :key="group.key">
           <h3 class="competition-heading" :data-tour="groupIndex === 0 ? 'spectate-league' : undefined" :title="group.label">{{ group.label }} <span class="competition-count">{{ group.matches.length }}</span></h3>
@@ -371,21 +388,21 @@ onBeforeUnmount(() => {
                   <small v-if="formatTeamValue(team(match, 1)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 1)?.tv) }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)"><DisplayCaps text="Spectate" /></button>
+              <button class="bevel spectate-button" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)"><DisplayCaps :text="$t('spectateBrowser.gameList.spectate')" /></button>
             </div>
           </article>
           </template>
         </div>
         <!-- Owner 10-06 (client walkthrough): no live games to point at - a static EXAMPLE row, same classes. -->
         <div v-if="tourExample && (browserStatus || filteredMatches.length === 0)" class="rows tour-example" data-testid="spectate-tour-example">
-          <h3 class="competition-heading" data-tour="spectate-league">Example League <span class="competition-count">Example</span></h3>
-          <div class="game-row" role="article" aria-label="Example live game">
+          <h3 class="competition-heading" data-tour="spectate-league">{{ $t('spectateBrowser.gameList.exampleLeague') }} <span class="competition-count">{{ $t('spectateBrowser.gameList.example') }}</span></h3>
+          <div class="game-row" role="article" :aria-label="$t('spectateBrowser.gameList.exampleLiveGame')">
             <div class="row-team home">
               <span class="row-logo logo-fallback" aria-hidden="true">{{ initials('Riverside Reavers') }}</span>
               <span class="row-text">
-                <strong class="row-name">Riverside Reavers</strong>
-                <small class="row-meta row-coach" data-tour="spectate-coach">ExampleCoach</small>
-                <small class="row-meta row-race">Human</small>
+                <strong class="row-name">{{ $t('spectateBrowser.gameList.riversideReavers') }}</strong>
+                <small class="row-meta row-coach" data-tour="spectate-coach">{{ $t('spectateBrowser.gameList.examplecoach') }}</small>
+                <small class="row-meta row-race">{{ $t('spectateBrowser.gameList.human') }}</small>
               </span>
             </div>
             <div class="row-centre">
@@ -396,12 +413,12 @@ onBeforeUnmount(() => {
               <div class="row-team away">
                 <span class="row-logo logo-fallback" aria-hidden="true">{{ initials('Ironjaw Krumpaz') }}</span>
                 <span class="row-text">
-                  <strong class="row-name">Ironjaw Krumpaz</strong>
-                  <small class="row-meta row-coach">AnotherCoach</small>
-                  <small class="row-meta row-race">Orc</small>
+                  <strong class="row-name">{{ $t('spectateBrowser.gameList.ironjawKrumpaz') }}</strong>
+                  <small class="row-meta row-coach">{{ $t('spectateBrowser.gameList.anothercoach') }}</small>
+                  <small class="row-meta row-race">{{ $t('spectateBrowser.gameList.orc') }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" data-tour="spectate-button" disabled title="Example"><DisplayCaps text="Spectate" /></button>
+              <button class="bevel spectate-button" type="button" data-tour="spectate-button" disabled :title="$t('spectateBrowser.gameList.example')"><DisplayCaps :text="$t('spectateBrowser.gameList.spectate')" /></button>
             </div>
           </div>
         </div>

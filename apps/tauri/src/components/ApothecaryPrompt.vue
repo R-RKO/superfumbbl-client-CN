@@ -6,6 +6,8 @@ import type { PlayerDetailSkill } from '../game/skillDisplay';
 import type { PlayerSpp } from '../game/logic/playerSpp';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
+import { $t, terms } from '../i18n';
+import { t } from '../i18n';
 
 export interface ApothecaryPromptInjury {
   index: number;
@@ -46,11 +48,11 @@ const props = defineProps<{
   lingering?: boolean;
 }>();
 
-const title = computed(() => props.prompt.kind === 'single' ? 'Use Apothecary?' : 'Choose an Injury to Treat');
+const title = computed(() => props.prompt.kind === 'single' ? t('dialogs.apothecaryPrompt.title.useApothecary') : t('dialogs.apothecaryPrompt.title.chooseAnInjuryTo'));
 const seatClass = computed(() => props.prompt.mine ? 'seat-local' : 'seat-opposition');
 const subjectName = computed(() => props.prompt.kind === 'single'
   ? props.prompt.player
-  : props.prompt.injuries[0]?.player ?? 'Injured player');
+  : props.prompt.injuries[0]?.player ?? t('dialogs.apothecaryPrompt.subjectName.injuredPlayer'));
 const panelStyle = computed<CSSProperties>(() => ({
   position: 'absolute', zIndex: 48, top: '42%', width: 'min(440px, calc(100% - 32px))',
   borderLeft: `4px solid ${props.prompt.mine ? '#496fdd' : '#cf4545'}`,
@@ -65,28 +67,28 @@ defineEmits<{
 
 <template>
   <PitchConfirmationPanel class="apothecary-prompt" :class="[seatClass, { readonly: !prompt.mine, lingering }]"
-    :title="title" label="Apothecary decision" :position-style="panelStyle" :draggable="!lingering" :inert="lingering || undefined"
+    :title="title" :label="$t('dialogs.apothecaryPrompt.apothecaryDecision')" :position-style="panelStyle" :draggable="!lingering" :inert="lingering || undefined"
     test-id="apothecary-prompt" @drag-start="$emit('dragStart', $event)">
     <span class="apo-icon-frame" aria-hidden="true"><img :src="iconUrl" alt="" /></span>
     <div class="apo-layout">
       <aside class="apo-player-card">
-        <img v-if="portrait" class="apo-portrait" :src="portrait" :alt="`${subjectName} portrait`" />
+        <img v-if="portrait" class="apo-portrait" :src="portrait" :alt="$t('dialogs.apothecaryPrompt.subjectnamePortrait', { subjectName })" />
         <span v-else class="apo-portrait apo-portrait-fallback" aria-hidden="true">👤</span>
         <strong class="apo-player-name">{{ subjectName }}</strong>
-        <span v-if="prompt.injuries[0]?.spp" class="apo-spp" data-testid="apothecary-spp">SPP {{ prompt.injuries[0].spp.total }}<span v-if="prompt.injuries[0].spp.earned > 0" class="apo-spp-gain"> +{{ prompt.injuries[0].spp.earned }}</span></span>
+        <span v-if="prompt.injuries[0]?.spp" class="apo-spp" data-testid="apothecary-spp">{{ $t('dialogs.apothecaryPrompt.sppP0', { p0: prompt.injuries[0].spp.total }) }}<span v-if="prompt.injuries[0].spp.earned > 0" class="apo-spp-gain"> +{{ prompt.injuries[0].spp.earned }}</span></span>
         <PlayerDetailSkillList v-if="skills?.length" list-class="apo-skills" :skills="skills"
           :mode="skillMode ?? 'markings'" :icon-style="skillIconStyle ?? 'bb3'"
           :position-id="positionId" :side="playerSide ?? prompt.side" mark-added />
       </aside>
       <div class="apo-treatment">
-        <span v-if="prompt.mine" class="apo-kicker">Choose treatment</span>
+        <span v-if="prompt.mine" class="apo-kicker">{{ $t('dialogs.apothecaryPrompt.chooseTreatment') }}</span>
         <div class="apo-injuries">
           <article v-for="injury in prompt.injuries" :key="injury.playerId" class="apo-injury" :class="{ ko: injury.base === 5 }">
             <div class="apo-injury-copy">
-              <span v-if="prompt.kind === 'multiple'" class="apo-player">{{ injury.player }}<span v-if="injury.spp" class="apo-row-spp" data-testid="apothecary-row-spp"> · SPP {{ injury.spp.total }}<span v-if="injury.spp.earned > 0" class="apo-spp-gain"> +{{ injury.spp.earned }}</span></span></span>
-              <span class="apo-status">{{ injury.injury }}</span>
+              <span v-if="prompt.kind === 'multiple'" class="apo-player">{{ injury.player }}<span v-if="injury.spp" class="apo-row-spp" data-testid="apothecary-row-spp"> {{ $t('dialogs.apothecaryPrompt.sppTotal', { total: injury.spp.total }) }}<span v-if="injury.spp.earned > 0" class="apo-spp-gain"> +{{ injury.spp.earned }}</span></span></span>
+              <span class="apo-status">{{ terms(injury.injury) }}</span>
               <!-- Owner 09-05: the wait line lives INSIDE the result box, names the coach and the player, and wraps. -->
-              <span v-if="!prompt.mine" class="apo-wait" aria-live="polite">Waiting for {{ prompt.coach || 'the coach' }}’s decision on {{ injury.player }}…</span>
+              <span v-if="!prompt.mine" class="apo-wait" aria-live="polite">{{ prompt.coach ? $t('dialogs.apothecaryPrompt.waitingForCoach', { coach: prompt.coach, player: injury.player }) : $t('dialogs.apothecaryPrompt.waitingForTheCoach', { player: injury.player }) }}</span>
             </div>
             <div v-if="prompt.mine" class="apo-option-row">
               <button v-for="option in injury.options" :key="option.type ?? 'legacy-use'" type="button"

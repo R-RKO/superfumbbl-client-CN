@@ -8,6 +8,7 @@ import { gameServiceFromTarget, wireLogBasename, type BugReportDevLogEntry, type
 import { ref } from 'vue';
 import { WIRE_LOG_INSTANCE_TAG } from './wireLogName';
 import type { PitchFrame } from './bugReportScreenshot';
+import { t } from '../i18n';
 
 export interface BugReportPitch {
   /** The mounted renderer's frame capture (PitchRenderer.captureFrame). */
@@ -130,8 +131,8 @@ export function createShellReportHost(deps: ShellReportDeps): BugReportHost {
     gameId: () => null,
     gameService: () => gameServiceFromTarget(deps.settings.activeServerTarget),
     wireLogPath: () => lastWireLogFile(),
-    wireLogLine: (fileName) => `Wire log: ${fileName} (your most recent game)`,
-    noWireLogLine: 'No game log',
+    wireLogLine: (fileName) => t('bugReport.text.wireLogFilenameYour', { fileName }),
+    noWireLogLine: t('bugReport.text.noGameLog'),
     onWireLogUnreadable: forgetWireLogFile,
     logEntries: () => deps.state.log,
     devLogEntries: () => deps.state.devLog,

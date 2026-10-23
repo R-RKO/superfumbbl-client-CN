@@ -7,6 +7,7 @@
  * attributes on the real elements. Public-edition code: no import from the FUMBBL.COM pane modules.
  */
 import type { SettingsTab } from './settingsDialog';
+import { $t } from '../i18n';
 
 export const CLIENT_TOUR_VERSION = 1;
 
@@ -105,10 +106,10 @@ export const BLADE_LABEL: Record<BladeId, string> = { home: 'FUMBBL.COM', play: 
 
 /** Step 2's per-blade mini-cards (owner copy, verbatim). */
 export const BLADE_INFO: Record<BladeId, string> = {
-  home: "FUMBBL.com is the website where you'll manage teams and interface with the community.",
-  play: "Play Blade is where you'll see any active games you've got going on and be able to see details and find replays of games.",
-  spectate: 'Spectate is where you can see any active games occurring in the community and join them live.',
-  replay: 'Replays is where you can search for replays by coach or by league name and find games in that specific group.',
+  get home() { return $t('tour.bladeInfo.fumbblComIsThe'); },
+  get play() { return $t('tour.bladeInfo.playBladeIsWhere'); },
+  get spectate() { return $t('tour.bladeInfo.spectateIsWhereYou'); },
+  get replay() { return $t('tour.bladeInfo.replaysIsWhereYou'); },
 };
 
 /** The six Settings tab one-liners (written from what each tab holds on 10-06; owner review pending). */
@@ -118,30 +119,29 @@ export function isHudStep(id: ClientStepId | 'done'): boolean {
 }
 
 /** A chip label may carry a longer legend text after " — " (the chip decision reads the short name only). */
-export const RES_OUT_LABEL = 'Reserves · Out — how many players are in the dugout and how many are out of the game';
 
 const ROW = '.roster-popout .pg-roster-list > li:first-child';
 const CARD = '.player-card';
 /** The quick-bar sub-steps: anchor + owner copy (left to right). */
 const BAR: Record<string, { anchor: string; label: string; body: string }> = {
-  'hud-bar-telestrator': { anchor: 'hud-telestrator', label: 'Telestrator', body: "Telestrator — draw on the pitch to plan or explain a play. The tools appear when it's on." },
-  'hud-bar-menu': { anchor: 'hud-menu', label: 'Game menu', body: 'Opens the Esc menu.' },
-  'hud-bar-tackle': { anchor: 'hud-tackle', label: 'Tackle zones', body: 'Toggles tackle-zone shading: off, opposition, friendly or both.' },
-  'hud-bar-sprites': { anchor: 'hud-sprites', label: 'Sprites', body: 'Cycles the player artwork between the sprite sets. Pick the look you read best.' },
-  'hud-bar-skills': { anchor: 'hud-skills', label: 'Skill display', body: 'Switches between skill icons and FUMBBL-style markings.' },
-  'hud-bar-director': { anchor: 'hud-director', label: 'Auto-director', body: 'Follows the action on the pitch; it starts off, so the camera stays where you put it.' },
-  'hud-bar-roster': { anchor: 'hud-roster-btn', label: 'Roster', body: 'Opens the roster pane.' },
-  'hud-bar-report': { anchor: 'hud-report', label: 'Report', body: 'Sends me a bug report with the wire log when something goes wrong.' },
+  'hud-bar-telestrator': { anchor: 'hud-telestrator', get label() { return $t('tour.bar.telestrator'); }, get body() { return $t('tour.bar.telestratorDrawOnThe'); } },
+  'hud-bar-menu': { anchor: 'hud-menu', get label() { return $t('tour.bar.gameMenu'); }, get body() { return $t('tour.bar.opensTheEscMenu'); } },
+  'hud-bar-tackle': { anchor: 'hud-tackle', get label() { return $t('tour.bar.tackleZones'); }, get body() { return $t('tour.bar.togglesTackleZoneShading'); } },
+  'hud-bar-sprites': { anchor: 'hud-sprites', get label() { return $t('tour.bar.sprites'); }, get body() { return $t('tour.bar.cyclesThePlayerArtwork'); } },
+  'hud-bar-skills': { anchor: 'hud-skills', get label() { return $t('tour.bar.skillDisplay'); }, get body() { return $t('tour.bar.switchesBetweenSkillIcons'); } },
+  'hud-bar-director': { anchor: 'hud-director', get label() { return $t('tour.bar.autoDirector'); }, get body() { return $t('tour.bar.followsTheActionOn'); } },
+  'hud-bar-roster': { anchor: 'hud-roster-btn', get label() { return $t('tour.bar.roster'); }, get body() { return $t('tour.bar.opensTheRosterPane'); } },
+  'hud-bar-report': { anchor: 'hud-report', get label() { return $t('tour.bar.report'); }, get body() { return $t('tour.bar.sendsMeABug'); } },
 };
 
 export const SETTINGS_LINES: Record<SettingsTab, string> = {
-  general: 'General holds your connection, mouse controls, confirmations, the movement planner and diagnostics.',
-  controls: 'Controls picks keyboard or controller and edits every key and button binding.',
-  accessibility: 'Accessibility sets text size and contrast, pitch grid lines and the click echo.',
-  display: 'Display covers video, the pitch, player sprites, movement animation, the log and skill markings.',
-  mods: 'Art holds the dice and your mod packs: import and manage sprites, sounds and icons from friends or online.', // shown as the Art tab (id stays mods)
-  ui: 'UI arranges the HUD layout, theme, element opacity, chat and notifications, the telestrator and sound.',
-  credits: 'Credits shows the client version, the attributions and licences, and the FUMBBL contributors behind it all.',
+  get general() { return $t('tour.settingsLines.generalHoldsYourConnection'); },
+  get controls() { return $t('tour.settingsLines.controlsPicksKeyboardOr'); },
+  get accessibility() { return $t('tour.settingsLines.accessibilitySetsTextSize'); },
+  get display() { return $t('tour.settingsLines.displayCoversVideoThe'); },
+  get mods() { return $t('tour.settingsLines.artHoldsTheDice'); }, // shown as the Art tab (id stays mods)
+  get ui() { return $t('tour.settingsLines.uiArrangesTheHud'); },
+  get credits() { return $t('tour.settingsLines.creditsShowsTheClient'); },
 };
 
 const SETTINGS_ORDER: readonly SettingsTab[] = ['general', 'accessibility', 'display', 'mods', 'ui', 'credits'];
@@ -151,16 +151,16 @@ export function clientStep(id: ClientStepId): ClientStep {
     case 'nav':
       return {
         id,
-        title: 'Navigation bar',
-        body: ['Super FUMBBL has 4 panes that each give you access to different information. Click on each of them to get info.'],
+        get title() { return $t('tour.text.navigationBar'); },
+        body: [$t('tour.text.superFumbblHas4')],
         anchors: TOUR_BLADES.map((b) => `blade-${b}`),
         placement: 'below-blades',
       };
     case 'play-refresh':
       return {
         id,
-        title: 'Play',
-        body: ["If you've got an active game to play, it should show up here. Just hit refresh and you'll get a join button."],
+        get title() { return $t('tour.text.play'); },
+        body: [$t('tour.text.ifYouVeGot')],
         anchors: ['play-refresh'],
         placement: 'near',
         blade: 'play',
@@ -168,8 +168,8 @@ export function clientStep(id: ClientStepId): ClientStep {
     case 'play-recent':
       return {
         id,
-        title: 'Play',
-        body: ['My recent games shows you a whole lot of your recent games and lets you instantly see stats about them.'],
+        get title() { return $t('tour.text.play'); },
+        body: [$t('tour.text.myRecentGamesShows')],
         anchors: ['play-recent'],
         placement: 'near',
         blade: 'play',
@@ -177,8 +177,8 @@ export function clientStep(id: ClientStepId): ClientStep {
     case 'play-details':
       return {
         id,
-        title: 'Play',
-        body: ['Details shows you the stats from the page and lets you pull up the end-game Dice pane as well.'],
+        get title() { return $t('tour.text.play'); },
+        body: [$t('tour.text.detailsShowsYouThe')],
         anchors: ['play-details'],
         placement: 'top',
         blade: 'play',
@@ -186,8 +186,8 @@ export function clientStep(id: ClientStepId): ClientStep {
     case 'play-replay':
       return {
         id,
-        title: 'Play',
-        body: ['Replay lets you immediately access the replay from that game from the start.'],
+        get title() { return $t('tour.text.play'); },
+        body: [$t('tour.text.replayLetsYouImmediately')],
         anchors: ['play-replay'],
         placement: 'near',
         blade: 'play',
@@ -195,36 +195,36 @@ export function clientStep(id: ClientStepId): ClientStep {
     case 'spectate':
       return {
         id,
-        title: 'Spectate',
+        get title() { return $t('tour.text.spectate'); },
         body: [
-          'Spectate lets you see all of the live games!',
-          "You can see the coach, what league it's part of, what turn and half it is, and join by clicking the spectate button.",
+          $t('tour.text.spectateLetsYouSee'),
+          $t('tour.text.youCanSeeThe'),
         ],
         // Owner 10-06: the Spectate tab itself first, then the row's parts (numbered chips + legend).
         anchors: ['blade-spectate', 'spectate-league', 'spectate-coach', 'spectate-phase', 'spectate-button'],
-        labels: ['Spectate tab', 'League', 'Coach', 'Half · Turn', 'Spectate button'],
+        labels: [$t('tour.text.spectateTab'), 'League', 'Coach', $t('tour.text.halfTurn'), $t('tour.text.spectateButton')],
         placement: 'centre',
         blade: 'spectate',
       };
     case 'replay':
       return {
         id,
-        title: 'Replays',
+        get title() { return $t('tour.text.replays'); },
         body: [
-          'Replays let you search for coaches and leagues and get detailed info from them.',
-          'By default, we hide results here so you can watch as you go as if you were there.',
+          $t('tour.text.replaysLetYouSearch'),
+          $t('tour.text.byDefaultWeHide'),
         ],
         // Owner 10-06: the Replay tab itself first, then the search box and Hide scores.
         anchors: ['blade-replay', 'replay-search', 'replay-hide-scores'],
-        labels: ['Replay tab', 'Search', 'Hide scores'],
+        labels: [$t('tour.text.replayTab'), 'Search', $t('tour.text.hideScores')],
         placement: 'centre',
         blade: 'replay',
       };
     case 'hud-coaches':
       return {
         id,
-        title: 'In a match',
-        body: ['The coach panels show each team: coach name, team name, rerolls, apothecary and the inducements they bought.'],
+        get title() { return $t('tour.text.inAMatch'); },
+        body: [$t('tour.text.theCoachPanelsShow')],
         anchors: [
           '.coach-panel.home .coach-lines',
           '.coach-panel.away .coach-lines',
@@ -234,48 +234,48 @@ export function clientStep(id: ClientStepId): ClientStep {
           // Owner 10-06: the coach-corner "N RES / N OUT" tab (CoachCornerCounts.vue; absent when Settings hides it).
           '.coach-corner-counts[data-side="home"]',
         ],
-        labels: ['Coach · Team', 'Coach · Team', 'Rerolls', 'Apothecary', 'Inducements', RES_OUT_LABEL],
+        labels: [$t('tour.text.coachTeam'), $t('tour.text.coachTeam'), $t('tour.labels.rerolls'), $t('tour.labels.apothecary'), $t('tour.labels.inducements'), $t('tour.labels.resOut')],
         optional: ['.coach-panel .inducement[data-chip="apothecary"]', '.coach-panel .inducement[data-chip="inducement"]', '.coach-corner-counts[data-side="home"]'],
         placement: 'centre',
       };
     case 'hud-centre':
       return {
         id,
-        title: 'In a match',
-        body: ['Score, half and weather live here.'],
+        get title() { return $t('tour.text.inAMatch'); },
+        body: [$t('tour.text.scoreHalfAndWeather')],
         anchors: ['.hud-center.scoreboard .sb-score', '.hud-center.scoreboard .sb-half', '.hud-center.scoreboard .sb-weather', '.hud-center.scoreboard .sb-turn.home'],
         labels: [
           'Score',
           'Half',
           'Weather',
-          "This always turns at the START of your turn. So during setup and kickoff, just know you're one turn behind what you're seeing.",
+          $t('tour.text.thisAlwaysTurnsAt'),
         ],
         placement: 'centre',
       };
     case 'hud-log':
       return {
         id,
-        title: 'In a match',
-        body: ['The log records every roll and event; drag the grip to move it, the corner handle to resize it.'],
+        get title() { return $t('tour.text.inAMatch'); },
+        body: [$t('tour.text.theLogRecordsEvery')],
         anchors: ['hud-log-grip', 'hud-log-resize', 'hud-log-tab', 'hud-chat-tab'],
-        labels: ['Grip (drag)', 'Resize', 'Log', 'Chat'],
+        labels: [$t('tour.text.gripDrag'), 'Resize', 'Log', 'Chat'],
         optional: ['hud-chat-tab'],
         placement: 'centre',
       };
     case 'hud-chat-settings':
       return {
         id,
-        title: 'In a match',
-        body: ['Change the chat font and text size here.'],
+        get title() { return $t('tour.text.inAMatch'); },
+        body: [$t('tour.text.changeTheChatFont')],
         anchors: ['hud-log-font', 'hud-log-size'],
-        labels: ['Font', 'Text size'],
+        labels: ['Font', $t('tour.text.textSize')],
         placement: 'centre',
       };
     case 'hud-roster':
       return {
         id,
-        title: 'Roster',
-        body: ['Added skills have gold outlines and come at the end of the list.'],
+        get title() { return $t('tour.text.roster'); },
+        body: [$t('tour.text.addedSkillsHaveGold')],
         anchors: [
           '.roster-popout .pg-roster-team-toggle',
           `${ROW} .pg-roster-lvl`,
@@ -286,15 +286,15 @@ export function clientStep(id: ClientStepId): ClientStep {
           `${ROW} .pg-roster-spp`,
           '.roster-popout [data-added="true"]',
         ],
-        labels: ['Team', 'Level · Injury', 'Name', 'Position', 'Skills', 'Value', 'SPP', 'Added skill'],
+        labels: ['Team', $t('tour.text.levelInjury'), 'Name', 'Position', 'Skills', 'Value', 'SPP', $t('tour.text.addedSkill')],
         optional: ['.roster-popout .pg-roster-skills', '.roster-popout [data-added="true"]'],
         placement: 'top',
       };
     case 'hud-card':
       return {
         id,
-        title: 'Player card',
-        body: ['Click any player for their card: everything about them at a glance.'],
+        get title() { return $t('tour.text.playerCard'); },
+        body: [$t('tour.text.clickAnyPlayerFor')],
         anchors: [
           `${CARD} .card-name`,
           `${CARD} .card-position-main`,
@@ -306,19 +306,19 @@ export function clientStep(id: ClientStepId): ClientStep {
           `${CARD} .card-skills`,
           `${CARD} .card-skills [data-added="true"]`,
         ],
-        labels: ['Number · Name', 'Position', 'SPP', 'SPP gained', 'Keywords', 'MA / ST / AG / PA / AV', 'Portrait', 'Skills', 'Added skills'],
+        labels: [$t('tour.text.numberName'), 'Position', 'SPP', $t('tour.text.sppGained'), 'Keywords', $t('tour.text.maStAgPa'), 'Portrait', 'Skills', $t('tour.text.addedSkills')],
         optional: [`${CARD} .card-spp-gain`, `${CARD} .card-keywords`, `${CARD} .card-skills [data-added="true"]`],
         placement: 'top',
       };
     case 'esc':
-      return { id, title: 'Settings', body: ['Press Esc to open the settings menu.'], anchors: [], placement: 'top', waits: true };
+      return { id, get title() { return $t('tour.text.settings'); }, body: [$t('tour.text.pressEscToOpen')], anchors: [], placement: 'top', waits: true };
     case 'disclaimer':
       return { id, title: '', body: [], anchors: [], placement: 'top' };
     default: {
       const bar = BAR[id];
-      if (bar) return { id, title: 'Quick bar', body: [bar.body], anchors: [bar.anchor], labels: [bar.label], placement: 'centre' };
+      if (bar) return { id, get title() { return $t('tour.text.quickBar'); }, body: [bar.body], anchors: [bar.anchor], labels: [bar.label], placement: 'centre' };
       const tab = id.slice('settings-'.length) as SettingsTab;
-      return { id, title: 'Settings', body: [SETTINGS_LINES[tab]], anchors: [`settings-tab-${tab}`], placement: 'dock-settings', settingsTab: tab };
+      return { id, get title() { return $t('tour.text.settings'); }, body: [SETTINGS_LINES[tab]], anchors: [`settings-tab-${tab}`], placement: 'dock-settings', settingsTab: tab };
     }
   }
 }

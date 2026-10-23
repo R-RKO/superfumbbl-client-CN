@@ -3,6 +3,8 @@ import type { CSSProperties } from 'vue';
 import D6Face from './D6Face.vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import { d6RequirementParts } from '../game/d6Log';
+import { $t } from '../i18n';
+import { t } from '../i18n';
 
 export interface ActionTargetModalView {
   seq: number;
@@ -26,9 +28,9 @@ defineEmits<{
 }>();
 
 const LABELS: Record<ActionTargetModalView['mode'], string> = {
-  foul: 'Perform foul?',
-  handoff: 'Hand off?',
-  pass: 'Throw the pass?',
+  get foul() { return t('dialogs.actionTarget.labels.performFoul'); },
+  get handoff() { return t('dialogs.actionTarget.labels.handOff'); },
+  get pass() { return t('dialogs.actionTarget.labels.throwThePass'); },
 };
 const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
 </script>
@@ -40,7 +42,7 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
     <div class="yesno-text">
       <span v-if="modal.note" class="action-modal-note">{{ modal.note }}</span>
       <span class="action-modal-roll">
-        <img v-if="modal.mode === 'foul'" :src="foulSkullUrl" class="action-roll-die" alt="skull" />
+        <img v-if="modal.mode === 'foul'" :src="foulSkullUrl" class="action-roll-die" :alt="$t('dialogs.actionTargetConfirmModal.actionModal.foul.skull')" />
         <template v-if="modal.mode === 'foul'">{{ foulRollNumber(modal.rollText) }}</template>
         <template v-else v-for="(part, i) in d6RequirementParts(modal.rollText)" :key="i">
           <D6Face v-if="part.face" class="action-target-d6" :value="part.face" :label="part.label" />
@@ -50,8 +52,8 @@ const foulRollNumber = (text: string) => text.replace(/^SKULL\s*/i, '');
       </span>
     </div>
     <template #actions>
-      <button type="button" class="sendoff-btn argue" @click.stop="$emit('confirm')">Confirm</button>
-      <button type="button" class="sendoff-btn pass" data-pad-cancel @click.stop="$emit('cancel')">Cancel</button>
+      <button type="button" class="sendoff-btn argue" @click.stop="$emit('confirm')">{{ $t('dialogs.actionTargetConfirmModal.actionModal.confirm') }}</button>
+      <button type="button" class="sendoff-btn pass" data-pad-cancel @click.stop="$emit('cancel')">{{ $t('dialogs.actionTargetConfirmModal.actionModal.cancel') }}</button>
     </template>
   </PitchConfirmationPanel>
 </template>

@@ -21,6 +21,7 @@ import {
   PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence, pgPlayerDetail, pgTeamBreaks,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
+import { $t, terms } from '../i18n';
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
 
@@ -358,7 +359,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
     <!-- Window 1: RESULT (always shown, on top) -->
     <div class="pg-window pg-window-result">
       <header class="pg-head">
-        <span class="pg-title">End of Game</span>
+        <span class="pg-title">{{ $t('cards.postGamePanel.endOfGame') }}</span>
         <!-- Owner 2026-07-15: no manual close — the end-game panel persists over the cleared board until a
              NEW game starts. Owner 09-23: Return to Menu lives in the exit bar under the tab card (slot). -->
       </header>
@@ -369,13 +370,13 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
           <div class="pg-team-coach">{{ pg.home.coach }}</div>
           <!-- Owner 09-14: winnings + dedicated fans live in a lifted box under the team card; no team name repeated. -->
           <div v-if="stats" class="pg-team-box pg-bevel">
-            <span v-if="stats.winningsHome != null" class="pg-endstat-gold">{{ stats.winningsHome.toLocaleString() }}g winnings</span>
-            <span v-if="stats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="stats.dedFans.concededTeamId !== game.teamHome.teamId" class="pg-endstat-d6" :value="stats.dedFans.rollHome" :label="`Rolled ${stats.dedFans.rollHome}`" /><span v-else>{{ stats.dedFans.rollHome }}</span> → {{ dedFansMod(stats.dedFans.modHome) }}</span>
-            <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
+            <span v-if="stats.winningsHome != null" class="pg-endstat-gold">{{ $t('cards.postGamePanel.pgTeamBox.p0GWinnings', { p0: stats.winningsHome.toLocaleString() }) }}</span>
+            <span v-if="stats.dedFans" class="pg-endstat-fans">{{ $t('cards.postGamePanel.pgTeamBox.dedicatedFansRolled') }} <D6Face v-if="stats.dedFans.concededTeamId !== game.teamHome.teamId" class="pg-endstat-d6" :value="stats.dedFans.rollHome" :label="$t('cards.postGamePanel.pgTeamBox.rolledRollhome', { rollHome: stats.dedFans.rollHome })" /><span v-else>{{ stats.dedFans.rollHome }}</span> → {{ dedFansMod(stats.dedFans.modHome) }}</span>
+            <span v-else class="pg-endstat-fans muted">{{ $t('cards.postGamePanel.pgTeamBox.dedicatedFansUnchanged') }}</span>
           </div>
         </div>
         <!-- Owner 09-15: no verdict line under the score — the winner card's highlight already says it. -->
-        <div class="pg-scoreline pg-bevel" :title="pg.draw ? 'Draw' : `${pg.winner?.team} wins!`">
+        <div class="pg-scoreline pg-bevel" :title="pg.draw ? $t('cards.postGamePanel.draw') : $t('cards.postGamePanel.p0Wins', { p0: pg.winner?.team })">
           <div class="pg-score">{{ pg.home.score }}<span>–</span>{{ pg.away.score }}</div>
         </div>
         <div class="pg-team pg-bevel" :class="{ winner: pg.winner === pg.away }">
@@ -383,16 +384,16 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
           <div class="pg-team-name">{{ pg.away.team }}</div>
           <div class="pg-team-coach">{{ pg.away.coach }}</div>
           <div v-if="stats" class="pg-team-box pg-bevel">
-            <span v-if="stats.winningsAway != null" class="pg-endstat-gold">{{ stats.winningsAway.toLocaleString() }}g winnings</span>
-            <span v-if="stats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="stats.dedFans.concededTeamId !== game.teamAway.teamId" class="pg-endstat-d6" :value="stats.dedFans.rollAway" :label="`Rolled ${stats.dedFans.rollAway}`" /><span v-else>{{ stats.dedFans.rollAway }}</span> → {{ dedFansMod(stats.dedFans.modAway) }}</span>
-            <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
+            <span v-if="stats.winningsAway != null" class="pg-endstat-gold">{{ $t('cards.postGamePanel.pgTeamBox.p0GWinnings', { p0: stats.winningsAway.toLocaleString() }) }}</span>
+            <span v-if="stats.dedFans" class="pg-endstat-fans">{{ $t('cards.postGamePanel.pgTeamBox.dedicatedFansRolled') }} <D6Face v-if="stats.dedFans.concededTeamId !== game.teamAway.teamId" class="pg-endstat-d6" :value="stats.dedFans.rollAway" :label="$t('cards.postGamePanel.pgTeamBox.rolledRollaway', { rollAway: stats.dedFans.rollAway })" /><span v-else>{{ stats.dedFans.rollAway }}</span> → {{ dedFansMod(stats.dedFans.modAway) }}</span>
+            <span v-else class="pg-endstat-fans muted">{{ $t('cards.postGamePanel.pgTeamBox.dedicatedFansUnchanged') }}</span>
           </div>
         </div>
       </section>
       <!-- #140 (owner concede consequence): the DEFECTORS reveal on the PERSISTENT end-screen. Only when someone
            actually defected. Names WHICH players walked (the concede notice named WHO conceded). -->
       <div v-if="snapshot.defectors && snapshot.defectors.length" class="pg-defectors">
-        <b>{{ snapshot.defectors.length }}</b> player{{ snapshot.defectors.length === 1 ? '' : 's' }} defected after the concession:
+        <b>{{ snapshot.defectors.length }}</b> {{ $t('cards.postGamePanel.playerP0DefectedAfter', { n: snapshot.defectors.length }) }}
         <span class="pg-defector-names">{{ snapshot.defectors.join(', ') }}</span>
       </div>
     </div>
@@ -402,10 +403,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
       <!-- Owner 09-15 (3rd): no "Statistics & MVP" title — the tab blades sit centred in the header. -->
       <header class="pg-head pg-head-tabs">
         <nav class="pg-tabs">
-          <button :data-active="postGamePhase === 'mvp'" @click="postGamePhase = 'mvp'">MVP</button>
-          <button :data-active="postGamePhase === 'stats'" @click="postGamePhase = 'stats'">Statistics</button>
-          <button :data-active="postGamePhase === 'roster'" @click="postGamePhase = 'roster'">Roster</button>
-          <button :data-active="diceModalOpen" @click="diceModalOpen = true">Dice</button>
+          <button :data-active="postGamePhase === 'mvp'" @click="postGamePhase = 'mvp'">{{ $t('cards.postGamePanel.mvp') }}</button>
+          <button :data-active="postGamePhase === 'stats'" @click="postGamePhase = 'stats'">{{ $t('cards.postGamePanel.statistics') }}</button>
+          <button :data-active="postGamePhase === 'roster'" @click="postGamePhase = 'roster'">{{ $t('cards.postGamePanel.roster') }}</button>
+          <button :data-active="diceModalOpen" @click="diceModalOpen = true">{{ $t('cards.postGamePanel.dice') }}</button>
         </nav>
       </header>
 
@@ -419,8 +420,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="PG_MVP_NO_ROWS" :innate-toggle="side.which === 'away'">
             <template #status>
               <template v-if="roll[side.which].phase === 'cycling' || side.mvps.length" />
-              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP (conceded)' : 'No MVP awarded' }}</p>
-              <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
+              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? $t('cards.postGamePanel.noMvpConceded') : $t('cards.postGamePanel.noMvpAwarded') }}</p>
+              <p v-else class="pg-mvp-none pg-mvp-awaiting">{{ $t('cards.postGamePanel.awaitingResult') }}</p>
             </template>
             <template v-if="roll[side.which].phase === 'cycling' || pgMvpCardList[side.which].length" #footer>
             <!-- While the roulette spins the awarded card(s) are laid out but not shown (data-pending): the column already
@@ -437,7 +438,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 :aria-hidden="roll[side.which].phase === 'cycling' ? 'true' : undefined">
                 <div class="pg-mvp-portrait card-portrait">
                   <img v-if="card.portrait" :src="card.portrait" alt="" />
-                  <span v-else class="portrait-missing">no portrait</span>
+                  <span v-else class="portrait-missing">{{ $t('cards.postGamePanel.pgMvpCard.noPortrait') }}</span>
                 </div>
                 <div class="pg-mvp-card-info">
                   <!-- Owner 10-10: the roster row's badge, right of the name: the injury (gold box when suffered this game),
@@ -447,11 +448,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                     <RosterBadge class="pg-mvp-card-badge" :injury="card.injury" :injury-new="card.injuryNew" :advancements="card.advancements" />
                   </div>
                   <!-- Owner 10-12: a second award is a second card, so no card carries an "MVP xN" count. -->
-                  <div class="pg-mvp-card-pos">{{ card.position }}</div>
+                  <div class="pg-mvp-card-pos">{{ terms(card.position) }}</div>
                   <!-- Owner 09-14: SPP on its own line under the position (the one-liner wrapped mid-tag). -->
                   <!-- Owner 10-10: the player's value at the line's right end, in the roster's value style. -->
-                  <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span><span
-                    v-if="formatPlayerValue(card.value)" class="pg-mvp-card-value" title="Player value">{{ formatPlayerValue(card.value) }}</span></div>
+                  <div class="pg-mvp-card-spp"><span class="card-spp">{{ $t('cards.postGamePanel.pgMvpCard.sppSpp', { spp: card.spp }) }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span><span
+                    v-if="formatPlayerValue(card.value)" class="pg-mvp-card-value" :title="$t('cards.postGamePanel.pgMvpCard.playerValue')">{{ formatPlayerValue(card.value) }}</span></div>
                   <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
                   <PlayerDetailSkillList v-if="mvpCardSkills(card).length" :skills="mvpCardSkills(card)" :mode="skillMode" :icon-style="iconStyle"
                     :position-id="card.positionId" :side="side.which" mark-added />
@@ -468,7 +469,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
         <!-- Owner 09-14: three lifted columns; the side is read from the header bevel (crest + side edge), not a name. -->
         <div class="pg-stats-cols">
           <div class="pg-stat-col pg-bevel" data-side="home">
-            <div class="pg-stat-col-head"><img v-if="pg.home.logo" :src="pg.home.logo" :alt="pg.home.team" /><span v-else class="pg-stat-col-side">Home</span></div>
+            <div class="pg-stat-col-head"><img v-if="pg.home.logo" :src="pg.home.logo" :alt="pg.home.team" /><span v-else class="pg-stat-col-side">{{ $t('cards.postGamePanel.home') }}</span></div>
             <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-h" :data-lead="row.homeLead">{{ row.home }}</div>
           </div>
           <div class="pg-stat-col pg-bevel" data-side="label">
@@ -476,7 +477,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-stat-label">{{ row.label }}</div>
           </div>
           <div class="pg-stat-col pg-bevel" data-side="away">
-            <div class="pg-stat-col-head"><img v-if="pg.away.logo" :src="pg.away.logo" :alt="pg.away.team" /><span v-else class="pg-stat-col-side">Away</span></div>
+            <div class="pg-stat-col-head"><img v-if="pg.away.logo" :src="pg.away.logo" :alt="pg.away.team" /><span v-else class="pg-stat-col-side">{{ $t('cards.postGamePanel.away') }}</span></div>
             <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-a" :data-lead="row.awayLead">{{ row.away }}</div>
           </div>
         </div>
@@ -489,23 +490,23 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
     <!-- Owner 08-19: spectate-seat MVP-PENDING placeholder — sits exactly where the Statistics & MVP window will land. -->
     <div v-else class="pg-window pg-mvp-pending" role="status" aria-live="polite">
       <span class="pg-mvp-pending-dot" aria-hidden="true"></span>
-      <span>Players are selecting MVP</span>
+      <span>{{ $t('cards.postGamePanel.playersAreSelectingMvp') }}</span>
     </div>
 
     <slot name="exit" />
 
     <!-- Owner 09-17: DICE pane — distributions left, likelihood graphs top right, fun facts bottom right. -->
     <Teleport to="body">
-      <div v-if="diceModalOpen && showStats" class="pg-dice-modal" role="dialog" aria-modal="true" aria-label="Dice statistics" @click.self="diceModalOpen = false">
+      <div v-if="diceModalOpen && showStats" class="pg-dice-modal" role="dialog" aria-modal="true" :aria-label="$t('cards.postGamePanel.pgDiceModal.diceStatistics')" @click.self="diceModalOpen = false">
         <div class="pg-dice-card pg-bevel">
           <header class="pg-dice-head">
             <span class="pg-dice-heading">
-              <span class="pg-title pg-title-sub">Dice</span>
+              <span class="pg-title pg-title-sub">{{ $t('cards.postGamePanel.pgDiceModal.dice') }}</span>
               <!-- Owner 10-10: a spectated game says what its dice cover - the whole game (replay data imported), or what is missing. -->
               <span v-if="pgDiceNote" class="pg-dice-coverage" :data-coverage="pgDiceNote.kind" role="note">{{ pgDiceNote.text }}</span>
             </span>
             <!-- Owner 09-17 (r3): a coach selector in the header picks whose distributions fill the left column. -->
-            <div class="pg-dice-switch" role="tablist" aria-label="Dice distribution coach">
+            <div class="pg-dice-switch" role="tablist" :aria-label="$t('cards.postGamePanel.pgDiceModal.diceDistributionCoach')">
               <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'">
                 <img v-if="side.logo" :src="side.logo" alt="" /><span>{{ side.team }}</span>
               </button>
@@ -519,22 +520,22 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                   <p v-for="line in DICE_EXPECTED_HELP" :key="line.key" :data-help="line.key">{{ line.text }}</p>
                 </div>
               </span>
-              <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
+              <button type="button" class="pg-dice-close" :aria-label="$t('cards.postGamePanel.pgDiceModal.closeDiceStatistics')" @click="diceModalOpen = false">✕</button>
             </span>
           </header>
           <!-- Owner 10-16: the Luck chart subpane (game/luckChart.ts). -->
-          <div v-if="luckChartOpen" ref="luckPaneEl" class="pg-luck-pane" role="dialog" aria-modal="true" aria-label="Luck by turn" @keydown="onLuckPaneKeydown">
+          <div v-if="luckChartOpen" ref="luckPaneEl" class="pg-luck-pane" role="dialog" aria-modal="true" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @keydown="onLuckPaneKeydown">
             <header class="pg-luck-head">
-              <b class="pg-luck-title">Luck by turn</b>
+              <b class="pg-luck-title">{{ $t('cards.postGamePanel.pgDiceModal.luckByTurn') }}</b>
               <span class="pg-luck-legend">
                 <span v-for="line in luckChartData.series" :key="line.side + line.kind" class="pg-luck-key" :data-side="line.side" :data-kind="line.kind">
                   <svg viewBox="0 0 24 8" aria-hidden="true"><line x1="1" y1="4" x2="23" y2="4" /></svg>{{ line.label }}
                 </span>
               </span>
-              <button type="button" class="pg-luck-close" aria-label="Close the luck chart" @click="closeLuckChart()">✕</button>
+              <button type="button" class="pg-luck-close" :aria-label="$t('cards.postGamePanel.pgDiceModal.closeTheLuckChart')" @click="closeLuckChart()">✕</button>
             </header>
             <div class="pg-luck-body">
-              <svg class="pg-luck-svg" :viewBox="`0 0 ${luckChartData.width} ${luckChartData.height}`" role="img" aria-label="Net luck per team turn and its running average">
+              <svg class="pg-luck-svg" :viewBox="`0 0 ${luckChartData.width} ${luckChartData.height}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.netLuckPerTeam')">
                 <line class="pg-luck-zero" :x1="luckChartData.plot.left" :x2="luckChartData.plot.right" :y1="luckChartData.plot.zero" :y2="luckChartData.plot.zero" />
                 <text v-for="t in luckChartData.yTicks" :key="t.label" class="pg-luck-ytick" :x="luckChartData.plot.left - 5" :y="t.y + 4" text-anchor="end">{{ t.label }}</text>
                 <line v-for="x in luckChartData.dividers" :key="x" class="pg-luck-divider" :x1="x" :x2="x" :y1="luckChartData.plot.top" :y2="luckChartData.plot.bottom" />
@@ -542,20 +543,20 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 <polyline v-for="line in luckChartData.series" :key="line.side + line.kind" class="pg-luck-line" :data-side="line.side" :data-kind="line.kind" :points="line.points" fill="none" />
                 <rect v-for="(slot, i) in luckChartData.slots" :key="`col-${slot.half}-${slot.slot}`" class="pg-luck-col" :data-hover="luckHover === i" tabindex="0"
                   :x="slot.left" :y="luckChartData.plot.top" :width="slot.width" :height="luckChartData.plot.bottom - luckChartData.plot.top"
-                  :aria-label="`${slot.half === 3 ? 'Overtime' : `Half ${slot.half}`}, turn ${slot.label}: ${slot.lines.length} ${slot.lines.length === 1 ? 'break' : 'breaks'}`"
+                  :aria-label="slot.half === 3 ? $t('cards.postGamePanel.slotOvertime', { turn: slot.label, n: slot.lines.length }) : $t('cards.postGamePanel.slotHalf', { half: slot.half, turn: slot.label, n: slot.lines.length })"
                   @mouseenter="luckHover = i" @mouseleave="luckHover = null" @focus="luckHover = i" @blur="luckHover = null" />
               </svg>
-              <p v-if="luckChartData.empty" class="pg-luck-empty">No breaks yet</p>
+              <p v-if="luckChartData.empty" class="pg-luck-empty">{{ $t('cards.postGamePanel.pgDiceModal.noBreaksYet') }}</p>
               <div v-if="luckHoverSlot" class="pg-luck-tip" role="tooltip">
-                <b>{{ luckHoverSlot.half === 3 ? 'Overtime' : `Half ${luckHoverSlot.half}` }}, turn {{ luckHoverSlot.label }}</b>
+                <b>{{ luckHoverSlot.half === 3 ? $t('cards.postGamePanel.pgDiceModal.overtime') : $t('cards.postGamePanel.pgDiceModal.halfHalf', { half: luckHoverSlot.half }) }}{{ $t('cards.postGamePanel.pgDiceModal.turnLabel', { label: luckHoverSlot.label }) }}</b>
                 <span v-for="(line, i) in luckHoverSlot.lines" :key="i" class="pg-luck-tip-line" :data-side="line.side">{{ line.text }}</span>
-                <span v-if="luckHoverSlot.lines.length === 0" class="pg-luck-tip-line">No breaks this turn</span>
+                <span v-if="luckHoverSlot.lines.length === 0" class="pg-luck-tip-line">{{ $t('cards.postGamePanel.pgDiceModal.noBreaksThisTurn') }}</span>
               </div>
             </div>
           </div>
           <div class="pg-dice-grid">
             <section class="pg-dice-left">
-              <h3>Dice distribution</h3>
+              <h3>{{ $t('cards.postGamePanel.pgDiceModal.diceDistribution') }}</h3>
               <div class="pg-dice-cols pg-dice-cols-charts">
                 <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col" :data-side="diceSide">
                   <div v-for="row in side.charts" :key="row.key" class="pg-dice-block">
@@ -563,8 +564,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                          re-roll, blue = passed after a re-roll, red = failed even after a re-roll; the outline is every attempt
                          (its empty part failed with no re-roll); dashed = expected passes. -->
                     <template v-if="row.key === 'dodge' && side.dodgeTargets">
-                      <h4>Dodges by target <span class="pg-dice-n">{{ side.dodgeTargets.passed }} / {{ side.dodgeTargets.attempts }} passed · expected <b>{{ side.dodgeTargets.expected.toFixed(1) }}</b></span></h4>
-                      <svg class="pg-dice-chart pg-dodge-targets" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" aria-label="Dodges by target number">
+                      <h4>{{ $t('cards.postGamePanel.pgDiceModal.dodgesByTarget') }} <span class="pg-dice-n">{{ $t('cards.postGamePanel.pgDiceModal.passedAttemptsPassedExpected', { passed: side.dodgeTargets.passed, attempts: side.dodgeTargets.attempts }) }} <b>{{ side.dodgeTargets.expected.toFixed(1) }}</b></span></h4>
+                      <svg class="pg-dice-chart pg-dodge-targets" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.dodgesByTargetNumber')">
                         <g v-for="(b, i) in side.dodgeTargets.bars" :key="i">
                           <rect :x="b.x" :y="b.yAttempts" :width="b.w" :height="b.hAttempts" class="pg-dodge-attempts" />
                           <rect :x="b.x" :y="b.yFirst" :width="b.w" :height="b.hFirst" class="pg-dodge-first" />
@@ -580,10 +581,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                         <text v-for="(l, i) in side.dodgeTargets.labels" :key="'s' + i" :x="l.x" :y="l.y"
                           class="pg-dodge-seg-n" :class="[l.inside ? 'pg-dodge-seg-in' : `pg-dodge-seg-out pg-dodge-seg-${l.kind}`]">{{ l.n }}</text>
                       </svg>
-                      <p class="pg-dodge-legend"><span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-first" />passed</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-reroll" />after reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-fail" />failed w/ reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-none" />no reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-exp" />expected</span></p>
+                      <p class="pg-dodge-legend"><span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-first" />{{ $t('cards.postGamePanel.pgDiceModal.passed') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-reroll" />{{ $t('cards.postGamePanel.pgDiceModal.afterReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-fail" />{{ $t('cards.postGamePanel.pgDiceModal.failedWReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-none" />{{ $t('cards.postGamePanel.pgDiceModal.noReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-exp" />{{ $t('cards.postGamePanel.pgDiceModal.expected') }}</span></p>
                     </template>
-                    <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ side.blocks === 1 ? 'block' : 'blocks' }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? 'rolls' : 'dice' }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
-                    <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${row.block ? PG_CHART_H + PG_BLOCK_FACE_EXTRA : PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
+                    <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ $t('postGame.dice.blocks', { count: side.blocks }) }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? $t('postGame.dice.rolls') : $t('postGame.dice.dice') }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
+                    <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${row.block ? PG_CHART_H + PG_BLOCK_FACE_EXTRA : PG_CHART_H}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.titleDistribution', { title: row.title })">
                       <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
                       <path :d="row.chart.expectedPath" class="pg-dice-expected" />
                       <!-- Owner 10-01 (S71): the Block dice columns are labelled with the client's block-die FACES, not words. -->
@@ -605,7 +606,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             </section>
             <div class="pg-dice-right">
               <section class="pg-dice-right-top">
-                <h3>Likelihood</h3>
+                <h3>{{ $t('cards.postGamePanel.pgDiceModal.likelihood') }}</h3>
                 <div class="pg-dice-cols pg-dice-cols-single">
                   <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
                     <div class="pg-dice-block">
@@ -615,7 +616,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                       <div v-for="row in side.likelihoods" :key="row.key" class="pg-dice-gauge-row" :data-row="row.key" :data-measured="row.like.measured">
                         <span class="pg-dice-gauge-head" :data-chart="row.key === 'luck' && row.like.measured">
                           <span class="pg-dice-gauge-label">{{ row.label }}</span>
-                          <button type="button" class="pg-dice-info" :aria-label="`${row.label} details`"
+                          <button type="button" class="pg-dice-info" :aria-label="$t('cards.postGamePanel.pgDiceModal.labelDetails', { label: row.label })"
                             :aria-expanded="diceTip.key === row.key" :aria-describedby="diceTip.key === row.key ? diceTipId(row.key) : undefined"
                             :data-open="diceTip.key === row.key" :data-pinned="diceTip.key === row.key && diceTip.pinned"
                             @pointerenter="onDiceInfoEnter(row.key, $event)" @pointerleave="onDiceInfoLeave(row.key)"
@@ -623,7 +624,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                             @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
                           <!-- Owner 10-22: the Luck chart's button sits on the row, under the word "Luck" (it was the last line of the
                                popover). After the "i" in the DOM, so Tab reads the row's title, its details, then "By turn". -->
-                          <button v-if="row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" aria-label="Luck by turn" @click="openLuckChart">By turn</button>
+                          <button v-if="row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @click="openLuckChart">{{ $t('cards.postGamePanel.pgDiceModal.byTurn') }}</button>
                         </span>
                         <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${row.sentence ?? pgOddsSentence(row.like)}`">
                           <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
@@ -637,11 +638,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 </div>
               </section>
               <section class="pg-dice-right-bottom">
-                <h3>Fun facts</h3>
+                <h3>{{ $t('cards.postGamePanel.pgDiceModal.funFacts') }}</h3>
                 <div class="pg-dice-cols pg-dice-cols-single">
                   <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
                     <div class="pg-dice-block">
-                      <div v-if="side.facts.length === 0" class="pg-dice-empty">No dice rolled yet.</div>
+                      <div v-if="side.facts.length === 0" class="pg-dice-empty">{{ $t('cards.postGamePanel.pgDiceModal.noDiceRolledYet') }}</div>
                       <div v-for="fact in side.facts" :key="fact.label" class="pg-dice-fact">
                         <span class="pg-dice-fact-label">{{ fact.label }}</span>
                         <span class="pg-dice-fact-value">{{ fact.value }}</span>

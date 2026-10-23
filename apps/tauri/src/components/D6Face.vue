@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { d6FaceUrl, d6FaceVisualScale, isD6FaceValue, type BlockDieSide, type D6FaceVariant } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
+import { t } from '../i18n';
 
 const props = withDefaults(defineProps<{
   value: number;
@@ -28,7 +29,7 @@ const imageStyle = computed(() => {
   const offset = (1 - scale) * 50;
   return { width: `${scale * 100}%`, height: `${scale * 100}%`, left: `${offset}%`, top: `${offset}%` };
 });
-const alt = computed(() => props.label || `D6 showing ${props.value}`);
+const alt = computed(() => props.label || t('hud.d6Face.alt.d6ShowingProps', { value: props.value }));
 const failed = ref(false);
 watch(() => [props.value, effectiveVariant.value, teamSide.value], () => { failed.value = false; });
 </script>

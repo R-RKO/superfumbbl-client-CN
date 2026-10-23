@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { fumbblAsset } from '../game/jnlpRouting';
+import { $t } from '../i18n';
+import { t } from '../i18n';
 
 export interface TurnToastPresentation {
   turn: number;
@@ -22,8 +24,8 @@ watch(
 
 const followsTurnover = computed(() => props.toast.context === 'afterTurnover');
 const label = computed(() => followsTurnover.value
-  ? `${props.toast.coach}'s Turn ${props.toast.turn}`
-  : `Turn ${props.toast.turn}`);
+  ? t('hud.turnToast.label.coachSTurnTurn', { coach: props.toast.coach, turn: props.toast.turn })
+  : t('hud.turnToast.label.turnTurn', { turn: props.toast.turn }));
 const logoSrc = computed(() => {
   if (logoFailed.value) return null;
   return fumbblAsset(props.toast.logoUrl ?? undefined, props.toast.baseIconPath ?? undefined);
@@ -39,9 +41,9 @@ const logoSrc = computed(() => {
     <span class="turn-toast-label">
       <template v-if="followsTurnover">
         <span class="turn-toast-coach">{{ toast.coach }}</span>
-        <span class="turn-toast-suffix">'s Turn {{ toast.turn }}</span>
+        <span class="turn-toast-suffix">{{ $t('hud.turnToast.sTurnTurn', { turn: toast.turn }) }}</span>
       </template>
-      <span v-else class="turn-toast-plain">Turn {{ toast.turn }}</span>
+      <span v-else class="turn-toast-plain">{{ $t('hud.turnToast.turnTurn', { turn: toast.turn }) }}</span>
     </span>
   </div>
 </template>

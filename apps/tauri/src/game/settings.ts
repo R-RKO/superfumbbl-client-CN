@@ -12,6 +12,7 @@ import { STICK_DEADZONE, clampDeadzone } from './gamepad';
 import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
 import { DEFAULT_SPECTATOR_VIEW, normalizeSpectatorView, type SpectatorView } from './spectatorView';
 import { CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
+import { $t, normalizeLocale, type Locale } from '../i18n';
 
 /**
  * App settings, persisted to localStorage (works in the web preview and the
@@ -69,7 +70,7 @@ const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OS
 // Before load(): the loader validates the stored rebindable keys with hotkeyConflict at module init.
 export type RebindableKey = 'confirmKey' | 'rosterKey' | 'logExpandKey';
 export { SPECTATOR_TACKLE_ZONE_MODES, type SpectatorTackleZoneMode };
-const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm move / pass target', rosterKey: 'Roster pop-out', logExpandKey: 'Enlarge the Log window' };
+const REBINDABLE_LABEL: Record<RebindableKey, string> = { get confirmKey() { return $t('settings.rebindableLabel.confirmMovePassTarget'); }, get rosterKey() { return $t('settings.rebindableLabel.rosterPopOut'); }, get logExpandKey() { return $t('settings.rebindableLabel.enlargeTheLogWindow'); } };
 const REBINDABLE_ACTION: Record<RebindableKey, ControlActionId> = { confirmKey: 'confirm', rosterKey: 'roster', logExpandKey: 'logExpand' };
 
 // Owner 10-04: each client confirmation prompt has its own on/off line (confirmationSettings.ts; all default on).
@@ -404,6 +405,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Colourblind mode (owner 09-10): a daltonization colour-matrix filter over the whole shell (pitch canvas + UI) —
    *  no asset conversion. deuteranopia/protanopia also keep the green→blue UI-accent remap; 'redgreen' (legacy) = deuteranopia. */
   colorblindMode: 'off' | 'redgreen' | 'deuteranopia' | 'protanopia' | 'tritanopia';
+  /** Owner 10-23: client language (src/i18n). Applies live; every client-authored string and every server game term
+   *  the client labels follows it. Server report text stays English (server-derived law). */
+  language: Locale;
   /** UI theme engine (owner 2026-07-14, spec black-red-ui-scheme.md): a preset or a custom Primary/Secondary
    *  pair drives the derived `--ui-*` token set (Settings → Accessibility). Default = the Black/Red headline. */
   uiTheme: 'brand-red' | 'fumbbl' | 'custom';
@@ -791,6 +795,7 @@ const DEFAULTS: AppSettings = {
   gridLineOpacity: 1,
   markColor: '#e03030', // owner 2026-07-04f: pitch markings default red
   colorblindMode: 'off',
+  language: 'en',
   uiTheme: 'brand-red',
   uiPrimary: '#A10005',
   uiSecondary: '#000000',
@@ -871,11 +876,11 @@ export const MARKER_BEHAVIOUR_DEFAULT: SkillBehaviour = 'never';
 /** Owner 10-12: backdrop choices behind the stadium (Settings -> Stadium). */
 export type BackdropSetting = 'skybox' | 'space' | 'galaxy' | 'parking' | 'color';
 export const BACKDROP_OPTIONS: readonly { value: BackdropSetting; label: string }[] = [
-  { value: 'skybox', label: 'Fantasy skybox' },
-  { value: 'space', label: 'Space' },
-  { value: 'galaxy', label: 'Whirlpool Galaxy (Hubble)' },
-  { value: 'parking', label: 'Night parking lot' },
-  { value: 'color', label: 'Plain colour' },
+  { value: 'skybox', get label() { return $t('settings.backdropOptions.fantasySkybox'); } },
+  { value: 'space', get label() { return $t('settings.backdropOptions.space'); } },
+  { value: 'galaxy', get label() { return $t('settings.backdropOptions.whirlpoolGalaxyHubble'); } },
+  { value: 'parking', get label() { return $t('settings.backdropOptions.nightParkingLot'); } },
+  { value: 'color', get label() { return $t('settings.backdropOptions.plainColour'); } },
 ];
 export function normalizeBackdrop(value: unknown): BackdropSetting {
   return BACKDROP_OPTIONS.some((o) => o.value === value) ? value as BackdropSetting : 'skybox';
@@ -891,29 +896,29 @@ export function normalizeBackdropColor(value: unknown): string {
 
 /** Human-readable, provider-neutral turf labels for the Settings picker. */
 export const TURF_LABELS: Record<string, string> = {
-  'default-weather': 'Default - Weather pack',
-  'pixel-weather': 'Pixel - Weather pack',
-  'acasas-weather': 'Acasas - Weather pack', // installer-only family; absent from public checkouts
-  'acasas-weather-fx': 'Acasas - Weather pack (strong)', // owner 09-07: stronger sunny/heat/blizzard language; installer-only
-  grass1: 'Basic', // owner 09-05: renamed from 'Grass 1' (the Acasas 64 px leafy tile)
-  grass2: 'Grass 2',
+  get 'default-weather'() { return $t('settings.turfLabels.defaultWeatherPack'); },
+  get 'pixel-weather'() { return $t('settings.turfLabels.pixelWeatherPack'); },
+  get 'acasas-weather'() { return $t('settings.turfLabels.acasasWeatherPack'); }, // installer-only family; absent from public checkouts
+  get 'acasas-weather-fx'() { return $t('settings.turfLabels.acasasWeatherPackStrong'); }, // owner 09-07: stronger sunny/heat/blizzard language; installer-only
+  get grass1() { return $t('settings.turfLabels.basic'); }, // owner 09-05: renamed from 'Grass 1' (the Acasas 64 px leafy tile)
+  get grass2() { return $t('settings.turfLabels.grass2'); },
   // #56 WT-7 (owner/Yularen 07-16): every FUMBBL pack is weather-responsive (swaps the field photo with
   // fieldModel.weather) — the "(weather)" suffix flags that behaviour vs the static grass tile themes.
-  'fumbbl-basic': 'Basic (weather)',
-  'fumbbl-default': 'Default (weather)',
-  'fumbbl-blackbox': 'Blackbox (weather)',
-  'fumbbl-fumbblcup': 'Cup (weather)',
-  'fumbbl-chaos': 'Chaos (weather)',
-  'fumbbl-darkelf': 'Dark Elf (weather)',
-  'fumbbl-goblin': 'Goblin (weather)',
-  'fumbbl-khorne': 'Khorne (weather)',
-  'fumbbl-necromantic': 'Necromantic (weather)',
-  'fumbbl-norse': 'Norse (weather)',
-  'fumbbl-nurgle': 'Nurgle (weather)',
-  'fumbbl-skaven': 'Skaven (weather)',
-  'fumbbl-slaanesh': 'Slaanesh (weather)',
-  'fumbbl-tzeentch': 'Tzeentch (weather)',
-  'fumbbl-vampire': 'Vampire (weather)',
+  get 'fumbbl-basic'() { return $t('settings.turfLabels.basicWeather'); },
+  get 'fumbbl-default'() { return $t('settings.turfLabels.defaultWeather'); },
+  get 'fumbbl-blackbox'() { return $t('settings.turfLabels.blackboxWeather'); },
+  get 'fumbbl-fumbblcup'() { return $t('settings.turfLabels.cupWeather'); },
+  get 'fumbbl-chaos'() { return $t('settings.turfLabels.chaosWeather'); },
+  get 'fumbbl-darkelf'() { return $t('settings.turfLabels.darkElfWeather'); },
+  get 'fumbbl-goblin'() { return $t('settings.turfLabels.goblinWeather'); },
+  get 'fumbbl-khorne'() { return $t('settings.turfLabels.khorneWeather'); },
+  get 'fumbbl-necromantic'() { return $t('settings.turfLabels.necromanticWeather'); },
+  get 'fumbbl-norse'() { return $t('settings.turfLabels.norseWeather'); },
+  get 'fumbbl-nurgle'() { return $t('settings.turfLabels.nurgleWeather'); },
+  get 'fumbbl-skaven'() { return $t('settings.turfLabels.skavenWeather'); },
+  get 'fumbbl-slaanesh'() { return $t('settings.turfLabels.slaaneshWeather'); },
+  get 'fumbbl-tzeentch'() { return $t('settings.turfLabels.tzeentchWeather'); },
+  get 'fumbbl-vampire'() { return $t('settings.turfLabels.vampireWeather'); },
 };
 
 /** Available turf themes for the Settings picker. Populated at runtime from
@@ -1483,6 +1488,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // Owner 09-10: the legacy red-green accent remap becomes the deuteranopia filter; anything unknown → off.
     if ((merged.colorblindMode as string) === 'redgreen') merged.colorblindMode = 'deuteranopia';
     if (!['off', 'deuteranopia', 'protanopia', 'tritanopia'].includes(merged.colorblindMode)) merged.colorblindMode = 'off';
+    merged.language = normalizeLocale(merged.language); // owner 10-23: unknown / missing -> English
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a
     // fresh install needs no migration, and a transiently-null read of an EXISTING blob must
@@ -2146,11 +2152,11 @@ export const FUMBBL_SITE = import.meta.env.DEV && !inTauri ? '/fumbbl-site' : 'h
 /** The backend presets the launch picker offers. The hosted public server
  *  (self-host-plan §1 row 3) is added once a host exists. */
 const ALL_SERVER_TARGETS: ServerTarget[] = [
-  { id: 'fumbbl', label: 'Official FUMBBL', url: FUMBBL_WS_URL, auth: 'fumbbl', compression: true },
-  { id: 'local', label: 'Super FUMBBL — local dev', url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
+  { id: 'fumbbl', get label() { return $t('settings.allServerTargets.officialFumbbl'); }, url: FUMBBL_WS_URL, auth: 'fumbbl', compression: true },
+  { id: 'local', get label() { return $t('settings.allServerTargets.superFumbblLocalDev'); }, url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
   // Owner 2026-07-07: the FORK server (external IPv4). TEST builds default to this (see the
   // activeServerTarget default below); RC/public builds default to 'fumbbl' (docs/release-checklist.md).
-  { id: 'fork', label: `Super FUMBBL — fork (${FORK_SERVER_HOST})`, url: FORK_WS_URL, auth: 'standalone', compression: true },
+  { id: 'fork', get label() { return $t('settings.allServerTargets.superFumbblForkFork', { FORK_SERVER_HOST }); }, url: FORK_WS_URL, auth: 'standalone', compression: true },
 ];
 // Owner 09-10: the public edition offers Official FUMBBL only.
 export const SERVER_TARGETS: ServerTarget[] = ALL_SERVER_TARGETS.filter((t) => FORK_EDITION || t.id === 'fumbbl');

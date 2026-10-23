@@ -24,6 +24,10 @@ import {
   type SetupOption,
   type SetupStep,
 } from '../game/setupWizard';
+import { $t, terms, useLiveSet, liveValue } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 const props = defineProps<{
   /** Present only when the host has a Home pane (another branch); absent = that step is skipped entirely. */
@@ -91,7 +95,6 @@ function selectedFor(s: SetupStep): string | null {
 
 // Picks are serialised: while a pack activation (or a pack import) is in flight, cards, Next, Skip and Finish are
 // disabled so a second pick cannot snapshot stale assignments. Back is never blocked.
-const PACK_SWITCH_TIMEOUT_MESSAGE = 'Could not switch packs — try again';
 const pickBusy = ref(false);
 const packBusy = ref(false); // step 9: an import or "Use it now" in flight
 // Any pack operation — ours (a pick, "Use it now") or a pending activation/import anywhere — locks the picks, so an
@@ -127,12 +130,12 @@ async function choose(s: SetupStep, option: SetupOption): Promise<void> {
       const result = await withPackTimeout((intent) => publishAssetAssignments({ ...settings.assetPackAssignments, [slot]: '' }, intent));
       if (result === 'timeout') {
         // The stuck activation is abandoned; family + selection unchanged.
-        choiceError.value = PACK_SWITCH_TIMEOUT_MESSAGE;
+        liveSetHere(choiceError, 'value', () => t('setupWizard.packSwitchTimeout'));
         retryPick.value = { s, option };
         return;
       }
       if (!result) {
-        choiceError.value = assetMods.error || 'The installed pack could not be switched off; change it in Settings → Art.';
+        liveSetHere(choiceError, 'value', () => liveValue<string>(assetMods, 'error') || t('ui.firstLaunchSetup.text.theInstalledPackCould'));
         return; // family + selection unchanged
       }
     } finally {
@@ -227,8 +230,8 @@ async function applyImportedPack(target?: InstalledAssetPack): Promise<void> {
   packBusy.value = true;
   try {
     const result = await withPackTimeout((intent) => useWholeAssetPack(pack, intent));
-    if (result === true) importedPacks.value = importedPacks.value.map((e) => (e.pack.installId === pack.installId ? { ...e, applied: true, status: `${pack.name} ${pack.version} applied.` } : e));
-    else packError.value = result === 'timeout' ? PACK_SWITCH_TIMEOUT_MESSAGE : (assetMods.error || 'The pack could not be applied.');
+    if (result === true) importedPacks.value = importedPacks.value.map((e) => (e.pack.installId === pack.installId ? { ...e, applied: true, status: t('setup.assetPacks.packApplied', { name: pack.name, version: pack.version }) } : e));
+    else liveSetHere(packError, 'value', () => result === 'timeout' ? t('setupWizard.packSwitchTimeout') : (liveValue<string>(assetMods, 'error') || t('ui.firstLaunchSetup.text.thePackCouldNot')));
   } finally {
     packBusy.value = false;
   }
@@ -282,7 +285,7 @@ function finish(): void {
     aria-labelledby="first-launch-setup-title" data-testid="first-launch-setup" @keydown="onShellKeydown">
     <div class="setup-card">
       <header class="setup-head">
-        <p class="setup-progress" aria-live="polite">Step {{ index + 1 }} of {{ steps.length }}</p>
+        <p class="setup-progress" aria-live="polite">{{ $t('setupWizard.stepP0OfSteps', { p0: index + 1, steps: steps.length }) }}</p>
         <ol class="setup-rail" aria-hidden="true">
           <li v-for="(s, i) in steps" :key="s.id" :data-state="i < index ? 'done' : i === index ? 'current' : 'todo'"></li>
         </ol>
@@ -304,11 +307,11 @@ function finish(): void {
               <div class="setup-option-main">
                 <div v-if="step.id === 'skills' && option.id === 'icons'" class="setup-images setup-skill-icons">
                   <figure v-for="skill in SKILL_EXAMPLES" :key="skill">
-                    <img v-if="illustratedIconUrl(skill)" :src="illustratedIconUrl(skill)" :alt="skill" />
-                    <figcaption>{{ skill }}</figcaption>
+                    <img v-if="illustratedIconUrl(skill)" :src="illustratedIconUrl(skill)" :alt="terms(skill)" />
+                    <figcaption>{{ terms(skill) }}</figcaption>
                   </figure>
                   <!-- Owner 10-06: how the icons read on the pitch, over the players' heads -->
-                  <img v-if="imageUrl('icons-illustrated')" class="setup-skill-icons-pitch" :src="imageUrl('icons-illustrated')" alt="Players with skill icons over their heads" />
+                  <img v-if="imageUrl('icons-illustrated')" class="setup-skill-icons-pitch" :src="imageUrl('icons-illustrated')" :alt="$t('setupWizard.playersWithSkillIcons')" />
                 </div>
                 <div v-else-if="option.fontStack" class="setup-font-sample" :style="{ fontFamily: option.fontStack }">
                   <span class="setup-font-title">{{ FONT_SAMPLE.title }}</span>
@@ -329,7 +332,7 @@ function finish(): void {
                     <template v-else-if="surfacePreview[surface] === 'pending'">
                       <span v-for="f in 5" :key="f" class="setup-die-skeleton" :class="'setup-die-skeleton--' + surface" aria-hidden="true"></span>
                     </template>
-                    <span v-else class="setup-preview-failed">Preview unavailable. Your dice will use the face set's original art.</span>
+                    <span v-else class="setup-preview-failed">{{ $t('setupWizard.previewUnavailableYourDice') }}</span>
                   </div>
                 </div>
                 <div v-else-if="option.images.length" class="setup-images" :class="{ 'setup-dice': step.id === 'blockDice' }">
@@ -344,13 +347,13 @@ function finish(): void {
           </div>
           <p v-if="choiceError" class="setup-error" role="alert">
             {{ choiceError }}
-            <button v-if="retryPick" type="button" class="setup-secondary setup-retry" @click="retry">Try again</button>
+            <button v-if="retryPick" type="button" class="setup-secondary setup-retry" @click="retry">{{ $t('setupWizard.tryAgain') }}</button>
           </p>
           <div v-if="step.id === 'skills' && selectedFor(step) === 'markings'" class="setup-markings-import">
-            <label class="setup-field">Coach
-              <input v-model="markingsCoach" type="text" spellcheck="false" placeholder="FUMBBL coach" :disabled="markingsBusy" />
+            <label class="setup-field">{{ $t('setupWizard.coach') }}
+              <input v-model="markingsCoach" type="text" spellcheck="false" :placeholder="$t('setupWizard.fumbblCoach')" :disabled="markingsBusy" />
             </label>
-            <button type="button" class="setup-secondary" :disabled="markingsBusy" @click="importMarkings">Import my markings from FUMBBL</button>
+            <button type="button" class="setup-secondary" :disabled="markingsBusy" @click="importMarkings">{{ $t('setupWizard.importMyMarkingsFrom') }}</button>
             <p v-if="markingsStatus" class="setup-hint" aria-live="polite">{{ markingsStatus }}</p>
           </div>
         </template>
@@ -358,33 +361,33 @@ function finish(): void {
         <!-- Step 7: FUMBBL login (bound exactly as Settings → General / the old setup splash). -->
         <template v-else-if="step.kind === 'login'">
           <section class="setup-panel">
-            <label class="setup-field">Coach name
-              <input v-model="settings.coach" type="text" autocomplete="username" placeholder="your FUMBBL coach name" />
+            <label class="setup-field">{{ $t('setupWizard.setupPanel.coachName') }}
+              <input v-model="settings.coach" type="text" autocomplete="username" :placeholder="$t('setupWizard.setupPanel.yourFumbblCoachName')" />
             </label>
-            <label class="setup-field">Password
-              <input v-model="settings.password" type="password" autocomplete="current-password" placeholder="FUMBBL password" />
+            <label class="setup-field">{{ $t('setupWizard.setupPanel.password') }}
+              <input v-model="settings.password" type="password" autocomplete="current-password" :placeholder="$t('setupWizard.setupPanel.fumbblPassword')" />
             </label>
-            <p class="setup-hint">Stored locally on this machine only — never sent anywhere but the server you connect to.</p>
+            <p class="setup-hint">{{ $t('setupWizard.setupPanel.storedLocallyOnThis') }}</p>
           </section>
         </template>
 
         <!-- Step 8: only when the host provides a Home pane. -->
         <template v-else-if="step.kind === 'homeLogin'">
           <div class="setup-actions-row">
-            <button type="button" class="setup-secondary" @click="homeLogin?.open()">Open FUMBBL.COM</button>
+            <button type="button" class="setup-secondary" @click="homeLogin?.open()">{{ $t('setupWizard.setupActionsRow.openFumbblCom') }}</button>
           </div>
         </template>
 
         <!-- Step 9: mod packs. -->
         <template v-else-if="step.kind === 'modPacks'">
           <div class="setup-actions-row">
-            <button type="button" class="setup-secondary" :disabled="packBusy || assetMods.busy" @click="importModPack">Import Mod Pack</button>
+            <button type="button" class="setup-secondary" :disabled="packBusy || assetMods.busy" @click="importModPack">{{ $t('setupWizard.setupActionsRow.importModPack') }}</button>
           </div>
           <ul v-if="importedPacks.length" class="setup-pack-list" aria-live="polite">
             <li v-for="entry in importedPacks" :key="entry.pack.installId" class="setup-pack-row">
               <span class="setup-hint">{{ entry.status }}</span>
               <button v-if="!entry.applied && packCapabilityLabels(entry.pack).length" type="button" class="setup-secondary" :disabled="packBusy" @click="applyImportedPack(entry.pack)">
-                Use it now ({{ packCapabilityLabels(entry.pack).join(', ') }})
+                {{ $t('setupWizard.setupPackList.useItNowP0', { p0: packCapabilityLabels(entry.pack).join(', ') }) }}
               </button>
             </li>
           </ul>
@@ -395,42 +398,42 @@ function finish(): void {
         <!-- Step 10: fine tuning. -->
         <template v-else-if="step.kind === 'fineTuning'">
           <section class="setup-panel setup-fine">
-            <label class="setup-field">Colourblind mode
+            <label class="setup-field">{{ $t('setupWizard.setupPanel.colourblindMode') }}
               <select v-model="settings.colorblindMode">
-                <option value="off">Off</option>
-                <option value="deuteranopia">Deuteranopia (red-green, most common)</option>
-                <option value="protanopia">Protanopia (red-green)</option>
-                <option value="tritanopia">Tritanopia (blue-yellow)</option>
+                <option value="off">{{ $t('setupWizard.setupPanel.off') }}</option>
+                <option value="deuteranopia">{{ $t('setupWizard.setupPanel.deuteranopiaRedGreenMost') }}</option>
+                <option value="protanopia">{{ $t('setupWizard.setupPanel.protanopiaRedGreen') }}</option>
+                <option value="tritanopia">{{ $t('setupWizard.setupPanel.tritanopiaBlueYellow') }}</option>
               </select>
             </label>
-            <label class="setup-field">UI text size
+            <label class="setup-field">{{ $t('setupWizard.setupPanel.uiTextSize') }}
               <span class="setup-range">
                 <input v-model.number="settings.uiTextSize" type="range" min="12" max="20" step="1" />
                 <span>{{ settings.uiTextSize }}px</span>
               </span>
             </label>
-            <p class="setup-text-preview" :style="{ fontSize: `${settings.uiTextSize}px` }">Sub-headers and annotations will read at this size.</p>
+            <p class="setup-text-preview" :style="{ fontSize: `${settings.uiTextSize}px` }">{{ $t('setupWizard.setupPanel.subHeadersAndAnnotations') }}</p>
             <label class="setup-check">
               <input v-model="settings.discordPresence" type="checkbox" />
-              <span>Discord Rich Presence (show my game as my Discord activity; off = private)</span>
+              <span>{{ $t('setupWizard.setupPanel.discordRichPresenceShow') }}</span>
             </label>
           </section>
         </template>
       </div>
 
       <footer class="setup-footer">
-        <button type="button" class="setup-back" :disabled="index === 0" @click="back">◂ Back</button>
+        <button type="button" class="setup-back" :disabled="index === 0" @click="back">{{ $t('setupWizard.setupFooter.back') }}</button>
         <!-- owner 2026-07-14: build credit + Twitch link (moved off the menu bar onto the old setup splash; since 10-06
              it lives on the wizard's last step). -->
         <span v-if="isLast" class="setup-build-credit">
-          Client built by FluteTheCat
+          {{ $t('setupWizard.setupFooter.clientBuiltByFlutethecat') }}
           <a class="setup-twitch-link" :href="TWITCH_URL" title="twitch.tv/flutethecat" @click.prevent="openExternal(TWITCH_URL)">twitch.tv/flutethecat</a>
         </span>
         <span class="setup-footer-spacer"></span>
         <button v-if="step.kind === 'login' || step.kind === 'modPacks' || step.kind === 'homeLogin'" type="button"
-          class="setup-skip" :disabled="picksLocked" @click="isLast ? finish() : next()">{{ step.kind === 'login' ? 'Skip for now' : 'Skip' }}</button>
-        <button v-if="!isLast" type="button" class="setup-next" :disabled="picksLocked" @click="next">Next ▸</button>
-        <button v-else type="button" class="setup-next setup-finish" :disabled="picksLocked" @click="finish">Finish</button>
+          class="setup-skip" :disabled="picksLocked" @click="isLast ? finish() : next()">{{ step.kind === 'login' ? $t('setupWizard.setupFooter.skipForNow') : $t('setupWizard.setupFooter.skip') }}</button>
+        <button v-if="!isLast" type="button" class="setup-next" :disabled="picksLocked" @click="next">{{ $t('setupWizard.setupFooter.next') }}</button>
+        <button v-else type="button" class="setup-next setup-finish" :disabled="picksLocked" @click="finish">{{ $t('setupWizard.setupFooter.finish') }}</button>
       </footer>
     </div>
   </div>

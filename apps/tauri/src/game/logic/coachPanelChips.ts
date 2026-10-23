@@ -1,4 +1,5 @@
 import type { InducementSetJson, TurnDataJson } from '@fumbbl40k/ffb-protocol';
+import { t, terms } from '../../i18n';
 
 /**
  * Coach-panel resource chip: one icon per remaining charge-family (re-rolls,
@@ -93,14 +94,14 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
   const chips: InducementChip[] = [{
     icon: 're_roll',
     count: Math.max(0, remaining(turnData.reRolls) - driveTotal),
-    label: 'Base team rerolls',
+    get label() { return t('hud.coachPanel.chips.baseTeamRerolls'); },
     pool: 'base',
   }];
   for (const pool of drivePools) {
     if (pool.count > 0) chips.push({
       icon: 're_roll',
       count: pool.count,
-      label: `${pool.source} reroll — expires at the end of the following drive`,
+      get label() { return t('hud.coachPanel.text.sourceRerollExpiresAt', { source: terms(pool.source) }); },
       pool: 'drive',
       badge: pool.badge,
     });
@@ -109,11 +110,11 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
   if (singleUse > 0) chips.push({
     icon: 're_roll',
     count: singleUse,
-    label: 'Single-use rerolls',
+    get label() { return t('hud.coachPanel.text.singleUseRerolls'); },
     pool: 'single-use',
     badge: '1×',
   });
-  if ((turnData.apothecaries ?? 0) > 0) chips.push({ icon: 'apothecary', count: turnData.apothecaries, label: 'Apothecary' });
+  if ((turnData.apothecaries ?? 0) > 0) chips.push({ icon: 'apothecary', count: turnData.apothecaries, get label() { return t('hud.coachPanel.text.apothecary'); } });
 
   const set = turnData.inducementSet as InducementSetJson;
   const byType = new Map<string, number>();
@@ -134,9 +135,9 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
     const icon = INDUCEMENT_ICONS[type];
     if (icon) chips.push({ icon, count, label: inducementChipLabel(type) }); // unmapped types have no coach-panel chip
   }
-  if (set.prayers.length > 0) chips.push({ icon: 'prayer', count: set.prayers.length, label: 'Prayers' });
+  if (set.prayers.length > 0) chips.push({ icon: 'prayer', count: set.prayers.length, get label() { return t('hud.coachPanel.text.prayers'); } });
   const cards = set.cardsAvailable.length + set.cardsActive.length;
-  if (cards > 0) chips.push({ icon: 'card', count: cards, label: 'Cards' });
+  if (cards > 0) chips.push({ icon: 'card', count: cards, get label() { return t('hud.coachPanel.text.cards'); } });
   return chips;
 }
 
@@ -166,6 +167,6 @@ export function cheeringFansChip(turnData: object | null | undefined): Inducemen
   return {
     icon: CHEERING_FANS_CHIP_ICON,
     count,
-    label: `Cheering Fans: +${count} offensive assist on a block`,
+    get label() { return t('hud.coachPanel.text.cheeringFansCountOffensive', { count }); },
   };
 }

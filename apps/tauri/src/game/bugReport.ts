@@ -24,6 +24,7 @@ import { configWebUnreachableMessage, stripSecretFields } from './settings';
 import type { BugReportScreenshotAttachment } from './bugReportScreenshot';
 import { lastAppPatchStatus } from './appPatch';
 import { lastServerVersion } from './serverVersionGate';
+import { t } from '../i18n';
 
 /** Owner cap on the free-text field. The textarea enforces it too; this is the authority. */
 export const BUG_REPORT_DESCRIPTION_MAX = 4000;
@@ -48,7 +49,7 @@ export function gameServiceFromTarget(targetId: string): BugReportGameService {
 
 /** Human label for the modal's attachment summary ("GAME: FUMBBL 1932766" / "GAME: SUPER FUMBBL 868"). */
 export function gameServiceLabel(service: BugReportGameService): string {
-  return service === 'fumbbl' ? 'FUMBBL' : 'SUPER FUMBBL';
+  return service === 'fumbbl' ? 'FUMBBL' : t('bugReport.text.superFumbbl');
 }
 
 /**

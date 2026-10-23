@@ -18,6 +18,7 @@ import {
   resolvePanelPosition,
   type EdgePanelPosition,
 } from '../game/edgePanelLayout';
+import { $t } from '../i18n';
 
 /** Owner 08-17 (telestrator placement fix): points are stored in WORLD pixel space (the
  *  renderer's pre-camera coordinate system — the same space squareAnchor/extPoint project game
@@ -68,7 +69,17 @@ const launcherSize = ref({ width: 112, height: 39 });
 const viewportRevision = ref(0);
 const toolbarDragging = ref(false);
 const state = computed(() => { revision.value; return model.state(); });
-const colorName = computed(() => TELESTRATOR_COLOR_PRESETS.find((preset) => preset.value === state.value.color)?.name ?? 'Custom');
+/** Display name of a colour preset (the preset `name` stays the invariant id). */
+function colorLabel(name: string | undefined): string {
+  switch (name) {
+    case 'Red': return $t('hud.replayTelestrator.color.red');
+    case 'Blue': return $t('hud.replayTelestrator.color.blue');
+    case 'Green': return $t('hud.replayTelestrator.color.green');
+    case 'Gold': return $t('hud.replayTelestrator.color.gold');
+    default: return $t('hud.replayTelestrator.color.custom');
+  }
+}
+const colorName = computed(() => colorLabel(TELESTRATOR_COLOR_PRESETS.find((preset) => preset.value === state.value.color)?.name));
 const visible = computed(() => {
   revision.value;
   const draft = model.draftElement();
@@ -556,12 +567,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="enabled" ref="shell" class="telestrator-shell">
-      <div ref="toolbar" class="telestrator-tools" role="toolbar" aria-label="Telestrator" :data-matched="matchedHeight"
+      <div ref="toolbar" class="telestrator-tools" role="toolbar" :aria-label="$t('hud.replayTelestrator.telestrator')" :data-matched="matchedHeight"
         :data-expanded="state.expanded"
         :data-dragging="toolbarDragging"
         :style="toolbarStyle">
         <button v-if="!state.expanded" class="telestrator-collapsed-trigger" data-tour="hud-telestrator" data-pad-action="telestrator"
-          title="Open telestrator — long-press to move" aria-label="Open telestrator"
+          :title="$t('hud.replayTelestrator.openTelestratorLongPress')" :aria-label="$t('hud.replayTelestrator.openTelestrator')"
           @pointerdown="armToolbarDrag" @pointermove="moveToolbar"
           @pointerup="finishToolbarPress" @pointercancel="finishToolbarPress"
           @lostpointercapture="finishToolbarPress"
@@ -569,26 +580,26 @@ onBeforeUnmount(() => {
         <template v-else>
           <div v-if="state.limitNotice" class="telestrator-limit-notice" role="status" aria-live="polite">{{ state.limitNotice }}</div>
           <!-- Owner 09-22: Path is the DEFAULT tool and leads the bar; Shapes (Circle by default) then the pencil. -->
-          <button :aria-pressed="state.tool === 'path'" title="Path (Ctrl+1) — click a square and drag; the arrow follows square centres" @click="choose('path')">Path</button>
+          <button :aria-pressed="state.tool === 'path'" :title="$t('hud.replayTelestrator.pathCtrl1Click')" @click="choose('path')">{{ $t('hud.replayTelestrator.path') }}</button>
           <div class="shape-group">
             <button :aria-expanded="openPopover === 'shapes'" :aria-pressed="state.tool === 'arrow' || state.tool === 'circle'"
-              title="Shapes (Ctrl+2)" @click="togglePopover('shapes')">Shapes</button>
-            <div v-if="openPopover === 'shapes'" class="shape-flyout" role="group" aria-label="Shape options">
-              <button title="Arrow" @click="chooseShape('arrow')">➜ Arrow</button>
-              <button title="Circle" @click="chooseShape('circle')">◯ Circle</button>
+              :title="$t('hud.replayTelestrator.shapesCtrl2')" @click="togglePopover('shapes')">{{ $t('hud.replayTelestrator.shapes') }}</button>
+            <div v-if="openPopover === 'shapes'" class="shape-flyout" role="group" :aria-label="$t('hud.replayTelestrator.shapeOptions')">
+              <button :title="$t('hud.replayTelestrator.arrow')" @click="chooseShape('arrow')">{{ $t('hud.replayTelestrator.arrow2') }}</button>
+              <button :title="$t('hud.replayTelestrator.circle')" @click="chooseShape('circle')">{{ $t('hud.replayTelestrator.circle2') }}</button>
             </div>
           </div>
-          <button :aria-pressed="state.tool === 'pencil'" title="Pencil (Ctrl+3)" @click="choose('pencil')">✎</button>
+          <button :aria-pressed="state.tool === 'pencil'" :title="$t('hud.replayTelestrator.pencilCtrl3')" @click="choose('pencil')">✎</button>
           <div class="picker-group">
-            <button class="weight-trigger" title="Stroke weight" :aria-label="`Stroke weight: ${state.thickness}`"
+            <button class="weight-trigger" :title="$t('hud.replayTelestrator.strokeWeight')" :aria-label="$t('hud.replayTelestrator.strokeWeightThickness', { thickness: state.thickness })"
               :aria-expanded="openPopover === 'weight'" @click="togglePopover('weight')">
               <svg viewBox="0 0 40 20" preserveAspectRatio="none" aria-hidden="true">
                 <line x1="5" y1="10" x2="35" y2="10" :stroke-width="Math.max(state.thickness, 0.2)" />
               </svg>
             </button>
-            <div v-if="openPopover === 'weight'" class="toolbar-popover weight-picker" role="group" aria-label="Stroke weight options">
+            <div v-if="openPopover === 'weight'" class="toolbar-popover weight-picker" role="group" :aria-label="$t('hud.replayTelestrator.weightPicker.strokeWeightOptions')">
               <button v-for="weight in TELESTRATOR_THICKNESS_PRESETS" :key="weight"
-                :aria-label="`Stroke weight ${weight}`" :aria-pressed="state.thickness === weight"
+                :aria-label="$t('hud.replayTelestrator.weightPicker.strokeWeightWeight', { weight })" :aria-pressed="state.thickness === weight"
                 @click="chooseThickness(weight)">
                 <svg viewBox="0 0 40 20" preserveAspectRatio="none" aria-hidden="true">
                   <line x1="5" y1="10" x2="35" y2="10" :stroke-width="weight" />
@@ -597,21 +608,21 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="picker-group">
-            <button class="color-trigger" title="Stroke color" :aria-label="`Stroke color: ${colorName}`"
+            <button class="color-trigger" :title="$t('hud.replayTelestrator.strokeColor')" :aria-label="$t('hud.replayTelestrator.strokeColorColorname', { colorName })"
               :aria-expanded="openPopover === 'color'" @click="togglePopover('color')">
               <span class="color-dot" :style="{ backgroundColor: state.color }" aria-hidden="true"></span>
             </button>
-            <div v-if="openPopover === 'color'" class="toolbar-popover color-picker" role="group" aria-label="Stroke color options">
+            <div v-if="openPopover === 'color'" class="toolbar-popover color-picker" role="group" :aria-label="$t('hud.replayTelestrator.colorPicker.strokeColorOptions')">
               <button v-for="preset in TELESTRATOR_COLOR_PRESETS" :key="preset.name"
-                :aria-label="preset.name" :aria-pressed="state.color === preset.value"
+                :aria-label="colorLabel(preset.name)" :aria-pressed="state.color === preset.value"
                 @click="chooseColor(preset.value)">
                 <span class="color-dot" :style="{ backgroundColor: preset.value }" aria-hidden="true"></span>
               </button>
             </div>
           </div>
-          <button title="Undo (Ctrl+Z / Ctrl+4 / right-click)" @click="model.undo(); refresh()">Undo</button>
-          <button title="Clear (Ctrl+5 / Shift+right-click)" @click="model.clear(); refresh()">Clear</button>
-          <button title="Close telestrator" aria-label="Close telestrator" @click="toggleExpanded">✕</button>
+          <button :title="$t('hud.replayTelestrator.undoCtrlZCtrl')" @click="model.undo(); refresh()">{{ $t('hud.replayTelestrator.undo') }}</button>
+          <button :title="$t('hud.replayTelestrator.clearCtrl5Shift')" @click="model.clear(); refresh()">{{ $t('hud.replayTelestrator.clear') }}</button>
+          <button :title="$t('hud.replayTelestrator.closeTelestrator')" :aria-label="$t('hud.replayTelestrator.closeTelestrator')" @click="toggleExpanded">✕</button>
         </template>
       </div>
     <!-- Owner 08-17 (ruling 3): the layer swallows the drag-pan gesture whenever telestrator is

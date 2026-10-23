@@ -1,5 +1,6 @@
 import { reactive } from 'vue';
 import { installArtPack, type ArtPackFileRef } from '@fumbbl40k/ffb-pitch';
+import { t } from '../i18n';
 
 /**
  * Owner 09-23/24: ART PACK sync. A split build (public installer) ships no walk sprite sheets; `asset-pack.json`
@@ -96,7 +97,7 @@ export async function tauriArtPackHost(): Promise<ArtPackHost> {
   };
 }
 
-export function formatMb(bytes: number): string { return `${(bytes / 1048576).toFixed(0)} MB`; }
+export function formatMb(bytes: number): string { return t('updates.text.p0Mb', { p0: (bytes / 1048576).toFixed(0) }); }
 
 /** A WEB host (vite preview / the rig): the pack is served as static files under `<baseUrl>/<group>/<name>`;
  *  nothing is downloaded, every part counts as installed, bytes come from a plain fetch. */

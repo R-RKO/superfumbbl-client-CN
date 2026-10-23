@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { ChatToastRole } from '../game/chatAuthor';
 import ChatEmojiText from './ChatEmojiText.vue';
+import { $t } from '../i18n';
 
 const props = withDefaults(defineProps<{
   sender?: string;
@@ -29,8 +30,8 @@ const accessibleLabel = computed(() => {
 <template>
   <button type="button" class="chat-toast" :class="`chat-toast--${role}`" :data-author-role="role"
     :data-text-size="toastTextSize" :style="{ '--chat-toast-text-size': `${toastTextSize}px` }"
-    :aria-label="accessibleLabel" title="Open chat" @click="$emit('open')">
-    <span class="chat-toast-sender">{{ sender || 'Chat' }}</span>
+    :aria-label="accessibleLabel" :title="$t('hud.chatToast.openChat')" @click="$emit('open')">
+    <span class="chat-toast-sender">{{ sender || $t('hud.chatToast.chat') }}</span>
     <span class="chat-toast-text"><ChatEmojiText :text="text" /></span>
   </button>
 </template>

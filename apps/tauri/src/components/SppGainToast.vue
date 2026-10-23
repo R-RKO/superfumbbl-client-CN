@@ -2,6 +2,7 @@
 import { onBeforeUnmount, reactive, watch } from 'vue';
 import type { SppGainOccurrence } from '../game/sppGainPresentation';
 import { createTokenToastFollower, type TokenScreenPosition } from '../game/tokenToastFollower';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   occurrence: SppGainOccurrence;
@@ -30,9 +31,9 @@ onBeforeUnmount(follower.clear);
 <template>
   <div v-if="position.ready" class="spp-splash" :data-player-id="occurrence.playerId"
     :style="{ left: position.x + 'px', top: position.y + 'px' }"
-    :aria-label="`Earned ${occurrence.delta} SPP`">
+    :aria-label="$t('hud.sppGainToast.sppSplash.earnedDeltaSpp', { delta: occurrence.delta })">
     <span class="spp-burst" aria-hidden="true">✦</span>
-    <span class="spp-copy"><b>SPP</b><strong>+{{ occurrence.delta }} SPP</strong></span>
+    <span class="spp-copy"><b>{{ $t('hud.sppGainToast.sppSplash.spp') }}</b><strong>{{ $t('hud.sppGainToast.sppSplash.deltaSpp', { delta: occurrence.delta }) }}</strong></span>
     <span class="spp-burst" aria-hidden="true">✦</span>
   </div>
 </template>

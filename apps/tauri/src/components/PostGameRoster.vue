@@ -17,6 +17,7 @@ import { rosterTeamSubtext, type PostGamePlayer, type PostGameSide, type RosterP
 import { formatPlayerValue } from '../game/playerValue';
 import { settings } from '../game/settings';
 import { ROSTER_INJURY_TEXT, ROSTER_INJURY_TITLE, ROSTER_RIP_SKULL_URL, rosterInjuryArt, rosterLevelArt } from '../game/rosterLevelArt';
+import { $t, terms } from '../i18n';
 
 const props = withDefaults(defineProps<{
   teams: { home: PostGameSide; away: PostGameSide };
@@ -113,7 +114,7 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
     <!-- Owner 10-09: with the switcher off (the end-game MVP panels) the SAME header shows the one team, as a plain
          block: nothing to click, no second team. -->
     <div class="pg-roster-team-toggle" :class="{ 'pg-roster-team-toggle--fixed': !switcher }" :role="switcher ? 'group' : undefined"
-      :aria-label="switcher ? 'Select roster team' : undefined">
+      :aria-label="switcher ? $t('cards.postGameRoster.selectRosterTeam') : undefined">
       <component :is="switcher ? 'button' : 'div'" v-for="w in headSides" :key="w" class="pg-roster-team-tab" :type="switcher ? 'button' : undefined"
         :data-active="side === w" @click="switcher && (side = w)">
         <img v-if="teams[w].logo" :src="teams[w].logo!" alt="" />
@@ -123,7 +124,7 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
         </span>
         <!-- Owner 10-02: players still available / on the roster ("11/13"), bottom-right, live through the game. -->
         <span v-if="teams[w].rosterSize" class="pg-roster-team-count" data-testid="roster-eligible-count"
-          :title="`${teams[w].eligible ?? teams[w].rosterSize} of ${teams[w].rosterSize} players available`">{{ teams[w].eligible ?? teams[w].rosterSize }}/{{ teams[w].rosterSize }}</span>
+          :title="$t('cards.postGameRoster.p0OfRostersizePlayers', { p0: teams[w].eligible ?? teams[w].rosterSize, rosterSize: teams[w].rosterSize })">{{ teams[w].eligible ?? teams[w].rosterSize }}/{{ teams[w].rosterSize }}</span>
       </component>
     </div>
     <slot name="status" />
@@ -140,8 +141,8 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
             <!-- Owner 10-09: an injury suffered THIS game wears the added-skill gold box (data-new); MNG carried in and KO do not. -->
             <span v-if="pl.injury === 'rip' && ROSTER_RIP_SKULL_URL" class="pg-roster-rip" :data-new="pl.injuryNew ? 'true' : null" :title="ROSTER_INJURY_TITLE.rip">
               <img class="pg-roster-rip-skull" :src="ROSTER_RIP_SKULL_URL" alt="" />
-              <img v-if="rosterInjuryArt('rip')" class="pg-roster-rip-text" :src="rosterInjuryArt('rip')!.src" :srcset="rosterInjuryArt('rip')!.srcset" alt="RIP" />
-              <span v-else class="pg-roster-rip-text pg-roster-lvl-text pg-roster-inj-text">RIP</span>
+              <img v-if="rosterInjuryArt('rip')" class="pg-roster-rip-text" :src="rosterInjuryArt('rip')!.src" :srcset="rosterInjuryArt('rip')!.srcset" :alt="$t('cards.postGameRoster.pgRosterList.rip')" />
+              <span v-else class="pg-roster-rip-text pg-roster-lvl-text pg-roster-inj-text">{{ $t('cards.postGameRoster.pgRosterList.rip') }}</span>
             </span>
             <template v-else-if="pl.injury">
               <img v-if="rosterInjuryArt(pl.injury)" class="pg-roster-inj-img" :data-new="pl.injuryNew ? 'true' : null" :src="rosterInjuryArt(pl.injury)!.src"
@@ -150,8 +151,8 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
             </template>
             <template v-else-if="pl.advancements > 0">
               <img v-if="rosterLevelArt(pl.advancements)" class="pg-roster-lvl-img" :src="rosterLevelArt(pl.advancements)!.src"
-                :srcset="rosterLevelArt(pl.advancements)!.srcset" :alt="`LVL ${pl.advancements}`" :title="`Level ${pl.advancements}`" />
-              <span v-else class="pg-roster-lvl-text" :title="`Level ${pl.advancements}`">LVL {{ pl.advancements }}</span>
+                :srcset="rosterLevelArt(pl.advancements)!.srcset" :alt="$t('cards.postGameRoster.pgRosterList.lvlAdvancements', { advancements: pl.advancements })" :title="$t('cards.postGameRoster.pgRosterList.levelAdvancements', { advancements: pl.advancements })" />
+              <span v-else class="pg-roster-lvl-text" :title="$t('cards.postGameRoster.pgRosterList.levelAdvancements', { advancements: pl.advancements })">{{ $t('cards.postGameRoster.pgRosterList.lvlAdvancements', { advancements: pl.advancements }) }}</span>
             </template>
             <!-- Owner 10-09 ("add a checkmark next to the LVL badges"): a selectable row's check mark sits in the badge
                  column, right of the LVL / injury badge (same spot on a rookie's empty slot). It is the real, labelled,
@@ -165,8 +166,8 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
           <span class="pg-roster-portrait-slot"><img v-if="portrait(pl.playerId)" class="pg-roster-portrait" :src="portrait(pl.playerId)!" alt="" /></span>
           <span class="pg-roster-name">{{ pl.name }}</span>
           <span v-if="extras?.[pl.playerId]?.teamTag" class="pg-roster-team-tag">{{ extras[pl.playerId]!.teamTag }}</span>
-          <span v-if="extras?.[pl.playerId]?.awards" class="pg-roster-mvp" data-testid="roster-mvp-mark"><i aria-hidden="true">★</i> MVP<template v-if="extras[pl.playerId]!.awards! > 1"> ×{{ extras[pl.playerId]!.awards }}</template></span>
-          <span class="pg-roster-pos">{{ pl.position }}</span>
+          <span v-if="extras?.[pl.playerId]?.awards" class="pg-roster-mvp" data-testid="roster-mvp-mark"><i aria-hidden="true">★</i>{{ $t('cards.postGameRoster.pgRosterList.mvp') }}<template v-if="extras[pl.playerId]!.awards! > 1"> ×{{ extras[pl.playerId]!.awards }}</template></span>
+          <span class="pg-roster-pos">{{ terms(pl.position) }}</span>
           <!-- Owner 09-15: added skills in their category colour, no "+" prefix, a step under the name size. -->
           <!-- Owner 10-02: every skill, sorted like the player portrait - base first, added last (added icons ringed gold). -->
           <!-- Owner 10-10: "Hide innate skills" (default on) leaves only the gained ones; a player with none has no
@@ -176,28 +177,28 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
             <template v-for="(skill, i) in rowSkills(pl)" :key="`${skill.name}:${skill.label}:${i}`">
               <!-- Owner 10-02: with skill icons enabled, the icon replaces the name (name on hover). -->
               <img v-if="skillMode === 'icons' && skillIcon(skill.name, pl.positionId)" class="pg-roster-skill-icon" :data-added="skill.added" tabindex="0"
-                :src="skillIcon(skill.name, pl.positionId)!" :alt="skill.label" :title="skill.label" />
-              <span v-else class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)" :data-added="skill.added">{{ skill.label }}</span>
+                :src="skillIcon(skill.name, pl.positionId)!" :alt="terms(skill.label)" :title="terms(skill.label)" />
+              <span v-else class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)" :data-added="skill.added">{{ terms(skill.label) }}</span>
             </template>
           </span>
           <!-- Owner 10-02: the player's value (position cost + advancements), left of the SPP. -->
-          <span class="pg-roster-value" title="Player value">{{ formatPlayerValue(pl.value) }}</span>
+          <span class="pg-roster-value" :title="$t('cards.postGameRoster.pgRosterList.playerValue')">{{ formatPlayerValue(pl.value) }}</span>
           <!-- Owner 10-09 (pick panes, final): "10 SPP (+7)" - the SPP the player CAME INTO the game with, then what was
                earned this game in brackets, shown only when something was earned. The old nomination list's format
                (its markup, bracket, spacing and the green gain), never a summed figure. -->
           <span v-if="extras?.[pl.playerId]?.sppBank != null" class="pg-roster-spp pg-roster-spp--bank" :data-zero="extras[pl.playerId]!.sppBank === 0 && pl.spp === 0"
-            :title="`${extras[pl.playerId]!.sppBank} SPP before this game, ${pl.spp} earned this game`">{{ extras[pl.playerId]!.sppBank }} SPP<span v-if="pl.spp > 0" class="pg-roster-spp-gain"> (+{{ pl.spp }})</span></span>
-          <span v-else class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
+            :title="$t('cards.postGameRoster.pgRosterList.sppbankSppBeforeThis', { sppBank: extras[pl.playerId]!.sppBank, spp: pl.spp })">{{ $t('cards.postGameRoster.pgRosterList.p0Spp', { p0: extras[pl.playerId]!.sppBank }) }}<span v-if="pl.spp > 0" class="pg-roster-spp-gain"> (+{{ pl.spp }})</span></span>
+          <span v-else class="pg-roster-spp" :data-zero="pl.spp === 0">{{ $t('cards.postGameRoster.pgRosterList.sppSpp', { spp: pl.spp }) }}</span>
         </li>
       </ul>
-      <p v-else-if="!onlyIds" class="pg-mvp-none">No player records</p>
+      <p v-else-if="!onlyIds" class="pg-mvp-none">{{ $t('cards.postGameRoster.noPlayerRecords') }}</p>
     </div>
     <slot name="footer" />
     <!-- Owner 10-10: one box for every roster pane (settings.rosterHideInnateSkills), bottom-right, inside the pane's own
          padding (clear of the pop-out's resize grip; the pick panes' confirm button sits in the footer under it). -->
-    <label v-if="innateToggle" class="pg-roster-innate" data-testid="roster-hide-innate" title="List only the skills a player has gained; position skills are left out">
+    <label v-if="innateToggle" class="pg-roster-innate" data-testid="roster-hide-innate" :title="$t('cards.postGameRoster.listOnlyTheSkills')">
       <input v-model="settings.rosterHideInnateSkills" type="checkbox" @keydown="onInnateKeydown" />
-      <span>Hide innate skills</span>
+      <span>{{ $t('cards.postGameRoster.hideInnateSkills') }}</span>
     </label>
   </section>
 </template>

@@ -4,6 +4,7 @@
  *  "don't show again"; dismissing sends nothing and writes no setting. The parent owns visibility
  *  with a single ref and unmounts this on `dismiss`. Chrome mirrors FirstOpenLegalNotice. */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { $t } from '../i18n';
 
 const emit = defineEmits<{ dismiss: [] }>();
 const continueButton = ref<HTMLButtonElement | null>(null);
@@ -51,11 +52,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, tru
       aria-describedby="beta-launch-splash-body"
     >
       <header class="beta-header">
-        <h1 id="beta-launch-splash-title">THIS CLIENT IS IN BETA</h1>
+        <h1 id="beta-launch-splash-title">{{ $t('splash.betaDialog.thisClientIsIn') }}</h1>
       </header>
       <div id="beta-launch-splash-body" class="beta-body">
-        <p>This is a third-party client and is not officially supported by the FUMBBL team. Use this at your own risk in the live FUMBBL environment. If you encounter any bugs then please click the REPORT button in the bottom right hand of the client during a game.</p>
-        <p>Otherwise, please reach out to flutethecat on Discord.</p>
+        <p>{{ $t('splash.betaDialog.thisIsAThird') }}</p>
+        <p>{{ $t('splash.betaDialog.otherwisePleaseReachOut') }}</p>
       </div>
       <footer class="beta-footer">
         <button
@@ -65,7 +66,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown, tru
           data-testid="beta-launch-splash-continue"
           @keydown="onButtonKeydown"
           @click="dismiss"
-        >Continue ▸</button>
+        >{{ $t('splash.betaDialog.continue') }}</button>
       </footer>
     </section>
   </div>

@@ -43,6 +43,10 @@ import {
 } from '../../game/fumbblCoachTeams';
 // Commission #5 (owner 08-12): elite skills get a pixel-art diamond sprite in place of the "◆" text glyph.
 import eliteDiamondUrl from '../../assets/resources/elite-diamond.png';
+import { fallbackPlayerName } from './teamBuilderNames';
+import { $t, terms, capHead, capTail, useLiveSet } from '../../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
 
 type BuilderMode = 'create' | 'custom' | 'tournament' | 'import';
 const props = withDefaults(defineProps<{ initialMode?: BuilderMode; initialPackageName?: string; launchRevision?: number }>(), {
@@ -312,9 +316,9 @@ const selectedLibraryTeamEditUnavailable = computed(() => (
 ));
 const selectedLibraryTeamEditTitle = computed(() => (
   selectedLibraryTeamDetail.value?.canEditRoster.available !== true
-    ? selectedLibraryTeamDetail.value?.canEditRoster.reason ?? "Your server role doesn't allow whole-roster editing for this team."
+    ? selectedLibraryTeamDetail.value?.canEditRoster.reason ?? $t('teamBuilder.selectedLibraryTeamEditTitle.yourServerRoleDoesn')
     : selectedLibraryTeamEditUnavailable.value
-      ? "This race has no builder roster; editing isn't available."
+      ? $t('teamBuilder.selectedLibraryTeamEditTitle.thisRaceHasNo')
       : undefined
 ));
 let libraryDetailRequestId = 0;
@@ -380,11 +384,11 @@ const fantasyNames = [
 ];
 
 const staffRows: Array<{ key: StaffKey; label: string; min: number; max: number; cost: number }> = [
-  { key: 'reRolls', label: 'Rerolls', min: 0, max: 8, cost: 0 },
-  { key: 'assistantCoaches', label: 'Assistant Coaches', min: 0, max: 6, cost: 10_000 },
-  { key: 'cheerleaders', label: 'Cheerleaders', min: 0, max: 12, cost: 10_000 },
-  { key: 'dedicatedFans', label: 'Dedicated Fans', min: 0, max: 7, cost: 10_000 },
-  { key: 'apothecary', label: 'Apothecary', min: 0, max: 1, cost: 50_000 },
+  { key: 'reRolls', get label() { return $t('teamBuilder.staffRows.rerolls'); }, min: 0, max: 8, cost: 0 },
+  { key: 'assistantCoaches', get label() { return $t('teamBuilder.staffRows.assistantCoaches'); }, min: 0, max: 6, cost: 10_000 },
+  { key: 'cheerleaders', get label() { return $t('teamBuilder.staffRows.cheerleaders'); }, min: 0, max: 12, cost: 10_000 },
+  { key: 'dedicatedFans', get label() { return $t('teamBuilder.staffRows.dedicatedFans'); }, min: 0, max: 7, cost: 10_000 },
+  { key: 'apothecary', get label() { return $t('teamBuilder.staffRows.apothecary'); }, min: 0, max: 1, cost: 50_000 },
 ];
 
 function errText(error: unknown): string {
@@ -527,11 +531,11 @@ async function loadRosters(): Promise<void> {
     const returnedBudget = Number(data.goldBudget);
     rosterGoldBudget.value = Number.isFinite(returnedBudget) && returnedBudget >= 0 ? returnedBudget : null;
     rosterId.value = rosters.value[0]?.rosterId ?? '';
-    rosterStatus.value = rosters.value.length ? '' : 'No buildable rosters were returned.';
+    liveSetHere(rosterStatus, 'value', () => rosters.value.length ? '' : $t('teamBuilder.text.noBuildableRostersWere'));
   } catch (error) {
     rosters.value = [];
     rosterGoldBudget.value = null;
-    rosterStatus.value = `Couldn't load rosters (${errText(error)}).`;
+    liveSetHere(rosterStatus, 'value', () => $t('teamBuilder.text.couldnTLoadRosters', { p0: errText(error) }));
   }
 }
 
@@ -541,10 +545,10 @@ async function loadTournamentPackages(): Promise<void> {
     const list = Array.isArray(data.packages) ? data.packages : Array.isArray(data) ? data : [];
     tournamentPackages.value = (list as TournamentPackageListing[]).filter((p) => typeof p?.name === 'string');
     if (!selectedPackageName.value) selectedPackageName.value = tournamentPackages.value[0]?.name ?? '';
-    tournamentPackagesStatus.value = tournamentPackages.value.length ? '' : 'No tournament packages are saved yet.';
+    liveSetHere(tournamentPackagesStatus, 'value', () => tournamentPackages.value.length ? '' : $t('teamBuilder.text.noTournamentPackagesAre'));
   } catch (error) {
     tournamentPackages.value = [];
-    tournamentPackagesStatus.value = `Couldn't load tournament packages (${errText(error)}).`;
+    liveSetHere(tournamentPackagesStatus, 'value', () => $t('teamBuilder.text.couldnTLoadTournament', { p0: errText(error) }));
   }
 }
 
@@ -570,22 +574,22 @@ async function loadPackageRules(): Promise<void> {
 
 async function loadLibrary(): Promise<void> {
   if (!coach.value) {
-    libraryStatus.value = 'Set your Super FUMBBL coach name in Settings → Connection.';
+    liveSetHere(libraryStatus, 'value', () => $t('teamBuilder.text.setYourSuperFumbbl'));
     return;
   }
   try {
     const data = await botGet('library', { coach: coach.value });
     library.value = (data.teams as LibraryTeam[]) ?? [];
-    libraryStatus.value = library.value.length ? '' : 'No teams are currently in your fork library.';
+    liveSetHere(libraryStatus, 'value', () => library.value.length ? '' : $t('teamBuilder.text.noTeamsAreCurrently'));
   } catch (error) {
     library.value = [];
-    libraryStatus.value = `Couldn't load your teams (${errText(error)}).`;
+    liveSetHere(libraryStatus, 'value', () => $t('teamBuilder.text.couldnTLoadYour', { p0: errText(error) }));
   }
 }
 
 async function loadInducements(packageName = ''): Promise<void> {
   const requestId = ++inducementRequestId;
-  inducementStatus.value = 'Loading inducements...';
+  liveSetHere(inducementStatus, 'value', () => $t('teamBuilder.text.loadingInducements'));
   try {
     const data = await botGet('team-builder/inducements', { packageName });
     if (requestId !== inducementRequestId) return;
@@ -596,12 +600,12 @@ async function loadInducements(packageName = ''): Promise<void> {
       nextCounts[item.key] = item.max === null ? count : Math.min(count, Math.max(0, item.max));
     }
     inducementCounts.value = nextCounts;
-    inducementStatus.value = inducements.value.length ? '' : 'No inducements are available for this package.';
+    liveSetHere(inducementStatus, 'value', () => inducements.value.length ? '' : $t('teamBuilder.text.noInducementsAreAvailable'));
   } catch (error) {
     if (requestId !== inducementRequestId) return;
     inducements.value = [];
     inducementCounts.value = {};
-    inducementStatus.value = `Couldn't load inducements (${errText(error)}).`;
+    liveSetHere(inducementStatus, 'value', () => $t('teamBuilder.text.couldnTLoadInducements', { p0: errText(error) }));
   }
 }
 
@@ -609,7 +613,7 @@ async function selectLibraryTeam(team: LibraryTeam): Promise<void> {
   const requestId = ++libraryDetailRequestId;
   selectedLibraryTeam.value = team;
   selectedLibraryTeamDetail.value = null;
-  libraryDetailStatus.value = 'Loading player roster…';
+  liveSetHere(libraryDetailStatus, 'value', () => $t('teamBuilder.text.loadingPlayerRoster'));
   try {
     const data = await teamDetailGet(team.teamId);
     if (requestId !== libraryDetailRequestId || selectedLibraryTeam.value?.teamId !== team.teamId) return;
@@ -624,7 +628,7 @@ async function selectLibraryTeam(team: LibraryTeam): Promise<void> {
     resumePendingAdvancement(detail);
   } catch (error) {
     if (requestId !== libraryDetailRequestId) return;
-    libraryDetailStatus.value = `Couldn't load player roster (${errText(error)}).`;
+    liveSetHere(libraryDetailStatus, 'value', () => $t('teamBuilder.text.couldnTLoadPlayer', { p0: errText(error) }));
   }
 }
 
@@ -634,7 +638,7 @@ function resumePendingAdvancement(detail: LibraryTeamDetail): void {
   if (!pending) return;
   if (!player || player.id !== pending.playerId) {
     pendingAdvancementRoll.value = null;
-    advancementStatus.value = 'The server returned an advancement choice for a player that is no longer on this roster. Refresh before continuing.';
+    liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.theServerReturnedAn'));
     return;
   }
   advancementReturnFocus ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -644,12 +648,12 @@ function resumePendingAdvancement(detail: LibraryTeamDetail): void {
   pendingAdvancementRoll.value = pending;
   characteristicFallbackAccess.value = pending.primaryFallbacks.length ? 'primary' : 'secondary';
   advancementSkill.value = pending.primaryFallbacks[0] ?? pending.secondaryFallbacks[0] ?? '';
-  advancementStatus.value = 'Finish this server-held advancement choice before leaving or starting another advancement.';
+  liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.finishThisServerHeld'));
 }
 
 function returnToLibraryList(): void {
   if (pendingAdvancementRoll.value) {
-    advancementStatus.value = 'Finish this server-held advancement choice before leaving the team.';
+    liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.finishThisServerHeld2'));
     return;
   }
   libraryDetailRequestId += 1;
@@ -707,7 +711,7 @@ function onAdvancementDialogKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault();
     if (!pendingAdvancementRoll.value && !advancementBusy.value) closeAdvancement();
-    else advancementStatus.value = 'Finish this server-held advancement choice before closing.';
+    else liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.finishThisServerHeld3'));
     return;
   }
   trapModalFocus(event, advancementDialog.value);
@@ -774,7 +778,7 @@ function canAdvancePlayer(player: LibraryPlayerDetail): boolean {
 
 function closeAdvancement(): void {
   if (advancementBusy.value || pendingAdvancementRoll.value) {
-    if (pendingAdvancementRoll.value) advancementStatus.value = 'Finish this server-held advancement choice before closing.';
+    if (pendingAdvancementRoll.value) liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.finishThisServerHeld3'));
     return;
   }
   advancementPlayer.value = null;
@@ -829,9 +833,9 @@ async function submitAdvancement(body: Record<string, unknown>, revisionOverride
       await refreshSelectedLibraryTeam();
       const refreshedPlayer = selectedLibraryTeamDetail.value?.players.find((entry) => entry.id === playerId) ?? null;
       advancementPlayer.value = refreshedPlayer;
-      advancementStatus.value = 'The team changed on the server. The latest roster and SPP have been loaded; review them and try again. Nothing was submitted twice.';
+      liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.theTeamChangedOn'));
     } else if (error instanceof TeamApiError && error.status === 401) {
-      advancementStatus.value = 'Your coach session is no longer authorized. Reconnect in Settings, then retry this advancement.';
+      liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.yourCoachSessionIs'));
     } else {
       advancementStatus.value = errText(error);
     }
@@ -858,7 +862,7 @@ async function rollAdvancement(): Promise<void> {
   const data = await submitAdvancement(body);
   if (data?.pending && typeof data.pending === 'object') {
     pendingAdvancementRoll.value = data.pending as PendingAdvancementRoll;
-    advancementStatus.value = 'This roll is held by the server. Choose an offered result to finish the advancement.';
+    liveSetHere(advancementStatus, 'value', () => $t('teamBuilder.text.thisRollIsHeld'));
   }
 }
 
@@ -887,7 +891,7 @@ async function commitRolledCharacteristic(characteristic: string): Promise<void>
 // SpectateView.vue delete-saved-setup) — before the irreversible-feeling drop from the grid.
 async function confirmRetireTeam(team: LibraryTeam): Promise<void> {
   if (retiringTeamIds.value.has(team.teamId)) return;
-  if (!window.confirm(`Retire "${team.teamName}"? It will drop out of your fork team library.`)) return;
+  if (!window.confirm($t('teamBuilder.text.retireTeamnameItWill', { teamName: team.teamName }))) return;
   retiringTeamIds.value = new Set([...retiringTeamIds.value, team.teamId]);
   retireStatus.value = '';
   try {
@@ -899,9 +903,9 @@ async function confirmRetireTeam(team: LibraryTeam): Promise<void> {
       selectedLibraryTeamDetail.value = null;
       libraryDetailStatus.value = '';
     }
-    retireStatus.value = `✓ Retired "${team.teamName}".`;
+    liveSetHere(retireStatus, 'value', () => $t('teamBuilder.text.retiredTeamname', { teamName: team.teamName }));
   } catch (error) {
-    retireStatus.value = `Couldn't retire "${team.teamName}" (${errText(error)}).`;
+    liveSetHere(retireStatus, 'value', () => $t('teamBuilder.text.couldnTRetireTeamname', { teamName: team.teamName, p1: errText(error) }));
   } finally {
     retiringTeamIds.value = new Set([...retiringTeamIds.value].filter((id) => id !== team.teamId));
   }
@@ -1159,10 +1163,10 @@ const previewSummary = computed(() => preview.value?.summary ?? null);
 const buildTotalLabel = computed(() => {
   // Owner (annotated Create card, follow-up): NO label at all in Create — the numbers stand alone.
   // Custom keeps the authoritative wording.
-  if (previewSummary.value) return mode.value === 'create' ? '' : 'Authoritative preview';
-  if (previewPending.value) return 'Calculating team value…';
-  if (teamNameMissing.value) return 'Please name your team';
-  return 'Team value';
+  if (previewSummary.value) return mode.value === 'create' ? '' : $t('teamBuilder.buildTotalLabel.authoritativePreview');
+  if (previewPending.value) return $t('teamBuilder.buildTotalLabel.calculatingTeamValue');
+  if (teamNameMissing.value) return $t('teamBuilder.buildTotalLabel.pleaseNameYourTeam');
+  return $t('teamBuilder.buildTotalLabel.teamValue');
 });
 const buildTotalValue = computed(() => {
   if (previewSummary.value) return `${formatGold(previewSummary.value.goldUsed)} / ${formatGold(previewSummary.value.goldBudget)}`;
@@ -1235,7 +1239,7 @@ watch(selectedLeague, (league, previousLeague) => {
   if (!removed) return;
   resetSkillPicker();
   slots.value = next;
-  leagueChangeNotice.value = `${removed} ineligible star player${removed === 1 ? '' : 's'} removed.`;
+  liveSetHere(leagueChangeNotice, 'value', () => $t('teamBuilder.text.removedIneligibleStarPlayer', { removed }));
 });
 
 function positionById(positionId: string): Position | undefined {
@@ -1273,12 +1277,12 @@ function positionGroupTitle(positionId: string): string | undefined {
   const state = positionGroupState(positionId);
   if (!state.capped) return undefined;
   const label = state.blockingGroups[0]?.label?.trim();
-  return label ? `${label} limit reached` : 'Position group limit reached';
+  return label ? $t('teamBuilder.text.labelLimitReached', { label }) : $t('teamBuilder.text.positionGroupLimitReached');
 }
 
 function requireTeamName(): boolean {
   if (!teamNameMissing.value) return true;
-  addPlayerNotice.value = 'You must name your team.';
+  liveSetHere(addPlayerNotice, 'value', () => $t('teamBuilder.text.youMustNameYour'));
   if (addPlayerNoticeTimer) clearTimeout(addPlayerNoticeTimer);
   addPlayerNoticeTimer = setTimeout(() => { addPlayerNotice.value = ''; }, 3000);
   return false;
@@ -1294,7 +1298,7 @@ function addPosition(position: Position): void {
   const next = [...slots.value];
   next[openIndex] = {
     positionId: position.positionId,
-    name: position.isStar ? position.name : (fantasyNames[openIndex] ?? `Player ${openIndex + 1}`),
+    name: position.isStar ? position.name : (fantasyNames[openIndex] ?? fallbackPlayerName(openIndex)), // generated player name is DATA: invariant (teamBuilderNames.ts)
     chosenSkills: [],
   };
   slots.value = next;
@@ -1309,7 +1313,7 @@ function starChoiceStatus(choice: TeamBuilderStarChoice<Position>): string {
   if (!choice.paired) return `${present} / ${positionMax(choice.members[0]!)}`;
   if (present === 0) return '0 / 1';
   if (present === choice.members.length) return '1 / 1';
-  return `${present} of ${choice.members.length} present`;
+  return $t('teamBuilder.text.presentOfLengthPresent', { present, length: choice.members.length });
 }
 
 function canAddStarChoice(choice: TeamBuilderStarChoice<Position>): boolean {
@@ -1456,7 +1460,7 @@ function schedulePreview(): void {
     preview.value = null;
     previewRosterId.value = null;
     previewPending.value = false;
-    previewStatus.value = 'Waiting for a roster to preview.';
+    liveSetHere(previewStatus, 'value', () => $t('teamBuilder.text.waitingForARoster'));
     tournamentPackageInfo.value = null;
     return;
   }
@@ -1470,7 +1474,7 @@ function schedulePreview(): void {
   }
 
   previewPending.value = true;
-  previewStatus.value = 'Updating live preview…';
+  liveSetHere(previewStatus, 'value', () => $t('teamBuilder.text.updatingLivePreview'));
   previewTimer = setTimeout(() => {
     previewTimer = null;
     void requestPreview(requestId);
@@ -1494,14 +1498,15 @@ async function requestPreview(requestId: number): Promise<void> {
       summary,
     };
     previewRosterId.value = rosterId.value;
-    previewStatus.value = preview.value.valid ? 'Live preview is valid.' : 'Live preview found issues.';
+    const previewValid = preview.value.valid;
+    liveSetHere(previewStatus, 'value', () => previewValid ? $t('teamBuilder.text.livePreviewIsValid') : $t('teamBuilder.text.livePreviewFoundIssues'));
     tournamentPackageInfo.value = packageInfoFrom(data.package);
   } catch (error) {
     if (requestId !== previewRequestId || controller.signal.aborted) return;
     // SR-27: leave preview.value (and previewRosterId) alone — a transient fetch failure on the SAME roster
     // should not blank the panel; the last-landed numbers stay on screen until either a fresh preview lands
     // or the roster changes (schedulePreview clears it then).
-    previewStatus.value = `Live preview unavailable (${errText(error)}). Client estimate remains active.`;
+    liveSetHere(previewStatus, 'value', () => $t('teamBuilder.text.livePreviewUnavailableP0', { p0: errText(error) }));
   } finally {
     if (requestId === previewRequestId) {
       previewPending.value = false;
@@ -1527,7 +1532,7 @@ async function buildTeam(): Promise<void> {
     const teamId = String(data.teamId ?? '');
     buildResult.value = {
       kind: 'success',
-      message: isEditingLibraryTeam.value ? `Team ${teamId || editingLibraryTeamId.value} saved.` : `Team created with ID ${teamId}.`,
+      message: isEditingLibraryTeam.value ? $t('teamBuilder.text.teamP0Saved', { p0: teamId || editingLibraryTeamId.value }) : $t('teamBuilder.text.teamCreatedWithId', { teamId }),
       teamId,
     };
     await loadLibrary();
@@ -1540,7 +1545,7 @@ async function buildTeam(): Promise<void> {
     const data = error instanceof BotPostError ? error.data : null;
     const message = String(data?.error ?? errText(error));
     buildErrors.value = findingEntries(data?.errors);
-    buildResult.value = { kind: 'error', message: `${isEditingLibraryTeam.value ? 'Team save' : 'Team creation'} failed: ${message}` };
+    buildResult.value = { kind: 'error', message: $t('teamBuilder.text.p0FailedMessage', { p0: isEditingLibraryTeam.value ? 'Team save' : 'Team creation', message }) };
   } finally {
     buildBusy.value = false;
   }
@@ -1739,12 +1744,12 @@ function canTemporarilyRetire(player: LibraryPlayerDetail): boolean {
   return details.some((injury) => injury.recovering && /\(-(?:MA|ST|AG|PA|AV)\)/i.test(injury.name));
 }
 const PLAYER_ACTIONS: ReadonlyArray<{ path: string; label: string; show?: (player: LibraryPlayerDetail) => boolean }> = [
-  { path: 'team/firePlayer', label: 'Fire' },
-  { path: 'team/retirePlayer', label: 'Retire' },
-  { path: 'team/temporaryRetirePlayer', label: 'Temporarily retire', show: canTemporarilyRetire },
-  { path: 'team/undoTemporaryRetire', label: 'Undo temporary retire' },
-  { path: 'team/rehirePlayer', label: 'Re-hire' },
-  { path: 'team/refundPlayer', label: 'Refund' },
+  { path: 'team/firePlayer', get label() { return $t('teamBuilder.playerActions.fire'); } },
+  { path: 'team/retirePlayer', get label() { return $t('teamBuilder.playerActions.retire'); } },
+  { path: 'team/temporaryRetirePlayer', get label() { return $t('teamBuilder.playerActions.temporarilyRetire'); }, show: canTemporarilyRetire },
+  { path: 'team/undoTemporaryRetire', get label() { return $t('teamBuilder.playerActions.undoTemporaryRetire'); } },
+  { path: 'team/rehirePlayer', get label() { return $t('teamBuilder.playerActions.reHire'); } },
+  { path: 'team/refundPlayer', get label() { return $t('teamBuilder.playerActions.refund'); } },
 ];
 async function runPlayerAction(path: string, player: LibraryPlayerDetail): Promise<void> {
   playerActionsFor.value = null;
@@ -1755,7 +1760,7 @@ async function runPlayerAction(path: string, player: LibraryPlayerDetail): Promi
 async function readyTeam(): Promise<void> {
   const data = await runManagement('team/ready', { journeymen: [] });
   const em = data?.expensiveMistakes as { roll?: number; effect?: string; treasuryLoss?: number } | undefined;
-  if (em) managementStatus.value = `Expensive Mistakes! Roll ${em.roll ?? '?'} — ${em.effect ?? 'effect unknown'}${em.treasuryLoss ? `, treasury −${formatGold(em.treasuryLoss)}` : ''}.`;
+  if (em) managementStatus.value = (em.treasuryLoss ? $t('teamBuilder.expensiveMistakesLoss', { roll: em.roll ?? '?', effect: em.effect ?? $t('teamBuilder.effectUnknown'), loss: formatGold(em.treasuryLoss) }) : $t('teamBuilder.expensiveMistakes', { roll: em.roll ?? '?', effect: em.effect ?? $t('teamBuilder.effectUnknown') }));
 }
 function unreadyTeam(): void { void runManagement('team/unready', {}); }
 
@@ -1818,16 +1823,16 @@ async function editSelectedLibraryTeam(): Promise<void> {
   if (!detail) return;
   const roster = rosterForRace(detail.race);
   if (!roster) {
-    libraryDetailStatus.value = `Couldn't edit this team (no builder roster matched ${detail.race}).`;
+    liveSetHere(libraryDetailStatus, 'value', () => $t('teamBuilder.text.couldnTEditThis', { race: detail.race }));
     return;
   }
 
   const rosterLeagues = [...new Set(roster.leagueOptions?.map((entry) => entry.trim()).filter(Boolean) ?? [])];
   const storedLeagueMatches = [...new Set([...detail.leagues, ...detail.specialRules].map((entry) => entry.trim()).filter((entry) => rosterLeagues.includes(entry)))];
   if (rosterLeagues.length && storedLeagueMatches.length !== 1) {
-    libraryDetailStatus.value = storedLeagueMatches.length > 1
-      ? `Couldn't edit this team because more than one stored league matches ${detail.race}. No substitute was selected.`
-      : `Couldn't edit this team because its exact stored league was not returned or is no longer available. No substitute was selected.`;
+    liveSetHere(libraryDetailStatus, 'value', () => storedLeagueMatches.length > 1
+      ? $t('teamBuilder.text.couldnTEditThis2', { race: detail.race })
+      : $t('teamBuilder.text.couldnTEditThis3'));
     return;
   }
   const storedLeague = storedLeagueMatches[0] ?? '';
@@ -1842,11 +1847,11 @@ async function editSelectedLibraryTeam(): Promise<void> {
     ? detail.rulesetPackName
     : fallbackPackage;
   if (detail.rulesetPackName && !originatingPackageAvailable) {
-    editRulesetHint.value = `This team's ruleset pack '${detail.rulesetPackName}' is no longer available; using ${fallbackPackage || 'the current default ruleset'}.`;
+    liveSetHere(editRulesetHint, 'value', () => $t('teamBuilder.text.thisTeamSRuleset', { rulesetPackName: detail.rulesetPackName, p1: fallbackPackage || 'the current default ruleset' }));
   } else {
     editRulesetHint.value = detail.rulesetPackName
       ? ''
-      : `No originating ruleset pack was recorded; using the current default ruleset${fallbackPackage ? ` (${fallbackPackage})` : ''}.`;
+      : fallbackPackage ? $t('teamBuilder.noRulesetPackFallback', { fallbackPackage }) : $t('teamBuilder.noRulesetPack');
   }
   mode.value = 'tournament';
   rosterId.value = roster.rosterId;
@@ -1920,14 +1925,14 @@ const bladeSections = computed(() => buildBladeSections(skillPickerSet.value, mo
 watch(skillPickerSet, (set) => {
   if (set && pickerCategory.value === null) pickerCategory.value = firstBladeCategory(bladeSections.value);
 });
-type PickerSkill = LegalSkill & { tierLabel: 'Primary' | 'Secondary' | 'All skills & traits'; priceLabel: string };
+type PickerSkill = LegalSkill & { tierLabel: string; priceLabel: string }; // i18n 10-23: tierLabel is a localised display label (rendered / v-for key only)
 const pickerCategorySkills = computed<PickerSkill[]>(() => {
   const set = skillPickerSet.value;
   const category = pickerCategory.value;
   if (!set || !category) return [];
   const inCategory = (skills: LegalSkill[]) => groupByCategory(skills).find((group) => group.category === category)?.skills ?? [];
   if (mode.value === 'custom') {
-    return inCategory(set.primary).map((skill) => ({ ...skill, tierLabel: 'All skills & traits', priceLabel: '' }));
+    return inCategory(set.primary).map((skill) => ({ ...skill, tierLabel: $t('teamBuilder.pickerCategorySkills.allSkillsTraits'), priceLabel: '' }));
   }
   return [
     ...inCategory(set.primary).map((skill) => ({ ...skill, tierLabel: 'Primary' as const, priceLabel: '+20k' })),
@@ -1974,7 +1979,7 @@ async function toggleSkillPicker(index: number): Promise<void> {
       customSkillsCache.value = set;
       if (skillPickerIndex.value === index) skillPickerSet.value = set;
     } catch (error) {
-      if (skillPickerIndex.value === index) skillPickerError.value = `Couldn't load all skills & traits (${errText(error)}).`;
+      if (skillPickerIndex.value === index) liveSetHere(skillPickerError, 'value', () => $t('teamBuilder.text.couldnTLoadAll', { p0: errText(error) }));
     } finally {
       skillPickerLoading.value = false;
     }
@@ -2064,24 +2069,24 @@ async function loadFumbblCoachTeams(): Promise<void> {
   if (!name || fumbblCoachTeamsBusy.value) return;
 
   fumbblCoachTeamsBusy.value = true;
-  fumbblCoachTeamsStatus.value = 'Fetching FUMBBL teams…';
+  liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.fetchingFumbblTeams'));
   try {
     const cacheKey = name.toLowerCase();
     const result = fumbblCoachTeamsCache.value.get(cacheKey) ?? await fetchFumbblCoachTeams(name);
     fumbblCoachTeamsCache.value.set(cacheKey, result);
     if (result.kind === 'not-found') {
       fumbblCoachTeams.value = [];
-      fumbblCoachTeamsStatus.value = `No FUMBBL coach named “${name}” was found.`;
+      liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.noFumbblCoachNamed', { name }));
       return;
     }
 
     fumbblCoachTeams.value = result.teams;
-    fumbblCoachTeamsStatus.value = result.teams.length
+    liveSetHere(fumbblCoachTeamsStatus, 'value', () => result.teams.length
       ? ''
-      : `No FUMBBL teams were returned for “${result.coachName || name}”.`;
+      : $t('teamBuilder.text.noFumbblTeamsWere', { p0: result.coachName || name }));
   } catch (error) {
     fumbblCoachTeams.value = [];
-    fumbblCoachTeamsStatus.value = `Could not reach fumbbl.com (${errText(error)}).`;
+    liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.couldNotReachFumbbl', { p0: errText(error) }));
   } finally {
     fumbblCoachTeamsBusy.value = false;
   }
@@ -2090,22 +2095,22 @@ async function loadFumbblCoachTeams(): Promise<void> {
 async function importFumbblTeam(team: FumbblCoachTeam): Promise<void> {
   if (importingFumbblTeamIds.value.has(team.id)) return;
   if (!coach.value) {
-    fumbblCoachTeamsStatus.value = 'Set your Super FUMBBL coach name in Settings → Connection.';
+    liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.setYourSuperFumbbl'));
     return;
   }
 
   importingFumbblTeamIds.value = new Set([...importingFumbblTeamIds.value, team.id]);
-  fumbblCoachTeamsStatus.value = `Importing “${team.name}” onto the fork…`;
+  liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.importingNameOntoThe', { name: team.name }));
   try {
     const data = await ingestFumbblCoachTeam(botPost, coach.value, team.id);
     const importedTeam = data.team as LibraryTeam | undefined;
     importedFumbblTeamIds.value = new Set([...importedFumbblTeamIds.value, team.id]);
-    fumbblCoachTeamsStatus.value = `✓ Imported “${importedTeam?.teamName ?? team.name}”.`
+    liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.importedP0', { p0: importedTeam?.teamName ?? team.name })
       + (data.raceWarning ? ` ⚠ ${String(data.raceWarning)}` : '')
-      + (data.needsRestart ? ' (playable after the next fork restart)' : '');
+      + (data.needsRestart ? ' (playable after the next fork restart)' : ''));
     await loadLibrary();
   } catch (error) {
-    fumbblCoachTeamsStatus.value = `Import failed (${errText(error)}).`;
+    liveSetHere(fumbblCoachTeamsStatus, 'value', () => $t('teamBuilder.text.importFailedP0', { p0: errText(error) }));
   } finally {
     importingFumbblTeamIds.value = new Set([...importingFumbblTeamIds.value].filter((id) => id !== team.id));
   }
@@ -2172,53 +2177,53 @@ onBeforeUnmount(() => {
   <main class="team-builder-view" aria-labelledby="team-builder-title">
     <header class="view-header">
       <div>
-        <h1 id="team-builder-title"><span>T</span>eam <span>M</span>anagement</h1>
-        <p>Coach: <strong>{{ coach || 'Not configured' }}</strong>.</p>
+        <h1 id="team-builder-title"><span>{{ capHead('teamBuilder.viewHeader.capTeam') }}</span>{{ capTail('teamBuilder.viewHeader.capTeam') }} <span>{{ capHead('teamBuilder.viewHeader.capManagement') }}</span>{{ capTail('teamBuilder.viewHeader.capManagement') }}</h1>
+        <p>{{ $t('teamBuilder.viewHeader.coach') }} <strong>{{ coach || $t('teamBuilder.viewHeader.notConfigured') }}</strong>.</p>
       </div>
-      <div class="skill-key" aria-label="Skill category key">
-        <span class="key-label"><b>S</b>kill <b>K</b>ey</span>
-        <span class="skill-general">General</span>
-        <span class="skill-agility">Agility</span>
-        <span class="skill-strength">Strength</span>
-        <span class="skill-passing">Passing</span>
-        <span class="skill-mutation">Mutations</span>
-        <span class="skill-trait">Traits</span>
+      <div class="skill-key" :aria-label="$t('teamBuilder.viewHeader.skillCategoryKey')">
+        <span class="key-label"><b>{{ capHead('teamBuilder.viewHeader.capSkill') }}</b>{{ capTail('teamBuilder.viewHeader.capSkill') }} <b>{{ capHead('teamBuilder.viewHeader.capKey') }}</b>{{ capTail('teamBuilder.viewHeader.capKey') }}</span>
+        <span class="skill-general">{{ $t('teamBuilder.viewHeader.general') }}</span>
+        <span class="skill-agility">{{ $t('teamBuilder.viewHeader.agility') }}</span>
+        <span class="skill-strength">{{ $t('teamBuilder.viewHeader.strength') }}</span>
+        <span class="skill-passing">{{ $t('teamBuilder.viewHeader.passing') }}</span>
+        <span class="skill-mutation">{{ $t('teamBuilder.viewHeader.mutations') }}</span>
+        <span class="skill-trait">{{ $t('teamBuilder.viewHeader.traits') }}</span>
       </div>
     </header>
 
-    <aside class="test-environment-notice" role="note" aria-label="Test environment notice">
-      <strong>Test environment</strong>
-      <span> — Teams created or managed here are for the Super FUMBBL test environment and do not alter official FUMBBL teams.</span>
+    <aside class="test-environment-notice" role="note" :aria-label="$t('teamBuilder.testEnvironmentNotice.testEnvironmentNotice')">
+      <strong>{{ $t('teamBuilder.testEnvironmentNotice.testEnvironment') }}</strong>
+      <span>{{ $t('teamBuilder.testEnvironmentNotice.teamsCreatedOrManaged') }}</span>
     </aside>
 
     <!-- Owner: mode cards are titles only (descriptions struck), Custom/Tournament gain "Create",
          and the library card reads "Your Fork Teams". -->
-    <nav class="mode-grid" aria-label="Team management mode">
+    <nav class="mode-grid" :aria-label="$t('teamBuilder.teamManagementMode')">
       <button :class="{ active: mode === 'create' }" type="button" @click="selectBuilderMode('create')">
-        <strong>Create Team</strong>
+        <strong>{{ $t('teamBuilder.createTeam') }}</strong>
       </button>
       <button :class="{ active: mode === 'custom' }" type="button" @click="selectBuilderMode('custom')">
-        <strong>Create Custom Team</strong>
+        <strong>{{ $t('teamBuilder.createCustomTeam') }}</strong>
       </button>
       <button :class="{ active: mode === 'tournament' }" type="button" @click="selectBuilderMode('tournament')">
-        <strong>Create Tournament Team</strong>
+        <strong>{{ $t('teamBuilder.createTournamentTeam') }}</strong>
       </button>
       <button :class="{ active: mode === 'import' }" type="button" @click="selectBuilderMode('import')">
-        <strong>Your Fork Teams</strong>
+        <strong>{{ $t('teamBuilder.yourForkTeams') }}</strong>
       </button>
     </nav>
 
     <section v-if="mode === 'import'" class="builder-panel import-panel">
       <header class="library-toolbar">
-        <button v-if="selectedLibraryTeam" class="library-back-button" type="button" @click="returnToLibraryList">← Your Fork Teams</button>
-        <div class="section-title"><span>F</span>ork <span>L</span>ibrary</div>
-        <button class="library-ingest-button" type="button" @click="openLibraryIngest($event.currentTarget as HTMLElement)">Ingest Team</button>
+        <button v-if="selectedLibraryTeam" class="library-back-button" type="button" @click="returnToLibraryList">{{ $t('teamBuilder.builderPanel.import.yourForkTeams') }}</button>
+        <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capFork') }}</span>{{ capTail('teamBuilder.builderPanel.import.capFork') }} <span>{{ capHead('teamBuilder.builderPanel.import.capLibrary') }}</span>{{ capTail('teamBuilder.builderPanel.import.capLibrary') }}</div>
+        <button class="library-ingest-button" type="button" @click="openLibraryIngest($event.currentTarget as HTMLElement)">{{ $t('teamBuilder.builderPanel.import.ingestTeam') }}</button>
       </header>
       <p v-if="libraryStatus" class="status-copy">{{ libraryStatus }}</p>
       <p v-if="retireStatus" class="status-copy">{{ retireStatus }}</p>
 
       <div v-else class="library-workspace">
-        <aside class="library-sidebar" aria-label="Known teams">
+        <aside class="library-sidebar" :aria-label="$t('teamBuilder.builderPanel.import.knownTeams')">
           <button
             v-for="team in library"
             :key="team.teamId"
@@ -2229,17 +2234,17 @@ onBeforeUnmount(() => {
             @click="selectLibraryTeam(team)"
           >
             <span class="library-crest">
-              <img v-if="forkCrestUrl(team)" :src="forkCrestUrl(team) ?? undefined" :alt="`${team.race} crest`" @error="markForkCrestFailed(team)" />
+              <img v-if="forkCrestUrl(team)" :src="forkCrestUrl(team) ?? undefined" :alt="$t('teamBuilder.builderPanel.import.raceCrest', { race: team.race })" @error="markForkCrestFailed(team)" />
               <template v-else>{{ initials(team.teamName) }}</template>
             </span>
-            <span><strong :title="team.teamName">{{ team.teamName }}</strong><small>{{ team.race }} · {{ formatTeamValue(team.teamValue) }}</small></span>
+            <span><strong :title="team.teamName">{{ team.teamName }}</strong><small>{{ terms(team.race) }} · {{ formatTeamValue(team.teamValue) }}</small></span>
           </button>
         </aside>
 
         <main class="library-detail-pane">
           <div v-if="!selectedLibraryTeam" class="library-empty-state">
-            <div class="section-title"><span>T</span>eam <span>M</span>anagement</div>
-            <p>Select a team from the library to inspect its stored roster and manage advancements.</p>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capTeam') }}</span>{{ capTail('teamBuilder.builderPanel.import.capTeam') }} <span>{{ capHead('teamBuilder.builderPanel.import.capManagement') }}</span>{{ capTail('teamBuilder.builderPanel.import.capManagement') }}</div>
+            <p>{{ $t('teamBuilder.builderPanel.import.selectATeamFrom') }}</p>
           </div>
           <p v-else-if="libraryDetailStatus" class="status-copy">{{ libraryDetailStatus }}</p>
           <div v-else-if="selectedLibraryTeamDetail" class="builder-layout import-team-display">
@@ -2248,27 +2253,27 @@ onBeforeUnmount(() => {
                    wraps instead of overflowing the pane. -->
               <div class="builder-heading library-detail-heading">
                 <span v-if="selectedLibraryTeam" class="library-crest" aria-hidden="true">
-                  <img v-if="forkCrestUrl(selectedLibraryTeam)" :src="forkCrestUrl(selectedLibraryTeam) ?? undefined" :alt="`${selectedLibraryTeamDetail.race} crest`" @error="markForkCrestFailed(selectedLibraryTeam)" />
+                  <img v-if="forkCrestUrl(selectedLibraryTeam)" :src="forkCrestUrl(selectedLibraryTeam) ?? undefined" :alt="$t('teamBuilder.builderPanel.import.raceCrest', { race: selectedLibraryTeamDetail.race })" @error="markForkCrestFailed(selectedLibraryTeam)" />
                   <template v-else>{{ initials(selectedLibraryTeamDetail.name) }}</template>
                 </span>
-                <span class="library-heading-name">{{ selectedLibraryTeamDetail.name }} — {{ selectedLibraryTeamDetail.race }}</span>
+                <span class="library-heading-name">{{ selectedLibraryTeamDetail.name }} — {{ terms(selectedLibraryTeamDetail.race) }}</span>
                 <!-- Owner: tournament-built teams carry a banner top-right of the heading, named by the
                      ruleset (e.g. "SPIKE! 2026 TOURNAMENT"; rulesetPackName = the signal). -->
-                <span v-if="selectedLibraryTeamDetail.rulesetPackName" class="tournament-banner">{{ selectedLibraryTeamDetail.rulesetPackName }} Tournament</span>
+                <span v-if="selectedLibraryTeamDetail.rulesetPackName" class="tournament-banner">{{ $t('teamBuilder.builderPanel.import.rulesetpacknameTournament', { rulesetPackName: selectedLibraryTeamDetail.rulesetPackName }) }}</span>
               </div>
               <section class="roster-section">
-                <div class="section-title"><span>P</span>layer <span>R</span>oster</div>
+                <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capPlayer') }}</span>{{ capTail('teamBuilder.builderPanel.import.capPlayer') }} <span>{{ capHead('teamBuilder.builderPanel.import.capRoster') }}</span>{{ capTail('teamBuilder.builderPanel.import.capRoster') }}</div>
                 <div class="roster-scroll">
                   <!-- Owner annotation pass (library row): every value sits OVER its descriptor (stacked chips);
                        the Earned cell, the rank word ("Legend"), the "Active" status noise, and the
                        "No added skills" placeholder are all gone. Null stats stay muted em dashes. -->
-                  <div class="roster-header roster-grid library-roster-grid"><span>#</span><span>Player</span><span>Stats</span><span>Skills &amp; Traits</span><span>Value</span><span>SPP</span><span>Advancement</span></div>
+                  <div class="roster-header roster-grid library-roster-grid"><span>#</span><span>{{ $t('teamBuilder.builderPanel.import.player') }}</span><span>{{ $t('teamBuilder.builderPanel.import.stats') }}</span><span>{{ $t('teamBuilder.builderPanel.import.skillsTraits') }}</span><span>{{ $t('teamBuilder.builderPanel.import.value') }}</span><span>{{ $t('teamBuilder.builderPanel.import.spp') }}</span><span>{{ $t('teamBuilder.builderPanel.import.advancement') }}</span></div>
                   <div v-for="player in selectedLibraryTeamDetail.players" :key="player.id" class="roster-stack">
                     <div class="roster-row roster-grid library-roster-grid library-roster-row">
                       <!-- P2 renumber (contract §3C): the number is an editor; commit on change/blur sends
                            team/renumber and the server-refreshed detail re-sorts. Out-of-range just re-syncs. -->
                       <input class="slot-number slot-number-input" type="number" min="1" max="99" :value="player.number"
-                        :disabled="managementBusy" :aria-label="`Player number for ${player.name}`"
+                        :disabled="managementBusy" :aria-label="$t('teamBuilder.builderPanel.import.playerNumberForName', { name: player.name })"
                         @change="commitPlayerNumber(player, ($event.target as HTMLInputElement).value)" />
                       <div class="player-cell">
                         <!-- Owner: position sprite portrait back in the row (Roster Slots idiom — same frame,
@@ -2285,23 +2290,23 @@ onBeforeUnmount(() => {
                         </span>
                         <span class="player-copy"><strong class="fixed-player-name">{{ player.name }}</strong><small>{{ libraryPositionLabel(player) }}<template v-if="!['Active', 'Ready'].includes(libraryPlayerStatus(player))"> · {{ libraryPlayerStatus(player) }}</template></small>
                           <!-- Gap-analysis P1: injuries were emitted by /detail but never rendered. -->
-                          <small v-if="player.injuries.length" class="player-injuries">{{ player.injuries.map(injuryName).join(' · ') }}</small>
+                          <small v-if="player.injuries.length" class="player-injuries">{{ player.injuries.map((x) => terms(injuryName(x))).join(' · ') }}</small>
                         </span>
                       </div>
-                      <div class="row-stats"><span><b :class="{ 'stat-missing': player.movement == null }">{{ player.movement ?? '—' }}</b><small>MA</small></span><span><b :class="{ 'stat-missing': player.strength == null }">{{ player.strength ?? '—' }}</b><small>ST</small></span><span><b :class="{ 'stat-missing': player.agility == null }">{{ player.agility ? `${player.agility}+` : '—' }}</b><small>AG</small></span><span><b :class="{ 'stat-missing': player.passing == null }">{{ player.passing ? `${player.passing}+` : '—' }}</b><small>PA</small></span><span><b :class="{ 'stat-missing': player.armour == null }">{{ player.armour ? `${player.armour}+` : '—' }}</b><small>AV</small></span></div>
+                      <div class="row-stats"><span><b :class="{ 'stat-missing': player.movement == null }">{{ player.movement ?? '—' }}</b><small>{{ $t('teamBuilder.builderPanel.import.ma') }}</small></span><span><b :class="{ 'stat-missing': player.strength == null }">{{ player.strength ?? '—' }}</b><small>ST</small></span><span><b :class="{ 'stat-missing': player.agility == null }">{{ player.agility ? `${player.agility}+` : '—' }}</b><small>{{ $t('teamBuilder.builderPanel.import.ag') }}</small></span><span><b :class="{ 'stat-missing': player.passing == null }">{{ player.passing ? `${player.passing}+` : '—' }}</b><small>{{ $t('teamBuilder.builderPanel.import.pa') }}</small></span><span><b :class="{ 'stat-missing': player.armour == null }">{{ player.armour ? `${player.armour}+` : '—' }}</b><small>{{ $t('teamBuilder.builderPanel.import.av') }}</small></span></div>
                       <div class="row-skills">
-                        <span v-for="skill in player.skills" :key="skill" :class="skillClass(skill)">{{ skill }}</span>
+                        <span v-for="skill in player.skills" :key="skill" :class="skillClass(skill)">{{ terms(skill) }}</span>
                       </div>
-                      <div class="library-num-cell"><b>{{ formatGold(player.currentValue) }}</b><small>Current</small></div>
+                      <div class="library-num-cell"><b>{{ formatGold(player.currentValue) }}</b><small>{{ $t('teamBuilder.builderPanel.import.current') }}</small></div>
                       <!-- Owner ruling: resurrection-style team ⇒ earned SPP suppressed (history stays in the XML). -->
                       <!-- Owner: Available = spp/N (N = this advancement's max SPP cost); the standalone
                            advancement count is retired — Available + Add Skill carry the progression story. -->
-                      <div class="library-num-cell"><b :class="{ 'stat-missing': isResurrectionTeam }" :title="isResurrectionTeam ? 'Resurrection-style team — SPP is not tracked.' : undefined">{{ isResurrectionTeam ? '—' : sppLabel(player) }}</b><small>Available</small></div>
+                      <div class="library-num-cell"><b :class="{ 'stat-missing': isResurrectionTeam }" :title="isResurrectionTeam ? $t('teamBuilder.builderPanel.import.resurrectionStyleTeamSpp') : undefined">{{ isResurrectionTeam ? '—' : sppLabel(player) }}</b><small>{{ $t('teamBuilder.builderPanel.import.available') }}</small></div>
                       <div class="library-advancement-cell">
-                        <button class="add-skill-btn" type="button" :disabled="isResurrectionTeam || !canAdvancePlayer(player)" :title="isResurrectionTeam ? 'Resurrection-style team — SPP advancement is off.' : player.advancementCosts ? 'Spend SPP on a BB2025 advancement' : 'This player cannot take another advancement'" @click="openAdvancement(player, $event.currentTarget as HTMLElement)">Add Skill</button>
+                        <button class="add-skill-btn" type="button" :disabled="isResurrectionTeam || !canAdvancePlayer(player)" :title="isResurrectionTeam ? $t('teamBuilder.builderPanel.import.resurrectionStyleTeamSpp2') : player.advancementCosts ? $t('teamBuilder.builderPanel.import.spendSppOnA') : $t('teamBuilder.builderPanel.import.thisPlayerCannotTake')" @click="openAdvancement(player, $event.currentTarget as HTMLElement)">{{ $t('teamBuilder.builderPanel.import.addSkill') }}</button>
                         <!-- P3 (contract §3C): player lifecycle menu — legality is the server's call. -->
                         <span class="player-actions">
-                          <button class="mgmt-step" type="button" :title="`Manage ${player.name}`" :disabled="managementBusy" @click="togglePlayerActions(player.id)">⋯</button>
+                          <button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.manageName', { name: player.name })" :disabled="managementBusy" @click="togglePlayerActions(player.id)">⋯</button>
                           <span v-if="playerActionsFor === player.id" class="player-actions-menu">
                             <button v-for="action in PLAYER_ACTIONS.filter((a) => !a.show || a.show(player))" :key="action.path" type="button" @click="runPlayerAction(action.path, player)">{{ action.label }}</button>
                           </span>
@@ -2309,23 +2314,23 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                   </div>
-                  <p v-if="!selectedLibraryTeamDetail.players.length" class="status-copy">No players are registered for this team.</p>
+                  <p v-if="!selectedLibraryTeamDetail.players.length" class="status-copy">{{ $t('teamBuilder.builderPanel.import.noPlayersAreRegistered') }}</p>
                   <!-- P3 (contract §3C): hire flow — team/addPlayer {teamId, positionId, gender, name}. -->
                   <div class="hire-row">
-                    <button v-if="!hireOpen" class="mgmt-hire-button" type="button" :disabled="managementBusy || !hirePositions.length" :title="hirePositions.length ? 'Hire a new player' : 'No builder roster matched this race — hiring unavailable'" @click="openHire">+ Hire Player</button>
+                    <button v-if="!hireOpen" class="mgmt-hire-button" type="button" :disabled="managementBusy || !hirePositions.length" :title="hirePositions.length ? $t('teamBuilder.builderPanel.import.hireANewPlayer') : $t('teamBuilder.builderPanel.import.noBuilderRosterMatched')" @click="openHire">{{ $t('teamBuilder.builderPanel.import.hirePlayer') }}</button>
                     <div v-else class="hire-form">
-                      <select v-model="hireDraft.positionId" aria-label="Position to hire">
+                      <select v-model="hireDraft.positionId" :aria-label="$t('teamBuilder.builderPanel.import.positionToHire')">
                         <option v-for="position in hirePositions" :key="position.positionId" :value="position.positionId">{{ displayPositionName(position.name) }} — {{ formatGold(position.cost) }}</option>
                       </select>
-                      <input v-model="hireDraft.name" type="text" maxlength="60" placeholder="Player name" aria-label="New player name" @keydown.enter.prevent="commitHire" />
-                      <button class="mgmt-step" type="button" title="Generate a name" :disabled="managementBusy" @click="generateHireName">🎲</button>
-                      <select v-model="hireDraft.gender" aria-label="Player gender">
-                        <option value="male">Male</option>
-                        <option value="female">Female</option>
-                        <option value="neutral">Neutral</option>
+                      <input v-model="hireDraft.name" type="text" maxlength="60" :placeholder="$t('teamBuilder.builderPanel.import.playerName')" :aria-label="$t('teamBuilder.builderPanel.import.newPlayerName')" @keydown.enter.prevent="commitHire" />
+                      <button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.generateAName')" :disabled="managementBusy" @click="generateHireName">🎲</button>
+                      <select v-model="hireDraft.gender" :aria-label="$t('teamBuilder.builderPanel.import.playerGender')">
+                        <option value="male">{{ $t('teamBuilder.builderPanel.import.male') }}</option>
+                        <option value="female">{{ $t('teamBuilder.builderPanel.import.female') }}</option>
+                        <option value="neutral">{{ $t('teamBuilder.builderPanel.import.neutral') }}</option>
                       </select>
-                      <button class="mgmt-hire-button" type="button" :disabled="managementBusy || !hireDraft.name.trim() || !hireDraft.positionId" @click="commitHire">Hire</button>
-                      <button class="mgmt-step" type="button" title="Cancel hire" @click="hireOpen = false">✕</button>
+                      <button class="mgmt-hire-button" type="button" :disabled="managementBusy || !hireDraft.name.trim() || !hireDraft.positionId" @click="commitHire">{{ $t('teamBuilder.builderPanel.import.hire') }}</button>
+                      <button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.cancelHire')" @click="hireOpen = false">✕</button>
                     </div>
                   </div>
                 </div>
@@ -2334,48 +2339,48 @@ onBeforeUnmount(() => {
 
             <aside class="right-rail">
               <section class="value-card">
-                <div class="section-title"><span>T</span>eam <span>S</span>ummary</div>
+                <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capTeam') }}</span>{{ capTail('teamBuilder.builderPanel.import.capTeam') }} <span>{{ capHead('teamBuilder.builderPanel.import.capSummary') }}</span>{{ capTail('teamBuilder.builderPanel.import.capSummary') }}</div>
                 <!-- P2 (FUMBBLUI contract §3B/§3C): the summary rail is interactive — steppers per staff line
                      (server-authoritative costs/caps; errors render verbatim below), inline team rename. -->
-                <div v-if="!renamingTeam" class="value-line wrappable"><span>Team name</span><strong>{{ selectedLibraryTeamDetail.name }}<button class="mgmt-edit" type="button" title="Rename team" :disabled="managementBusy" @click="startRenameTeam">✎</button></strong></div>
-                <div v-else class="value-line wrappable rename-line"><span>Team name</span>
+                <div v-if="!renamingTeam" class="value-line wrappable"><span>{{ $t('teamBuilder.builderPanel.import.teamName') }}</span><strong>{{ selectedLibraryTeamDetail.name }}<button class="mgmt-edit" type="button" :title="$t('teamBuilder.builderPanel.import.renameTeam')" :disabled="managementBusy" @click="startRenameTeam">✎</button></strong></div>
+                <div v-else class="value-line wrappable rename-line"><span>{{ $t('teamBuilder.builderPanel.import.teamName') }}</span>
                   <span class="rename-controls">
-                    <input v-model="renameDraft" type="text" maxlength="60" aria-label="New team name" @keydown.enter.prevent="commitRenameTeam" @keydown.escape.prevent="renamingTeam = false" />
-                    <button class="mgmt-step" type="button" title="Save name" :disabled="managementBusy" @click="commitRenameTeam">✓</button>
-                    <button class="mgmt-step" type="button" title="Cancel rename" @click="renamingTeam = false">✕</button>
+                    <input v-model="renameDraft" type="text" maxlength="60" :aria-label="$t('teamBuilder.builderPanel.import.newTeamName')" @keydown.enter.prevent="commitRenameTeam" @keydown.escape.prevent="renamingTeam = false" />
+                    <button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.saveName')" :disabled="managementBusy" @click="commitRenameTeam">✓</button>
+                    <button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.cancelRename')" @click="renamingTeam = false">✕</button>
                   </span>
                 </div>
-                <div class="value-line"><span>Race</span><strong>{{ selectedLibraryTeamDetail.race }}</strong></div>
-                <div v-if="isResurrectionTeam" class="value-line"><span>Progression</span><strong title="Earned SPP is suppressed for this team.">Resurrection</strong></div>
-                <div class="value-line"><span>Rerolls</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="canRemoveReroll ? 'Remove a reroll' : 'Rerolls can only be removed at redraft or by an admin.'" :disabled="managementBusy || !selectedLibraryTeamDetail.rerolls || !canRemoveReroll" @click="adjustRerolls(-1)">−</button>{{ selectedLibraryTeamDetail.rerolls }}<button class="mgmt-step" type="button" title="Buy a reroll" :disabled="managementBusy" @click="adjustRerolls(1)">+</button></strong></div>
-                <div class="value-line"><span>Assistant coaches</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Remove an assistant coach" :disabled="managementBusy || !selectedLibraryTeamDetail.assistantCoaches" @click="adjustAssistantCoaches(-1)">−</button>{{ selectedLibraryTeamDetail.assistantCoaches }}<button class="mgmt-step" type="button" title="Hire an assistant coach" :disabled="managementBusy" @click="adjustAssistantCoaches(1)">+</button></strong></div>
-                <div class="value-line"><span>Cheerleaders</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Remove a cheerleader" :disabled="managementBusy || !selectedLibraryTeamDetail.cheerleaders" @click="adjustCheerleaders(-1)">−</button>{{ selectedLibraryTeamDetail.cheerleaders }}<button class="mgmt-step" type="button" title="Hire a cheerleader" :disabled="managementBusy" @click="adjustCheerleaders(1)">+</button></strong></div>
-                <div class="value-line"><span>Fan factor</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Reduce dedicated fans" :disabled="managementBusy || !selectedLibraryTeamDetail.fanFactor" @click="adjustDedicatedFans(-1)">−</button>{{ selectedLibraryTeamDetail.fanFactor }}<button class="mgmt-step" type="button" title="Increase dedicated fans" :disabled="managementBusy" @click="adjustDedicatedFans(1)">+</button></strong></div>
-                <div class="value-line"><span>Apothecary</span><strong class="mgmt-value">{{ selectedLibraryTeamDetail.apothecary ? 'Yes' : 'No' }}<button class="mgmt-step" type="button" :title="selectedLibraryTeamDetail.apothecary ? 'Remove the apothecary' : 'Hire an apothecary'" :disabled="managementBusy" @click="toggleApothecary">{{ selectedLibraryTeamDetail.apothecary ? '−' : '+' }}</button></strong></div>
-                <div class="value-line"><span>Treasury</span><strong>{{ formatGold(selectedLibraryTeamDetail.treasury) }}</strong></div>
-                <div class="value-line total"><span>Team value</span><strong>{{ formatTeamValue(selectedLibraryTeamDetail.teamValue) }}</strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.race') }}</span><strong>{{ terms(selectedLibraryTeamDetail.race) }}</strong></div>
+                <div v-if="isResurrectionTeam" class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.progression') }}</span><strong :title="$t('teamBuilder.builderPanel.import.earnedSppIsSuppressed')">{{ $t('teamBuilder.builderPanel.import.resurrection') }}</strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.rerolls') }}</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="canRemoveReroll ? $t('teamBuilder.builderPanel.import.removeAReroll') : $t('teamBuilder.builderPanel.import.rerollsCanOnlyBe')" :disabled="managementBusy || !selectedLibraryTeamDetail.rerolls || !canRemoveReroll" @click="adjustRerolls(-1)">−</button>{{ selectedLibraryTeamDetail.rerolls }}<button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.buyAReroll')" :disabled="managementBusy" @click="adjustRerolls(1)">+</button></strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.assistantCoaches') }}</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.removeAnAssistantCoach')" :disabled="managementBusy || !selectedLibraryTeamDetail.assistantCoaches" @click="adjustAssistantCoaches(-1)">−</button>{{ selectedLibraryTeamDetail.assistantCoaches }}<button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.hireAnAssistantCoach')" :disabled="managementBusy" @click="adjustAssistantCoaches(1)">+</button></strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.cheerleaders') }}</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.removeACheerleader')" :disabled="managementBusy || !selectedLibraryTeamDetail.cheerleaders" @click="adjustCheerleaders(-1)">−</button>{{ selectedLibraryTeamDetail.cheerleaders }}<button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.hireACheerleader')" :disabled="managementBusy" @click="adjustCheerleaders(1)">+</button></strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.fanFactor') }}</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.reduceDedicatedFans')" :disabled="managementBusy || !selectedLibraryTeamDetail.fanFactor" @click="adjustDedicatedFans(-1)">−</button>{{ selectedLibraryTeamDetail.fanFactor }}<button class="mgmt-step" type="button" :title="$t('teamBuilder.builderPanel.import.increaseDedicatedFans')" :disabled="managementBusy" @click="adjustDedicatedFans(1)">+</button></strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.apothecary') }}</span><strong class="mgmt-value">{{ selectedLibraryTeamDetail.apothecary ? $t('teamBuilder.builderPanel.import.yes') : $t('teamBuilder.builderPanel.import.no') }}<button class="mgmt-step" type="button" :title="selectedLibraryTeamDetail.apothecary ? $t('teamBuilder.builderPanel.import.removeTheApothecary') : $t('teamBuilder.builderPanel.import.hireAnApothecary')" :disabled="managementBusy" @click="toggleApothecary">{{ selectedLibraryTeamDetail.apothecary ? '−' : '+' }}</button></strong></div>
+                <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.import.treasury') }}</span><strong>{{ formatGold(selectedLibraryTeamDetail.treasury) }}</strong></div>
+                <div class="value-line total"><span>{{ $t('teamBuilder.builderPanel.import.teamValue') }}</span><strong>{{ formatTeamValue(selectedLibraryTeamDetail.teamValue) }}</strong></div>
                 <p v-if="managementStatus" class="status-copy mgmt-status">{{ managementStatus }}</p>
               </section>
               <!-- Owner: rostered inducements & stars join the right rail as their own sub-category. Stars
                    derive from the roster positions; inducements consume the detail's optional emit (the XML's
                    inducementSet — the field is a Veers widening ask, section hides until it arrives). -->
               <section v-if="rosteredStars.length || rosteredInducements.length" class="live-card">
-                <div class="section-title"><span>R</span>ostered <span>I</span>nducements &amp; <span>S</span>tars</div>
-                <div v-for="star in rosteredStars" :key="`star-${star.id}`" class="value-line"><span>{{ star.name }}</span><strong>Star</strong></div>
+                <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capRostered') }}</span>{{ capTail('teamBuilder.builderPanel.import.capRostered') }} <span>{{ capHead('teamBuilder.builderPanel.import.capInducementsAnd') }}</span>{{ capTail('teamBuilder.builderPanel.import.capInducementsAnd') }} <span>{{ capHead('teamBuilder.builderPanel.import.capStars') }}</span>{{ capTail('teamBuilder.builderPanel.import.capStars') }}</div>
+                <div v-for="star in rosteredStars" :key="`star-${star.id}`" class="value-line"><span>{{ star.name }}</span><strong>{{ $t('teamBuilder.builderPanel.import.star') }}</strong></div>
                 <div v-for="(item, index) in rosteredInducements" :key="`ind-${index}`" class="value-line"><span>{{ item.label }}</span><strong>{{ item.count }}</strong></div>
               </section>
               <section class="live-card">
-                <div class="section-title"><span>T</span>eam <span>M</span>anagement</div>
+                <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capTeam') }}</span>{{ capTail('teamBuilder.builderPanel.import.capTeam') }} <span>{{ capHead('teamBuilder.builderPanel.import.capManagement') }}</span>{{ capTail('teamBuilder.builderPanel.import.capManagement') }}</div>
                 <!-- Owner: the Team ID / Coach / Ingested rows are removed — the card keeps its actions. -->
-                <div v-if="!selectedLibraryTeam.forkLoadable" class="finding warning-finding">This library team is not currently fork-loadable.</div>
+                <div v-if="!selectedLibraryTeam.forkLoadable" class="finding warning-finding">{{ $t('teamBuilder.builderPanel.import.thisLibraryTeamIs') }}</div>
                 <!-- P3 (contract §3C): ready/unready — journeymen picks ride once the detail emits a JM flag. -->
                 <div class="ready-actions">
-                  <button class="edit-team-button ready-button" type="button" :disabled="managementBusy" title="Mark this team ready to play (rolls Expensive Mistakes when due)" @click="readyTeam">Ready Team</button>
-                  <button class="retire-team-button" type="button" :disabled="managementBusy" title="Take this team back out of the ready state" @click="unreadyTeam">Unready</button>
+                  <button class="edit-team-button ready-button" type="button" :disabled="managementBusy" :title="$t('teamBuilder.builderPanel.import.markThisTeamReady')" @click="readyTeam">{{ $t('teamBuilder.builderPanel.import.readyTeam') }}</button>
+                  <button class="retire-team-button" type="button" :disabled="managementBusy" :title="$t('teamBuilder.builderPanel.import.takeThisTeamBack')" @click="unreadyTeam">{{ $t('teamBuilder.builderPanel.import.unready') }}</button>
                 </div>
-                <button v-if="selectedLibraryTeamDetail.canEditRoster.available" class="edit-team-button" type="button" :disabled="selectedLibraryTeamEditUnavailable" :title="selectedLibraryTeamEditTitle" @click="editSelectedLibraryTeam">Edit Team</button>
-                <p v-else class="status-copy">{{ selectedLibraryTeamDetail.canEditRoster.reason ?? 'Whole-roster editing is unavailable for your server role.' }}</p>
-                <button class="retire-team-button detail-retire-button" type="button" :disabled="retiringTeamIds.has(selectedLibraryTeam.teamId)" @click="confirmRetireTeam(selectedLibraryTeam)">{{ retiringTeamIds.has(selectedLibraryTeam.teamId) ? 'Retiring…' : 'Retire Team' }}</button>
+                <button v-if="selectedLibraryTeamDetail.canEditRoster.available" class="edit-team-button" type="button" :disabled="selectedLibraryTeamEditUnavailable" :title="selectedLibraryTeamEditTitle" @click="editSelectedLibraryTeam">{{ $t('teamBuilder.builderPanel.import.editTeam') }}</button>
+                <p v-else class="status-copy">{{ selectedLibraryTeamDetail.canEditRoster.reason ?? $t('teamBuilder.builderPanel.import.wholeRosterEditingIs') }}</p>
+                <button class="retire-team-button detail-retire-button" type="button" :disabled="retiringTeamIds.has(selectedLibraryTeam.teamId)" @click="confirmRetireTeam(selectedLibraryTeam)">{{ retiringTeamIds.has(selectedLibraryTeam.teamId) ? $t('teamBuilder.builderPanel.import.retiring') : $t('teamBuilder.builderPanel.import.retireTeam') }}</button>
               </section>
             </aside>
           </div>
@@ -2384,17 +2389,17 @@ onBeforeUnmount(() => {
 
       <div v-if="libraryIngestOpen" class="library-modal-backdrop" @click.self="closeLibraryIngest">
         <section ref="libraryIngestDialog" class="library-modal" role="dialog" aria-modal="true" aria-labelledby="library-ingest-title" tabindex="-1" @keydown="onIngestDialogKeydown">
-          <header><h2 id="library-ingest-title" class="section-title"><span>I</span>ngest <span>T</span>eam</h2><button type="button" aria-label="Close ingest team" @click="closeLibraryIngest">×</button></header>
+          <header><h2 id="library-ingest-title" class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capIngest') }}</span>{{ capTail('teamBuilder.builderPanel.import.capIngest') }} <span>{{ capHead('teamBuilder.builderPanel.import.capTeam') }}</span>{{ capTail('teamBuilder.builderPanel.import.capTeam') }}</h2><button type="button" :aria-label="$t('teamBuilder.builderPanel.import.closeIngestTeam')" @click="closeLibraryIngest">×</button></header>
           <form class="fumbbl-team-search" @submit.prevent="loadFumbblCoachTeams">
-            <input v-model="fumbblCoachName" type="text" aria-label="FUMBBL coach name" placeholder="FUMBBL coach name" />
-            <button type="submit" :disabled="fumbblCoachTeamsBusy || !fumbblCoachName.trim()">{{ fumbblCoachTeamsBusy ? 'Fetching…' : 'Fetch teams' }}</button>
+            <input v-model="fumbblCoachName" type="text" :aria-label="$t('teamBuilder.builderPanel.import.fumbblCoachName')" :placeholder="$t('teamBuilder.builderPanel.import.fumbblCoachName')" />
+            <button type="submit" :disabled="fumbblCoachTeamsBusy || !fumbblCoachName.trim()">{{ fumbblCoachTeamsBusy ? $t('teamBuilder.builderPanel.import.fetching') : $t('teamBuilder.builderPanel.import.fetchTeams') }}</button>
           </form>
           <p v-if="fumbblCoachTeamsStatus" class="status-copy">{{ fumbblCoachTeamsStatus }}</p>
           <div v-if="fumbblCoachTeams.length" class="library-grid fumbbl-team-grid">
             <article v-for="team in fumbblCoachTeams" :key="team.id" class="library-team fumbbl-team-card">
-              <span class="library-crest"><img v-if="fumbblTeamIconUrl(team)" :src="fumbblTeamIconUrl(team) ?? undefined" :alt="`${team.race} crest`" @error="markFumbblTeamIconFailed(team)" /><template v-else>{{ initials(team.name) }}</template></span>
-              <span class="fumbbl-team-copy"><strong :title="team.name">{{ team.name }}</strong><small>{{ team.race }} · {{ formatTeamValue(team.teamValue) }} · #{{ team.id }}</small></span>
-              <button class="fumbbl-import-button" type="button" :disabled="importingFumbblTeamIds.has(team.id) || importedFumbblTeamIds.has(team.id)" @click="importFumbblTeam(team)">{{ importingFumbblTeamIds.has(team.id) ? 'Importing…' : importedFumbblTeamIds.has(team.id) ? 'Imported' : 'Import' }}</button>
+              <span class="library-crest"><img v-if="fumbblTeamIconUrl(team)" :src="fumbblTeamIconUrl(team) ?? undefined" :alt="$t('teamBuilder.builderPanel.import.raceCrest', { race: team.race })" @error="markFumbblTeamIconFailed(team)" /><template v-else>{{ initials(team.name) }}</template></span>
+              <span class="fumbbl-team-copy"><strong :title="team.name">{{ team.name }}</strong><small>{{ terms(team.race) }} · {{ formatTeamValue(team.teamValue) }} · #{{ team.id }}</small></span>
+              <button class="fumbbl-import-button" type="button" :disabled="importingFumbblTeamIds.has(team.id) || importedFumbblTeamIds.has(team.id)" @click="importFumbblTeam(team)">{{ importingFumbblTeamIds.has(team.id) ? $t('teamBuilder.builderPanel.import.importing') : importedFumbblTeamIds.has(team.id) ? $t('teamBuilder.builderPanel.import.imported') : $t('teamBuilder.builderPanel.import.import') }}</button>
             </article>
           </div>
         </section>
@@ -2402,36 +2407,36 @@ onBeforeUnmount(() => {
 
       <div v-if="advancementPlayer" class="library-modal-backdrop" @click.self="closeAdvancement">
         <section ref="advancementDialog" class="library-modal advancement-modal" role="dialog" aria-modal="true" aria-labelledby="advancement-title" tabindex="-1" @keydown="onAdvancementDialogKeydown">
-          <header><h2 id="advancement-title" class="section-title"><span>A</span>dvance {{ advancementPlayer.name }}</h2><button type="button" aria-label="Close advancement" :disabled="advancementBusy || !!pendingAdvancementRoll" :title="pendingAdvancementRoll ? 'Finish the server-held choice before closing' : undefined" @click="closeAdvancement">×</button></header>
-          <div class="advancement-summary"><span>Available SPP <b>{{ advancementPlayer.spp }}</b></span><span>Earned SPP <b :title="advancementPlayer.earnedSpp === null ? 'Exact lifetime Earned SPP is unavailable for this imported player.' : undefined">{{ formatEarnedSpp(advancementPlayer.earnedSpp) }}</b></span><span>{{ advancementPlayer.rank }} <b>{{ advancementPlayer.advancements }}/6</b></span></div>
-          <div class="advancement-methods" role="tablist" aria-label="Advancement type" @keydown="onAdvancementTabsKeydown">
+          <header><h2 id="advancement-title" class="section-title"><span>{{ capHead('teamBuilder.builderPanel.import.capAdvanceName', { name: advancementPlayer.name }) }}</span>{{ capTail('teamBuilder.builderPanel.import.capAdvanceName', { name: advancementPlayer.name }) }}</h2><button type="button" :aria-label="$t('teamBuilder.builderPanel.import.closeAdvancement')" :disabled="advancementBusy || !!pendingAdvancementRoll" :title="pendingAdvancementRoll ? $t('teamBuilder.builderPanel.import.finishTheServerHeld') : undefined" @click="closeAdvancement">×</button></header>
+          <div class="advancement-summary"><span>{{ $t('teamBuilder.builderPanel.import.availableSpp') }} <b>{{ advancementPlayer.spp }}</b></span><span>{{ $t('teamBuilder.builderPanel.import.earnedSpp') }} <b :title="advancementPlayer.earnedSpp === null ? $t('teamBuilder.builderPanel.import.exactLifetimeEarnedSpp') : undefined">{{ formatEarnedSpp(advancementPlayer.earnedSpp) }}</b></span><span>{{ advancementPlayer.rank }} <b>{{ advancementPlayer.advancements }}/6</b></span></div>
+          <div class="advancement-methods" role="tablist" :aria-label="$t('teamBuilder.builderPanel.import.advancementType')" @keydown="onAdvancementTabsKeydown">
             <button v-for="method in ADVANCEMENT_METHODS" :id="`advancement-tab-${method}`" :key="method" type="button" role="tab" :aria-selected="advancementMethod === method" :aria-controls="`advancement-panel-${method}`" :aria-disabled="!!pendingAdvancementRoll || !advancementMethodAvailable(method)" :tabindex="advancementMethod === method ? 0 : -1" :disabled="!!pendingAdvancementRoll || !advancementMethodAvailable(method)" :title="advancementMethodReason(method)" :class="{ active: advancementMethod === method }" @click="advancementMethod = method">
-              {{ method === 'randomPrimary' ? 'Random Primary' : method === 'chosenPrimary' ? 'Chosen Primary' : method === 'chosenSecondary' ? 'Chosen Secondary' : 'Characteristic' }}
-              <small>{{ advancementPlayer.advancementCosts?.[method] ?? '—' }} SPP</small>
+              {{ method === 'randomPrimary' ? $t('teamBuilder.builderPanel.import.randomPrimary') : method === 'chosenPrimary' ? $t('teamBuilder.builderPanel.import.chosenPrimary') : method === 'chosenSecondary' ? $t('teamBuilder.builderPanel.import.chosenSecondary') : $t('teamBuilder.builderPanel.import.characteristic') }}
+              <small>{{ $t('teamBuilder.builderPanel.import.p0Spp', { p0: advancementPlayer.advancementCosts?.[method] ?? '—' }) }}</small>
             </button>
           </div>
           <p v-if="!pendingAdvancementRoll && advancementMethodReason(advancementMethod)" class="finding warning-finding">{{ advancementMethodReason(advancementMethod) }}</p>
           <div :id="`advancement-panel-${advancementMethod}`" role="tabpanel" :aria-labelledby="`advancement-tab-${advancementMethod}`">
           <template v-if="!pendingAdvancementRoll && (advancementMethod === 'chosenPrimary' || advancementMethod === 'chosenSecondary')">
-            <label class="advancement-field">Skill<select v-model="advancementSkill"><option v-for="skill in advancementMethodSkills" :key="skill" :value="skill">{{ skill }}</option></select></label>
-            <button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementSkill || (advancementPlayer.advancementCosts?.[advancementMethod] ?? Infinity) > advancementPlayer.spp" @click="applyChosenAdvancement">Add Skill</button>
+            <label class="advancement-field">{{ $t('teamBuilder.builderPanel.import.skill') }}<select v-model="advancementSkill"><option v-for="skill in advancementMethodSkills" :key="skill" :value="skill">{{ terms(skill) }}</option></select></label>
+            <button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementSkill || (advancementPlayer.advancementCosts?.[advancementMethod] ?? Infinity) > advancementPlayer.spp" @click="applyChosenAdvancement">{{ $t('teamBuilder.builderPanel.import.addSkill') }}</button>
           </template>
           <template v-else-if="!pendingAdvancementRoll && advancementMethod === 'randomPrimary'">
-            <label class="advancement-field">Primary category<select v-model="advancementCategory"><option v-for="category in advancementPlayer.primaryCategories" :key="category" :value="category">{{ category }}</option></select></label>
-            <button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementCategory || (advancementPlayer.advancementCosts?.randomPrimary ?? Infinity) > advancementPlayer.spp" @click="rollAdvancement">Roll two Skills</button>
+            <label class="advancement-field">{{ $t('teamBuilder.builderPanel.import.primaryCategory') }}<select v-model="advancementCategory"><option v-for="category in advancementPlayer.primaryCategories" :key="category" :value="category">{{ category }}</option></select></label>
+            <button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementCategory || (advancementPlayer.advancementCosts?.randomPrimary ?? Infinity) > advancementPlayer.spp" @click="rollAdvancement">{{ $t('teamBuilder.builderPanel.import.rollTwoSkills') }}</button>
           </template>
           <template v-else-if="!pendingAdvancementRoll">
-            <p class="status-copy">The server rolls the D8. You may take an offered Characteristic or decline it for a legal Primary or Secondary Skill at the Characteristic SPP cost.</p>
-            <button class="advancement-confirm" type="button" :disabled="advancementBusy || (advancementPlayer.advancementCosts?.characteristic ?? Infinity) > advancementPlayer.spp" @click="rollAdvancement">Roll D8</button>
+            <p class="status-copy">{{ $t('teamBuilder.builderPanel.import.theServerRollsThe') }}</p>
+            <button class="advancement-confirm" type="button" :disabled="advancementBusy || (advancementPlayer.advancementCosts?.characteristic ?? Infinity) > advancementPlayer.spp" @click="rollAdvancement">{{ $t('teamBuilder.builderPanel.import.rollD8') }}</button>
           </template>
           <template v-else-if="pendingAdvancementRoll.method === 'randomPrimary'">
-            <p class="status-copy">Choose one of the two server-rolled Primary Skills.</p>
-            <div class="advancement-roll-choices"><button v-for="(skill, index) in pendingAdvancementRoll.choices" :key="`${skill}-${index}`" type="button" :disabled="advancementBusy" @click="commitRolledSkill(skill)">{{ skill }}</button></div>
+            <p class="status-copy">{{ $t('teamBuilder.builderPanel.import.chooseOneOfThe') }}</p>
+            <div class="advancement-roll-choices"><button v-for="(skill, index) in pendingAdvancementRoll.choices" :key="`${skill}-${index}`" type="button" :disabled="advancementBusy" @click="commitRolledSkill(skill)">{{ terms(skill) }}</button></div>
           </template>
           <template v-else>
-            <p class="status-copy">D8 result: <b>{{ pendingAdvancementRoll.roll }}</b>. Choose an available Characteristic, or take a Skill instead.</p>
+            <p class="status-copy">{{ $t('teamBuilder.builderPanel.import.d8Result') }} <b>{{ pendingAdvancementRoll.roll }}</b>{{ $t('teamBuilder.builderPanel.import.chooseAnAvailableCharacteristic') }}</p>
             <div class="advancement-roll-choices"><button v-for="characteristic in pendingAdvancementRoll.choices" :key="characteristic" type="button" :disabled="advancementBusy" @click="commitRolledCharacteristic(characteristic)">+1 {{ characteristic }}</button></div>
-            <div class="characteristic-fallback"><label class="advancement-field">Fallback access<select v-model="characteristicFallbackAccess"><option value="primary">Primary</option><option value="secondary">Secondary</option></select></label><label class="advancement-field">Skill<select v-model="advancementSkill"><option v-for="skill in advancementMethodSkills" :key="skill" :value="skill">{{ skill }}</option></select></label><button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementSkill" @click="commitRolledSkill(advancementSkill, characteristicFallbackAccess)">Take Skill</button></div>
+            <div class="characteristic-fallback"><label class="advancement-field">{{ $t('teamBuilder.builderPanel.import.fallbackAccess') }}<select v-model="characteristicFallbackAccess"><option value="primary">{{ $t('teamBuilder.builderPanel.import.primary') }}</option><option value="secondary">{{ $t('teamBuilder.builderPanel.import.secondary') }}</option></select></label><label class="advancement-field">{{ $t('teamBuilder.builderPanel.import.skill') }}<select v-model="advancementSkill"><option v-for="skill in advancementMethodSkills" :key="skill" :value="skill">{{ terms(skill) }}</option></select></label><button class="advancement-confirm" type="button" :disabled="advancementBusy || !advancementSkill" @click="commitRolledSkill(advancementSkill, characteristicFallbackAccess)">{{ $t('teamBuilder.builderPanel.import.takeSkill') }}</button></div>
           </template>
           </div>
           <p v-if="advancementStatus" class="finding warning-finding" role="status" aria-live="polite">{{ advancementStatus }}</p>
@@ -2441,37 +2446,37 @@ onBeforeUnmount(() => {
 
     <section v-else class="builder-panel">
       <div class="builder-heading">
-        <span>{{ mode === 'tournament' ? 'Tournament Slot Builder' : mode === 'custom' ? 'Custom Team — Slot Builder' : 'Create Team — Slot Builder' }}</span>
-        <span v-if="mode === 'custom'" class="custom-badge">Custom — validation off</span>
+        <span>{{ mode === 'tournament' ? $t('teamBuilder.builderPanel.tournamentSlotBuilder') : mode === 'custom' ? $t('teamBuilder.builderPanel.customTeamSlotBuilder') : $t('teamBuilder.builderPanel.createTeamSlotBuilder') }}</span>
+        <span v-if="mode === 'custom'" class="custom-badge">{{ $t('teamBuilder.builderPanel.custom.customValidationOff') }}</span>
       </div>
       <div class="form-grid">
-        <label><span>Team Name</span><input v-model="teamName" type="text" /></label>
+        <label><span>{{ $t('teamBuilder.builderPanel.teamName') }}</span><input v-model="teamName" type="text" /></label>
         <label v-if="mode === 'tournament'" class="field-placeholder">
-          <span>Ruleset</span>
+          <span>{{ $t('teamBuilder.builderPanel.tournament.ruleset') }}</span>
           <select v-model="selectedPackageName" :disabled="!tournamentPackages.length">
             <option v-for="pkg in tournamentPackages" :key="pkg.name" :value="pkg.name">{{ pkg.name }}</option>
           </select>
         </label>
         <label>
-          <span>Roster</span>
+          <span>{{ $t('teamBuilder.builderPanel.roster') }}</span>
           <select v-model="rosterId" :disabled="!rosters.length">
-            <optgroup label="Available Rosters">
-              <option v-for="roster in rosters" :key="roster.rosterId" :value="roster.rosterId">{{ roster.raceName }}</option>
+            <optgroup :label="$t('teamBuilder.builderPanel.availableRosters')">
+              <option v-for="roster in rosters" :key="roster.rosterId" :value="roster.rosterId">{{ terms(roster.raceName) }}</option>
             </optgroup>
           </select>
         </label>
         <label v-if="hasLeagueField" class="field-placeholder">
-          <span>League</span>
+          <span>{{ $t('teamBuilder.builderPanel.league') }}</span>
           <select
             v-model="leagueSelectModel"
             class="league-select"
             :disabled="leaguePresentation.disabled"
             :required="leaguePresentation.required"
           >
-            <option v-if="hasLeagueMenu" disabled value="">Choose a league</option>
+            <option v-if="hasLeagueMenu" disabled value="">{{ $t('teamBuilder.builderPanel.chooseALeague') }}</option>
             <option v-for="league in leagueOptions" :key="league" :value="league">{{ league }}</option>
           </select>
-          <small v-if="selectedLeagueSpecialRule" class="league-rule-display">Special rule: {{ selectedLeagueSpecialRule }}</small>
+          <small v-if="selectedLeagueSpecialRule" class="league-rule-display">{{ $t('teamBuilder.builderPanel.specialRuleSelectedleaguespecialrule', { selectedLeagueSpecialRule }) }}</small>
         </label>
       </div>
       <p v-if="leagueChangeNotice" class="status-copy league-change-notice" role="status">{{ leagueChangeNotice }}</p>
@@ -2482,12 +2487,12 @@ onBeforeUnmount(() => {
            prose note survives only as the fallback for a server that predates the rules block. -->
       <div v-if="mode === 'tournament' && rulesetPanelView.kind === 'race'" class="ruleset-note ruleset-derived">
         <div class="ruleset-line ruleset-head">
-          <strong>{{ rulesetPanelView.race.roster }}</strong>
+          <strong>{{ terms(rulesetPanelView.race.roster) }}</strong>
           <span v-if="rulesetPanelView.race.tierLabel"> — {{ rulesetPanelView.race.tierLabel }}</span>
-          <span> · Budget {{ goldK(rulesetPanelView.race.gold) }}</span>
-          <span v-if="!rulesetPanelView.race.packs.length"> · {{ rulesetPanelView.race.skillPointBudget }} SP</span>
-          <span v-else-if="selectedPackSummary"> · {{ selectedPackSummary.skillPointBudget }} SP ({{ selectedPackSummary.label }})</span>
-          <span v-if="rulesetPanelView.race.maxPerPlayer != null"> · {{ rulesetPanelView.race.maxPerPlayer }} skill{{ rulesetPanelView.race.maxPerPlayer === 1 ? '' : 's' }}/player</span>
+          <span> {{ $t('teamBuilder.builderPanel.tournament.budgetP0', { p0: goldK(rulesetPanelView.race.gold) }) }}</span>
+          <span v-if="!rulesetPanelView.race.packs.length"> {{ $t('teamBuilder.builderPanel.tournament.skillpointbudgetSp', { skillPointBudget: rulesetPanelView.race.skillPointBudget }) }}</span>
+          <span v-else-if="selectedPackSummary"> {{ $t('teamBuilder.builderPanel.tournament.skillpointbudgetSpLabel', { skillPointBudget: selectedPackSummary.skillPointBudget, label: selectedPackSummary.label }) }}</span>
+          <span v-if="rulesetPanelView.race.maxPerPlayer != null"> {{ $t('teamBuilder.builderPanel.tournament.maxperplayerSkillP1Player', { maxPerPlayer: rulesetPanelView.race.maxPerPlayer }) }}</span>
         </div>
         <!-- Owner: the choose-one packs are a real SELECTION — big design-language buttons (mode-card
              idiom); picking one shades the others out. The chosen pack drives the displayed budget and
@@ -2502,32 +2507,32 @@ onBeforeUnmount(() => {
               <small>{{ packDetail(pack) }}</small>
             </button>
           </div>
-          <span v-if="!selectedSkillPack" class="ruleset-caveat pack-hint">Pick your skill pack.</span>
+          <span v-if="!selectedSkillPack" class="ruleset-caveat pack-hint">{{ $t('teamBuilder.builderPanel.tournament.pickYourSkillPack') }}</span>
         </div>
         <!-- Owner: the Star SP table (+ banned/caveat lines) moved to its own section below Star Players. -->
         <div v-if="rulesetPanelView.race.stars.allowed" class="ruleset-line ruleset-stars">
-          <div>Stars<template v-if="rulesetPanelView.race.stars.maxCount != null"> (max {{ rulesetPanelView.race.stars.maxCount }})</template><template v-if="rulesetPanelView.race.stars.paidInSkillPoints">, paid in SP</template></div>
+          <div>{{ $t('teamBuilder.builderPanel.tournament.stars') }}<template v-if="rulesetPanelView.race.stars.maxCount != null"> {{ $t('teamBuilder.builderPanel.tournament.maxMaxcount', { maxCount: rulesetPanelView.race.stars.maxCount }) }}</template><template v-if="rulesetPanelView.race.stars.paidInSkillPoints">{{ $t('teamBuilder.builderPanel.tournament.paidInSp') }}</template></div>
         </div>
-        <div v-else class="ruleset-line">No star players</div>
+        <div v-else class="ruleset-line">{{ $t('teamBuilder.builderPanel.tournament.noStarPlayers') }}</div>
       </div>
       <div v-else-if="mode === 'tournament' && rulesetPanelView.kind === 'summary'" class="ruleset-note ruleset-derived">
-        <div class="ruleset-line ruleset-head"><strong>{{ rulesetPanelView.name }}</strong> — {{ rulesetPanelView.tiers.length }} tiers</div>
+        <div class="ruleset-line ruleset-head"><strong>{{ rulesetPanelView.name }}</strong> {{ $t('teamBuilder.builderPanel.tournament.tiersTiers', { tiers: rulesetPanelView.tiers.length }) }}</div>
         <div v-for="tier in rulesetPanelView.tiers" :key="tier.tier" class="ruleset-line">
           <strong>{{ tier.label }}</strong>
-          <span v-if="tier.packs.length"> · Packs {{ tier.packs.map(packShort).join(' / ') }}</span>
-          <span v-else> · {{ goldK(tier.gold) }} / {{ tier.skillPointBudget }} SP</span>
+          <span v-if="tier.packs.length"> {{ $t('teamBuilder.builderPanel.tournament.packsP0', { p0: tier.packs.map(packShort).join(' / ') }) }}</span>
+          <span v-else> {{ $t('teamBuilder.builderPanel.tournament.p0SkillpointbudgetSp', { p0: goldK(tier.gold), skillPointBudget: tier.skillPointBudget }) }}</span>
           <span class="ruleset-rosters"> — {{ tier.rosters.join(', ') }}</span>
         </div>
         <div v-if="rulesetPanelView.dataNote" class="ruleset-caveat">{{ rulesetPanelView.dataNote }}</div>
       </div>
       <div v-else-if="mode === 'tournament' && rulesetNoteText" class="ruleset-note">{{ rulesetNoteText }}</div>
-      <div v-if="mode === 'tournament' && packageValidationPending" class="ruleset-note muted">Ruleset validation pending server update.</div>
+      <div v-if="mode === 'tournament' && packageValidationPending" class="ruleset-note muted">{{ $t('teamBuilder.builderPanel.tournament.rulesetValidationPendingServer') }}</div>
       <p v-if="rosterStatus" class="status-copy">{{ rosterStatus }}</p>
 
       <div v-if="currentRoster" class="builder-layout">
         <div class="builder-main">
           <section class="add-players-panel">
-            <div class="section-title"><span>A</span>dd <span>P</span>layers</div>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.capAdd') }}</span>{{ capTail('teamBuilder.builderPanel.capAdd') }} <span>{{ capHead('teamBuilder.builderPanel.capPlayers') }}</span>{{ capTail('teamBuilder.builderPanel.capPlayers') }}</div>
             <!-- Owner ruling (08-18): the R13 name-gate notice floats as a toast over this panel
                  instead of an inline status-copy line, so it never shifts the position grid below
                  it. Same 3s auto-clear (addPlayerNoticeTimer, unchanged); click dismisses early. -->
@@ -2543,7 +2548,7 @@ onBeforeUnmount(() => {
                 class="position-card"
                 :class="{ exhausted: positionCount(position.positionId) >= positionMax(position) || positionGroupState(position.positionId).capped, 'name-required': teamNameMissing }"
                 :disabled="positionCount(position.positionId) >= positionMax(position) || positionGroupState(position.positionId).capped || filledSlots.length >= 16"
-                :title="teamNameMissing ? 'You must name your team.' : positionGroupTitle(position.positionId)"
+                :title="teamNameMissing ? $t('teamBuilder.builderPanel.youMustNameYour') : positionGroupTitle(position.positionId)"
                 type="button"
                 @click="addPosition(position)"
               >
@@ -2558,28 +2563,28 @@ onBeforeUnmount(() => {
                       @error="markSpriteFailed(position)"
                     />
                   </span>
-                  <span class="position-name"><strong>{{ position.name }}</strong><small>{{ positionMax(position) - positionCount(position.positionId) }} of {{ positionMax(position) }} left</small></span>
+                  <span class="position-name"><strong>{{ terms(position.name) }}</strong><small>{{ $t('teamBuilder.builderPanel.p0OfP1Left', { p0: positionMax(position) - positionCount(position.positionId), p1: positionMax(position) }) }}</small></span>
                   <span class="cost">{{ formatGold(position.cost) }}</span>
                 </div>
                 <div class="stat-strip">
-                  <span><b>{{ position.MA ?? '—' }}</b><small>MA</small></span>
+                  <span><b>{{ position.MA ?? '—' }}</b><small>{{ $t('teamBuilder.builderPanel.ma') }}</small></span>
                   <span><b>{{ position.ST ?? '—' }}</b><small>ST</small></span>
-                  <span><b>{{ position.AG ?? '—' }}</b><small>AG</small></span>
-                  <span><b>{{ position.PA ?? '—' }}</b><small>PA</small></span>
-                  <span><b>{{ position.AV ?? '—' }}</b><small>AV</small></span>
+                  <span><b>{{ position.AG ?? '—' }}</b><small>{{ $t('teamBuilder.builderPanel.ag') }}</small></span>
+                  <span><b>{{ position.PA ?? '—' }}</b><small>{{ $t('teamBuilder.builderPanel.pa') }}</small></span>
+                  <span><b>{{ position.AV ?? '—' }}</b><small>{{ $t('teamBuilder.builderPanel.av') }}</small></span>
                 </div>
                 <div class="printed-skills">
-                  <span v-for="skill in position.skills ?? []" :key="skill" :class="skillClass(skill)">{{ skill }}</span>
-                  <span v-if="!position.skills?.length" class="muted">No printed skills</span>
+                  <span v-for="skill in position.skills ?? []" :key="skill" :class="skillClass(skill)">{{ terms(skill) }}</span>
+                  <span v-if="!position.skills?.length" class="muted">{{ $t('teamBuilder.builderPanel.noPrintedSkills') }}</span>
                 </div>
               </button>
             </div>
           </section>
 
           <section class="roster-section">
-            <div class="section-title"><span>R</span>oster <span>S</span>lots</div>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.capRoster') }}</span>{{ capTail('teamBuilder.builderPanel.capRoster') }} <span>{{ capHead('teamBuilder.builderPanel.capSlots') }}</span>{{ capTail('teamBuilder.builderPanel.capSlots') }}</div>
             <div class="roster-scroll">
-              <div class="roster-header roster-grid"><span>#</span><span>Player</span><span>Stats</span><span>Skills &amp; Traits</span><span>Cost</span><span /></div>
+              <div class="roster-header roster-grid"><span>#</span><span>{{ $t('teamBuilder.builderPanel.player') }}</span><span>{{ $t('teamBuilder.builderPanel.stats') }}</span><span>{{ $t('teamBuilder.builderPanel.skillsTraits') }}</span><span>{{ $t('teamBuilder.builderPanel.cost') }}</span><span /></div>
               <div v-for="(slot, index) in visibleSlots" :key="index" class="roster-stack">
                 <div class="roster-row roster-grid">
                   <span class="slot-number">{{ index + 1 }}</span>
@@ -2596,11 +2601,11 @@ onBeforeUnmount(() => {
                     </span>
                     <span class="player-copy">
                       <strong v-if="positionById(slot.positionId)?.isStar" class="fixed-player-name">{{ slot.name }}</strong>
-                      <input v-else :value="slot.name" aria-label="Player name" @input="updateSlotName(index, $event)" />
-                      <small>{{ positionById(slot.positionId)?.name }}</small>
+                      <input v-else :value="slot.name" :aria-label="$t('teamBuilder.builderPanel.playerName')" @input="updateSlotName(index, $event)" />
+                      <small>{{ terms(positionById(slot.positionId)?.name) }}</small>
                     </span>
                   </div>
-                  <span v-else class="open-slot">— open slot</span>
+                  <span v-else class="open-slot">{{ $t('teamBuilder.builderPanel.openSlot') }}</span>
                   <div class="row-stats">
                     <template v-if="slot">
                       <span v-for="stat in ['MA', 'ST', 'AG', 'PA', 'AV'] as const" :key="stat"><b>{{ positionById(slot.positionId)?.[stat] ?? '—' }}</b><small>{{ stat }}</small></span>
@@ -2608,22 +2613,22 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="row-skills">
                     <template v-if="slot">
-                      <span v-for="skill in positionById(slot.positionId)?.skills ?? []" :key="skill" :class="skillClass(skill)">{{ skill }}</span>
+                      <span v-for="skill in positionById(slot.positionId)?.skills ?? []" :key="skill" :class="skillClass(skill)">{{ terms(skill) }}</span>
                       <!-- TB7 (owner 08-11): added skills JOIN the printed skills inline here (was a separate row under
                            the slot) as removable chips — composes with the TB6 per-skill cells. Kallus item 594: the
                            removable chip shows ONLY in a skill-editing mode (canEditSkills) so a Custom→Create switch
                            can never surface an editable × on a plain-build roster (belt with the watch(mode) reset). -->
-                      <span v-for="sk in ((canEditSkills && !positionById(slot.positionId)?.isStar) ? slot.chosenSkills : [])" :key="'c:' + sk" class="chosen-chip" :class="skillClass(sk)">{{ sk }}<button type="button" aria-label="Remove skill" @click="removeSkill(index, sk)">×</button></span>
+                      <span v-for="sk in ((canEditSkills && !positionById(slot.positionId)?.isStar) ? slot.chosenSkills : [])" :key="'c:' + sk" class="chosen-chip" :class="skillClass(sk)">{{ sk }}<button type="button" :aria-label="$t('teamBuilder.builderPanel.removeSkill')" @click="removeSkill(index, sk)">×</button></span>
                     </template>
                   </div>
                   <span class="cost">{{ slot ? formatGold(positionById(slot.positionId)?.cost) : '' }}</span>
                   <div v-if="slot" class="row-actions">
                     <!-- TB10 (owner 08-11): stacked two-line "Add Skill". -->
-                    <button v-if="canEditSkills && !positionById(slot.positionId)?.isStar" type="button" class="skill-add-btn" :class="{ open: skillPickerIndex === index }" @click="toggleSkillPicker(index)"><span>Add</span><span>Skill</span></button>
+                    <button v-if="canEditSkills && !positionById(slot.positionId)?.isStar" type="button" class="skill-add-btn" :class="{ open: skillPickerIndex === index }" @click="toggleSkillPicker(index)"><span>{{ $t('teamBuilder.builderPanel.add') }}</span><span>{{ $t('teamBuilder.builderPanel.skill') }}</span></button>
                     <!-- TB9 (owner 08-11): small red "FIRE" under the delete ✕ (Blood Bowl flavour for releasing a player). -->
                     <span class="fire-cell">
-                      <button type="button" aria-label="Remove player" @click="removeSlot(index)">×</button>
-                      <small class="fire-label">FIRE</small>
+                      <button type="button" :aria-label="$t('teamBuilder.builderPanel.removePlayer')" @click="removeSlot(index)">×</button>
+                      <small class="fire-label">{{ $t('teamBuilder.builderPanel.fire') }}</small>
                     </span>
                   </div>
                 </div>
@@ -2631,16 +2636,16 @@ onBeforeUnmount(() => {
                   <!-- TB8 / owner UAT 08-12 (#4): the ✕ lives in a STATIC header row so it stays anchored while the
                        skill list scrolls (was position:absolute inside the scroll body → detached on scroll). -->
                   <div class="skill-picker-head">
-                    <span class="skill-picker-heading">{{ mode === 'custom' ? 'All Skills & Traits' : 'Add Skill' }}</span>
-                    <button type="button" class="picker-close" aria-label="Collapse skills" @click="toggleSkillPicker(index)">×</button>
+                    <span class="skill-picker-heading">{{ mode === 'custom' ? $t('teamBuilder.builderPanel.allSkillsTraits') : $t('teamBuilder.builderPanel.addSkill') }}</span>
+                    <button type="button" class="picker-close" :aria-label="$t('teamBuilder.builderPanel.collapseSkills')" @click="toggleSkillPicker(index)">×</button>
                   </div>
                   <div class="skill-picker-body">
-                  <div v-if="skillPickerLoading" class="skill-picker-status">{{ mode === 'custom' ? 'Loading all skills & traits…' : 'Loading legal skills…' }}</div>
+                  <div v-if="skillPickerLoading" class="skill-picker-status">{{ mode === 'custom' ? $t('teamBuilder.builderPanel.loadingAllSkillsTraits') : $t('teamBuilder.builderPanel.loadingLegalSkills') }}</div>
                   <div v-else-if="skillPickerError" class="skill-picker-status">{{ skillPickerError }}</div>
                   <template v-else-if="skillPickerSet">
                     <!-- Blades (owner 08-18): notebook-tab rows — PRIMARY tab + its category blades, then SECONDARY —
                          replace the category menu + Back; one click switches category from anywhere. -->
-                    <div v-if="!bladeSections.length" class="skill-picker-status">{{ mode === 'custom' ? 'No skills or traits were returned.' : 'No selectable skills for this position.' }}</div>
+                    <div v-if="!bladeSections.length" class="skill-picker-status">{{ mode === 'custom' ? $t('teamBuilder.builderPanel.noSkillsOrTraits') : $t('teamBuilder.builderPanel.noSelectableSkillsFor') }}</div>
                     <template v-else>
                       <div class="skill-blade-bar">
                         <template v-for="section in bladeSections" :key="section.label ?? 'all'">
@@ -2659,16 +2664,16 @@ onBeforeUnmount(() => {
                           <button type="button" class="skill-chip" :class="[categoryClass(s.category), { innate: isInnateSkill(index, s.skill), added: isAddedSkill(index, s.skill) }]" :disabled="isInnateSkill(index, s.skill) || isAddedSkill(index, s.skill)" @click="addSkill(index, s.skill)">
                             <span class="skill-chip-main">
                               <img v-if="s.elite" class="elite-mark" :src="eliteDiamondUrl" alt="" aria-hidden="true" />
-                              <span>{{ s.skill }}</span>
+                              <span>{{ terms(s.skill) }}</span>
                               <span v-if="isInnateSkill(index, s.skill)" class="skill-owned-check" aria-hidden="true">✓</span>
                             </span>
                             <span class="skill-chip-meta">
-                              <img v-if="pickerSkillIconUrl(s.skill)" class="skill-picker-icon" :src="pickerSkillIconUrl(s.skill)!" :alt="s.skill" />
+                              <img v-if="pickerSkillIconUrl(s.skill)" class="skill-picker-icon" :src="pickerSkillIconUrl(s.skill)!" :alt="terms(s.skill)" />
                               <span v-else-if="markerGlyph(s.skill)" class="skill-picker-marker" aria-hidden="true">{{ markerGlyph(s.skill) }}</span>
                               <small v-if="s.priceLabel">{{ s.priceLabel }}</small>
                             </span>
                           </button>
-                          <button v-if="isAddedSkill(index, s.skill)" type="button" class="skill-chip-remove" :aria-label="'Remove ' + s.skill" @click="removeSkill(index, s.skill)">×</button>
+                          <button v-if="isAddedSkill(index, s.skill)" type="button" class="skill-chip-remove" :aria-label="$t('teamBuilder.builderPanel.remove') + s.skill" @click="removeSkill(index, s.skill)">×</button>
                         </span>
                       </div>
                     </template>
@@ -2683,7 +2688,7 @@ onBeforeUnmount(() => {
                build-out): Tournament shows it too, fed by the Tournament Rules logic — allowed flag,
                banned list, tier SP pricing (defines the set + shows SP costs), maxCount cap. -->
           <section v-if="starSectionVisible" class="star-section">
-            <div class="section-title"><span>S</span>tar <span>P</span>layers</div>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.capStar') }}</span>{{ capTail('teamBuilder.builderPanel.capStar') }} <span>{{ capHead('teamBuilder.builderPanel.capPlayers') }}</span>{{ capTail('teamBuilder.builderPanel.capPlayers') }}</div>
             <div v-if="displayedStarChoices.length" class="star-card">
               <div v-for="choice in displayedStarChoices" :key="choice.key" class="star-row">
                 <span class="star-sprites" :class="{ paired: choice.paired }" aria-hidden="true">
@@ -2698,58 +2703,58 @@ onBeforeUnmount(() => {
                     />
                   </span>
                 </span>
-                <span class="star-copy"><strong>{{ choice.label }}</strong><small>{{ mode === 'tournament' && tournamentStarSp(choice) !== null ? `${tournamentStarSp(choice)} SP` : formatGold(choice.cost) }} · {{ starChoiceStatus(choice) }}</small></span>
+                <span class="star-copy"><strong>{{ choice.label }}</strong><small>{{ mode === 'tournament' && tournamentStarSp(choice) !== null ? $t('teamBuilder.builderPanel.p0Sp', { p0: tournamentStarSp(choice) }) : formatGold(choice.cost) }} · {{ starChoiceStatus(choice) }}</small></span>
                 <span class="star-actions">
-                  <button type="button" :aria-label="`Remove ${choice.label}`" :disabled="!starChoiceHasAny(choice)" @click="removeStarChoice(choice)">−</button>
+                  <button type="button" :aria-label="$t('teamBuilder.builderPanel.removeLabel', { label: choice.label })" :disabled="!starChoiceHasAny(choice)" @click="removeStarChoice(choice)">−</button>
                   <button
                     type="button"
                     class="star-add"
                     :class="{ 'name-required': teamNameMissing }"
-                    :aria-label="`Add ${choice.label}`"
-                    :title="teamNameMissing ? 'You must name your team.' : mode === 'tournament' && tournamentStarCapReached ? 'This ruleset\'s star player limit is reached.' : undefined"
+                    :aria-label="$t('teamBuilder.builderPanel.addLabel', { label: choice.label })"
+                    :title="teamNameMissing ? $t('teamBuilder.builderPanel.youMustNameYour') : mode === 'tournament' && tournamentStarCapReached ? $t('teamBuilder.builderPanel.thisRulesetSStar') : undefined"
                     :disabled="!canAddStarChoice(choice) || (mode === 'tournament' && tournamentStarCapReached && !starChoiceHasAny(choice))"
                     @click="addStarChoice(choice)"
                   >+</button>
                 </span>
               </div>
             </div>
-            <p v-else-if="mode === 'tournament'" class="status-copy">No star players are available for this roster under this ruleset.</p>
-            <p v-else-if="leagueSelectionRequired" class="status-copy">Choose a league to see star players.</p>
-            <p v-else class="status-copy">No star players are available for this roster.</p>
+            <p v-else-if="mode === 'tournament'" class="status-copy">{{ $t('teamBuilder.builderPanel.tournament.noStarPlayersAre') }}</p>
+            <p v-else-if="leagueSelectionRequired" class="status-copy">{{ $t('teamBuilder.builderPanel.chooseALeagueTo') }}</p>
+            <p v-else class="status-copy">{{ $t('teamBuilder.builderPanel.noStarPlayersAre') }}</p>
           </section>
 
           <!-- Owner: the Star SP summary table sits BELOW the Star Players section, at the bottom of the
                page (relocated from the top ruleset note; its banned + transcription-caveat lines ride along). -->
           <section v-if="tournamentStarRules && (teamStarSpRows.length || tournamentStarRules.bannedStars.length)" class="star-sp-section">
             <button class="star-sp-toggle" type="button" :aria-expanded="starSpOpen" @click="starSpOpen = !starSpOpen">
-              {{ starSpOpen ? '▾' : '▸' }} Star Player SP costs<template v-if="teamStarSpRows.length"> ({{ teamStarSpRows.length }})</template>
+              {{ $t('teamBuilder.builderPanel.p0StarPlayerSp', { p0: starSpOpen ? '▾' : '▸' }) }}<template v-if="teamStarSpRows.length"> ({{ teamStarSpRows.length }})</template>
             </button>
             <template v-if="starSpOpen">
               <div v-if="teamStarSpRows.length" class="star-sp-table-wrap">
                 <table class="star-sp-table">
-                  <thead><tr><th scope="col">Star Player</th><th scope="col">SP Cost</th></tr></thead>
+                  <thead><tr><th scope="col">{{ $t('teamBuilder.builderPanel.starPlayer') }}</th><th scope="col">{{ $t('teamBuilder.builderPanel.spCost') }}</th></tr></thead>
                   <tbody>
                     <tr v-for="star in teamStarSpRows" :key="star.name">
-                      <th scope="row">{{ star.name }}</th><td>{{ star.sp }} SP</td>
+                      <th scope="row">{{ star.name }}</th><td>{{ $t('teamBuilder.builderPanel.spSp', { sp: star.sp }) }}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-              <div v-if="tournamentStarRules.bannedStars.length" class="ruleset-line">Banned: {{ tournamentStarRules.bannedStars.join(', ') }}</div>
+              <div v-if="tournamentStarRules.bannedStars.length" class="ruleset-line">{{ $t('teamBuilder.builderPanel.bannedP0', { p0: tournamentStarRules.bannedStars.join(', ') }) }}</div>
               <div v-if="tournamentRaceDataNote" class="ruleset-caveat">{{ tournamentRaceDataNote }}</div>
             </template>
           </section>
 
           <section v-if="mode === 'tournament' || mode === 'custom'" class="inducement-section">
-            <div class="section-title"><span>I</span>nducements</div>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.tournament.capInducements') }}</span>{{ capTail('teamBuilder.builderPanel.tournament.capInducements') }}</div>
             <div v-if="inducements.length" class="star-card">
               <!-- Owner: a disallowed inducement is NOT displayed in the tournament builder (custom keeps
                    the greyed row — validation-off mode shows the full catalog). -->
               <div v-for="item in (mode === 'tournament' ? inducements.filter((entry) => entry.allowed) : inducements)" :key="item.key" class="stepper-row" :class="{ unavailable: !item.allowed }">
                 <span>{{ item.label }} <small>{{ formatGold(item.price) }}</small></span>
-                <button type="button" :disabled="!item.allowed || (inducementCounts[item.key] ?? 0) === 0" :aria-label="`Remove ${item.label}`" @click="stepInducement(item, -1)">−</button>
+                <button type="button" :disabled="!item.allowed || (inducementCounts[item.key] ?? 0) === 0" :aria-label="$t('teamBuilder.builderPanel.tournament.removeLabel', { label: item.label })" @click="stepInducement(item, -1)">−</button>
                 <b>{{ inducementCounts[item.key] ?? 0 }}</b>
-                <button type="button" class="step-add" :disabled="!item.allowed || (item.max !== null && (inducementCounts[item.key] ?? 0) >= item.max)" :aria-label="`Add ${item.label}`" @click="stepInducement(item, 1)">+</button>
+                <button type="button" class="step-add" :disabled="!item.allowed || (item.max !== null && (inducementCounts[item.key] ?? 0) >= item.max)" :aria-label="$t('teamBuilder.builderPanel.tournament.addLabel', { label: item.label })" @click="stepInducement(item, 1)">+</button>
               </div>
             </div>
             <p v-if="inducementStatus" class="status-copy">{{ inducementStatus }}</p>
@@ -2758,7 +2763,7 @@ onBeforeUnmount(() => {
 
         <aside class="right-rail">
           <section class="value-card" :class="{ 'is-refreshing': previewRefreshing, 'custom-summary': mode === 'custom' }">
-            <div v-if="mode !== 'custom'" class="section-title"><span>T</span>eam <span>V</span>alue<span v-if="previewRefreshing" class="refresh-dot" aria-hidden="true"></span></div>
+            <div v-if="mode !== 'custom'" class="section-title"><span>{{ capHead('teamBuilder.builderPanel.capTeam') }}</span>{{ capTail('teamBuilder.builderPanel.capTeam') }} <span>{{ capHead('teamBuilder.builderPanel.capValue') }}</span>{{ capTail('teamBuilder.builderPanel.capValue') }}<span v-if="previewRefreshing" class="refresh-dot" aria-hidden="true"></span></div>
             <span v-else-if="previewRefreshing" class="refresh-dot custom-refresh-dot" aria-hidden="true"></span>
             <!-- W32 (owner 08-14): build mode (create/custom) renders ONE fixed row-set regardless of whether
                  previewSummary has landed yet — every edit nulls preview.value briefly (schedulePreview), and this
@@ -2768,29 +2773,29 @@ onBeforeUnmount(() => {
             <!-- Owner (annotated Create card): Create Team keeps only Players / Staff / Skills / total —
                  the skill-point rows, Inducements, and the budget chrome are Custom/Tournament-only. -->
             <template v-if="isBuildMode">
-              <div class="value-line"><span>Players</span><strong>{{ previewSummary ? previewSummary.playerCount : filledSlots.length }}</strong></div>
-              <div v-if="mode !== 'create'" class="value-line"><span>Skill points</span><strong>{{ previewSummary ? `${previewSummary.skillPointsUsed} / ${previewSummary.skillPointBudget}` : '—' }}</strong></div>
-              <div v-if="mode !== 'create'" class="value-line"><span>Primary skills</span><strong>{{ previewSummary ? previewSummary.primarySkillCount : '—' }}</strong></div>
-              <div v-if="mode !== 'create'" class="value-line"><span>Secondary skills</span><strong>{{ previewSummary ? previewSummary.secondarySkillCount : '—' }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.players') }}</span><strong>{{ previewSummary ? previewSummary.playerCount : filledSlots.length }}</strong></div>
+              <div v-if="mode !== 'create'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.skillPoints') }}</span><strong>{{ previewSummary ? `${previewSummary.skillPointsUsed} / ${previewSummary.skillPointBudget}` : '—' }}</strong></div>
+              <div v-if="mode !== 'create'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.primarySkills') }}</span><strong>{{ previewSummary ? previewSummary.primarySkillCount : '—' }}</strong></div>
+              <div v-if="mode !== 'create'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.secondarySkills') }}</span><strong>{{ previewSummary ? previewSummary.secondarySkillCount : '—' }}</strong></div>
               <!-- Owner 08-10 (Veers 99822cf): the authoritative gold breakdown that composes goldUsed. Always
                    rendered now (was v-if per optional field) — formatGold(undefined) already prints '—'. -->
-              <div class="value-line"><span>Staff</span><strong>{{ formatGold(previewSummary?.staffCost) }}</strong></div>
-              <div v-if="mode !== 'create'" class="value-line"><span>Inducements</span><strong>{{ formatGold(previewSummary?.inducementsCost) }}</strong></div>
-              <div class="value-line"><span>Skills</span><strong>{{ formatGold(previewSummary?.skillsCost) }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.staff') }}</span><strong>{{ formatGold(previewSummary?.staffCost) }}</strong></div>
+              <div v-if="mode !== 'create'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.inducements') }}</span><strong>{{ formatGold(previewSummary?.inducementsCost) }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.skills') }}</span><strong>{{ formatGold(previewSummary?.skillsCost) }}</strong></div>
               <div class="value-line total"><span>{{ buildTotalLabel }}</span><strong :class="previewSummary || previewPending ? (buildTotalOver ? 'over-budget' : 'within-budget') : 'value-unavailable'">{{ buildTotalValue }}</strong></div>
             </template>
             <template v-else>
-              <div class="value-line"><span>Players ({{ filledSlots.length }})</span><strong>{{ formatGold(rawPlayerCost) }}</strong></div>
-              <div v-if="mode === 'tournament'" class="value-line"><span>Star players</span><strong>0k</strong></div>
-              <div v-if="mode === 'tournament'" class="value-line"><span>Inducements</span><strong>{{ formatGold(inducementGoldTotal) }}</strong></div>
-              <div class="value-line"><span>Sideline staff</span><strong>{{ formatGold(staffCost) }}</strong></div>
-              <div class="value-line subtotal"><span>Subtotal</span><strong>{{ formatGold(preSkillsEstimate) }}</strong></div>
-              <div class="value-line"><span>Skills</span><strong>{{ formatGold(addedSkillGold) }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.playersFilledslots', { filledSlots: filledSlots.length }) }}</span><strong>{{ formatGold(rawPlayerCost) }}</strong></div>
+              <div v-if="mode === 'tournament'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.tournament.starPlayers') }}</span><strong>0k</strong></div>
+              <div v-if="mode === 'tournament'" class="value-line"><span>{{ $t('teamBuilder.builderPanel.tournament.inducements') }}</span><strong>{{ formatGold(inducementGoldTotal) }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.sidelineStaff') }}</span><strong>{{ formatGold(staffCost) }}</strong></div>
+              <div class="value-line subtotal"><span>{{ $t('teamBuilder.builderPanel.subtotal') }}</span><strong>{{ formatGold(preSkillsEstimate) }}</strong></div>
+              <div class="value-line"><span>{{ $t('teamBuilder.builderPanel.skills') }}</span><strong>{{ formatGold(addedSkillGold) }}</strong></div>
               <!-- Owner: the SP counter lives at the BOTTOM of the TV summary — used / remaining against the
                    CHOSEN skill pack's budget (falls back to the race SP budget until a pack is picked).
                    Model: 1 primary / 2 secondary / +0.5 elite (+ star SP when the package pays stars in SP);
                    the validator enforces the same math. -->
-              <div v-if="spRemaining != null" class="value-line"><span>Skill points</span><strong :class="{ 'over-budget': spRemaining < 0 }">{{ spUsed }} / {{ spRemaining }}</strong></div>
+              <div v-if="spRemaining != null" class="value-line"><span>{{ $t('teamBuilder.builderPanel.skillPoints') }}</span><strong :class="{ 'over-budget': spRemaining < 0 }">{{ spUsed }} / {{ spRemaining }}</strong></div>
               <!-- Owner ruling 08-18 (annotated screenshot, Tournament Team Value panel): the
                    "Client-side estimate" total row is struck — dropped in Tournament mode only
                    (this v-else branch is tournament-exclusive; create/custom render the isBuildMode
@@ -2802,8 +2807,8 @@ onBeforeUnmount(() => {
             <!-- Owner (annotated Create card): the budget row + editor leave Create entirely — the fixed
                  TV-1M default stands; Custom keeps the row/editor, Tournament keeps its locked input. -->
             <div v-if="mode === 'custom'" class="budget-source">
-              <span>{{ budgetOverride === null ? (rosterGoldBudget === null ? 'BB2025 budget fallback' : 'Roster budget') : 'Local build budget override' }}</span>
-              <button type="button" @click="budgetEditorOpen = !budgetEditorOpen">Edit</button>
+              <span>{{ budgetOverride === null ? (rosterGoldBudget === null ? $t('teamBuilder.builderPanel.custom.bb2025BudgetFallback') : $t('teamBuilder.builderPanel.custom.rosterBudget')) : $t('teamBuilder.builderPanel.custom.localBuildBudgetOverride') }}</span>
+              <button type="button" @click="budgetEditorOpen = !budgetEditorOpen">{{ $t('teamBuilder.builderPanel.custom.edit') }}</button>
             </div>
             <!-- Tournament mode has no Edit toggle now (its row was struck), so the manual budget
                  input — "wasn't struck… the manual budget entry until ruleset-pack ingestion lands" —
@@ -2817,7 +2822,7 @@ onBeforeUnmount(() => {
                 min="0"
                 :disabled="mode === 'tournament' && tournamentBudgetLocked"
               />
-              <span>k build budget</span>
+              <span>{{ $t('teamBuilder.builderPanel.custom.kBuildBudget') }}</span>
             </label>
           </section>
           <!-- TB18 (owner 08-11): ONE plain-language validity panel replaces the "Authoritative TV Preview" + "Validator Findings" internals-speak. Two headline states — valid ✓ / Team is Invalid + the fixes; plus transient checking and the custom validation-off mode. -->
@@ -2828,36 +2833,36 @@ onBeforeUnmount(() => {
                elsewhere already cover it honestly. -->
           <section v-if="canValidateTeam && !validityUnavailable" class="live-card validity-card" :class="[validityClass, { 'is-refreshing': previewRefreshing }]">
             <template v-if="mode === 'custom'">
-              <div class="validity-headline custom">Custom team — validation off</div>
+              <div class="validity-headline custom">{{ $t('teamBuilder.builderPanel.custom.customTeamValidationOff') }}</div>
               <div v-for="(finding, index) in validityFixes" :key="`custom-fix-${index}-${findingText(finding)}`" class="fix-line">{{ findingText(finding) }}</div>
             </template>
             <template v-else-if="validityChecking">
-              <div class="validity-headline checking">Checking team…</div>
+              <div class="validity-headline checking">{{ $t('teamBuilder.builderPanel.checkingTeam') }}</div>
             </template>
             <template v-else-if="teamValid">
-              <div class="validity-headline valid">Team is valid <span class="tick">✓</span></div>
+              <div class="validity-headline valid">{{ $t('teamBuilder.builderPanel.teamIsValid') }} <span class="tick">✓</span></div>
             </template>
             <template v-else>
-              <div class="validity-headline invalid">Team is Invalid<span v-if="validityFixes.length">: {{ validityFixes.length }} {{ validityFixes.length === 1 ? 'issue' : 'issues' }} to fix</span></div>
+              <div class="validity-headline invalid">{{ $t('teamBuilder.builderPanel.teamIsInvalid') }}<span v-if="validityFixes.length">{{ $t('teamBuilder.builderPanel.validityfixesP1ToFix', { validityFixes: validityFixes.length, p1: validityFixes.length === 1 ? 'issue' : 'issues' }) }}</span></div>
               <div v-for="(finding, index) in validityFixes" :key="`fix-${index}-${findingText(finding)}`" class="fix-line">{{ findingText(finding) }}</div>
-              <p v-if="!validityFixes.length" class="fix-line muted">Adjust the roster and try again.</p>
+              <p v-if="!validityFixes.length" class="fix-line muted">{{ $t('teamBuilder.builderPanel.adjustTheRosterAnd') }}</p>
             </template>
           </section>
           <form v-if="canSubmitTeam" class="live-card submit-card" @submit.prevent="buildTeam">
             <div v-if="needsInlineCreds" class="inline-creds">
-              <label><span>Coach</span><input v-model="inlineCoach" autocomplete="username" type="text" /></label>
-              <label><span>Password</span><input v-model="inlinePassword" autocomplete="current-password" type="password" /></label>
+              <label><span>{{ $t('teamBuilder.builderPanel.coach') }}</span><input v-model="inlineCoach" autocomplete="username" type="text" /></label>
+              <label><span>{{ $t('teamBuilder.builderPanel.password') }}</span><input v-model="inlinePassword" autocomplete="current-password" type="password" /></label>
             </div>
-            <button class="create-button" type="submit" :disabled="buildBusy">{{ buildBusy ? (isEditingLibraryTeam ? 'Saving…' : 'Creating…') : (isEditingLibraryTeam ? 'Save Team' : 'Create Team') }}</button>
+            <button class="create-button" type="submit" :disabled="buildBusy">{{ buildBusy ? (isEditingLibraryTeam ? $t('teamBuilder.builderPanel.saving') : $t('teamBuilder.builderPanel.creating')) : (isEditingLibraryTeam ? $t('teamBuilder.builderPanel.saveTeam') : $t('teamBuilder.builderPanel.createTeam')) }}</button>
           </form>
           <section v-if="canSubmitTeam && buildResult" class="result-banner" :class="buildResult.kind" role="status">
-            <strong>{{ buildResult.kind === 'success' ? 'Team Created ✅' : 'Build failed' }}</strong>
+            <strong>{{ buildResult.kind === 'success' ? $t('teamBuilder.builderPanel.teamCreated') : $t('teamBuilder.builderPanel.buildFailed') }}</strong>
             <!-- Owner 08-12 (⑤): suppress the "Team created with ID tb_…" line on success; keep the failure detail. -->
             <span v-if="buildResult.kind !== 'success'">{{ buildResult.message }}</span>
           </section>
 
           <section class="rail-section staff-section">
-            <div class="section-title"><span>S</span>ideline <span>S</span>taff</div>
+            <div class="section-title"><span>{{ capHead('teamBuilder.builderPanel.capSideline') }}</span>{{ capTail('teamBuilder.builderPanel.capSideline') }} <span>{{ capHead('teamBuilder.builderPanel.capStaff') }}</span>{{ capTail('teamBuilder.builderPanel.capStaff') }}</div>
             <div v-for="row in staffRows" :key="row.key" class="stepper-row" :class="{ unavailable: row.key === 'apothecary' && !currentRoster.apothecaryAllowed }">
               <span>{{ row.label }} <small>0–{{ row.key === 'reRolls' ? (currentRoster.maxReRolls ?? row.max) : row.max }}</small></span>
               <button

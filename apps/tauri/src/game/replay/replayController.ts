@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 export interface ReplayCommand {
   commandNr: number;
   netCommandId: string;
@@ -335,10 +336,17 @@ export function labelReplayTurnMarkers(markers: readonly UnlabelledReplayTurnMar
   }
   return markers.map((marker) => {
     const ambiguousHalf = (halves.get(`${marker.side}:${marker.turn}`)?.size ?? 0) > 1;
-    const half = marker.half === 0 ? 'Pre-game' : marker.half >= 3 ? 'Overtime' : `Half ${marker.half}`;
     return {
       ...marker,
-      label: `(${marker.side}) Turn ${marker.turn} — ${marker.boundary === 'start' ? 'Start' : 'Finish'}${ambiguousHalf ? ` · ${half}` : ''}`,
+      // i18n (Astra r1 #8): whole messages per boundary (with / without the half), side and half localised as values.
+      get label() {
+        const side = marker.side === 'H' ? t('replay.side.home') : t('replay.side.away');
+        const turn = marker.turn;
+        const start = marker.boundary === 'start';
+        if (!ambiguousHalf) return start ? t('replay.marker.start', { side, turn }) : t('replay.marker.finish', { side, turn });
+        const half = marker.half === 0 ? t('replay.half.pregame') : marker.half >= 3 ? t('replay.half.overtime') : t('replay.half.halfHalf', { half: marker.half });
+        return start ? t('replay.marker.startHalf', { side, turn, half }) : t('replay.marker.finishHalf', { side, turn, half });
+      },
     };
   });
 }
@@ -377,8 +385,8 @@ export function inducementChapterCursor(commands: readonly ReplayCommand[]): num
 export function replayChapters(commands: readonly ReplayCommand[]): ReplayChapter[] {
   const chapters: ReplayChapter[] = [];
   const inducements = inducementChapterCursor(commands);
-  if (inducements != null) chapters.push({ id: 'inducements', label: 'Inducements', cursor: inducements });
-  if (commands.length > 0) chapters.push({ id: 'end', label: 'End of game', cursor: commands.length });
+  if (inducements != null) chapters.push({ id: 'inducements', get label() { return t('replay.text.inducements'); }, cursor: inducements });
+  if (commands.length > 0) chapters.push({ id: 'end', get label() { return t('replay.text.endOfGame'); }, cursor: commands.length });
   return chapters;
 }
 

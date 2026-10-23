@@ -78,7 +78,7 @@ import { chatAuthorSide, type ChatAuthorSide } from './chatAuthor';
 import { sequencingCategory } from './logVisibility';
 import { kickoffArcNeedsDecisionDwell } from './kickoffArcDwell';
 import { kickoffBannerPalette, kickoffOutcome, type KickoffBannerPalette, type KickoffOutcome } from './kickoffMiniPhases';
-import { joinLogLine } from './joinLog';
+import { joinLogMessage } from './joinLog';
 import { captureSppBreakdown, collectSppGainParts, type SppGainOccurrence, type SppGainPart } from './sppGainPresentation';
 import type { LogTagToken } from './logTags';
 import { logTimestamp } from './logTime';
@@ -305,6 +305,7 @@ import {
   serializeReplay,
   type ReplayBundle,
 } from './replay/replayLoader';
+import { $t, liveSet, lt, englishText, isLocalText, shownText, type LocalText } from '../i18n';
 
 // ==== SPECTATOR_ONLY build gate — REMOVE-WHEN-ASKED (grep SPECTATOR_ONLY; docs/spectator-build.md): VITE_SPECTATOR_ONLY=true ⇒ connectAsPlayer() refuses AND the play sender drops every outbound turn command; spectating unaffected.
 const SPECTATOR_ONLY = import.meta.env.VITE_SPECTATOR_ONLY === 'true';
@@ -339,7 +340,10 @@ export interface LogEntry {
   restored?: true;
   /** Display classification only; the entry remains in state.log and diagnostic exports. */
   category?: 'server-sequencing';
+  /** English (Astra r2): bug reports, diagnostics, the log classification and Classic read this. */
   text: string;
+  /** A client-authored line's message: the Modern view renders it in the current language (display only). */
+  local?: LocalText;
   d6?: D6LogToken[];
   blockDice?: BlockDieLogToken[];
   /** #157-v2: player names in `text`, tagged with the TEAM that owns them (format-time truth).
@@ -2510,14 +2514,14 @@ function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = t
   const seq = (state.rerollSplash?.seq ?? 0) + 1;
   state.rerollSplash = leader
     // Leader rides the team rail (TRR icon) but names the skill; the view swaps in the Leader skill icon when skill icons are on.
-    ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: `${coach} uses their Leader reroll!`, playerId, seq }
+    ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: $t('store.text.coachUsesTheirLeader', { coach }), playerId, seq }
     : isTeam ? { side, coach, logo, source, isTeam, playerId, seq }
       // Owner 10-10: Pro with a fallback whose first Pro roll failed and whose second passed (rerollPresentation) -
       // one toast tells the frame's whole reported sequence; no extra beat.
       : proRescuedBy !== null ? { side, coach, logo, source, isTeam, skill: source, playerId, seq,
         text: `${playerName(g, playerId)}'s Pro roll fails, then passes ${proRescuedBy ? `with ${proRescuedBy}` : 'on the reroll'}!` }
       // Owner 09-19: a SKILL re-roll (Dodge, Sure Feet, Pro, …) rides the same toast — the skill's icon, the player's name.
-      : { side, coach, logo, source, isTeam, skill: source, text: `${playerName(g, playerId)} uses ${source} to reroll!`, playerId, seq };
+      : { side, coach, logo, source, isTeam, skill: source, text: $t('store.text.p0UsesSourceTo', { p0: playerName(g, playerId), source }), playerId, seq };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
@@ -2574,7 +2578,7 @@ function showLonerFailedSplash(playerId: string, roll: number | null = null) {
   const g = game.value;
   if (!g || !playerId || playback.catchingUp) return;
   if (lonerFailedCueClearTimer) cancelGameTimeout(lonerFailedCueClearTimer);
-  state.lonerFailedCue = { playerId, text: `${playerName(g, playerId)} fails their loner roll!`, roll, seq: (state.lonerFailedCue?.seq ?? 0) + 1 };
+  state.lonerFailedCue = { playerId, text: $t('store.text.p0FailsTheirLoner', { p0: playerName(g, playerId) }), roll, seq: (state.lonerFailedCue?.seq ?? 0) + 1 };
   lonerFailedCueClearTimer = scheduleGameTimeout(() => { state.lonerFailedCue = null; lonerFailedCueClearTimer = null; }, presentationMs(LONER_FAILED_SPLASH_HOLD_MS));
 }
 
@@ -2596,7 +2600,7 @@ function showTentaclesCue(g: GameJson, holderId: string, moverId: string, held: 
   const seq = (state.tentaclesCue?.seq ?? 0) + 1;
   state.tentaclesCue = {
     holderId, holderName, moverId, moverName, held, square: [square[0], square[1]], seq,
-    text: held ? `${holderName} holds ${moverName} in place with their tentacles!` : `${holderName} fails to hold ${moverName} with their tentacles!`,
+    text: held ? $t('store.text.holdernameHoldsMovernameIn', { holderName, moverName }) : $t('store.text.holdernameFailsToHold', { holderName, moverName }),
   };
   tentaclesCueClearTimer = scheduleGameTimeout(() => {
     if (state.tentaclesCue?.seq === seq) state.tentaclesCue = null;
@@ -2613,7 +2617,7 @@ function showWeatherMageSplash(g: GameJson): void {
   const coach = (team.coach as string | null) ?? 'Coach';
   state.rerollSplash = {
     side, coach, logo, source: 'Weather Mage', isTeam: false,
-    text: `${coach} used their Weather Mage!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+    text: $t('store.text.coachUsedTheirWeather', { coach }), seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
@@ -2671,7 +2675,7 @@ function showTeamCaptainSplash(teamId: string, playerId?: string): void {
   if (teamCaptainSplashClearTimer) cancelGameTimeout(teamCaptainSplashClearTimer);
   state.teamCaptainSplash = {
     side, coach: (team.coach as string | null) ?? '', logo, teamId, skill: 'Team Captain',
-    text: `${name} leads the way - team reroll kept!`, ...(playerId ? { playerId } : {}), seq: (state.teamCaptainSplash?.seq ?? 0) + 1,
+    text: $t('store.text.nameLeadsTheWay', { name }), ...(playerId ? { playerId } : {}), seq: (state.teamCaptainSplash?.seq ?? 0) + 1,
   };
   teamCaptainSplashClearTimer = scheduleGameTimeout(() => { state.teamCaptainSplash = null; teamCaptainSplashClearTimer = null; }, presentationMs(REROLL_SPLASH_HOLD_MS));
 }
@@ -3170,7 +3174,7 @@ function showProFailedSplash(playerId: string) {
   clearRerollSplash();
   state.rerollSplash = {
     side, coach, logo, source: 'Pro', isTeam: false, playerId,
-    text: `${coach}'s Pro roll fails!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+    text: $t('store.text.coachSProRoll', { coach }), seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
   rerollSplashClearTimer = scheduleGameTimeout(() => {
     state.rerollSplash = null;
@@ -5437,7 +5441,7 @@ function surfaceAutoAcceptedApothecaryReturn(
     newInjuryDie,
     selected,
     outcome: autoReturn
-      ? `${liveChoice?.player ?? pending?.player ?? playerName(g, playerId)} returns to the bench.`
+      ? $t('store.text.p0ReturnsToThe', { p0: liveChoice?.player ?? pending?.player ?? playerName(g, playerId) })
       : `Kept ${selected === 'old' ? 'Original' : 'Rerolled'}: ${selected === 'old' ? oldInjury : newInjury}`,
     mine: play.active && myPlayIds(g).has(playerId),
     audience,
@@ -5783,7 +5787,7 @@ export function installSpectatorReviewChatUnreadTestHarness() {
  *  the visible position so the label and GO TO LIVE (which reconnects when stale) are on screen. */
 function spectatorFeedWentStale(transport: LiveSpectateTransport, reason: string): void {
   if (transport.review.source !== 'live' || transport.review.phase !== 'live') return;
-  log('system', `live feed unavailable — ${reason}. GO TO LIVE reconnects.`);
+  log('system', lt('store.text.liveFeedUnavailableReason', { reason }));
   // Forced: a budget-disabled history (recording=false) must still land the reader in review at the displayed position.
   void transport.pauseLive(true);
 }
@@ -6098,7 +6102,7 @@ async function pauseSpectatorView(): Promise<void> {
         const mage = kickoffWeather.weatherMageUse;
         if (!await holdSurface(REROLL_SPLASH_HOLD_MS, () => { state.rerollSplash = {
           side: mage.side, coach: mage.coach, logo: mage.logo, source: 'Weather Mage', isTeam: false,
-          text: `${mage.coach} used their Weather Mage!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+          text: $t('store.transport.coachUsedTheirWeather', { coach: mage.coach }), seq: (state.rerollSplash?.seq ?? 0) + 1,
         }; }, () => { state.rerollSplash = null; })) return;
       }
       for (const weather of kickoffWeather.weather.filter((cue) => cue.source === 'weatherMage')) {
@@ -6177,7 +6181,7 @@ async function pauseSpectatorView(): Promise<void> {
         if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
         if (dodgeUsedBreakTackle(report) && coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15) { // owner 09-14: Break Tackle toast on review too
           const name = playerName(position.model, pid);
-          state.skillUsed = { playerId: pid, skill: 'Break Tackle', square: [coordinate[0]!, coordinate[1]!], name, toast: `${name} uses Break Tackle!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+          state.skillUsed = { playerId: pid, skill: 'Break Tackle', square: [coordinate[0]!, coordinate[1]!], name, toast: $t('store.transport.nameUsesBreakTackle', { name }), seq: (state.skillUsed?.seq ?? 0) + 1 };
         }
       }
       const showRolls = (rolls: ActionRollCue[]) => {
@@ -6406,7 +6410,7 @@ async function pauseSpectatorView(): Promise<void> {
       // Owner 09-14: the Stab toast reads its beat before the target's armour roll on the review path too.
       const stabCue = stabPresentation(reports, position.model);
       if (stabCue) {
-        state.skillUsed = { playerId: stabCue.playerId, skill: 'Stab', square: stabCue.square, name: stabCue.name, toast: `${stabCue.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+        state.skillUsed = { playerId: stabCue.playerId, skill: 'Stab', square: stabCue.square, name: stabCue.name, toast: $t('store.transport.nameUsesStab', { name: stabCue.name }), seq: (state.skillUsed?.seq ?? 0) + 1 };
         if (!await presentStages([{ delayBefore: presentationMs(STAB_CUE_MS), present: () => {} }], signal)) return;
       }
       // Owner 10-13 (spectator / live armour parity): a live seat withholds these armour dice until the passive
@@ -6748,10 +6752,12 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens, upstream?: UpstreamLogExtra) {
+function log(kind: LogEntry['kind'], message: string | LocalText, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection', action?: LogActionPlate, g?: GraphicalLine | null, graphicalOnly?: boolean, alt?: LogLineTokens, upstream?: UpstreamLogExtra) {
+  const text = englishText(message); // i18n (Astra r2): the log keeps English; the view localises `local`
+  const local = isLocalText(message) ? message : undefined;
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
   const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
-  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}), ...(g !== undefined ? { g } : {}), ...(graphicalOnly ? { graphicalOnly: true as const } : {}), ...(alt ? { alt } : {}), ...(upstream?.u ? { u: upstream.u } : {}), ...(upstream?.upstreamOnly ? { upstreamOnly: true as const } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
+  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, ...(local ? { local } : {}), category: sequencingCategory(kind, text), side, d6, blockDice, names, tags, ...(action ? { action } : {}), ...(g !== undefined ? { g } : {}), ...(graphicalOnly ? { graphicalOnly: true as const } : {}), ...(alt ? { alt } : {}), ...(upstream?.u ? { u: upstream.u } : {}), ...(upstream?.upstreamOnly ? { upstreamOnly: true as const } : {}) }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
 }
 /** Owner 10-10: my own follow-up answer as a match log line ("<Player> does not follow the block"), the name tagged
@@ -6841,7 +6847,7 @@ function handleServerJoin(cmd: { spectators?: number; spectatorNames?: unknown; 
   if (/player/i.test(String(cmd.clientMode ?? '')) && String(cmd.coach ?? '').trim()) recentPlayerJoinAt.set(String(cmd.coach).trim().toLowerCase(), { at: Date.now(), gameId: String(game.value?.gameId ?? '') });
   // Owner 09-07: the join broadcast is the log's join line ("<Coach> joined as Home" / "<Coach> is now spectating
   // the game.") — the socket's own "connection: joined" state line is no longer logged.
-  const line = joinLogLine(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
+  const line = joinLogMessage(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
   if (line) log('system', line);
   // Owner 10-10: the opponent-left notice stays until THAT coach joins again as a player (never cleared by a spectator).
   // Owner 10-10 (stuck after a reconnect): also cleared when the server lists that coach among the connected players
@@ -9836,7 +9842,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // The deciding coach owns the interactive Shadowing card and must never see this passive duplicate.
       // Only the opposing player seat and a live spectator receive the compact status pill.
       const team = [gg.teamHome, gg.teamAway].find((candidate) => candidate.teamId === dp.teamId);
-      pending = `${team?.coach || team?.teamName || 'Opponent'} is deciding whether to use Shadowing`;
+      pending = $t('store.text.p0IsDecidingWhether', { p0: team?.coach || team?.teamName || 'Opponent' });
       // Owner 09-08: anchor the pill on the player who may shadow (the dialog's eligible list; playerId when given).
       const eligible = (dp as { playerIds?: unknown }).playerIds;
       pendingPlayerId = dp.playerId ?? (Array.isArray(eligible) && typeof eligible[0] === 'string' ? eligible[0] : null);
@@ -9849,7 +9855,7 @@ function applyFrameContents(frame: QueuedFrame) {
       if (!pitchAlreadyOwnsDecision && !answeredNow && !skillDialogAnswered(dp)) {
         const subject = playerName(gg, dp.playerId);
         const skill = typeof dp.skill === 'string' ? prettySkillName(dp.skill).trim() : '';
-        pending = skill ? `${subject} is deciding to use ${skill}...` : `${subject} is trying to decide something...`;
+        pending = skill ? $t('store.text.subjectIsDecidingTo', { subject, skill }) : $t('store.text.subjectIsTryingTo', { subject });
         pendingPlayerId = dp.playerId;
       }
     } else if (waiting && dp?.dialogId === 'playerChoice' && dp.teamId && dp.teamId !== myTid
@@ -9859,7 +9865,7 @@ function applyFrameContents(frame: QueuedFrame) {
         ? playerName(gg, dp.playerId)
         : team?.coach || team?.teamName || 'Opponent';
       const skill = dp.playerChoiceMode ? reactiveSkills[dp.playerChoiceMode] : undefined;
-      pending = skill ? `${subject} is deciding to use ${skill}...` : `${subject} is trying to decide something...`;
+      pending = skill ? $t('store.text.subjectIsDecidingTo', { subject, skill }) : $t('store.text.subjectIsTryingTo', { subject });
       pendingPlayerId = dp.playerId && !myIds.has(dp.playerId) ? dp.playerId : null;
     } else if (dp?.dialogId === 'followupChoice' && (liveSpectator || waiting)) {
       // Owner 09-08: the blocking coach's follow-up decision rides the same head-mounted pill as the other
@@ -9868,7 +9874,7 @@ function applyFrameContents(frame: QueuedFrame) {
       const attackerId = String(gg.actingPlayer?.playerId ?? '');
       if (attackerId && !myIds.has(attackerId)) {
         const team = [gg.teamHome, gg.teamAway].find((candidate) => candidate.playerArray.some((p) => p.playerId === attackerId));
-        pending = `${team?.coach || team?.teamName || 'The blocking coach'} is deciding whether to follow up`;
+        pending = $t('store.text.p0IsDecidingWhether2', { p0: team?.coach || team?.teamName || 'The blocking coach' });
         pendingPlayerId = attackerId;
       }
     }
@@ -10071,7 +10077,7 @@ function applyFrameContents(frame: QueuedFrame) {
   const foulInFrame = reports.some((other) => String(other.reportId) === 'foul');
   // Owner 09-14: STAB — "<Player> uses Stab!" over the stabber first; the target's armour roll follows a beat later.
   const stab = playback.catchingUp ? null : stabPresentation(reports, game.value);
-  if (stab) state.skillUsed = { playerId: stab.playerId, skill: 'Stab', square: stab.square, name: stab.name, toast: `${stab.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+  if (stab) state.skillUsed = { playerId: stab.playerId, skill: 'Stab', square: stab.square, name: stab.name, toast: $t('store.text.nameUsesStab', { name: stab.name }), seq: (state.skillUsed?.seq ?? 0) + 1 };
   // Owner 10-14: a frame whose only armour rolls are skipped casualties still runs the cue branches below (the follow/stay
   // indicator, the Stab toast, the foul boot keep reading before the result) with nothing to publish and no armour read.
   if (armorRolls.length > 0 || skippedArmourRolls.length > 0) followBlockKnockdownApplied = true; // Astra r5 P3: its knockdown frame applied
@@ -10466,8 +10472,8 @@ function applyFrameContents(frame: QueuedFrame) {
       if (holderSq) {
         state.skillUsed = {
           playerId: holderId, skill: 'Foul Appearance', square: holderSq, name: playerName(g, holderId),
-          toast: `${playerName(g, holderId)} used Foul Appearance!`,
-          also: attackerSq ? { playerId: attackerId, square: attackerSq, toast: `${playerName(g, attackerId)} is disgusted by Foul Appearance!` } : undefined,
+          toast: $t('store.text.p0UsedFoulAppearance', { p0: playerName(g, holderId) }),
+          also: attackerSq ? { playerId: attackerId, square: attackerSq, toast: $t('store.text.p0IsDisgustedBy', { p0: playerName(g, attackerId) }) } : undefined,
           seq: (state.skillUsed?.seq ?? 0) + 1,
         };
       }
@@ -11018,7 +11024,7 @@ function applyFrameContents(frame: QueuedFrame) {
         // Break Tackle!") — keyed off the successful dodge's modifier, since upstream sends no skillUse report for it.
         if (dodgeUsedBreakTackle(report) && raw && raw[0] >= 0 && raw[0] < 26 && raw[1] >= 0 && raw[1] < 15) {
           const name = playerName(game.value, String(pid));
-          state.skillUsed = { playerId: String(pid), skill: 'Break Tackle', square: [raw[0], raw[1]], name, toast: `${name} uses Break Tackle!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+          state.skillUsed = { playerId: String(pid), skill: 'Break Tackle', square: [raw[0], raw[1]], name, toast: $t('store.text.nameUsesBreakTackle', { name }), seq: (state.skillUsed?.seq ?? 0) + 1 };
         }
       }
       if (isSkillUse || isSkillDecline) {
@@ -12282,10 +12288,10 @@ function convertGazeToMove(playerId: string, route: [number, number][]): boolean
       raiseGazeToMoveRetry();
     }
     const text = gazeToMoveOffer?.retry === true
-      ? `The server did not answer the change to a Move — choose ${GAZE_TO_MOVE_RETRY_LABEL} or ${GAZE_TO_MOVE_WAIT_LABEL}.`
+      ? $t('store.text.theServerDidNot', { GAZE_TO_MOVE_RETRY_LABEL, GAZE_TO_MOVE_WAIT_LABEL })
       : stillGaze
-        ? 'The server did not answer the change to a Move — you will be asked again once the open prompt is answered. End Activation is still available.'
-        : 'The server did not answer the change to a Move.';
+        ? $t('store.text.theServerDidNot2')
+        : $t('store.text.theServerDidNot3');
     log('system', `⚠ ${text}`);
     state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
   }, GAZE_TO_MOVE_ACK_MS);
@@ -14093,7 +14099,7 @@ function reportDeclarationSwitch(found: DeclarationSwitch): void {
   declarationWatcherAskedGames.add(gameKey);
   state.switchWatcherCard = {
     title: 'Unexpected player switch',
-    text: 'The client switched players without a cancel. Please submit a bug report so we can fix it.',
+    text: $t('store.text.theClientSwitchedPlayers'),
     report: `Declaration watcher: ${detail}`,
   };
 }
@@ -14652,9 +14658,9 @@ function watchActivationTook(playerId: string, label: string) {
   scheduleGameTimeout(() => {
     if (srvActingId === playerId) return; // the activation landed after all — nothing dropped
     const g = game.value; if (!g) return;
-    const text = `⚠ ${label} may not have registered — the server never confirmed ${playerName(g, playerId)}'s activation. Re-select the player and try again.`;
+    const text = lt('store.text.labelMayNotHave', { label, p1: playerName(g, playerId) });
     log('system', text);
-    state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+    state.actionNotice = { text: shownText(text), seq: (state.actionNotice?.seq ?? 0) + 1 };
   }, 700);
 }
 // End the prior moving activation before a plain block; StepInitMoving accepts CLIENT_BLOCK only for Blitz.
@@ -14678,7 +14684,7 @@ function whenPriorActivationEnded(attackerId: string, cb: () => void, maxWaitMs 
     if (srvActingId == null && !declarationAwaitingEcho && !cancelInFlight) { cb(); return; }
     // P0 #3: the bounded fallback REFUSES (never declares over a live activation).
     if (Date.now() - start >= maxWaitMs) {
-      const text = 'Not declared: the previous activation did not end in time. Try again.';
+      const text = $t('store.tick.notDeclaredThePrevious');
       log('system', `⚠ ${text}`);
       state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
       return;
@@ -14737,9 +14743,9 @@ function watchBlockAccepted(attackerId: string, defenderId: string) {
       : ap !== attackerId
         ? `it's a different player's activation (${playerName(g, ap)})`
         : 'the server rejected it (already acted this turn, or the target moved out of reach)';
-    const text = `⚠ Block not registered — ${reason}. Re-select the player and try the block again.`;
+    const text = lt('store.text.blockNotRegisteredReason', { reason });
     log('system', text);
-    state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+    state.actionNotice = { text: shownText(text), seq: (state.actionNotice?.seq ?? 0) + 1 };
   }, 1500);
 }
 
@@ -15223,7 +15229,7 @@ function plannerRetireQuietly(reason: string) {
   if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
   state.blitzBlockChoice = null; state.foulChoiceHold = null; foulChoice = null;
   // Owner 10-15: no em dash in user-facing text.
-  log('system', `Plan ended: ${reason}.`);
+  log('system', lt('store.text.planEndedReason', { reason }));
 }
 function plannerFlush(reason: string) {
   if (!plannerPlan) return;
@@ -15231,7 +15237,7 @@ function plannerFlush(reason: string) {
   if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
   state.blitzBlockChoice = null; // #111 fail-safe: a held block-choice dies with its plan (turn-end/knockdown/etc.) — never a stale hold
   state.foulChoiceHold = null; foulChoice = null; // S42: same for a held Foul / Chainsaw choice and its remembered pick
-  const text = `Plan cancelled. ${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
+  const text = $t('store.text.planCancelledP0P1', { p0: reason.charAt(0).toUpperCase(), p1: reason.slice(1) });
   log('system', `⚠ ${text}`);
   state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
 }
@@ -15249,7 +15255,7 @@ function plannerEndForBloodlustReplan(p: PlannerPlan, spentTarget: [number, numb
   const intent = state.movementIntent;
   if (spentTarget && intent && intent.playerId === p.playerId && !intent.failureConfirmed
       && intent.to[0] === spentTarget[0] && intent.to[1] === spentTarget[1]) state.movementIntent = null;
-  const text = 'Bloodlust: plan a new move.';
+  const text = $t('store.text.bloodlustPlanANew');
   log('system', `play: ${text}`);
   state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
 }
@@ -15408,8 +15414,8 @@ function plannerStart(input: {
     const stickyOwnBlitz = !!visibleBlitzProjection && visibleBlitzProjection.turnKey === currentTurnKey(game.value) && visibleBlitzProjection.id === playerId;
     const declaredOwnBlitz = liveOwnBlitz || stickyOwnBlitz;
     if (turnData?.blitzUsed && !declaredOwnBlitz) {
-      log('system', '⚠ Blitz cancelled — this team has already used its Blitz this turn.');
-      state.actionNotice = { text: 'Blitz already used this turn.', seq: (state.actionNotice?.seq ?? 0) + 1 };
+      log('system', lt('store.text.blitzCancelledThisTeam'));
+      state.actionNotice = { text: $t('store.text.blitzAlreadyUsedThis'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
   }
@@ -15419,8 +15425,8 @@ function plannerStart(input: {
     const vc = input.targetPlayerId ? plannerCoord(input.targetPlayerId) : null;
     const adjacent = !!ac && !!vc && Math.max(Math.abs(ac[0] - vc[0]), Math.abs(ac[1] - vc[1])) === 1;
     if (!adjacent) {
-      log('system', '⚠ Foul cancelled — the fouler can’t reach the victim (no walk path). Move adjacent first.');
-      state.actionNotice = { text: 'Can’t reach the victim to foul — no walk path.', seq: (state.actionNotice?.seq ?? 0) + 1 };
+      log('system', lt('store.text.foulCancelledTheFouler'));
+      state.actionNotice = { text: $t('store.text.canTReachThe'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
   }
@@ -15481,9 +15487,9 @@ function plannerStart(input: {
     const targetLockedBase = cur === 'throwTeamMate' || cur === 'kickTeamMate' || cur === 'pass'
       || cur === 'foul' || cur === 'handOver' || cur === 'gaze' || cur === 'gazeSelect';
     if (targetLockedBase) {
-      const text = `⚠ Move cancelled — ${playerName(game.value, playerId)} already selected a target; finish or end that action first.`;
+      const text = lt('store.text.moveCancelledP0Already', { p0: playerName(game.value, playerId) });
       log('system', text);
-      state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+      state.actionNotice = { text: shownText(text), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
   }
@@ -15586,7 +15592,7 @@ function plannerFireAct() {
       // state at that square before the one CLIENT_PASS; an illegal throw is never sent, the plan retires.
       const refusal = plannedPassRefusal(p);
       if (refusal) {
-        const text = `Pass not thrown: ${refusal}. Pick a new target.`;
+        const text = $t('store.text.passNotThrownRefusal', { refusal });
         log('system', `plan: PASS ${playerName(game.value!, p.playerId)} retired at the destination (${refusal})`);
         state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
         state.plannedPassRetired = { seq: (state.plannedPassRetired?.seq ?? 0) + 1, playerId: p.playerId, reason: refusal };
@@ -15616,7 +15622,7 @@ function plannerFireAct() {
     const refusal = p.terminalSent ? null : plannedHandOffRefusal(p);
     if (refusal) {
       log('system', `plan: HAND-OFF ${playerName(game.value!, p.playerId)} retired at the destination (${refusal})`);
-      state.actionNotice = { text: `Hand-off not made: ${refusal}. Pick a receiver again.`, seq: (state.actionNotice?.seq ?? 0) + 1 };
+      state.actionNotice = { text: $t('store.text.handOffNotMade', { refusal }), seq: (state.actionNotice?.seq ?? 0) + 1 };
       plannerSet(null); plannerClearAbort();
       return;
     }
@@ -16861,7 +16867,7 @@ export function installWizardTargetConfirmationTestHarness(
   state.squarePick = null;
   state.wizardTargetConfirm = null;
   state.inducementUse = {
-    key: wizardSpellKey(commandNr), prompt: 'Choose a Zap target on the pitch.', declineLabel: 'Cancel',
+    key: wizardSpellKey(commandNr), prompt: $t('store.text.chooseAZapTarget'), declineLabel: 'Cancel',
     options: [], seq: (priorInducement?.seq ?? 0) + 1,
   };
   session = { send } as unknown as GameSession;
@@ -21454,7 +21460,7 @@ function syncOpponentSendOffWaiting(
       stage: 'resolving',
       status: `Waiting for ${context.coach || context.teamName} and the referee…`,
       resolved: false,
-      steps: [{ key: `${occurrenceKey}:spotted`, text: `The referee has spotted ${context.playerName}.`, tone: 'neutral' }],
+      steps: [{ key: `${occurrenceKey}:spotted`, text: $t('store.text.theRefereeHasSpotted', { playerName: context.playerName }), tone: 'neutral' }],
       seq: (state.sendOffWaiting?.seq ?? 0) + 1,
     };
   }
@@ -22217,7 +22223,7 @@ function answerWizardSpell(choice: { kind: 'cancel' } | { kind: 'spell'; spell: 
     state.wizardTargetConfirm = null;
     state.inducementUse = {
       key,
-      prompt: `Choose a ${choice.spell === 'fireball' ? 'Fireball square' : 'Zap target'} on the pitch.`,
+      prompt: $t('store.text.chooseAP0On', { p0: choice.spell === 'fireball' ? 'Fireball square' : 'Zap target' }),
       declineLabel: 'Cancel',
       options: [],
       seq: (state.inducementUse?.seq ?? 0) + 1,
@@ -22231,7 +22237,7 @@ function answerWizardSpell(choice: { kind: 'cancel' } | { kind: 'spell'; spell: 
   const sent = sendCommand(command);
   liveWizardSpellAwaitingServer = sent;
   if (!sent) {
-    const message = 'Wizard cancel send failed; the server dialog remains answerable.';
+    const message = $t('store.message.wizardCancelSendFailed');
     console.warn('[wizardSpell]', message);
     log('system', `⚠ ${message}`);
   }
@@ -22461,7 +22467,7 @@ function settleUnknownAttempt(a: UnknownAttempt, status: 'done' | 'not-accepted'
   if (status === 'not-accepted') {
     // No answer: the client keeps waiting. A new attempt is allowed only once an applied frame shows the server spoke again.
     unknownNoAnswer = { frameSeq: state.appliedFrameSeq }; // the server has to speak AFTER this point
-    u.attempt = { kind: a.kind, status, text: `The server did not accept ${label} here.` };
+    u.attempt = { kind: a.kind, status, text: $t('store.text.theServerDidNot4', { label }) };
     log('system', `⚠ ${label} from the unanswered server prompt: the server did not accept it`);
     return;
   }
@@ -22469,8 +22475,8 @@ function settleUnknownAttempt(a: UnknownAttempt, status: 'done' | 'not-accepted'
   // activation with the dialog still standing is reported, not hidden.
   const dp = game.value?.dialogParameter as object | null | undefined;
   if (u.instanceId !== 0 && (!dp || dialogObjectId(dp) !== u.instanceId)) { clearUnknownCall(); return; }
-  u.attempt = { kind: a.kind, status, text: a.kind === 'endTurn' ? "The turn ended. The server's prompt is still up." : "The activation ended. The server's prompt is still up." };
-  log('system', `${label} from the unanswered server prompt: it took effect, the prompt is still up`);
+  u.attempt = { kind: a.kind, status, text: a.kind === 'endTurn' ? $t('store.text.theTurnEndedThe') : $t('store.text.theActivationEndedThe') };
+  log('system', lt('store.text.labelFromTheUnanswered', { label }));
 }
 /** True when the ordinary End Activation would go straight to its plain end command, with nothing else to alter first. */
 function endActivationIsPlain(g: GameJson, actingId: string): boolean {
@@ -22527,7 +22533,7 @@ function startUnknownAttempt(kind: 'endTurn' | 'endActivation'): void {
   };
   unknownAttempt = attempt;
   unknownNoAnswer = null;
-  u.attempt = { kind, status: 'waiting', text: `${label} sent. Waiting for the server…` };
+  u.attempt = { kind, status: 'waiting', text: $t('store.text.labelSentWaitingFor', { label }) };
   log('system', `play: ${label} sent from the unanswered server prompt (the server may refuse it)`);
   armUnknownAttempt(attempt);
 }
@@ -22550,7 +22556,7 @@ function maybeDiagnoseUnknownPlayerAction(g: GameJson) {
   } else {
     resolvePlayerActionSelection(action, railDiagnostic);
   }
-  state.actionNotice = { text: `Unknown player action "${action}" is locked.`, seq: (state.actionNotice?.seq ?? 0) + 1 };
+  state.actionNotice = { text: $t('store.text.unknownPlayerActionAction', { action }), seq: (state.actionNotice?.seq ?? 0) + 1 };
   return true;
 }
 
@@ -22580,7 +22586,7 @@ function maybeSurfaceDefenderAction(g: GameJson) {
   if (defenderNoticeKey === key) return; // already surfaced this prompt
   defenderNoticeKey = key;
   state.defenderNotice = {
-    text: 'Defending coach is choosing a defender reaction…',
+    text: $t('store.text.defendingCoachIsChoosing'),
     seq: (state.defenderNotice?.seq ?? 0) + 1,
   };
 }
@@ -22668,7 +22674,7 @@ function requestConcede() {
     if (concedeRequestAt !== at) return; // the confirm dialog arrived (or a new game reset us)
     concedeRequestAt = null;
     state.infoNotice = {
-      text: 'Concede request not granted — the server only offers a concession on your own turn, before you act. Try again at the start of your turn.',
+      text: $t('store.text.concedeRequestNotGranted'),
       seq: (state.infoNotice?.seq ?? 0) + 1,
     };
   }, 2500);
@@ -22816,7 +22822,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
               key,
-              prompt: 'Which spell should your wizard cast?',
+              prompt: $t('store.text.whichSpellShouldYour'),
               declineLabel: 'Cancel',
               options,
               seq: (state.inducementUse?.seq ?? 0) + 1,
@@ -22876,7 +22882,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
               key,
-              prompt: 'Reroll one of these Regeneration rolls?',
+              prompt: $t('store.text.rerollOneOfThese'),
               declineLabel: 'No Reroll',
               options,
               seq: (state.inducementUse?.seq ?? 0) + 1,
@@ -22926,7 +22932,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
               key,
-              prompt: 'Which inducement do you want to use?',
+              prompt: $t('store.text.whichInducementDoYou'),
               declineLabel: 'Decline',
               options,
               seq: (state.inducementUse?.seq ?? 0) + 1,
@@ -23614,7 +23620,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       : 0;
     if (followupAttacker && (followupAttackerState & 0x400) !== 0) { // 0x400 = _BIT_ROOTED
       if (state.followupChoice) state.followupChoice = null;
-      log('system', `${playerName(g, followupAttacker)} can't follow up — Rooted`);
+      log('system', lt('store.text.p0CanTFollow', { p0: playerName(g, followupAttacker) }));
       return once('followup', { netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: false });
     }
     const followupForMe = o66On ? o66Reaction === 'followup' : true; // o66-dispatch
@@ -24143,15 +24149,15 @@ function forceAdvanceReport(outcome: ForceAdvanceOutcome): string {
   const preceding = outcome.preceding.map((step) => `${step.description} ${step.status}`).join('; ');
   let primary: string;
   if (outcome.description === 'End Turn request') {
-    if (outcome.status === 'sent') primary = 'End Turn request sent';
-    else if (outcome.status === 'refused') primary = 'End Turn request refused';
-    else primary = `End Turn request ${outcome.status}`;
+    if (outcome.status === 'sent') primary = $t('store.text.endTurnRequestSent');
+    else if (outcome.status === 'refused') primary = $t('store.text.endTurnRequestRefused');
+    else primary = $t('store.text.endTurnRequestStatus', { status: outcome.status });
   } else {
     switch (outcome.status) {
-      case 'sent': primary = `${outcome.description} — request sent`; break;
-      case 'refused': primary = `${outcome.description} — request refused`; break;
-      case 'pending': primary = `${outcome.description} — waiting to send the phase completion request`; break;
-      case 'no-op': primary = `${outcome.description} — no request sent`; break;
+      case 'sent': primary = $t('store.text.descriptionRequestSent', { description: outcome.description }); break;
+      case 'refused': primary = $t('store.text.descriptionRequestRefused', { description: outcome.description }); break;
+      case 'pending': primary = $t('store.text.descriptionWaitingToSend', { description: outcome.description }); break;
+      case 'no-op': primary = $t('store.text.descriptionNoRequestSent', { description: outcome.description }); break;
     }
   }
   return preceding ? `${preceding}; ${primary}` : primary;
@@ -25061,7 +25067,7 @@ function drivePregameStep() {
     const opp = state.inducementReveal?.opp;
     if (opp?.ready) {
       const desc = opp.items.map((i) => `${i.count}x ${i.label}`).concat(opp.stars.map((s) => s.name)).join(', ');
-      log('system', `${opp.coach || 'opponent'} bought ${desc || 'no inducements'}`);
+      log('system', lt('log.text.p0BoughtP1', { p0: opp.coach || 'opponent', p1: desc || 'no inducements' }));
     }
     state.inducementReveal = null;
     state.inducementBuy = null;
@@ -25501,9 +25507,9 @@ function drivePregameStep() {
       if (blitzDriving) {
         if (blockInFlight) return; // a real blitz drive owns the target selection
         blitzDriving = false; blitzAttackerId = null;
-        const notice = '⚠ Blitz target prompt arrived with no active blitz — clearing a stale guard; nominate the target.';
+        const notice = lt('store.notice.blitzTargetPromptArrived');
         log('system', notice);
-        state.actionNotice = { text: notice, seq: (state.actionNotice?.seq ?? 0) + 1 };
+        state.actionNotice = { text: shownText(notice), seq: (state.actionNotice?.seq ?? 0) + 1 };
         // fall through to handle the prompt normally
       }
       // In BLITZ_SELECT, offer opposing on-pitch blockable targets and send CLIENT_TARGET_SELECTED.
@@ -25940,7 +25946,7 @@ if (FORK_EDITION) {
       report: (message) => log('system', message),
     }));
     void coachDriver.then((driver) => driver.wake()).catch((error: unknown) => {
-      log('system', `Coach brain could not start: ${String(error)}`);
+      log('system', lt('store.text.coachBrainCouldNot', { p0: String(error) }));
     });
   }, { immediate: true });
 }
@@ -25956,7 +25962,7 @@ let lastAdminMessageText = '';
  *  reconnect prompt / auto-reconnect for this close. */
 function handleGameShutdown(code: number) {
   clearOfficialRejoinTarget(); // S44: the server ended this match — nothing to rejoin
-  const reason = lastAdminMessageText || 'This match has been shut down by the server.';
+  const reason = lastAdminMessageText || $t('store.reason.thisMatchHasBeen');
   lastAdminMessageAt = 0; // one-shot — don't reclassify a later drop as this shutdown
   state.adminMessage = null; // folded into the overlay
   state.gameShutdown = { reason, code };
@@ -26042,11 +26048,11 @@ function handleServerPush(cmd: Record<string, unknown>) {
       const joined = recentPlayerJoinAt.get(key);
       if (joined && joined.gameId === String(g?.gameId ?? '') && Date.now() - joined.at <= STALE_SESSION_LEAVE_WINDOW_MS) {
         recentPlayerJoinAt.delete(key);
-        log('system', `${leftCoach}'s previous connection closed (rejoined)`);
+        log('system', lt('store.text.leftcoachSPreviousConnection', { leftCoach }));
         return;
       }
       state.opponentLeft = { coach: leftCoach, seq: (state.opponentLeft?.seq ?? 0) + 1 };
-      log('system', `${leftCoach} has left the game`);
+      log('system', lt('store.text.leftcoachHasLeftThe', { leftCoach }));
     }
     return;
   }
@@ -26540,7 +26546,7 @@ export const gameStore = {
   pauseSpectatorView,
   goToLiveSpectatorView,
   registerSpectatorRendererCancellation,
-  appendSystemNotice(text: string): void { log('system', text); },
+  appendSystemNotice(text: string | LocalText): void { log('system', text); },
   state,
   game,
   /** Astra r2 (catch toast): see modalOfferHoldTeardown. */
@@ -26793,7 +26799,7 @@ export const gameStore = {
         const sent = sendCommand(command);
         liveWizardSpellAwaitingServer = sent;
         if (!sent) {
-          const message = `${spell === 'fireball' ? 'Fireball' : 'Zap'} send failed; target and Cancel remain available.`;
+          const message = $t('store.gameStore.p0SendFailedTarget', { p0: spell === 'fireball' ? 'Fireball' : 'Zap' });
           console.warn('[wizardSpell]', message);
           log('system', `⚠ ${message}`);
           return;
@@ -26840,7 +26846,7 @@ export const gameStore = {
     const sent = sendCommand(command);
     liveWizardSpellAwaitingServer = sent;
     if (!sent) {
-      const message = 'Zap send failed; the selected target and confirmation remain available.';
+      const message = $t('store.gameStore.zapSendFailedThe');
       console.warn('[wizardSpell]', message);
       log('system', `⚠ ${message}`);
       return;
@@ -27865,7 +27871,7 @@ export const gameStore = {
     }
     if (!canPlayerEndTurn(g.turnMode)) {
       log('system', '⚠ End Turn unavailable during a reaction');
-      state.actionNotice = { text: 'End Turn unavailable during a reaction', seq: (state.actionNotice?.seq ?? 0) + 1 };
+      state.actionNotice = { text: $t('store.gameStore.endTurnUnavailableDuring'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return;
     }
     if (endTurnInFlight) { log('system', `ignored: end turn already awaiting server ack (${g.turnMode})`); return; }
@@ -27873,7 +27879,7 @@ export const gameStore = {
     if (!accepted) {
       log('system', `⚠ End Turn was not sent; the current server choice must resolve first (${g.turnMode})`);
       state.actionNotice = {
-        text: 'End Turn was not sent — resolve the current server choice, then try again',
+        text: $t('store.gameStore.endTurnWasNot'),
         seq: (state.actionNotice?.seq ?? 0) + 1,
       };
       return;
@@ -28211,10 +28217,10 @@ export const gameStore = {
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
       } else if (expectingGame && !game.value) {
         // B9-12 G12: the socket dropped before we ever got a game (a FRESH join, not a reconnect) — surface the join error instead of leaving the bar on "joining".
-        state.joinError = `Couldn't join game ${params.gameId} — it may be finished or unavailable (closed ${code}).`;
+        liveSet(state, 'joinError', () => $t('store.gameStore.couldnTJoinGame', { gameId: params.gameId, code }));
         state.spectateConnectError = {
           gameId: params.gameId, url: params.url,
-          message: 'The connection closed before the game arrived — it may be finished or unavailable.',
+          message: $t('store.gameStore.theConnectionClosedBefore'),
           detail: `WebSocket closed (code ${code}${reason ? `, "${reason}"` : ''})`,
         };
         expectingGame = false;
@@ -28225,11 +28231,11 @@ export const gameStore = {
     if (joinTimer) cancelGameTimeout(joinTimer);
     joinTimer = scheduleConnectionTimeout(() => {
       if (expectingGame && (!game.value || retainedHistory)) {
-        state.joinError = `No response joining game ${params.gameId} — it may be finished or unavailable.`;
+        liveSet(state, 'joinError', () => $t('store.gameStore.noResponseJoiningGame', { gameId: params.gameId }));
         state.spectateConnectError = {
           gameId: params.gameId, url: params.url,
-          message: 'No response from the server — the game may be finished or unavailable.',
-          detail: `No response within ${JOIN_TIMEOUT_MS / 1000}s`,
+          message: $t('store.gameStore.noResponseFromThe'),
+          detail: $t('store.gameStore.noResponseWithinP0', { p0: JOIN_TIMEOUT_MS / 1000 }),
         };
         log('system', 'join timed out — game finished or unavailable');
         rejectPendingSpectatorGoLive(spectatorTransport);
@@ -28247,7 +28253,7 @@ export const gameStore = {
       if (thisSession !== session) return; // superseded by a newer connect() — its own error/success owns state now
       const detail = error instanceof Error ? error.message : String(error);
       const message = friendlySpectateError(detail);
-      state.joinError = `Couldn't connect to game ${params.gameId}: ${message}`;
+      liveSet(state, 'joinError', () => $t('store.gameStore.couldnTConnectTo', { gameId: params.gameId, message }));
       state.spectateConnectError = { gameId: params.gameId, url: params.url, message, detail };
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       if (state.connectionClosed?.mode === 'spectator') {
@@ -28284,7 +28290,7 @@ export const gameStore = {
       replay.loading = false;
       replay.active = false;
       const message = error instanceof Error ? error.message : String(error);
-      replay.error = `Replay server connection failed: ${message}`;
+      liveSet(replay, 'error', () => $t('store.gameStore.replayServerConnectionFailed', { message }));
       state.sessionState = 'idle';
       log('system', `replay: ${replay.error}`);
     }
@@ -28375,12 +28381,12 @@ export const gameStore = {
     // SPECTATOR_ONLY: refuse to ever join as a player in the public build.
     if (SPECTATOR_ONLY) {
       prepared?.session.close();
-      state.joinError = 'This is a spectator-only build — joining a game as a player is disabled.';
+      liveSet(state, 'joinError', () => $t('store.gameStore.thisIsASpectator'));
       log('system', 'blocked: spectator-only build cannot join as a player');
       return;
     }
     if (officialFumbbl && !prepared) {
-      state.joinError = 'Load a fresh FUMBBL JNLP before joining. Its one-time token cannot be reused.';
+      liveSet(state, 'joinError', () => $t('store.gameStore.loadAFreshFumbbl'));
       log('system', 'blocked: official FUMBBL player join requires its prepared JNLP socket');
       return;
     }
@@ -28434,11 +28440,11 @@ export const gameStore = {
       // Astra 10-11: a non-official join can be refused by a status AFTER serverJoin (ERROR_NOT_YOUR_TEAM from the
       // start-up ownership check); the close that follows is a refusal, not a closed wait.
       if (!officialFumbbl) { statusSeenThisConnect = true; return; }
-      const message = cmd.message?.trim() || cmd.serverStatus?.trim() || 'FUMBBL rejected the join.';
+      const message = cmd.message?.trim() || cmd.serverStatus?.trim() || $t('store.gameStore.fumbblRejectedTheJoin');
       if (isRecoverableFumbblLobbyStatus(cmd.serverStatus)) {
         state.joinError = null;
         state.waitingForMatch = null;
-        log('system', `FUMBBL: ${message}`);
+        log('system', lt('log.gameStore.fumbblMessage', { message }));
         return;
       }
       officialStatusTerminal = true;
@@ -28446,7 +28452,7 @@ export const gameStore = {
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
       state.joinError = message;
       state.waitingForMatch = null;
-      log('system', `FUMBBL: ${message}`);
+      log('system', lt('log.gameStore.fumbblMessage', { message }));
       thisSession.close();
     });
     session.on('state', (s) => {
@@ -28631,12 +28637,12 @@ export const gameStore = {
         // FUMBBL matchmaking window still surfaces the unreachable/no-match error.
         if (joinAckedThisConnect) {
           state.waitingForMatch = { ...waitingFromParams(params, officialFumbbl), ...(playersJoined != null ? { playersJoined } : {}) };
-          log('system', 'joined — waiting for the other coach to (re)connect');
+          log('system', lt('log.connection.joinedWaitingForCoach'));
           return;
         }
-        state.joinError = officialFumbbl
-          ? `Still waiting to be matched ${joinLabel} after ${Math.round(joinTimeoutMs / 60000)} min — the game hasn't started yet. Try again from FUMBBL when your match is ready.`
-          : `No response joining ${joinLabel} — the server may be unreachable.`;
+        liveSet(state, 'joinError', () => officialFumbbl
+          ? $t('store.gameStore.stillWaitingToBe', { joinLabel, p1: Math.round(joinTimeoutMs / 60000) })
+          : $t('store.gameStore.noResponseJoiningJoinlabel', { joinLabel }));
         log('system', 'join timed out');
         this.disconnect();
       }
@@ -28654,8 +28660,8 @@ export const gameStore = {
       } catch (error) {
         expectingGame = false;
         state.waitingForMatch = null;
-        state.joinError = `FUMBBL join could not be sent: ${error instanceof Error ? error.message : String(error)}`;
-        log('system', state.joinError);
+        liveSet(state, 'joinError', () => $t('store.gameStore.fumbblJoinCouldNot', { p0: error instanceof Error ? error.message : String(error) }));
+        log('system', state.joinError ?? '');
         thisSession.close();
       }
     } else {
@@ -28709,7 +28715,7 @@ export const gameStore = {
     const chosen = injuryIndex != null ? c.injuries[injuryIndex] ?? null : null;
     const used = decision.kind === 'use';
     log('system', used && chosen
-      ? `${decision.apothecaryType ? apothecaryTypeLabel(decision.apothecaryType) : 'Apothecary'} used on ${chosen.player} (${chosen.injury})`
+      ? lt('store.gameStore.p0UsedOnPlayer', { p0: decision.apothecaryType ? apothecaryTypeLabel(decision.apothecaryType) : 'Apothecary', player: chosen.player, injury: chosen.injury })
       : c.kind === 'multiple' ? 'apothecaries declined for all injuries' : `apothecary declined for ${c.player}`);
     // Run the doctor immediately on decline or non-reroll outcomes; used serious casualties animate after the choice.
     const animated = chosen ?? (c.kind === 'single' ? c.injuries[0] : null);
@@ -29017,7 +29023,7 @@ export const gameStore = {
     // The view converts a friendly-token click into the same Blitz confirmation card. Refuse direct/test callers
     // here so this alternate activation-switch seam cannot bypass the central end-action authorization.
     if (blitzEndConfirmationRequired(game.value)) {
-      log('system', '⚠ Blitz end blocked — confirm End Blitz first.');
+      log('system', lt('store.gameStore.blitzEndBlockedConfirm'));
       return false;
     }
     const requestSeq = ++friendlySwitchRequestSeq;
@@ -29060,7 +29066,7 @@ export const gameStore = {
         }
       }, 30000, () => {
         if (endSeq !== priorActivationEndSeq || requestSeq !== friendlySwitchRequestSeq) return;
-        const text = 'Not switched: the previous activation did not end. Try again.';
+        const text = $t('store.gameStore.notSwitchedThePrevious');
         log('system', `⚠ ${text}`);
         state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
       });
@@ -29128,7 +29134,7 @@ export const gameStore = {
     const directMoveSwitch = false;
     if (actingId0 && actingId0 !== playerId
         && (Number(acting0?.currentMove ?? 0) > 0 || (actingAction0 !== '' && actingAction0 !== 'move'))) {
-      const text = `${playerName(game.value, actingId0)} is mid-activation — End Activation first before activating ${playerName(game.value, playerId)}.`;
+      const text = $t('store.gameStore.p0IsMidActivation', { p0: playerName(game.value, actingId0), p1: playerName(game.value, playerId) });
       log('system', `⚠ ${text}`);
       state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
       return;
@@ -29341,7 +29347,7 @@ export const gameStore = {
         : gameStore.armedGazeVictimId() !== victimId ? 'the nominated victim has changed'
           : !gameStore.hasLiveGazeIntent() ? 'the Gaze activation is no longer active'
             : gazeConfirmRefusalReason(g, { ...intent, victimId }) ?? 'the target is no longer legal';
-      const text = `Gaze not confirmed — ${reason}.`;
+      const text = $t('store.gameStore.gazeNotConfirmedReason', { reason });
       log('system', `⚠ ${text}`);
       state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
@@ -29610,7 +29616,7 @@ export const gameStore = {
     // prevents a future left/right-click branch from silently burning a declared Blitz via acting-null (or the
     // selectBlitzTarget self-target cancellation). The confirmation cards are the only callers granted this token.
     if (blitzEndConfirmationRequired(game.value) && !options.blitzConfirmed) {
-      log('system', '⚠ Blitz end blocked — confirm End Blitz first.');
+      log('system', lt('store.gameStore.blitzEndBlockedConfirm'));
       return;
     }
     pendingWideRailDeclare = null;
@@ -29672,7 +29678,7 @@ export const gameStore = {
         bigGuyRollEndLatch = { gameId: String(game.value.gameId ?? ''), turnKey: activate.turnKey, playerId: activate.playerId };
         log('system', `play: ROLL AND END ${playerName(game.value, activate.playerId)} (server rolls the negatrait)`);
       } else {
-        log('system', `⚠ Roll and End refused — ${playerName(game.value, activate.playerId)} keeps the activation; try again once the prompt clears.`);
+        log('system', lt('store.gameStore.rollAndEndRefused', { p0: playerName(game.value, activate.playerId) }));
       }
       return;
     }
@@ -30285,14 +30291,14 @@ export const gameStore = {
     // #42 (2026-07-16, canBeBlocked = STANDING||MOVING): never block a prone/stunned target. Belt-and-suspenders —
     // the blitz-target picker already excludes them, but this is the shared block commit so it guards every caller.
     const defBase = playerStateBase(game.value.fieldModel.playerDataArray.find((d) => d.playerId === defenderId)?.playerState ?? 0) ?? 0;
-    if (defBase !== 1 && defBase !== 2) { log('system', '⚠ Block blocked — that player is down (prone/stunned). Down players are fouled, not blocked.'); return false; }
+    if (defBase !== 1 && defBase !== 2) { log('system', lt('store.gameStore.blockBlockedThatPlayer')); return false; }
     // #15 symmetry (2026-07-16, TK defense-in-depth): mirror the playerBlock currentMove gate on this commit path
     // too, so a planner/caller can't emit a DOOMED clientBlock the server bounces. GUARDED by playerAction==='move'
     // so a BLITZ (playerAction 'blitzMove', which legitimately walks then blocks with currentMove>0) is NOT gated —
     // only a plain-MOVE actor that has moved/stood is refused (block-after-move requires a Blitz).
     const apSB = game.value.actingPlayer as { playerId?: string | null; currentMove?: number; playerAction?: string | null } | undefined;
     if (apSB?.playerId === attackerId && Number(apSB?.currentMove ?? 0) > 0 && String(apSB?.playerAction ?? '') === 'move') {
-      log('system', '⚠ Block blocked — this player has already moved/stood up. To block after moving, declare a Blitz.'); return false;
+      log('system', lt('store.gameStore.blockBlockedThisPlayer')); return false;
     }
     if (blockInFlight) { log('system', 'block already pending — waiting for the server (ignoring re-click)'); return false; }
     // S41: the chainsaw clientBlock is out; flavored sends drop blockInFlight at once, so hold the line until the next frame.
@@ -30338,7 +30344,7 @@ export const gameStore = {
     }
     releaseChainsawDeclare();
     const defBase = playerStateBase(game.value.fieldModel.playerDataArray.find((d) => d.playerId === defenderId)?.playerState ?? 0) ?? 0;
-    if (defBase !== 1 && defBase !== 2) { log('system', '⚠ Block blocked — that player is down (prone/stunned). Down players are fouled, not blocked.'); return false; }
+    if (defBase !== 1 && defBase !== 2) { log('system', lt('store.gameStore.blockBlockedThatPlayer')); return false; }
     if (blockInFlight) { log('system', 'block already pending — waiting for the server (ignoring re-click)'); return false; }
     const declared = sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: attackerId, playerAction: 'chainsaw', leaping: isJumping() });
     if (!declared) return false;
@@ -30390,7 +30396,7 @@ export const gameStore = {
     if (!attackerId || !iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
     const action = String(acting?.playerAction ?? '');
     if (action !== 'kickEmBlock' && action !== 'kickEmBlitz') { log('system', 'ignored: no kick-em action declared'); return false; }
-    if (!kickEmCommitAllowed(game.value, attackerId, defenderId)) { log('system', '⚠ Kick \'em needs an ADJACENT prone/stunned opponent and the unused skill.'); return false; }
+    if (!kickEmCommitAllowed(game.value, attackerId, defenderId)) { log('system', lt('store.gameStore.kickEmNeedsAn')); return false; }
     followupHandled.clear();
     const accepted = sendCommand({
       netCommandId: NetCommandId.CLIENT_BLOCK, actingPlayerId: attackerId, defenderId,
@@ -30423,7 +30429,7 @@ export const gameStore = {
     }
     if (!kickEmCommitAllowed(g, actingId, defenderId)) {
       state.actionNotice = {
-        text: `Move adjacent to ${playerName(g, defenderId)}, then click them again to use Kick 'Em.`,
+        text: $t('store.gameStore.moveAdjacentToP0', { p0: playerName(g, defenderId) }),
         seq: (state.actionNotice?.seq ?? 0) + 1,
       };
       return true;
@@ -30439,7 +30445,7 @@ export const gameStore = {
         if (!yes) return;
         if (!gameStore.sendKickEmBlock(defenderId)) {
           state.actionNotice = {
-            text: `Kick 'Em was not sent — the target or server offer changed. Choose the target again.`,
+            text: $t('store.gameStore.kickEmWasNot'),
             seq: (state.actionNotice?.seq ?? 0) + 1,
           };
           syncKickEmTargetRail();
@@ -30472,7 +30478,7 @@ export const gameStore = {
     const secondBeatPick = blastinChooserPicks(game.value);
     if (!actingId || !(iControlPlayer(actingId) || secondBeatPick)) { log('system', 'ignored: not your player / not your turn'); return false; }
     if (!blastinTargetIds(game.value, actingId, state.blastinBeat?.targetPlayerId).includes(targetId)) {
-      log('system', secondBeatPick ? '⚠ Blastin\' needs a STANDING player within 3 squares of the first target.' : '⚠ Blastin\' needs a STANDING opponent within 3 squares.');
+      log('system', secondBeatPick ? lt('store.gameStore.blastinNeedsAStanding') : lt('store.gameStore.blastinNeedsAStanding2'));
       return false;
     }
     if (!sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId: targetId })) return false;
@@ -30642,7 +30648,7 @@ export const gameStore = {
     const from = game.value.fieldModel.playerDataArray.find((data) => data.playerId === throwerId)?.playerCoordinate;
     const origin = Array.isArray(from) && from.length === 2 ? [Number(from[0]), Number(from[1])] as [number, number] : null;
     if (!origin || !ttmRangeSquares(game.value, origin).some(([x, y]) => x === targetCoordinate[0] && y === targetCoordinate[1])) {
-      log('system', '⚠ Throw Team-Mate blocked — choose a Quick Pass or Short Pass square.');
+      log('system', lt('store.gameStore.throwTeamMateBlocked'));
       return false;
     }
     const accepted = sendCommand(throwMateCommand(throwerId, { targetCoordinate }, kicked));
@@ -30749,8 +30755,8 @@ export const gameStore = {
     // terminal offer; later reroll/Blast It dialogs use separate rails and cannot reach this sender.
     // At send time, require the passer to hold the live, settled ball; declaration may precede pickup.
     if (!holdsBall(game.value.fieldModel as unknown as HoldsBallFieldModel, acting)) {
-      log('system', '⚠ Pass blocked — the passer isn’t holding the ball. Pick up the ball first.');
-      state.actionNotice = { text: 'Can’t pass — the passer isn’t holding the ball.', seq: (state.actionNotice?.seq ?? 0) + 1 };
+      log('system', lt('store.gameStore.passBlockedThePasser'));
+      state.actionNotice = { text: $t('store.gameStore.canTPassThe'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
     const from = game.value.fieldModel.playerDataArray.find((data) => data.playerId === acting)?.playerCoordinate;
@@ -30778,7 +30784,7 @@ export const gameStore = {
     const actingPlayerId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!actingPlayerId) { log('system', 'ignored: no acting player for Dump-Off'); return false; }
     if (!sendCommand({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId, targetCoordinate })) {
-      log('system', '⚠ Dump-Off pass was not sent; pick a target again.');
+      log('system', lt('store.gameStore.dumpOffPassWas'));
       return false;
     }
     log('system', `play: DUMP-OFF ${playerName(g, actingPlayerId)} → [${targetCoordinate[0]},${targetCoordinate[1]}] (server resolves)`);
@@ -30951,14 +30957,14 @@ export const gameStore = {
     // server does NOT hard-bounce CLIENT_BLOCK on a prone target (Veers' honesty caveat), so the client must mirror
     // the shared eligibility here.
     const defBase = playerStateBase(game.value.fieldModel.playerDataArray.find((d) => d.playerId === defenderId)?.playerState ?? 0) ?? 0;
-    if (defBase !== 1 && defBase !== 2) { log('system', '⚠ Block blocked — that player is down (prone/stunned). Down players are fouled, not blocked.'); return; }
+    if (defBase !== 1 && defBase !== 2) { log('system', lt('store.gameStore.blockBlockedThatPlayer')); return; }
     // #15 (2026-07-16, owner + STAND_UP_BLITZ→setBlitzUsed, StepEndSelecting:399-402): a plain Block is a STAND-STILL
     // action. A player that has already used movement THIS activation — moved a square, or STOOD UP (which costs
     // 3 MA and IS a move) — cannot declare a plain Block; block-after-moving is only legal as a BLITZ (which consumes
     // the team's one blitz). Gate it here so the stand-then-block path can't throw a free block off a move action.
     const ap0 = game.value.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
     if (ap0?.playerId === attackerId && Number(ap0?.currentMove ?? 0) > 0) {
-      log('system', '⚠ Block blocked — this player has already moved/stood up. To block after moving, declare a Blitz.');
+      log('system', lt('store.gameStore.blockBlockedThisPlayer'));
       return;
     }
     // g313 (Yularen correction b): debounce — a block is already pending its ack/resolution; re-firing would re-send activate+block and re-arm the clear-then-set race. Suppress, don't re-declare.
@@ -31186,7 +31192,7 @@ export const gameStore = {
     if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
       // give up auto-retrying; leave the prompt with a manual Reconnect button
       if (state.connectionClosed) state.connectionClosed = { ...state.connectionClosed, reconnecting: false };
-      log('system', 'auto-reconnect gave up — use Reconnect to retry');
+      log('system', lt('log.connection.autoReconnectGaveUp'));
       return;
     }
     reconnectAttempts += 1;

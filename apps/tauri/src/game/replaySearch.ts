@@ -17,6 +17,7 @@ import { localPlayedTeamIds, playedTeamsAccountKey } from './recentPlayedTeams';
 import { resultLetter } from './fumbblPlayBlade';
 import { FUMBBL_SITE } from './settings';
 import leagueIndexData from '../assets/data/league-index.json';
+import { $t, lt, shownText, type LocalText } from '../i18n';
 
 export interface ReplayRowTeam {
   name: string;
@@ -71,8 +72,11 @@ export interface ReplaySearchResult {
   bareId?: number;
   /** own / coach lists: only some of the coach's teams were read (RECENT_TEAM_CAP) */
   teamCap?: RecentTeamCap;
-  /** a league whose tournament schedules did not all load: the rows that did load, plus this notice */
+  /** a note for the reader (e.g. why no league matched) */
   notice?: string;
+  /** a league whose tournament schedules did not all load: the rows that did load, plus this message - kept as its
+   *  message identity (i18n, Astra r3 #11) so a discarded result holds no live registration; shown via searchNoticeText */
+  noticeMessage?: LocalText;
   rows: ReplayRow[];
 }
 
@@ -202,7 +206,7 @@ export function sortRowsNewestFirst<T extends { when: string }>(rows: readonly T
 
 /** The fallback for a number that is not a FUMBBL match id: a bare FFB replay id, teams unknown. */
 export function replayIdRow(id: number): ReplayRow {
-  return { key: `replay-${id}`, replayId: id, when: '', left: { name: `Game ${id}`, coach: '' }, right: null, score: null };
+  return { key: `replay-${id}`, replayId: id, when: '', left: { name: $t('replay.text.gameId', { id }), coach: '' }, right: null, score: null };
 }
 
 export async function fetchMatchRow(id: number, fetcher: FetchLike): Promise<ReplayRow | null> {
@@ -513,7 +517,7 @@ async function fetchGroupName(id: number, fetcher: FetchLike): Promise<string> {
 }
 
 export async function searchGroup(input: FumbblGroup, fetcher: FetchLike, query = input.name): Promise<ReplaySearchResult> {
-  const group: FumbblGroup = input.fromAd ? { id: input.id, name: (await fetchGroupName(input.id, fetcher)) || input.name || `League ${input.id}` } : input;
+  const group: FumbblGroup = input.fromAd ? { id: input.id, name: (await fetchGroupName(input.id, fetcher)) || input.name || $t('replay.group.leagueId', { id: input.id }) } : input;
   const tournaments = parseGroupTournaments(await fetchJson(`${FUMBBL_SITE}/api/group/tournaments/${group.id}`, fetcher));
   const recent = tournaments.slice(0, LEAGUE_TOURNAMENT_CAP);
   let failed = 0;
@@ -525,7 +529,7 @@ export async function searchGroup(input: FumbblGroup, fetcher: FetchLike, query 
     .filter((row) => (seen.has(row.key) ? false : (seen.add(row.key), true)))
     .slice(0, LEAGUE_MATCH_CAP);
   const result: ReplaySearchResult = { kind: 'league', query, group, rows };
-  if (failed) result.notice = 'Some tournaments could not be loaded';
+  if (failed) result.noticeMessage = lt('replay.text.someTournamentsCouldNot');
   return result;
 }
 
@@ -590,7 +594,7 @@ export const groupIdResolver: ReplaySearchResolver = {
   async resolve(query, ctx) {
     const q = classifyQuery(query);
     if (!idAllows(q, 'league')) return null;
-    const empty: ReplaySearchResult = { kind: 'league', query: normalizeQuery(query), group: { id: q.id, name: `League ${q.id}` }, rows: [] };
+    const empty: ReplaySearchResult = { kind: 'league', query: normalizeQuery(query), group: { id: q.id, name: $t('replay.groupIdResolver.leagueId', { id: q.id }) }, rows: [] };
     try {
       const tournaments = parseGroupTournaments(await fetchJson(`${FUMBBL_SITE}/api/group/tournaments/${q.id}`, ctx.fetcher));
       if (!tournaments.length) return q.force ? empty : null; // league:<n> never falls through
@@ -659,15 +663,19 @@ export const leagueNameResolver: ReplaySearchResolver = {
   },
 };
 
+/** The notice line a result shows, in the current language (its note, then its own message). */
+export function searchNoticeText(result: Pick<ReplaySearchResult, 'notice' | 'noticeMessage'> | null | undefined): string {
+  return [result?.notice, result?.noticeMessage ? shownText(result.noticeMessage) : ''].filter(Boolean).join('. ');
+}
 /** The one-line note when a known coach with no games gives way to leagues of the same name. */
-export function coachNoGamesNote(coach: string): string { return `Coach ${coach} has no games — showing leagues named like ${coach}`; }
+export function coachNoGamesNote(coach: string): string { return $t('replay.text.coachCoachHasNo', { coach, coach1: coach }); }
 /** One matched league -> its games; several -> the pick list. An optional note leads any notice of its own. */
 async function leagueResultFor(matched: readonly FumbblGroup[], query: string, ctx: ReplaySearchContext, note?: string): Promise<ReplaySearchResult> {
   const q = normalizeQuery(query);
   const result: ReplaySearchResult = matched.length === 1
     ? await searchGroup(matched[0]!, ctx.fetcher, q)
     : { kind: 'league-pick', query: q, groups: matched.slice(0, LEAGUE_PICK_CAP), rows: [] };
-  if (note) result.notice = result.notice ? `${note}. ${result.notice}` : note;
+  if (note) result.notice = result.notice ? `${note}. ${result.notice}` : note; // searchNoticeText appends noticeMessage
   return result;
 }
 

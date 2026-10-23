@@ -5,6 +5,7 @@ import type { ReplayedStandingRerolls } from '../standingRerollProjection';
 import { buildReRollDecision } from '../reRollDecisionProjection';
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, seedSpectatorCheckpoint, withSpectatorClock, type SpectatorCheckpoint, type SpectatorClock, type SpectatorCursor, type SpectatorEvent, type SpectatorIdentity } from './spectatorCheckpoint';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../blastinSecondBeat';
+import { t, liveSet, data } from '../../i18n';
 
 export type SpectatorPacketClass = 'snapshot' | 'match' | 'clock' | 'annotation' | 'connection' | 'unsupported';
 /** Exhaustive inventory of the protocol's externally delivered server commands. */
@@ -463,7 +464,7 @@ export class LiveSpectateHistory {
       monotonicAt.push(monotonic);
     }
     const liveFirstWall = live.events[0]!.event.receivedWallAt;
-    const segment: Segment = { identity, start: 0, end: 0, sealed: true, incomplete: false, interruption: 'Before you joined',
+    const segment: Segment = { identity, start: 0, end: 0, sealed: true, incomplete: false, interruption: data('Before you joined'),
       events: [], anchors: [{ checkpoint, bytes: spectatorCheckpointBytes(checkpoint) }], turnMarkers: [], backfillFor: live.identity.segmentId, origin: 0 };
     let observing = !!observer;
     const observe = (before: SpectatorCheckpoint, after: SpectatorCheckpoint, command: Readonly<Record<string, unknown>>) => {
@@ -499,7 +500,7 @@ export class LiveSpectateHistory {
         segment.anchors.push({ checkpoint, bytes: anchorBytes });
         snapshotBytes += anchorBytes;
       }
-      if (overBudget()) { this.noticeValue = 'Earlier history limit reached'; return { kind: 'over-budget' }; }
+      if (overBudget()) { liveSet(this, 'noticeValue', () => t('replay.text.earlierHistoryLimitReached'), this); return { kind: 'over-budget' }; }
       if (performance.now() - sliceStart >= sliceMs) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); sliceStart = performance.now(); }
     }
     // Owner 10-15 (option C): independent state continuity. The replay reduced up to the single surviving candidate must
@@ -586,7 +587,7 @@ export class LiveSpectateHistory {
     const now = this.accounting();
     if (now.commands + segment.events.length > this.limits.commands || now.commandBytes + prepared.bytes > this.limits.commandBytes
       || now.checkpoints + segment.anchors.length > this.limits.checkpoints || now.snapshotBytes + prepared.snapshotBytes > this.limits.snapshotBytes) {
-      this.noticeValue = 'Earlier history limit reached';
+      liveSet(this, 'noticeValue', () => t('replay.text.earlierHistoryLimitReached'), this);
       return { kind: 'over-budget', ...observed };
     }
     this.segments.splice(this.segments.length - 1, 0, segment);
@@ -620,15 +621,15 @@ export class LiveSpectateHistory {
     this.connectionActive = true;
     this.lastNumbered = null;
     const last = this.segments.at(-1);
-    if (last) { last.sealed = true; last.interruption = 'Connection replaced'; }
-    this.staleReasonValue = 'Waiting for a fresh match snapshot';
+    if (last) { last.sealed = true; last.interruption = data('Connection replaced'); }
+    liveSet(this, 'staleReasonValue', () => t('replay.text.waitingForAFresh'), this);
   }
   disconnect(generation: number): void {
     if (generation !== this.currentGeneration) return;
     this.connectionActive = false;
     const last = this.segments.at(-1);
-    if (last) { last.sealed = true; last.interruption = 'Live feed disconnected'; }
-    if (!this.headValue?.durableProjection.endGame.finalPresentationReady) this.staleReasonValue = 'Live feed disconnected';
+    if (last) { last.sealed = true; last.interruption = data('Live feed disconnected'); }
+    if (!this.headValue?.durableProjection.endGame.finalPresentationReady) liveSet(this, 'staleReasonValue', () => t('replay.text.liveFeedDisconnected'), this);
   }
   private stale(reason: string): IngressResult {
     this.staleReasonValue = reason;
@@ -752,7 +753,7 @@ export class LiveSpectateHistory {
     this.commandCount = 0;
     this.commandBytes = 0;
     this.enabled = false;
-    this.noticeValue = 'History unavailable: minimum checkpoint exceeds the history budget';
+    liveSet(this, 'noticeValue', () => t('replay.text.historyUnavailableMinimumCheckpoint'), this);
   }
   private enforceLimits(): void {
     for (;;) {
@@ -760,7 +761,7 @@ export class LiveSpectateHistory {
       if (bytes.headBytes > this.limits.activeGraphBytes) { this.disable(); return; }
       if (bytes.commands <= this.limits.commands && bytes.commandBytes <= this.limits.commandBytes
         && bytes.checkpoints <= this.limits.checkpoints && bytes.snapshotBytes <= this.limits.snapshotBytes) return;
-      this.noticeValue = 'Earlier history limit reached';
+      liveSet(this, 'noticeValue', () => t('replay.text.earlierHistoryLimitReached'), this);
       // A pre-join backfill segment always goes before any captured history, oldest captured segment next.
       const backfillIndex = this.segments.findIndex((segment) => segment.backfillFor !== undefined);
       if (backfillIndex >= 0 && this.segments.length > 1) {

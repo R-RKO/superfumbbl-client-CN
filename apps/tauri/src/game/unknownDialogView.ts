@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * S43: what the "unanswered server prompt" panel says. Pure text projection of one server dialog: nothing here
  * answers, infers or computes anything. Every value shown is a value the server sent (names are looked up in the
@@ -31,23 +32,23 @@ export const UNKNOWN_DIALOG_TITLE = 'The server is asking something this client 
  * title and text (ffb-client-logic/src/main/java/com/fumbbl/ffb/client/dialog/, commit b7f355af4). `source` names the file.
  */
 export const UNKNOWN_DIALOG_WORDS: Readonly<Record<string, { what: string; source: string }>> = {
-  information: { what: 'The server is showing a notice and waiting for it to be closed.', source: 'DialogInformation.java' },
-  teamChoice: { what: 'The server wants a team picked from a list.', source: 'DialogTeamChoice.java ("Select Team")' },
-  reRollForTargets: { what: 'The server asks whether to use a reroll on the failed rolls against one or more targets.', source: 'DialogReRollForTargets.java ("Use a Re-roll")' },
-  reRollBlockForTargets: { what: 'The server asks whether to reroll the block dice against one or more targets.', source: 'DialogReRollBlockForTargets.java ("Block Roll")' },
-  useIgors: { what: 'The server asks for which of your players an Igor should reroll a failed Regeneration.', source: 'DialogUseIgorsHandler.java ("Select players to use igor for")' },
-  useMortuaryAssistants: { what: 'The server asks for which of your players a Mortuary Assistant (or Plague Doctor) should reroll a failed Regeneration.', source: 'DialogUseMortuaryAssistantsHandler.java' },
-  winningsReRoll: { what: 'The server asks whether to keep the winnings roll or roll it again.', source: 'DialogWinningsReRoll.java ("Re-roll Winnings")' },
-  pilingOn: { what: 'The server asks whether a player should use Piling On to reroll an armour or injury roll.', source: 'DialogPilingOn.java ("Use Piling On")' },
-  useIgor: { what: 'The server asks whether to use your Igor to reroll a failed Regeneration.', source: 'DialogUseIgor.java ("Use Igor")' },
-  useMortuaryAssistant: { what: 'The server asks whether to use your Mortuary Assistant (or Plague Doctor) to reroll a failed Regeneration.', source: 'DialogUseMortuaryAssistant.java' },
-  opponentBlockSelection: { what: 'The server asks a coach to pick the block dice results for one or more targets.', source: 'DialogOpponentBlockSelectionHandler.java ("Select Block Results")' },
-  useChainsaw: { what: 'The server asks whether to use the chainsaw on the foul.', source: 'DialogUseChainsaw.java ("Use Chainsaw")' },
-  briberyAndCorruptionReRoll: { what: 'The server asks whether to use Bribery and Corruption to reroll a natural 1 on Argue the Call.', source: 'DialogBriberyAndCorruption.java' },
-  penaltyShootout: { what: 'The server is showing the penalty shootout and waiting for it to be closed.', source: 'DialogPenaltyShootout.java ("Penalty Shootout")' },
-  opponentBlockSelectionProperties: { what: 'The server asks a coach to pick the block dice results for one or more targets.', source: 'DialogOpponentBlockSelectionPropertiesHandler.java ("Select Block Results")' },
-  pickUpChoice: { what: 'The server asks whether to attempt to pick up the ball.', source: 'DialogPickUpChoice.java ("Attempt to pick up the ball?")' },
-  selectPosition: { what: 'The server asks for one or more positions to be chosen from a list.', source: 'DialogSelectPosition.java ("Position Choice")' },
+  information: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerIsShowing'); }, source: 'DialogInformation.java' },
+  teamChoice: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerWantsA'); }, source: 'DialogTeamChoice.java ("Select Team")' },
+  reRollForTargets: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether'); }, source: 'DialogReRollForTargets.java ("Use a Re-roll")' },
+  reRollBlockForTargets: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether2'); }, source: 'DialogReRollBlockForTargets.java ("Block Roll")' },
+  useIgors: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksFor'); }, source: 'DialogUseIgorsHandler.java ("Select players to use igor for")' },
+  useMortuaryAssistants: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksFor2'); }, source: 'DialogUseMortuaryAssistantsHandler.java' },
+  winningsReRoll: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether3'); }, source: 'DialogWinningsReRoll.java ("Re-roll Winnings")' },
+  pilingOn: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether4'); }, source: 'DialogPilingOn.java ("Use Piling On")' },
+  useIgor: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether5'); }, source: 'DialogUseIgor.java ("Use Igor")' },
+  useMortuaryAssistant: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether6'); }, source: 'DialogUseMortuaryAssistant.java' },
+  opponentBlockSelection: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksA'); }, source: 'DialogOpponentBlockSelectionHandler.java ("Select Block Results")' },
+  useChainsaw: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether7'); }, source: 'DialogUseChainsaw.java ("Use Chainsaw")' },
+  briberyAndCorruptionReRoll: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether8'); }, source: 'DialogBriberyAndCorruption.java' },
+  penaltyShootout: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerIsShowing2'); }, source: 'DialogPenaltyShootout.java ("Penalty Shootout")' },
+  opponentBlockSelectionProperties: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksA'); }, source: 'DialogOpponentBlockSelectionPropertiesHandler.java ("Select Block Results")' },
+  pickUpChoice: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksWhether9'); }, source: 'DialogPickUpChoice.java ("Attempt to pick up the ball?")' },
+  selectPosition: { get what() { return t('dialogs.unknown.unknownDialogWords.theServerAsksFor3'); }, source: 'DialogSelectPosition.java ("Position Choice")' },
 };
 
 /** `reRollModifierChoice` -> "Re-roll modifier choice". */
@@ -58,11 +59,11 @@ export function readableDialogName(id: string): string {
 }
 
 const LABELS: Readonly<Record<string, string>> = {
-  teamId: 'Team', choosingTeamId: 'Team', playerId: 'Player', playerIds: 'Players',
-  skill: 'Skill', modifyingSkill: 'Modifying skill', minimumRoll: 'Roll needed',
-  roll: 'Roll', rolls: 'Rolls', oldRoll: 'Current roll', rollsHome: 'Home rolls', rollsAway: 'Away rolls',
-  reRolledAction: 'Rerolled action', reRollSource: 'Reroll source', nrOfDice: 'Number of dice',
-  blockRoll: 'Block roll', blockRolls: 'Block rolls',
+  get teamId() { return t('dialogs.unknown.labels.team'); }, get choosingTeamId() { return t('dialogs.unknown.labels.team'); }, get playerId() { return t('dialogs.unknown.labels.player'); }, get playerIds() { return t('dialogs.unknown.labels.players'); },
+  get skill() { return t('dialogs.unknown.labels.skill'); }, get modifyingSkill() { return t('dialogs.unknown.labels.modifyingSkill'); }, get minimumRoll() { return t('dialogs.unknown.labels.rollNeeded'); },
+  get roll() { return t('dialogs.unknown.labels.roll'); }, get rolls() { return t('dialogs.unknown.labels.rolls'); }, get oldRoll() { return t('dialogs.unknown.labels.currentRoll'); }, get rollsHome() { return t('dialogs.unknown.labels.homeRolls'); }, get rollsAway() { return t('dialogs.unknown.labels.awayRolls'); },
+  get reRolledAction() { return t('dialogs.unknown.labels.rerolledAction'); }, get reRollSource() { return t('dialogs.unknown.labels.rerollSource'); }, get nrOfDice() { return t('dialogs.unknown.labels.numberOfDice'); },
+  get blockRoll() { return t('dialogs.unknown.labels.blockRoll'); }, get blockRolls() { return t('dialogs.unknown.labels.blockRolls'); },
 };
 const RAW_MAX = 140;
 const ROWS_MAX = 60;
@@ -162,13 +163,13 @@ export function describeUnknownDialog(
   const words = registered ? UNKNOWN_DIALOG_WORDS[id]?.what : undefined;
   const name = readableDialogName(id);
   const what = words ?? (registered
-    ? `${name}: the server sent this prompt and this client has no way to show it yet.`
-    : `${name}: this prompt is new to this client.`);
+    ? t('dialogs.unknown.what.nameTheServerSent', { name })
+    : t('dialogs.unknown.what.nameThisPromptIs', { name }));
   const asked = unknownDialogAsked(payload, lookup);
-  const askedText = asked === 'you' ? 'The server is asking you.' : asked === 'opponent' ? 'The server is asking your opponent.' : 'The server does not say who it is asking.';
+  const askedText = asked === 'you' ? t('dialogs.unknown.askedText.theServerIsAsking') : asked === 'opponent' ? t('dialogs.unknown.askedText.theServerIsAsking2') : t('dialogs.unknown.askedText.theServerDoesNot');
   const keys = Object.keys(payload).filter((k) => k !== 'dialogId');
   const rows = keys.slice(0, ROWS_MAX).map((k) => rowFor(k, payload[k], lookup));
-  return { title: UNKNOWN_DIALOG_TITLE, what, isNew: !registered, asked, askedText, rows, moreCount: Math.max(0, keys.length - ROWS_MAX) };
+  return { title: t('dialogs.unknown.title'), what, isNew: !registered, asked, askedText, rows, moreCount: Math.max(0, keys.length - ROWS_MAX) };
 }
 
 /**

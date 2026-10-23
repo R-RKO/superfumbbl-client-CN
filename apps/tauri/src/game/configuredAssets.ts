@@ -1,6 +1,7 @@
 import walkManifest from '../../../../packages/ffb-pitch/assets/walk/manifest.json';
-import type { AssetTargetCatalog, AssetTargetPositionChoice, AssetTargetTeamChoice } from './assetModUi';
+import { assetTargetPositionLabel, assetTargetTeamLabel, type AssetTargetCatalog, type AssetTargetPositionChoice, type AssetTargetTeamChoice } from './assetModUi';
 import { userFilesPack, type AssetPackAssignments, type InstalledAssetPack } from './assetMods';
+import { t } from '../i18n';
 
 export type ConfiguredAssetSource = 'Built-in default' | 'Your file' | string;
 export type SpriteSide = 'any' | 'home' | 'away';
@@ -140,7 +141,7 @@ function spriteRows(
     for (const binding of userBindings) sides.add(binding.side ?? 'any');
     return {
       positionId: position.positionId,
-      label: position.label,
+      label: assetTargetPositionLabel(position), // i18n: a stored fallback is localised at display (Astra r2 #15)
       variants: [...sides].map((side) => {
         const overrideKey = spriteOverrideKey(team.teamId, position.positionId, side);
         const provider = bindings.find(({ binding }) => (binding.side ?? 'any') === side);
@@ -150,7 +151,7 @@ function spriteRows(
           side,
           overrideKey,
           url: user ?? packed,
-          source: user ? 'Your file' : packed && provider ? provider.pack.name : 'Built-in default',
+          source: user ? t('assets.text.yourFile') : packed && provider ? provider.pack.name : t('assets.text.builtInDefault'),
           userOverride: !!user,
         };
       }),
@@ -185,6 +186,7 @@ export function buildConfiguredAssets(input: {
   const skillPacks = fallbackPacks(skillPack);
   const teams = mergeTeams(input.catalog).map((team) => ({
     ...team,
+    label: assetTargetTeamLabel(team), // i18n: a stored fallback is localised at display (Astra r2 #15)
     raceKey: raceKeyForTeam(team.teamId),
     rows: spriteRows(team, spritePacks, userPack),
   })).sort((left, right) => left.label.localeCompare(right.label));
@@ -196,7 +198,7 @@ export function buildConfiguredAssets(input: {
     return {
       id, label,
       url: user ?? packed,
-      source: user ? 'Your file' : packed && provider ? provider.name : 'Built-in default',
+      source: user ? t('assets.sounds.yourFile') : packed && provider ? provider.name : t('assets.sounds.builtInDefault'),
       userOverride: !!user,
     };
   });
@@ -217,7 +219,7 @@ export function buildConfiguredAssets(input: {
     return {
       race,
       url: user ?? packed,
-      source: user ? 'Your file' : packed && provider ? provider.name : 'Built-in default',
+      source: user ? t('assets.logos.yourFile') : packed && provider ? provider.name : t('assets.logos.builtInDefault'),
       userOverride: !!user,
     };
   });
@@ -232,9 +234,9 @@ export function buildConfiguredAssets(input: {
     const packed = blockDicePack?.blockDiceBindings?.[face!] ?? null;
     return {
       face: face!, label: label!, url: user ?? packed ?? input.bundledBlockFaceUrls?.[face!] ?? null,
-      source: user ? 'Your file' : packed && blockDicePack
+      source: user ? t('assets.blockDice.yourFile') : packed && blockDicePack
         ? `${blockDicePack.name} ${blockDicePack.version}`
-        : input.blockDiceFamily === 'krisb' ? 'Built-in Rick dice faces' : 'Built-in Super FUMBBL faces',
+        : input.blockDiceFamily === 'krisb' ? t('assets.blockDice.builtInRickDice') : t('assets.blockDice.builtInSuperFumbbl'),
       userOverride: !!user,
     };
   });
@@ -291,11 +293,11 @@ export function validateOverrideFile(kind: OverrideFileKind, path: string, bytes
       const height = bytes.length >= 24 ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(20) : 0;
       return width >= 32 && height >= 32
         ? { ok: true, mime: 'image/png' }
-        : { ok: false, message: 'Choose a valid PNG file at least 32×32 pixels.' };
+        : { ok: false, message: t('assets.text.chooseAValidPng') };
     }
     return extension === 'png' && png
       ? { ok: true, mime: 'image/png' }
-      : { ok: false, message: 'Choose a valid PNG file (the extension and PNG signature must both match).' };
+      : { ok: false, message: t('assets.text.chooseAValidPng2') };
   }
   const ogg = bytes.length >= 4 && String.fromCharCode(...bytes.slice(0, 4)) === 'OggS';
   const wav = bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF'
@@ -305,6 +307,6 @@ export function validateOverrideFile(kind: OverrideFileKind, path: string, bytes
   if (extension === 'ogg' && ogg) return { ok: true, mime: 'audio/ogg' };
   if (extension === 'wav' && wav) return { ok: true, mime: 'audio/wav' };
   if (extension === 'mp3' && mp3) return { ok: true, mime: 'audio/mpeg' };
-  return { ok: false, message: 'Choose a valid OGG, WAV, or MP3 file (the extension and file signature must match).' };
+  return { ok: false, message: t('assets.text.chooseAValidOgg') };
 }
 

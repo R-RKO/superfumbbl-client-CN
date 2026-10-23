@@ -26,6 +26,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { anchorPanelPosition, persistClampedPanelPosition, resizablePanelStyle, type EdgePanelPosition } from '../game/edgePanelLayout';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   /** true = floating (teleported to body); false = docked in place. */
@@ -239,9 +240,9 @@ defineExpose({ panelEl });
       v-show="popped || visible"
     >
       <div v-if="popped" class="chat-dock-head" @pointerdown="startDrag">
-        <span class="chat-dock-grip" title="Drag to move" aria-hidden="true">⠿</span>
-        <span class="chat-dock-title"><span class="chat-dock-emoji">💬</span> CHAT</span>
-        <button type="button" class="chat-dock-btn" title="Dock back to the panel" @click="emit('dock')">⤓</button>
+        <span class="chat-dock-grip" :title="$t('hud.chatDock.dragToMove')" aria-hidden="true">⠿</span>
+        <span class="chat-dock-title"><span class="chat-dock-emoji">💬</span>{{ $t('hud.chatDock.chat') }}</span>
+        <button type="button" class="chat-dock-btn" :title="$t('hud.chatDock.dockBackToThe')" @click="emit('dock')">⤓</button>
       </div>
       <div class="chat-dock-body"><slot /></div>
     </div>

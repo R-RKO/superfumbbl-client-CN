@@ -5,6 +5,7 @@ import {
   type BlockChooserGameLike,
   type BlockChooserSide,
 } from '../game/blockChooser';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   game: BlockChooserGameLike | null | undefined;
@@ -18,9 +19,9 @@ const chooser = computed(() => projectBlockChooser(props.game, props.choosingTea
 
 <template>
   <div class="block-chooser-copy" role="status" :data-mine="chooser.mine" :data-side="chooser.side ?? 'unknown'">
-    <template v-if="chooser.mine">Your Choice</template>
+    <template v-if="chooser.mine">{{ $t('hud.blockChooserCopy.yourChoice') }}</template>
     <template v-else>
-      <span class="block-chooser-name" :class="chooser.spectator && chooser.side ? `block-chooser-name--${chooser.side}` : null">{{ chooser.coachName }}</span><span> is choosing</span>
+      <span class="block-chooser-name" :class="chooser.spectator && chooser.side ? `block-chooser-name--${chooser.side}` : null">{{ chooser.coachName }}</span><span>{{ $t('hud.blockChooserCopy.isChoosing') }}</span>
     </template>
   </div>
 </template>

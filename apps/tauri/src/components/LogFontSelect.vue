@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { settings } from '../game/settings';
+import { $t } from '../i18n';
 </script>
 
 <template>
-  <label class="log-font-select" title="Log and chat font" @pointerdown.stop @click.stop>
-    <select v-model="settings.logFont" aria-label="Log and chat font">
-      <option value="nuffle">Nuf</option>
-      <option value="arial">Arial</option>
-      <option value="mono">Mono</option>
+  <label class="log-font-select" :title="$t('settings.logFont.logAndChatFont')" @pointerdown.stop @click.stop>
+    <select v-model="settings.logFont" :aria-label="$t('settings.logFont.logAndChatFont')">
+      <option value="nuffle">{{ $t('settings.logFont.nuf') }}</option>
+      <option value="arial">{{ $t('settings.logFont.arial') }}</option>
+      <option value="mono">{{ $t('settings.logFont.mono') }}</option>
     </select>
   </label>
 </template>

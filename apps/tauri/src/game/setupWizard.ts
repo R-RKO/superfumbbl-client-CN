@@ -1,6 +1,7 @@
 import type { AppSettings } from './settings';
 import { UI_FONTS } from './uiFonts';
 import { resolveBlockDieSurface } from '@fumbbl40k/ffb-pitch/src/blockDieSurface';
+import { t } from '../i18n';
 
 /**
  * First-launch setup wizard (owner 10-06): the pure step model behind components/FirstLaunchSetup.vue — steps,
@@ -83,8 +84,8 @@ const DICE_FACES = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const;
 
 /** The Font step's sample block (owner 10-06 copy). */
 export const FONT_SAMPLE = {
-  title: 'Super FUMBBL',
-  sentence: 'Blitz the ball carrier and run it in for the touchdown.',
+  get title() { return t('setupWizard.fontSample.superFumbbl'); },
+  get sentence() { return t('setupWizard.fontSample.blitzTheBallCarrier'); },
   digits: '0 1 2 3 4 5 6 7 8 9',
 } as const;
 
@@ -92,51 +93,51 @@ export const SETUP_STEPS: readonly SetupStep[] = [
   {
     id: 'font',
     kind: 'choice',
-    title: 'Font',
-    lede: "Choose the typeface for the client's menus and panels.",
+    get title() { return t('setupWizard.setupSteps.font'); },
+    get lede() { return t('setupWizard.setupSteps.chooseTheTypefaceFor'); },
     options: [
-      { id: 'nuffle', title: 'Nuffle (Default)', images: [], fontStack: UI_FONTS.nuffle, writes: { uiFont: 'nuffle' } },
-      { id: 'system', title: 'System', images: [], fontStack: UI_FONTS.system, writes: { uiFont: 'system' } },
-      { id: 'arial', title: 'Arial', images: [], fontStack: UI_FONTS.arial, writes: { uiFont: 'arial' } },
+      { id: 'nuffle', get title() { return t('setupWizard.setupSteps.nuffleDefault'); }, images: [], fontStack: UI_FONTS.nuffle, writes: { uiFont: 'nuffle' } },
+      { id: 'system', get title() { return t('setupWizard.setupSteps.system'); }, images: [], fontStack: UI_FONTS.system, writes: { uiFont: 'system' } },
+      { id: 'arial', get title() { return t('setupWizard.setupSteps.arial'); }, images: [], fontStack: UI_FONTS.arial, writes: { uiFont: 'arial' } },
     ],
     prefill: (s) => (s.uiFont === 'system' || s.uiFont === 'arial' ? s.uiFont : 'nuffle'),
   },
   {
     id: 'leftClick',
     kind: 'choice',
-    title: 'Left click behavior',
-    lede: 'Choose what a left click on one of your players does.',
+    get title() { return t('setupWizard.setupSteps.leftClickBehavior'); },
+    get lede() { return t('setupWizard.setupSteps.chooseWhatALeft'); },
     options: [
-      { id: 'modern', title: 'Modern (Default)', description: 'Left click declares move to start', images: ['click-modern'], writes: { leftClickOpensContextMenu: false } },
-      { id: 'fumbbl', title: 'FUMBBL Original', description: 'Left click opens context menu', images: ['click-fumbbl'], writes: { leftClickOpensContextMenu: true } },
+      { id: 'modern', get title() { return t('setupWizard.setupSteps.modernDefault'); }, get description() { return t('setupWizard.setupSteps.leftClickDeclaresMove'); }, images: ['click-modern'], writes: { leftClickOpensContextMenu: false } },
+      { id: 'fumbbl', get title() { return t('setupWizard.setupSteps.fumbblOriginal'); }, get description() { return t('setupWizard.setupSteps.leftClickOpensContext'); }, images: ['click-fumbbl'], writes: { leftClickOpensContextMenu: true } },
     ],
     prefill: (s) => (s.leftClickOpensContextMenu ? 'fumbbl' : 'modern'),
   },
   {
     id: 'blitz',
     kind: 'choice',
-    title: 'Blitz behavior',
-    lede: 'Choose how a blitz is declared.',
+    get title() { return t('setupWizard.setupSteps.blitzBehavior'); },
+    get lede() { return t('setupWizard.setupSteps.chooseHowABlitz'); },
     options: [
       {
         id: 'menu',
-        title: 'Blitz must be declared from context menu (Default)',
-        description: 'To declare a blitz the user must first declare blitz and then select their target.',
+        get title() { return t('setupWizard.setupSteps.blitzMustBeDeclared'); },
+        get description() { return t('setupWizard.setupSteps.toDeclareABlitz'); },
         images: ['blitz-menu'],
         writes: { declareBlitzBehavior: 'fumbbl' },
       },
-      { id: 'click', title: 'Blitz can be declared using left clicks', images: ['blitz-click'], writes: { declareBlitzBehavior: 'modern' } },
+      { id: 'click', get title() { return t('setupWizard.setupSteps.blitzCanBeDeclared'); }, images: ['blitz-click'], writes: { declareBlitzBehavior: 'modern' } },
     ],
     prefill: (s) => (s.declareBlitzBehavior === 'modern' ? 'click' : 'menu'),
   },
   {
     id: 'blockDice',
     kind: 'choice',
-    title: 'Block dice',
-    lede: 'Choose the faces drawn on your block dice.',
+    get title() { return t('setupWizard.setupSteps.blockDice'); },
+    get lede() { return t('setupWizard.setupSteps.chooseTheFacesDrawn'); },
     options: [
-      { id: 'default', title: 'Super FUMBBL Default', images: DICE_FACES.map((f) => `dice-default-${f}`), writes: { blockDiceFamily: 'default' }, clearsAssignment: 'blockDice' },
-      { id: 'krisb', title: 'Rick dice', images: DICE_FACES.map((f) => `dice-krisb-${f}`), writes: { blockDiceFamily: 'krisb' }, clearsAssignment: 'blockDice' },
+      { id: 'default', get title() { return t('setupWizard.setupSteps.superFumbblDefault'); }, images: DICE_FACES.map((f) => `dice-default-${f}`), writes: { blockDiceFamily: 'default' }, clearsAssignment: 'blockDice' },
+      { id: 'krisb', get title() { return t('setupWizard.setupSteps.rickDice'); }, images: DICE_FACES.map((f) => `dice-krisb-${f}`), writes: { blockDiceFamily: 'krisb' }, clearsAssignment: 'blockDice' },
     ],
     // An installed block-dice pack wins over either family, so neither card is "current" while one is assigned.
     prefill: (s) => (s.assetPackAssignments.blockDice ? null : s.blockDiceFamily === 'krisb' ? 'krisb' : 'default'),
@@ -146,14 +147,14 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     // a black surface. Add that to the wizard." Right after the family pick; the previews follow that pick.
     id: 'blockDiceSurface',
     kind: 'choice',
-    title: 'Block die surface',
-    lede: "Choose whether your block dice sit on black or white. Your face set's default is preselected.",
+    get title() { return t('setupWizard.setupSteps.blockDieSurface'); },
+    get lede() { return t('setupWizard.setupSteps.chooseWhetherYourBlock'); },
     // Titles carry no "(Default)": setupOptionTitle appends it to the face set's own surface (the 'auto' resolution).
     options: [
-      { id: 'black', title: 'Black', images: [], blockSurface: 'black', writes: { blockDiceSurface: 'black' } },
-      { id: 'white', title: 'White', images: [], blockSurface: 'white', writes: { blockDiceSurface: 'white' } },
+      { id: 'black', get title() { return t('setupWizard.setupSteps.black'); }, images: [], blockSurface: 'black', writes: { blockDiceSurface: 'black' } },
+      { id: 'white', get title() { return t('setupWizard.setupSteps.white'); }, images: [], blockSurface: 'white', writes: { blockDiceSurface: 'white' } },
       // Owner 10-15: the same setting Settings > Art > Dice offers as "Brushed metal, home and away" ('team').
-      { id: 'team', title: 'Home / Away', description: 'Blue for the home team, red for the away team', images: [], blockSurface: 'team', writes: { blockDiceSurface: 'team' } },
+      { id: 'team', get title() { return t('setupWizard.setupSteps.homeAway'); }, get description() { return t('setupWizard.setupSteps.blueForTheHome'); }, images: [], blockSurface: 'team', writes: { blockDiceSurface: 'team' } },
     ],
     // Owner 10-06 follow-up: the preselected card is the RESOLVED surface for the family picked on the previous step
     // ('auto' = per face set); leaving the step without a pick writes nothing, so 'auto' stays.
@@ -164,24 +165,24 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     // Owner 10-06 follow-up. Labels match Settings > Dice's mapping: the legacy 'black' key is the WHITE face set.
     id: 'diceColour',
     kind: 'choice',
-    title: 'Dice colour',
-    lede: 'Choose the colour of the rolling dice.',
+    get title() { return t('setupWizard.setupSteps.diceColour'); },
+    get lede() { return t('setupWizard.setupSteps.chooseTheColourOf'); },
     options: [
-      { id: 'black', title: 'Black (Default)', images: [], d6Variant: 'brushed-metal', writes: { d6FaceVariant: 'brushed-metal' } },
-      { id: 'white', title: 'White', images: [], d6Variant: 'black', writes: { d6FaceVariant: 'black' } },
+      { id: 'black', get title() { return t('setupWizard.setupSteps.blackDefault'); }, images: [], d6Variant: 'brushed-metal', writes: { d6FaceVariant: 'brushed-metal' } },
+      { id: 'white', get title() { return t('setupWizard.setupSteps.white'); }, images: [], d6Variant: 'black', writes: { d6FaceVariant: 'black' } },
       // Owner 10-15: Settings > Art > Dice "Brushed metal, home and away".
-      { id: 'team', title: 'Home / Away', description: 'Blue for the home team, red for the away team', images: [], d6Variant: 'team', writes: { d6FaceVariant: 'team' } },
+      { id: 'team', get title() { return t('setupWizard.setupSteps.homeAway'); }, get description() { return t('setupWizard.setupSteps.blueForTheHome'); }, images: [], d6Variant: 'team', writes: { d6FaceVariant: 'team' } },
     ],
     prefill: (s) => (s.d6FaceVariant === 'team' ? 'team' : s.d6FaceVariant === 'black' ? 'white' : 'black'),
   },
   {
     id: 'skills',
     kind: 'choice',
-    title: 'Skill icons vs skill markings',
-    lede: 'Choose how player skills are shown on the pitch.',
+    get title() { return t('setupWizard.setupSteps.skillIconsVsSkill'); },
+    get lede() { return t('setupWizard.setupSteps.chooseHowPlayerSkills'); },
     options: [
-      { id: 'icons', title: 'Skill Icons · Illustrated (Default)', images: [], writes: { skillDisplay: 'icons', skillBadgeFamily: 'illustrated' }, clearsAssignment: 'skillIcons' },
-      { id: 'markings', title: 'Skill Markings · FUMBBL', images: ['markings-fumbbl'], writes: { skillDisplay: 'markings' } },
+      { id: 'icons', get title() { return t('setupWizard.setupSteps.skillIconsIllustratedDefault'); }, images: [], writes: { skillDisplay: 'icons', skillBadgeFamily: 'illustrated' }, clearsAssignment: 'skillIcons' },
+      { id: 'markings', get title() { return t('setupWizard.setupSteps.skillMarkingsFumbbl'); }, images: ['markings-fumbbl'], writes: { skillDisplay: 'markings' } },
     ],
     prefill: (s) => {
       if (s.skillDisplay === 'markings') return 'markings';
@@ -192,37 +193,37 @@ export const SETUP_STEPS: readonly SetupStep[] = [
   {
     id: 'stadium',
     kind: 'choice',
-    title: 'Stadium',
-    lede: 'Choose whether the pitch sits in a crowded stadium.',
+    get title() { return t('setupWizard.setupSteps.stadium'); },
+    get lede() { return t('setupWizard.setupSteps.chooseWhetherThePitch'); },
     options: [
       {
         id: 'on',
-        title: 'On (Default)',
-        description: "The number of spectators is dynamically generated for both Home and Away teams. Spectators will say quips when events happen and you'll see signs being held by them calling out prominent members of the community.",
+        get title() { return t('setupWizard.setupSteps.onDefault'); },
+        get description() { return t('setupWizard.setupSteps.theNumberOfSpectators'); },
         images: ['stadium-on'],
         writes: { showStadium: true },
       },
-      { id: 'off', title: 'Off', description: 'No stadium, a more minimalist look.', images: ['stadium-off'], writes: { showStadium: false } },
+      { id: 'off', get title() { return t('setupWizard.setupSteps.off'); }, get description() { return t('setupWizard.setupSteps.noStadiumAMore'); }, images: ['stadium-off'], writes: { showStadium: false } },
     ],
     prefill: (s) => (s.showStadium ? 'on' : 'off'),
   },
   {
     id: 'orientation',
     kind: 'choice',
-    title: 'Orientation',
-    lede: 'Choose which way the pitch runs on your screen.',
+    get title() { return t('setupWizard.setupSteps.orientation'); },
+    get lede() { return t('setupWizard.setupSteps.chooseWhichWayThe'); },
     options: [
       {
         id: 'ns',
-        title: 'North-South (Default)',
-        description: "You'll always be on the south end of the pitch whether defending or attacking. In spectator mode, offensive drives will always drive to the north.",
+        get title() { return t('setupWizard.setupSteps.northSouthDefault'); },
+        get description() { return t('setupWizard.setupSteps.youLlAlwaysBe'); },
         images: ['orientation-ns'],
         writes: { pitchOrientation: 'ns' },
       },
       {
         id: 'ew',
-        title: 'East-West',
-        description: "Play travels from East to West. You'll always play on the left side of the pitch and offense will always drive to the right in spectator mode.",
+        get title() { return t('setupWizard.setupSteps.eastWest'); },
+        get description() { return t('setupWizard.setupSteps.playTravelsFromEast'); },
         images: ['orientation-ew'],
         writes: { pitchOrientation: 'ew' },
       },
@@ -232,26 +233,26 @@ export const SETUP_STEPS: readonly SetupStep[] = [
   {
     id: 'login',
     kind: 'login',
-    title: 'FUMBBL login',
-    lede: 'Enter your FUMBBL logins. This enables you to join games on FUMBBL.',
+    get title() { return t('setupWizard.setupSteps.fumbblLogin'); },
+    get lede() { return t('setupWizard.setupSteps.enterYourFumbblLogins'); },
   },
   {
     id: 'homeLogin',
     kind: 'homeLogin',
-    title: 'Sign in on FUMBBL.COM',
-    lede: 'Sign in on FUMBBL.COM to join games with one click.',
+    get title() { return t('setupWizard.setupSteps.signInOnFumbbl'); },
+    get lede() { return t('setupWizard.setupSteps.signInOnFumbbl2'); },
   },
   {
     id: 'modPacks',
     kind: 'modPacks',
-    title: 'Install mod packs',
-    lede: "If you have any mod packs that your friends have provided or you've found online, you can import them here.",
+    get title() { return t('setupWizard.setupSteps.installModPacks'); },
+    get lede() { return t('setupWizard.setupSteps.ifYouHaveAny'); },
   },
   {
     id: 'fineTuning',
     kind: 'fineTuning',
-    title: 'Fine tuning',
-    lede: 'A few last touches. Everything here can be changed later in Settings.',
+    get title() { return t('setupWizard.setupSteps.fineTuning'); },
+    get lede() { return t('setupWizard.setupSteps.aFewLastTouches'); },
   },
 ];
 
@@ -275,7 +276,7 @@ export function setupOption(stepId: SetupStepId, optionId: string): SetupOption 
 /** The title a card shows. Block die surface (owner 10-06): " (Default)" is appended to the card that is the chosen
  *  face set's own surface (resolveBlockDieSurface(family, 'auto')) — Black for Super FUMBBL, White for KrisB. */
 export function setupOptionTitle(stepId: SetupStepId, option: SetupOption, s: SetupSettings): string {
-  if (stepId === 'blockDiceSurface' && option.id === resolveBlockDieSurface(s.blockDiceFamily, 'auto')) return `${option.title} (Default)`;
+  if (stepId === 'blockDiceSurface' && option.id === resolveBlockDieSurface(s.blockDiceFamily, 'auto')) return t('setupWizard.text.titleDefault', { title: option.title });
   return option.title;
 }
 

@@ -50,9 +50,9 @@ export function rerollSourceIconUrl(icon: RerollSourceIcon): string {
 }
 /** The source icon's tooltip (owner 10-15: "Team reroll", "Pro reroll", "Mascot"). */
 export function rerollSourceLabel(icon: RerollSourceIcon): string {
-  if (icon.kind === 'trr') return 'Team reroll';
-  if (icon.kind === 'resource') return icon.name === 'team_mascot' ? 'Mascot' : 'Bribery and Corruption reroll';
-  return `${icon.skill} reroll`;
+  if (icon.kind === 'trr') return t('hud.logActionPlate.text.teamReroll');
+  if (icon.kind === 'resource') return icon.name === 'team_mascot' ? 'Mascot' : t('hud.logActionPlate.text.briberyAndCorruptionReroll');
+  return t('hud.logActionPlate.text.skillReroll', { skill: icon.skill });
 }
 
 /** The row's tint: the DISPLAYED side of the acting team, the same mapping as the log's home/away dice. No single
@@ -64,6 +64,8 @@ export function logRowSide(side: ServerSide | null | undefined, viewerSeat: Serv
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { $t } from '../i18n';
+import { t } from '../i18n';
 
 const props = defineProps<{
   /** The line's decoration; absent = an empty icon cell that keeps the text aligned. */
@@ -89,7 +91,7 @@ const actionLabel = computed(() => (icons.value.action === 'skill' && props.plat
 
 <template>
   <span class="log-icons"><span class="log-icon log-icon-action" :data-action="icons.action ?? undefined"
-    :role="icons.action ? 'img' : undefined" :aria-label="icons.action ? actionLabel : undefined" :aria-hidden="icons.action ? undefined : 'true'" :title="icons.action ? actionLabel : undefined"><template v-if="icons.action === 'ko'"><img v-if="koUrl" class="log-icon-ko" :src="koUrl" alt="" aria-hidden="true" draggable="false" /><span v-else class="log-icon-ko-text" aria-hidden="true">KO</span></template><img v-else-if="icons.action && actionUrl" :src="actionUrl" alt="" aria-hidden="true" draggable="false" /><span v-else-if="icons.action && actionEmoji" class="log-icon-emoji" aria-hidden="true">{{ actionEmoji }}</span></span><span v-if="icons.source" class="log-icon log-icon-source"
+    :role="icons.action ? 'img' : undefined" :aria-label="icons.action ? actionLabel : undefined" :aria-hidden="icons.action ? undefined : 'true'" :title="icons.action ? actionLabel : undefined"><template v-if="icons.action === 'ko'"><img v-if="koUrl" class="log-icon-ko" :src="koUrl" alt="" aria-hidden="true" draggable="false" /><span v-else class="log-icon-ko-text" aria-hidden="true">{{ $t('hud.logActionPlate.ko') }}</span></template><img v-else-if="icons.action && actionUrl" :src="actionUrl" alt="" aria-hidden="true" draggable="false" /><span v-else-if="icons.action && actionEmoji" class="log-icon-emoji" aria-hidden="true">{{ actionEmoji }}</span></span><span v-if="icons.source" class="log-icon log-icon-source"
     :data-source="icons.source.kind === 'skill' ? icons.source.skill : icons.source.kind === 'resource' ? icons.source.name : 'trr'"
     role="img" :aria-label="sourceLabel" :title="sourceLabel"><img :src="sourceUrl" alt="" aria-hidden="true" draggable="false" /></span></span>
 </template>

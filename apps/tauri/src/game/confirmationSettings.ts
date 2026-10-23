@@ -1,4 +1,5 @@
 import type { EndActivationConfirmKind } from './logic/order66Interaction';
+import { t } from '../i18n';
 
 /** Owner 10-04: "let's make the confirmation modals toggleable in Settings. Each confirmation modal should have its
  *  own line item that users can disable in settings."
@@ -44,17 +45,17 @@ export const CONFIRMATION_OPT_IN: ReadonlySet<ConfirmationSettingKey> = new Set<
 
 /** The Settings rows, in display order. */
 export const CONFIRMATION_SETTING_ROWS: readonly { key: ConfirmationSettingKey; label: string; hint: string }[] = [
-  { key: 'confirmEndTurn', label: 'End Turn with players still to act', hint: 'Asks before ending your turn while some of your players have not activated.' },
-  { key: 'confirmEndBlitz', label: 'End or cancel a Blitz', hint: 'Asks before a right-click, Escape or End gesture ends your Blitz.' },
-  { key: 'confirmBlitzToMove', label: 'Keep Blitz? (convert a Blitz to a Move)', hint: 'Asks when you click an open square instead of a Blitz target. Off: that click converts the Blitz to a Move at once.' },
-  { key: 'confirmEndHandOff', label: 'End or cancel a Hand-off', hint: 'Asks before a right-click, Escape or End gesture ends your Hand-off.' },
-  { key: 'confirmEndPass', label: 'End or cancel a Pass', hint: 'Asks before a right-click, Escape or End gesture ends your Pass action.' },
-  { key: 'confirmFoul', label: 'Cancel Foul', hint: 'Asks before a right-click, Escape, End or End Turn gesture cancels or ends your Foul.' },
-  { key: 'confirmEndPunt', label: 'End or cancel a Punt', hint: 'Asks before your Punt is ended.' },
-  { key: 'confirmEndActivation', label: 'End activation with Escape', hint: 'Asks before Escape ends any other activation, and before an End that would roll for the player.' },
-  { key: 'confirmSetup', label: 'Confirm Setup', hint: 'Asks before a legal setup is locked in. A setup that is not legal always shows what is wrong.' },
-  { key: 'confirmConcedeOffer', label: 'Offer to concede at setup', hint: 'Asks whether to concede when you have too few players to field. You can still concede from the Game Menu.' },
-  { key: 'confirmKickoffSquare', label: 'Confirm kick-off square', hint: 'Asks you to confirm the square you clicked before the kick-off is sent. Off: the click kicks at once.' },
+  { key: 'confirmEndTurn', get label() { return t('settings.confirmationSettingRows.endTurnWithPlayers'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeEndingYour'); } },
+  { key: 'confirmEndBlitz', get label() { return t('settings.confirmationSettingRows.endOrCancelA'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeARight'); } },
+  { key: 'confirmBlitzToMove', get label() { return t('settings.confirmationSettingRows.keepBlitzConvertA'); }, get hint() { return t('settings.confirmationSettingRows.asksWhenYouClick'); } },
+  { key: 'confirmEndHandOff', get label() { return t('settings.confirmationSettingRows.endOrCancelA2'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeARight2'); } },
+  { key: 'confirmEndPass', get label() { return t('settings.confirmationSettingRows.endOrCancelA3'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeARight3'); } },
+  { key: 'confirmFoul', get label() { return t('settings.confirmationSettingRows.cancelFoul'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeARight4'); } },
+  { key: 'confirmEndPunt', get label() { return t('settings.confirmationSettingRows.endOrCancelA4'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeYourPunt'); } },
+  { key: 'confirmEndActivation', get label() { return t('settings.confirmationSettingRows.endActivationWithEscape'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeEscapeEnds'); } },
+  { key: 'confirmSetup', get label() { return t('settings.confirmationSettingRows.confirmSetup'); }, get hint() { return t('settings.confirmationSettingRows.asksBeforeALegal'); } },
+  { key: 'confirmConcedeOffer', get label() { return t('settings.confirmationSettingRows.offerToConcedeAt'); }, get hint() { return t('settings.confirmationSettingRows.asksWhetherToConcede'); } },
+  { key: 'confirmKickoffSquare', get label() { return t('settings.confirmationSettingRows.confirmKickOffSquare'); }, get hint() { return t('settings.confirmationSettingRows.asksYouToConfirm'); } },
 ];
 
 const END_ACTIVATION_KEY: Record<EndActivationConfirmKind, ConfirmationSettingKey> = {

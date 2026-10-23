@@ -13,6 +13,7 @@ import {
 } from './settings';
 import { coachPassword } from './credentials';
 import { authorizeForkRequest, shouldRetryAfterUnauthorized } from './configWebAuth';
+import { t, liveSet, disposeLive } from '../i18n';
 
 export type ForkPayload = Record<string, unknown>;
 export type ForkTransport = (input: string, init?: RequestInit) => Promise<Response>;
@@ -323,6 +324,8 @@ export function createChallengeController(
   const onMatched = options.onMatched ?? (() => undefined);
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+  /** i18n (Astra r3 #11): this controller's live-message registrations; released by dispose(). */
+  const liveOwner = {};
   let request: ChallengeRequest | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let generation = 0;
@@ -339,7 +342,7 @@ export function createChallengeController(
     stopPolling();
     state.match = payload;
     state.phase = 'matched';
-    state.message = `Matched with ${String(payload.opponent ?? request?.opponent ?? '')}.`;
+    liveSet(state, 'message', () => t('login.text.matchedWithP0', { p0: String(payload.opponent ?? request?.opponent ?? '') }), liveOwner);
     state.error = null;
     try {
       await onMatched(payload);
@@ -389,13 +392,14 @@ export function createChallengeController(
         return;
       }
       state.phase = 'waiting';
-      state.message = `Waiting for ${request.opponent} to accept the challenge…`;
+      const opponent = request.opponent;
+      liveSet(state, 'message', () => t('login.text.waitingForOpponentTo', { opponent }), liveOwner);
       startPolling();
     } catch (error) {
       if (ticket !== generation) return;
       state.phase = 'error';
       state.error = errText(error);
-      state.message = `Couldn't start the challenge (${state.error}).`;
+      liveSet(state, 'message', () => t('login.text.couldnTStartThe', { error: state.error }), liveOwner);
     }
   }
 
@@ -404,7 +408,7 @@ export function createChallengeController(
     ++generation;
     stopPolling();
     state.phase = 'cancelled';
-    state.message = 'Challenge cancelled.';
+    liveSet(state, 'message', () => t('login.text.challengeCancelled'), liveOwner);
     state.error = null;
     if (!coach) return;
     try {
@@ -415,6 +419,7 @@ export function createChallengeController(
   function dispose(): void {
     ++generation;
     stopPolling();
+    disposeLive(liveOwner);
   }
 
   return { submit, pollOnce, cancel, dispose };

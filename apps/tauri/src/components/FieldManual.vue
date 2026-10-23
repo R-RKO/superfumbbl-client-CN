@@ -5,6 +5,9 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { settings } from '../game/settings';
 import type { SettingsTab } from '../game/settingsDialog';
+import { $t } from '../i18n';
+import { RichT } from '../i18n/RichT';
+import { t } from '../i18n';
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -12,7 +15,11 @@ const emit = defineEmits<{
   (e: 'open-settings', tab: SettingsTab): void;
 }>();
 
-const PAGES = ['Your console', 'The six rails', 'Showtime', 'Settings'] as const;
+const PAGES = ['Your console', 'The six rails', 'Showtime', 'Settings'] as const; // invariant ids (v-for keys)
+/** i18n: the tab label of page `i` in the active language. */
+function pageLabel(i: number): string {
+  return i === 0 ? t('fieldManual.pages.console') : i === 1 ? t('fieldManual.pages.rails') : i === 2 ? t('fieldManual.pages.showtime') : t('fieldManual.pages.settings');
+}
 const page = ref(0);
 const prev = () => { if (page.value > 0) page.value -= 1; };
 const next = () => { if (page.value < PAGES.length - 1) page.value += 1; };
@@ -27,59 +34,58 @@ onMounted(() => window.addEventListener('keydown', onKey, { capture: true }));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey, { capture: true }));
 
 const RAILS = [
-  { n: 'I', name: 'Move', tag: 'left-click', how: 'Left-click your standing player — Move is declared on the spot. Click a square to preview the route (dodge/rush rolls print on the path), click it again to commit. Right-click on grass clears the plan.' },
-  { n: 'II', name: 'Block', tag: 'click the target', how: 'Before moving, left-click an adjacent standing enemy: the dice preview appears with Confirm Block on the bar. Click the same enemy again to throw it. Right-click the target for Stab, Chainsaw and the other flavours.' },
-  { n: 'III', name: 'Blitz', tag: 'once per turn', how: 'Right-click your player → Blitz, click the enemy you’re gunning for, walk into contact, then confirm the block. Stray clicks ask before they burn the blitz. Prefer a two-click declare? Flip Declare Blitz to Modern in Settings.' },
-  { n: 'IV', name: 'Foul', tag: 'menu only', how: 'Right-click → Foul, then click the victim — the 🥾 cue shows the armour target. Distant victim? First click plots the walk, second click boots. One foul per team turn.' },
-  { n: 'V', name: 'Pass · Bomb · Throw Team-mate', tag: 'two-click throw', how: 'Declare from the menu and the range template arms itself — hover for the throw 🎯 and catch 🧤 numbers. First click nominates, second click throws. Hand-off to an adjacent team-mate is a single click.' },
-  { n: 'VI', name: 'Special actions', tag: 'stars & sorcery', how: 'Star rules ride the same menu as plain rows, exactly when they’re legal. Declare with a special-carrying player and a Special Ability card asks before it’s too late. If the server offers it, we surface it — nothing more.' },
+  { n: 'I', get name() { return t('fieldManual.rails.move'); }, get tag() { return t('fieldManual.rails.leftClick'); }, get how() { return t('fieldManual.rails.leftClickYourStanding'); } },
+  { n: 'II', get name() { return t('fieldManual.rails.block'); }, get tag() { return t('fieldManual.rails.clickTheTarget'); }, get how() { return t('fieldManual.rails.beforeMovingLeftClick'); } },
+  { n: 'III', get name() { return t('fieldManual.rails.blitz'); }, get tag() { return t('fieldManual.rails.oncePerTurn'); }, get how() { return t('fieldManual.rails.rightClickYourPlayer'); } },
+  { n: 'IV', get name() { return t('fieldManual.rails.foul'); }, get tag() { return t('fieldManual.rails.menuOnly'); }, get how() { return t('fieldManual.rails.rightClickFoulThen'); } },
+  { n: 'V', get name() { return t('fieldManual.rails.passBombThrowTeam'); }, get tag() { return t('fieldManual.rails.twoClickThrow'); }, get how() { return t('fieldManual.rails.declareFromTheMenu'); } },
+  { n: 'VI', get name() { return t('fieldManual.rails.specialActions'); }, get tag() { return t('fieldManual.rails.starsSorcery'); }, get how() { return t('fieldManual.rails.starRulesRideThe'); } },
 ];
 
 const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> = [
-  { tab: 'general', name: 'Declare Blitz', blurb: 'FUMBBL (default): blitz from the context menu. Modern: select your player, click a distant enemy, click again to commit the previewed route.' },
-  { tab: 'mods', name: 'Art', blurb: 'Import .f40kmod packs for skill icons, sprites and sounds — or build and export your own (PNG images, OGG/WAV/MP3 sounds).' },
-  { tab: 'accessibility', name: 'Accessibility', blurb: 'Minimum text size, colourblind remap, click echoes, pitch grid width and colour, brightness, UI font.' },
+  { tab: 'general', get name() { return t('fieldManual.settingsStops.declareBlitz'); }, get blurb() { return t('fieldManual.settingsStops.fumbblDefaultBlitzFrom'); } },
+  { tab: 'mods', get name() { return t('fieldManual.settingsStops.art'); }, get blurb() { return t('fieldManual.settingsStops.importF40kmodPacksFor'); } },
+  { tab: 'accessibility', get name() { return t('fieldManual.settingsStops.accessibility2'); }, get blurb() { return t('fieldManual.settingsStops.minimumTextSizeColourblind'); } },
 ];
 </script>
 
 <template>
-  <div class="fm-backdrop" role="dialog" aria-modal="true" aria-label="Field Manual help guide" @click.self="emit('close')">
+  <div class="fm-backdrop" role="dialog" aria-modal="true" :aria-label="$t('fieldManual.fieldManualHelpGuide')" @click.self="emit('close')">
     <div class="fm-panel">
       <header class="fm-head">
         <div>
-          <p class="fm-kick">Super FUMBBL · Coach's Guide</p>
-          <h1>The Field Manual</h1>
+          <p class="fm-kick">{{ $t('fieldManual.fmPanel.superFumbblCoachS') }}</p>
+          <h1>{{ $t('fieldManual.fmPanel.theFieldManual') }}</h1>
         </div>
-        <button class="fm-x" type="button" aria-label="Close the Field Manual" @click="emit('close')">✕</button>
+        <button class="fm-x" type="button" :aria-label="$t('fieldManual.fmPanel.closeTheFieldManual')" @click="emit('close')">✕</button>
       </header>
 
-      <nav class="fm-tabs" aria-label="Manual pages">
+      <nav class="fm-tabs" :aria-label="$t('fieldManual.fmPanel.manualPages')">
         <button v-for="(label, i) in PAGES" :key="label" type="button" :data-active="page === i" @click="page = i">
-          {{ label }}
+          {{ pageLabel(i) }}
         </button>
       </nav>
 
       <div class="fm-body">
         <!-- Page 1: the console -->
         <section v-if="page === 0">
-          <p class="fm-lede">Everything rides the pitch — one camera, one board, every panel floats over it. Drag them where you like.</p>
+          <p class="fm-lede">{{ $t('fieldManual.fmPanel.everythingRidesThePitch') }}</p>
           <ul class="fm-list">
-            <li><b>Quick bar</b> (bottom corner): settings ⚙, tackle zones, sprite style, skill display, 🏟️ stadium visibility, 🎬 Auto Director, and the 🐞 bug report. Display and camera only — no game actions live there.</li>
-            <li><b>Auto Director</b> tracks the ball and the acting player. Toggle it off for a calm camera: pan with <kbd>WASD</kbd> or the arrow keys, or drag; scroll to zoom.</li>
-            <li><b>Log window</b> (bottom right): the play-by-play with the real dice. Tabs flip to Chat and both Rosters.</li>
-            <li><b>Click any player</b> — yours or theirs — for their card: stats, skills, SPP.</li>
-            <li><b>Follow the action:</b> the gold halo marks the player being activated; the ring under each player is white until they act, then grey. Skill icons ride over heads (or as text markers at the feet) — tune them in Settings → Display → Skill display config.</li>
-            <li><b>End Turn lives on the scoreboard</b>, never in a menu. Press it with players still fresh and it asks first. <kbd>Esc</kbd> always walks the same ladder: prompt → preview → menu → activation → selection.</li>
+            <li><b>{{ $t('fieldManual.fmPanel.quickBar') }}</b>{{ $t('fieldManual.fmPanel.bottomCornerSettingsTackle') }}</li>
+            <li><b>{{ $t('fieldManual.fmPanel.autoDirector') }}</b>{{ $t('fieldManual.fmPanel.tracksTheBallAnd') }} <kbd>WASD</kbd>{{ $t('fieldManual.fmPanel.orTheArrowKeys') }}</li>
+            <li><b>{{ $t('fieldManual.fmPanel.logWindow') }}</b>{{ $t('fieldManual.fmPanel.bottomRightThePlay') }}</li>
+            <li><b>{{ $t('fieldManual.fmPanel.clickAnyPlayer') }}</b>{{ $t('fieldManual.fmPanel.yoursOrTheirsFor') }}</li>
+            <li><b>{{ $t('fieldManual.fmPanel.followTheAction') }}</b>{{ $t('fieldManual.fmPanel.theGoldHaloMarks') }}</li>
+            <li><b>{{ $t('fieldManual.fmPanel.endTurnLivesOn') }}</b>{{ $t('fieldManual.fmPanel.neverInAMenu') }} <kbd>Esc</kbd>{{ $t('fieldManual.fmPanel.alwaysWalksTheSame') }}</li>
           </ul>
-          <button class="fm-cta" type="button" @click="emit('play-tutorial')">▶ Play the guided tour</button>
-          <p class="fm-aside">Loads the demo match and walks the HUD with a gold arrow — no connection needed.</p>
+          <button class="fm-cta" type="button" @click="emit('play-tutorial')">{{ $t('fieldManual.fmPanel.playTheGuidedTour') }}</button>
+          <p class="fm-aside">{{ $t('fieldManual.fmPanel.loadsTheDemoMatch') }}</p>
         </section>
 
         <!-- Page 2: the rails -->
         <section v-else-if="page === 1">
-          <p class="fm-lede">Every action rides one of six rails. Two gestures carry everything:
-            <b>left-click acts, right-click asks.</b> The action menu shows only what's legal right now —
-            nothing is greyed out, it's present or absent.</p>
+          <p class="fm-lede">{{ $t('fieldManual.fmPanel.everyActionRidesOne') }}
+            <b>{{ $t('fieldManual.fmPanel.leftClickActsRight') }}</b>{{ $t('fieldManual.fmPanel.theActionMenuShows') }}</p>
           <div class="fm-rails">
             <article v-for="r in RAILS" :key="r.name" class="fm-rail">
               <div class="fm-rail-head">
@@ -94,27 +100,24 @@ const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> =
 
         <!-- Page 3: showtime -->
         <section v-else-if="page === 2">
-          <p class="fm-lede">Nuffle demands theatre. Fan factor, weather, the coin toss and inducements each get
-            their beat before the boot hits the ball — and the big moments land as centre-pitch banners
-            (yes, the Halfling Master Chef announces his thefts in gold).</p>
+          <p class="fm-lede">{{ $t('fieldManual.fmPanel.nuffleDemandsTheatreFan') }}</p>
           <ul class="fm-list">
-            <li><b>Watch anything, live:</b> pick <b>FUMBBL</b> or <b>Super FUMBBL</b> in the header, open <b>Spectate</b>, and double-click a match — or type a game id. Live spectating wants your FUMBBL login (Settings → General).</li>
-            <li><b>Splashes are skippable</b> — click through them, or make them wait for your click in Settings → General.</li>
-            <li><b>Replays:</b> the Replay blade (or ☰ → Load Replay File) plays any saved match through the same presentation.</li>
+            <li><RichT k="fieldManual.rich.watchLive" /></li>
+            <li><RichT k="fieldManual.rich.splashes" /></li>
+            <li><RichT k="fieldManual.rich.replays" /></li>
           </ul>
         </section>
 
         <!-- Page 4: settings deep links -->
         <section v-else>
-          <p class="fm-lede">Six settings pages; changes preview live, <em>Cancel</em> rolls back, <em>OK</em> keeps.
-            Three stops worth the visit:</p>
+          <p class="fm-lede"><RichT k="fieldManual.rich.settingsLede" /></p>
           <div class="fm-stops">
             <article v-for="s in SETTINGS_STOPS" :key="s.tab" class="fm-stop">
               <div>
                 <h2>{{ s.name }}</h2>
                 <p>{{ s.blurb }}</p>
               </div>
-              <button type="button" @click="emit('open-settings', s.tab)">Open ▸</button>
+              <button type="button" @click="emit('open-settings', s.tab)">{{ $t('fieldManual.fmPanel.open') }}</button>
             </article>
           </div>
         </section>
@@ -123,13 +126,13 @@ const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> =
       <footer class="fm-foot">
         <label class="fm-dontshow">
           <input v-model="settings.hideTutorialSplash" type="checkbox" />
-          <span>Don't show this on launch</span>
+          <span>{{ $t('fieldManual.fmPanel.donTShowThis') }}</span>
         </label>
         <div class="fm-pager">
-          <button type="button" :disabled="page === 0" @click="prev">◂ Back</button>
+          <button type="button" :disabled="page === 0" @click="prev">{{ $t('fieldManual.fmPanel.back') }}</button>
           <span class="fm-page-ind">{{ page + 1 }} / {{ PAGES.length }}</span>
-          <button v-if="page < PAGES.length - 1" type="button" class="fm-next" @click="next">Next ▸</button>
-          <button v-else type="button" class="fm-next" @click="emit('close')">Play your game! ▸</button>
+          <button v-if="page < PAGES.length - 1" type="button" class="fm-next" @click="next">{{ $t('fieldManual.fmPanel.next') }}</button>
+          <button v-else type="button" class="fm-next" @click="emit('close')">{{ $t('fieldManual.fmPanel.playYourGame') }}</button>
         </div>
       </footer>
     </div>

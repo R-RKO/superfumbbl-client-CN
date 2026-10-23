@@ -6,6 +6,7 @@
 // round 1), identical in every state, so a state change never moves the row.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { connectionQualityLabel, type ConnectionQuality } from '../game/connectionQuality';
+import { t } from '../i18n';
 
 const props = defineProps<{ quality: ConnectionQuality; rttMs: number | null }>();
 
@@ -18,7 +19,7 @@ const srcset = computed(() => `${iconBase.value}-24.png 1x, ${iconBase.value}-48
 const label = computed(() => {
   const lead = connectionQualityLabel(props.quality);
   if (props.quality === 'lost' || props.rttMs == null) return lead;
-  return `${lead} · Round trip ${Math.round(props.rttMs)} ms`;
+  return t('hud.connectionQualityIcon.label.leadRoundTripP1', { lead, p1: Math.round(props.rttMs) });
 });
 
 /** prefers-reduced-motion: steady icon, no pulse (the class is withheld; the CSS media rule is a second guard). */

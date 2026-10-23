@@ -25,6 +25,7 @@ import type { RankPanelSide, RankPanelState } from '../game/gameLoadRankPanel';
 import type { BannerSide, WaitingBannerModel } from '../game/waitingVsBanner';
 import { DEFAULT_BAR_FONTS, RANK_BAR_LAYOUT_SCALE, RANK_BAR_TYPE_BOOST, RANK_BAR_PAD_Y, makeMeasureBarText, rankBarHeightBudget, rankBarLayout, rankBarTop, renderedFont, type BarFonts } from '../game/rankBarLayout';
 import { settings } from '../game/settings';
+import { t } from '../i18n';
 
 /** `covering` (owner 10-21: "load the elements and sprites behind this pane"): the renderer has not reported ready -
  *  the pitch sits behind the waiting board's backdrop until it does, then the backdrop fades and the bar stays. */
@@ -66,7 +67,7 @@ const detailLines = (s: RankPanelSide) => {
 
 function bannerSide(s: RankPanelSide): BannerSide {
   const coach = name(s);
-  return { teamName: s.team || (coach ? `${coach}'s team` : 'Team'), coach: coach || undefined, race: s.race || undefined };
+  return { teamName: s.team || (coach ? t('waitingBoard.text.coachSTeam', { coach }) : 'Team'), coach: coach || undefined, race: s.race || undefined };
 }
 const model = computed<WaitingBannerModel | null>(() => (props.panel
   ? { mine: bannerSide(props.panel.left), opponent: bannerSide(props.panel.right) }
@@ -102,7 +103,7 @@ const ariaLabel = computed(() => {
   const p = props.panel;
   if (!p) return '';
   const card = (s: RankPanelSide) => [name(s), title(s), stats(s), s.team].filter(Boolean).join(', ');
-  return `${card(p.left)} versus ${card(p.right)}`;
+  return t('waitingBoard.ariaLabel.p0VersusP1', { p0: card(p.left), p1: card(p.right) });
 });
 
 const hudElements = (): HTMLElement[] => {

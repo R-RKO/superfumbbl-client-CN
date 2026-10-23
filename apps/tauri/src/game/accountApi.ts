@@ -13,6 +13,7 @@ import {
   configWebBearerHeaders,
   configWebCoordinationIdentity,
 } from './configWebAuth';
+import { t } from '../i18n';
 
 export interface AccountIdentity {
   ffbCoachId: string;
@@ -72,7 +73,7 @@ async function desktopAuthRequest(path: string, init: RequestInit, fetchFn: Fetc
     status: response.status,
     ok: response.ok,
     data,
-    errorText: typeof data.error === 'string' ? data.error : `Config-Web returned HTTP ${response.status}.`,
+    errorText: typeof data.error === 'string' ? data.error : t('login.text.configWebReturnedHttp', { status: response.status }),
   };
 }
 

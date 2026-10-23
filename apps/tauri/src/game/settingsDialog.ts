@@ -1,11 +1,12 @@
+import { t } from '../i18n';
 export const SETTINGS_SECTIONS = [
-  { id: 'general', label: 'General' },
-  { id: 'controls', label: 'Controls' },
-  { id: 'accessibility', label: 'Accessibility' },
-  { id: 'display', label: 'Display' },
-  { id: 'mods', label: 'Art' },
-  { id: 'ui', label: 'UI' },
-  { id: 'credits', label: 'Credits' },
+  { id: 'general', get label() { return t('settings.settingsSections.general'); } },
+  { id: 'controls', get label() { return t('settings.settingsSections.controls'); } },
+  { id: 'accessibility', get label() { return t('settings.settingsSections.accessibility'); } },
+  { id: 'display', get label() { return t('settings.settingsSections.display'); } },
+  { id: 'mods', get label() { return t('settings.settingsSections.art'); } },
+  { id: 'ui', get label() { return t('settings.settingsSections.ui'); } },
+  { id: 'credits', get label() { return t('settings.settingsSections.credits'); } },
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_SECTIONS)[number]['id'];

@@ -17,6 +17,7 @@ import {
   isCurrentSkillPackIntent,
   publishTeamLogoBindings,
 } from './assetMods';
+import { data, t, tEveryLocale } from '../i18n';
 
 export interface SkillPackChoiceTransaction {
   installId: string;
@@ -28,12 +29,19 @@ export interface SkillPackChoiceTransaction {
 
 export interface AssetTargetPositionChoice {
   positionId: string;
+  /** The genuine name, or (generated) the invariant English fallback. */
   label: string;
+  /** Provenance (i18n, Astra r3 #17): true = no genuine name was known, the display derives "Position {id}" in the
+   *  current language. Absent only on legacy records, which are healed heuristically once. */
+  generated?: boolean;
 }
 
 export interface AssetTargetTeamChoice {
   teamId: string;
+  /** The genuine name, or (generated) the invariant English fallback. */
   label: string;
+  /** Provenance (see AssetTargetPositionChoice.generated). */
+  generated?: boolean;
   positions: AssetTargetPositionChoice[];
 }
 
@@ -82,32 +90,57 @@ function stableTargetId(value: unknown): string {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(id) ? id : '';
 }
 
-function usefulLabel(value: unknown, fallback: string): string {
-  const label = typeof value === 'string' ? value.trim() : '';
-  return label || fallback;
+// i18n (Astra r2 #15): the catalogue is DATA persisted to device storage, so a generated fallback is stored as the
+// invariant English form and only localised at display (assetTargetTeamLabel / assetTargetPositionLabel).
+function fallbackTeamLabel(teamId: string): string { return data(`Team ${teamId}`); }
+function fallbackPositionLabel(positionId: string): string { return data(`Position ${positionId}`); }
+/** LEGACY records only (no provenance field): a label equal to the fallback in any locale was generated. */
+function isLegacyFallbackLabel(label: string, id: string, kind: 'team' | 'position'): boolean {
+  if (label === (kind === 'team' ? fallbackTeamLabel(id) : fallbackPositionLabel(id))) return true;
+  return kind === 'team'
+    ? tEveryLocale('assets.text.teamTeamid', { teamId: id }).includes(label)
+    : tEveryLocale('assets.text.positionPositionid', { positionId: id }).includes(label);
 }
-
-function fallbackTeamLabel(teamId: string): string { return `Team ${teamId}`; }
-function fallbackPositionLabel(positionId: string): string { return `Position ${positionId}`; }
-function isFallbackLabel(label: string, id: string, kind: 'team' | 'position'): boolean {
-  return label === (kind === 'team' ? fallbackTeamLabel(id) : fallbackPositionLabel(id));
+/** A record's provenance: an explicit `generated` flag is trusted as it stands (a supplied name is never re-inferred);
+ *  only a legacy record without the flag is classified by the heuristic. */
+function provenance(raw: { label?: unknown; generated?: unknown } | null | undefined, id: string, kind: 'team' | 'position'): { label: string; generated: boolean } {
+  const fallback = kind === 'team' ? fallbackTeamLabel(id) : fallbackPositionLabel(id);
+  const supplied = typeof raw?.label === 'string' ? raw.label.trim() : '';
+  if (typeof raw?.generated === 'boolean') return raw.generated || !supplied ? { label: fallback, generated: true } : { label: supplied, generated: false };
+  if (!supplied || isLegacyFallbackLabel(supplied, id, kind)) return { label: fallback, generated: true };
+  return { label: supplied, generated: false };
+}
+/** A freshly observed name: genuine when supplied, else generated. Never inferred from the text. */
+function observed(value: unknown, id: string, kind: 'team' | 'position'): { label: string; generated: boolean } {
+  const supplied = typeof value === 'string' ? value.trim() : '';
+  return supplied ? { label: supplied, generated: false } : { label: kind === 'team' ? fallbackTeamLabel(id) : fallbackPositionLabel(id), generated: true };
+}
+const isGenerated = (choice: { label: string; generated?: boolean }, id: string, kind: 'team' | 'position'): boolean =>
+  choice.generated ?? isLegacyFallbackLabel(choice.label, id, kind);
+/** Display label for a catalogue team: the genuine name, else the localised "Team {id}". */
+export function assetTargetTeamLabel(team: Pick<AssetTargetTeamChoice, 'teamId' | 'label' | 'generated'>): string {
+  return isGenerated(team, team.teamId, 'team') ? t('assets.text.teamTeamid', { teamId: team.teamId }) : team.label;
+}
+/** Display label for a catalogue position: the genuine name, else the localised "Position {id}". */
+export function assetTargetPositionLabel(position: Pick<AssetTargetPositionChoice, 'positionId' | 'label' | 'generated'>): string {
+  return isGenerated(position, position.positionId, 'position')
+    ? t('assets.text.positionPositionid', { positionId: position.positionId }) : position.label;
 }
 
 function normalizedCatalog(raw: unknown): AssetTargetCatalog {
   const value = raw as Partial<AssetTargetCatalog> | null;
   const positions = new Map<string, AssetTargetPositionChoice>();
   const teams = new Map<string, AssetTargetTeamChoice>();
-  const mergePosition = (target: Map<string, AssetTargetPositionChoice>, positionId: unknown, label?: unknown) => {
-    const id = stableTargetId(positionId);
+  // a genuine name replaces a generated one; otherwise the earlier (more recent) record stays
+  const mergePosition = (target: Map<string, AssetTargetPositionChoice>, raw: Partial<AssetTargetPositionChoice> | null | undefined) => {
+    const id = stableTargetId(raw?.positionId);
     if (!id) return;
-    const nextLabel = usefulLabel(label, fallbackPositionLabel(id));
+    const next = provenance(raw, id, 'position');
     const previous = target.get(id);
-    if (!previous || (isFallbackLabel(previous.label, id, 'position') && !isFallbackLabel(nextLabel, id, 'position'))) {
-      target.set(id, { positionId: id, label: nextLabel });
-    }
+    if (!previous || (previous.generated && !next.generated)) target.set(id, { positionId: id, ...next });
   };
   if (Array.isArray(value?.positions)) {
-    for (const position of value.positions) mergePosition(positions, position?.positionId, position?.label);
+    for (const position of value.positions) mergePosition(positions, position);
   }
   if (Array.isArray(value?.teams)) {
     for (const team of value.teams) {
@@ -118,14 +151,14 @@ function normalizedCatalog(raw: unknown): AssetTargetCatalog {
         previousTeam?.positions.map((position) => [position.positionId, position]) ?? [],
       );
       for (const position of Array.isArray(team.positions) ? team.positions : []) {
-        mergePosition(teamPositions, position?.positionId, position?.label);
-        mergePosition(positions, position?.positionId, position?.label);
+        mergePosition(teamPositions, position);
+        mergePosition(positions, position);
       }
-      const nextLabel = usefulLabel(team?.label, fallbackTeamLabel(teamId));
+      const next = provenance(team, teamId, 'team');
+      const keep = previousTeam && (!previousTeam.generated || next.generated);
       teams.set(teamId, {
         teamId,
-        label: previousTeam && (!isFallbackLabel(previousTeam.label, teamId, 'team') || isFallbackLabel(nextLabel, teamId, 'team'))
-          ? previousTeam.label : nextLabel,
+        ...(keep ? { label: previousTeam.label, generated: previousTeam.generated ?? false } : next),
         positions: [...teamPositions.values()],
       });
     }
@@ -169,7 +202,7 @@ export function rememberAssetTargetCatalog(input: {
   const addLoosePosition = (positionId: unknown, label?: unknown, team?: AssetTargetTeamChoice) => {
     const id = stableTargetId(positionId);
     if (!id) return;
-    const choice = { positionId: id, label: usefulLabel(label, fallbackPositionLabel(id)) };
+    const choice: AssetTargetPositionChoice = { positionId: id, ...observed(label, id, 'position') };
     incomingPositions.push(choice);
     team?.positions.push(choice);
   };
@@ -178,13 +211,14 @@ export function rememberAssetTargetCatalog(input: {
     if (!teamId) continue;
     const choice: AssetTargetTeamChoice = {
       teamId,
-      label: usefulLabel(team?.teamName ?? team?.name, fallbackTeamLabel(teamId)),
+      ...observed(team?.teamName ?? team?.name, teamId, 'team'),
       positions: [],
     };
     const rosterNames = new Map<string, string>();
     for (const position of team?.roster?.positionArray ?? []) {
       const id = stableTargetId(position.positionId);
-      if (id) rosterNames.set(id, usefulLabel(position.positionName ?? position.name, fallbackPositionLabel(id)));
+      const name = position.positionName ?? position.name;
+      if (id && typeof name === 'string' && name.trim()) rosterNames.set(id, name.trim());
       addLoosePosition(position.positionId, position.positionName ?? position.name, choice);
     }
     for (const player of team?.playerArray ?? []) {
@@ -211,7 +245,7 @@ export function rememberAssetTargetCatalog(input: {
     if (!teamId) continue;
     let team = incomingTeams.find((candidate) => candidate.teamId === teamId);
     if (!team) {
-      team = { teamId, label: fallbackTeamLabel(teamId), positions: [] };
+      team = { teamId, ...observed(undefined, teamId, 'team'), positions: [] };
       incomingTeams.push(team);
     }
     addLoosePosition(target.positionId, undefined, team);

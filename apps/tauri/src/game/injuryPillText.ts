@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /** The injury pill's copy (the token-bound toast below the injured player, SpectateView `.ko-toast`). Pure: every word
  *  comes from the server's injury / apothecary reports as the store's InjuryEvent carries them - never recomputed
  *  from dice. Owner 10-20: the pill IS the injury result on the pitch (no injury dice there); an injury roll of 10+
@@ -9,19 +10,25 @@ const DEAD_BASE = 0x08;
  *  "Serious Injury (NI)", "Smashed Knee (-MA)", "Dead (RIP)") as TWO centred lines - "<Player> is" / "<Casualty>".
  *  A plain Badly Hurt (no result string) reads "is Badly Hurt!". */
 export function injuryPhraseLines(splash: { player: string; seriousInjury?: string | null; injuryBase: number }): [string, string] {
-  const who = splash.player || 'The player';
+  // i18n (Astra r1 #8): each casualty is ONE message whose two pill lines are split at a newline, so a translation
+  // controls both lines and their order. The server's result string is only matched here (invariant English data).
+  const who = splash.player || t('hud.injuryPill.who.thePlayer');
   const s = (splash.seriousInjury ?? '').toLowerCase();
-  if (s.includes('rip') || s.includes('dead') || s.includes('killed')) return [`${who} is`, 'KILLED!'];
-  if (s.includes('knee')) return [`${who} has`, 'smashed their knee!'];
-  if (s.includes('arm')) return [`${who} has`, 'broken their arm!'];
-  if (s.includes('hip')) return [`Call Lifeline! ${who} has`, 'dislocated their hip!'];
-  if (s.includes('shoulder')) return [`${who} has`, 'broken their shoulder!'];
+  const lines = (message: string): [string, string] => {
+    const cut = message.indexOf('\n');
+    return cut < 0 ? [message, ''] : [message.slice(0, cut), message.slice(cut + 1)];
+  };
+  if (s.includes('rip') || s.includes('dead') || s.includes('killed')) return lines(t('hud.injuryPill.killed', { who }));
+  if (s.includes('knee')) return lines(t('hud.injuryPill.knee', { who }));
+  if (s.includes('arm')) return lines(t('hud.injuryPill.arm', { who }));
+  if (s.includes('hip')) return lines(t('hud.injuryPill.hip', { who }));
+  if (s.includes('shoulder')) return lines(t('hud.injuryPill.shoulder', { who }));
   if (s.includes('head') || s.includes('eye') || s.includes('concussion') || s.includes('skull') || s.includes('neck'))
-    return [`${who} receives a`, 'Head Injury!'];
-  if (s.includes('niggling') || s.includes('(ni)')) return [`${who} receives a`, 'Niggling Injury!'];
-  if (s.includes('seriously hurt') || s.includes('mng')) return [`${who} is`, 'Seriously Hurt!'];
-  if (splash.injuryBase === DEAD_BASE) return [`${who} is`, 'KILLED!']; // DEAD state, no result string
-  return [`${who} is`, 'Badly Hurt!']; // no lasting-injury string -> the coarse casualty
+    return lines(t('hud.injuryPill.head', { who }));
+  if (s.includes('niggling') || s.includes('(ni)')) return lines(t('hud.injuryPill.niggling', { who }));
+  if (s.includes('seriously hurt') || s.includes('mng')) return lines(t('hud.injuryPill.seriouslyHurt', { who }));
+  if (splash.injuryBase === DEAD_BASE) return lines(t('hud.injuryPill.killed', { who })); // DEAD state, no result string
+  return lines(t('hud.injuryPill.badlyHurt', { who })); // no lasting-injury string -> the coarse casualty
 }
 
 /** Owner 10-09: the stat a lasting injury cut, read from the server's own result string ("Smashed Knee (-MA)"). */
@@ -45,5 +52,5 @@ export function decayPillLine(splash: { player: string; seriousInjuryDecay?: str
   if (!splash.seriousInjuryDecay && (base === null || base < 0x06 || base > 0x08)) return null;
   const [, casualty] = injuryPhraseLines({ player: splash.player, seriousInjury: splash.seriousInjuryDecay ?? null, injuryBase: base ?? 0x07 });
   const tag = injuryStatTag(splash.seriousInjuryDecay);
-  return `Decay: ${tag ? `${casualty} ${tag}` : casualty}`;
+  return t('hud.injuryPill.decay', { casualty: tag ? `${casualty} ${tag}` : casualty });
 }

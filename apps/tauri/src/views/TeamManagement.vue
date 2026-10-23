@@ -8,6 +8,9 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { settings, botConfigBaseUrl, configWebUnreachableMessage, FUMBBL_SITE } from '../game/settings';
 import { coachPassword } from '../game/credentials';
 import { authorizeForkRequest, shouldRetryAfterUnauthorized } from '../game/configWebAuth';
+import { $t, data, terms, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
 
 const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 const coach = computed(() => settings.coach40k.trim());
@@ -71,13 +74,13 @@ const library = ref<LibraryTeam[]>([]);
 const libStatus = ref('');
 const libBusy = ref(false);
 async function loadLibrary() {
-  if (!coach.value) { libStatus.value = 'Set your Super FUMBBL coach name first (Settings → Connection).'; return; }
+  if (!coach.value) { liveSetHere(libStatus, 'value', () => $t('teamManagement.text.setYourSuperFumbbl')); return; }
   libBusy.value = true;
   try {
     const d = await botGet('library', { coach: coach.value });
     library.value = (d.teams as LibraryTeam[]) ?? [];
-    libStatus.value = library.value.length === 0 ? 'No teams yet — create or import one below.' : '';
-  } catch (e) { library.value = []; libStatus.value = `Couldn't load your teams (${errText(e)}).`; }
+    liveSetHere(libStatus, 'value', () => library.value.length === 0 ? $t('teamManagement.text.noTeamsYetCreate') : '');
+  } catch (e) { library.value = []; liveSetHere(libStatus, 'value', () => $t('teamManagement.text.couldnTLoadYour', { p0: errText(e) })); }
   finally { libBusy.value = false; }
 }
 onMounted(loadLibrary);
@@ -98,8 +101,8 @@ function teamIdFrom(raw: string): string | null {
 async function previewImport() {
   importPreview.value = null; importStatus.value = '';
   const id = teamIdFrom(importInput.value);
-  if (!id) { importStatus.value = 'Enter a FUMBBL team id or team URL.'; return; }
-  importBusy.value = true; importStatus.value = 'Fetching team from FUMBBL…';
+  if (!id) { liveSetHere(importStatus, 'value', () => $t('teamManagement.text.enterAFumbblTeam')); return; }
+  importBusy.value = true; liveSetHere(importStatus, 'value', () => $t('teamManagement.text.fetchingTeamFromFumbbl'));
   try {
     const url = `${FUMBBL_SITE}/api/team/get/${id}`;
     const res = inTauri ? await tauriFetch(url) : await fetch(url);
@@ -115,22 +118,22 @@ async function previewImport() {
       coach: t.coach ? String(t.coach) : undefined,
     };
     importStatus.value = '';
-  } catch (e) { importStatus.value = `Preview failed (${errText(e)}).`; }
+  } catch (e) { liveSetHere(importStatus, 'value', () => $t('teamManagement.text.previewFailedP0', { p0: errText(e) })); }
   finally { importBusy.value = false; }
 }
 async function confirmImport() {
   const id = importPreview.value?.teamId ?? teamIdFrom(importInput.value);
-  if (!id || !coach.value) { importStatus.value = 'Enter a team and set your coach name first.'; return; }
-  importBusy.value = true; importStatus.value = 'Importing team onto the fork…';
+  if (!id || !coach.value) { liveSetHere(importStatus, 'value', () => $t('teamManagement.text.enterATeamAnd')); return; }
+  importBusy.value = true; liveSetHere(importStatus, 'value', () => $t('teamManagement.text.importingTeamOntoThe'));
   try {
     const d = await botPost('library/ingest', { coach: coach.value, team: id });
     const t = d.team as LibraryTeam | undefined;
-    importStatus.value = `✓ Imported “${t?.teamName ?? importPreview.value?.name ?? id}”.`
+    liveSetHere(importStatus, 'value', () => $t('teamManagement.text.importedP0', { p0: t?.teamName ?? importPreview.value?.name ?? id })
       + (d.raceWarning ? ` ⚠ ${String(d.raceWarning)}` : '')
-      + (d.needsRestart ? ' (playable after the next fork restart)' : '');
+      + (d.needsRestart ? ' (playable after the next fork restart)' : ''));
     importInput.value = ''; importPreview.value = null;
     await loadLibrary();
-  } catch (e) { importStatus.value = `Import failed (${errText(e)}).`; }
+  } catch (e) { liveSetHere(importStatus, 'value', () => $t('teamManagement.text.importFailedP0', { p0: errText(e) })); }
   finally { importBusy.value = false; }
 }
 
@@ -148,11 +151,11 @@ const counts = ref<Record<string, number>>({});
 const staff = reactive({ reRolls: 0, assistantCoaches: 0, cheerleaders: 0, dedicatedFans: 1, apothecary: 0 });
 type StaffKey = keyof typeof staff;
 const STAFF_BOUNDS: Record<StaffKey, { min: number; max: number; label: string }> = {
-  reRolls: { min: 0, max: 8, label: 'Rerolls' },
-  assistantCoaches: { min: 0, max: 6, label: 'Asst. coaches' },
-  cheerleaders: { min: 0, max: 12, label: 'Cheerleaders' },
-  dedicatedFans: { min: 1, max: 7, label: 'Dedicated fans' },
-  apothecary: { min: 0, max: 1, label: 'Apothecary' },
+  reRolls: { min: 0, max: 8, get label() { return $t('teamManagement.staffBounds.rerolls'); } },
+  assistantCoaches: { min: 0, max: 6, get label() { return $t('teamManagement.staffBounds.asstCoaches'); } },
+  cheerleaders: { min: 0, max: 12, get label() { return $t('teamManagement.staffBounds.cheerleaders'); } },
+  dedicatedFans: { min: 1, max: 7, get label() { return $t('teamManagement.staffBounds.dedicatedFans'); } },
+  apothecary: { min: 0, max: 1, get label() { return $t('teamManagement.staffBounds.apothecary'); } },
 };
 function stepStaff(key: StaffKey, delta: number) {
   const { min, max } = STAFF_BOUNDS[key];
@@ -180,11 +183,12 @@ async function loadRosters() {
   try {
     const d = await botGet('rosters', {});
     rosters.value = (d.rosters as Roster[]) ?? [];
-  } catch (e) { buildStatus.value = `Couldn't load rosters (${errText(e)}).`; }
+  } catch (e) { liveSetHere(buildStatus, 'value', () => $t('teamManagement.text.couldnTLoadRosters', { p0: errText(e) })); }
 }
 function onRaceChange() {
   counts.value = {}; previewSummary.value = null;
-  if (current.value && !teamName.value.trim()) teamName.value = `${current.value.raceName} team`;
+  // i18n (Astra r1 #9): a generated team name is DATA (sent to config-web): invariant English.
+  if (current.value && !teamName.value.trim()) teamName.value = data(`${current.value.raceName} team`);
 }
 function bump(positionId: string, delta: number, max: number) {
   const n = Math.max(0, (counts.value[positionId] ?? 0) + delta);
@@ -219,7 +223,7 @@ async function runPreview() {
   } catch (e) { previewSummary.value = { goldUsed: 0, valid: false, findings: [`✗ ${errText(e)}`] }; }
 }
 async function buildTeam() {
-  buildBusy.value = true; buildStatus.value = 'Building…';
+  buildBusy.value = true; liveSetHere(buildStatus, 'value', () => $t('teamManagement.text.building'));
   const name = teamName.value.trim();
   try {
     // Veers' spec (ForTarkin-client-build-team-hot-import-spec.md): POST /build owns the whole server-authoritative
@@ -231,7 +235,7 @@ async function buildTeam() {
     // reload.method === 'refresh' confirms the hot import (no restart); a 'restart' path self-refuses during live play.
     const reload = r.reload as { method?: string; teams?: number } | undefined;
     const hot = reload?.method === 'refresh';
-    buildStatus.value = `✓ “${name}” is live on the fork${r.teamId ? ` (${r.teamId})` : ''}${hot ? '' : ' (pending a server refresh)'} — create or join a game with it now.`;
+    liveSetHere(buildStatus, 'value', () => $t(hot ? 'teamManagement.liveOnFork' : 'teamManagement.liveOnForkPending', { name, teamId: r.teamId ? ` (${r.teamId})` : '' }));
     counts.value = {}; previewSummary.value = null; teamName.value = '';
     await loadLibrary();
   } catch (e) {
@@ -240,12 +244,12 @@ async function buildTeam() {
     const status = (e as { status?: number }).status;
     const data = (e as { data?: { errors?: { message?: string }[] } }).data;
     if (status === 401) {
-      buildStatus.value = '✗ Build needs your Super FUMBBL fork password — set it in Settings → Connection, then Build again.';
+      liveSetHere(buildStatus, 'value', () => $t('teamManagement.text.buildNeedsYourSuper'));
     } else if (status === 400) {
       const findings = (data?.errors ?? []).map((f) => f?.message).filter(Boolean).join('; ');
-      buildStatus.value = `✗ “${name}” isn’t legal — ${findings || errText(e)}. Fix the findings and rebuild.`;
+      liveSetHere(buildStatus, 'value', () => $t('teamManagement.text.nameIsnTLegal', { name, p1: findings || errText(e) }));
     } else {
-      buildStatus.value = `✗ Build failed — ${errText(e)}.`;
+      liveSetHere(buildStatus, 'value', () => $t('teamManagement.text.buildFailedP0', { p0: errText(e) }));
     }
   } finally { buildBusy.value = false; }
 }
@@ -256,60 +260,60 @@ function kk(n: number) { return `${Math.round(n / 1000)}k`; }
 <template>
   <section class="tm">
     <header class="tm-head">
-      <h2>Team Management</h2>
-      <p class="tm-sub">Coach: <b>{{ coach || '— not set —' }}</b>. Build a team or import one from FUMBBL, then play on the fork.</p>
+      <h2>{{ $t('teamManagement.teamManagement') }}</h2>
+      <p class="tm-sub">{{ $t('teamManagement.coach') }} <b>{{ coach || $t('teamManagement.notSet') }}</b>{{ $t('teamManagement.buildATeamOr') }}</p>
     </header>
 
     <div class="tm-cards">
       <button class="tm-card" :class="{ on: panel === 'create' }" @click="openCreate">
-        <span class="tm-card-title">Create Team</span>
-        <span class="tm-card-sub">Build a legal BB2025 team in the Roster Builder</span>
+        <span class="tm-card-title">{{ $t('teamManagement.tmCard.createTeam') }}</span>
+        <span class="tm-card-sub">{{ $t('teamManagement.tmCard.buildALegalBb2025') }}</span>
       </button>
       <button class="tm-card" :class="{ on: panel === 'import' }" @click="panel = 'import'">
-        <span class="tm-card-title">Import Team</span>
-        <span class="tm-card-sub">Bring in a team from FUMBBL by id or URL</span>
+        <span class="tm-card-title">{{ $t('teamManagement.tmCard.importTeam') }}</span>
+        <span class="tm-card-sub">{{ $t('teamManagement.tmCard.bringInATeam') }}</span>
       </button>
     </div>
 
     <!-- IMPORT TEAM ------------------------------------------------------------------------->
     <div v-if="panel === 'import'" class="tm-panel">
-      <h3>Import a team from FUMBBL</h3>
+      <h3>{{ $t('teamManagement.tmPanel.importATeamFrom') }}</h3>
       <div class="tm-row">
-        <input v-model="importInput" type="text" class="tm-input" placeholder="FUMBBL team id or team URL"
+        <input v-model="importInput" type="text" class="tm-input" :placeholder="$t('teamManagement.tmPanel.fumbblTeamIdOr')"
           @keydown.enter.prevent="previewImport" />
-        <button class="tm-btn" :disabled="importBusy" @click="previewImport">Preview</button>
+        <button class="tm-btn" :disabled="importBusy" @click="previewImport">{{ $t('teamManagement.tmPanel.preview') }}</button>
       </div>
       <div v-if="importPreview" class="tm-preview">
         <div class="tm-preview-title">{{ importPreview.name }}</div>
         <dl class="tm-preview-grid">
-          <div><dt>Race</dt><dd>{{ importPreview.race }}</dd></div>
-          <div><dt>Players</dt><dd>{{ importPreview.players || '—' }}</dd></div>
-          <div v-if="importPreview.teamValue"><dt>Team value</dt><dd>{{ kk(importPreview.teamValue) }}</dd></div>
-          <div v-if="importPreview.coach"><dt>Coach</dt><dd>{{ importPreview.coach }}</dd></div>
+          <div><dt>{{ $t('teamManagement.tmPanel.race') }}</dt><dd>{{ terms(importPreview.race) }}</dd></div>
+          <div><dt>{{ $t('teamManagement.tmPanel.players') }}</dt><dd>{{ importPreview.players || '—' }}</dd></div>
+          <div v-if="importPreview.teamValue"><dt>{{ $t('teamManagement.tmPanel.teamValue') }}</dt><dd>{{ kk(importPreview.teamValue) }}</dd></div>
+          <div v-if="importPreview.coach"><dt>{{ $t('teamManagement.tmPanel.coach') }}</dt><dd>{{ importPreview.coach }}</dd></div>
         </dl>
-        <button class="tm-btn tm-btn-go" :disabled="importBusy || !coach" @click="confirmImport">Confirm &amp; bind to {{ coach || 'coach' }}</button>
+        <button class="tm-btn tm-btn-go" :disabled="importBusy || !coach" @click="confirmImport">{{ $t('teamManagement.tmPanel.confirmBindToP0', { p0: coach || 'coach' }) }}</button>
       </div>
       <p v-if="importStatus" class="tm-status">{{ importStatus }}</p>
     </div>
 
     <!-- CREATE TEAM (Roster Builder) ------------------------------------------------------->
     <div v-else-if="panel === 'create'" class="tm-panel">
-      <h3>Roster Builder</h3>
-      <p class="tm-sub">Compose a legal BB2025 team (1000k budget). It installs straight onto the fork.</p>
+      <h3>{{ $t('teamManagement.tmPanel.rosterBuilder') }}</h3>
+      <p class="tm-sub">{{ $t('teamManagement.tmPanel.composeALegalBb2025') }}</p>
       <div class="tm-row">
-        <label class="tm-field">Race
+        <label class="tm-field">{{ $t('teamManagement.tmPanel.race') }}
           <select v-model="rosterId" class="tm-input" @change="onRaceChange">
-            <option value="">— choose a race —</option>
-            <option v-for="r in rosters" :key="r.rosterId" :value="r.rosterId">{{ r.raceName }}</option>
+            <option value="">{{ $t('teamManagement.tmPanel.chooseARace') }}</option>
+            <option v-for="r in rosters" :key="r.rosterId" :value="r.rosterId">{{ terms(r.raceName) }}</option>
           </select>
         </label>
-        <label class="tm-field">Team name
-          <input v-model="teamName" type="text" class="tm-input" placeholder="team name" @input="schedulePreview" />
+        <label class="tm-field">{{ $t('teamManagement.tmPanel.teamName') }}
+          <input v-model="teamName" type="text" class="tm-input" :placeholder="$t('teamManagement.tmPanel.teamName2')" @input="schedulePreview" />
         </label>
       </div>
       <div v-if="current" class="tm-positions">
         <table>
-          <thead><tr><th>Position</th><th class="r">Cost</th><th class="c">Max</th><th>Stats</th><th>Skills</th><th class="c">Count</th></tr></thead>
+          <thead><tr><th>{{ $t('teamManagement.tmPanel.position') }}</th><th class="r">{{ $t('teamManagement.tmPanel.cost') }}</th><th class="c">{{ $t('teamManagement.tmPanel.max') }}</th><th>{{ $t('teamManagement.tmPanel.stats') }}</th><th>{{ $t('teamManagement.tmPanel.skills') }}</th><th class="c">{{ $t('teamManagement.tmPanel.count') }}</th></tr></thead>
           <tbody>
             <tr v-for="p in sortedPositions" :key="p.positionId">
               <td>{{ p.name }}</td>
@@ -317,11 +321,11 @@ function kk(n: number) { return `${Math.round(n / 1000)}k`; }
               <td class="c">{{ p.max }}</td>
               <td class="stats">
                 <div class="stat-chips">
-                  <span class="stat-chip"><b>{{ p.MA ?? '—' }}</b><em>MA</em></span>
+                  <span class="stat-chip"><b>{{ p.MA ?? '—' }}</b><em>{{ $t('teamManagement.tmPanel.ma') }}</em></span>
                   <span class="stat-chip"><b>{{ p.ST ?? '—' }}</b><em>ST</em></span>
-                  <span class="stat-chip"><b>{{ p.AG || '—' }}</b><em>AG</em></span>
-                  <span class="stat-chip"><b>{{ p.PA || '—' }}</b><em>PA</em></span>
-                  <span class="stat-chip"><b>{{ p.AV || '—' }}</b><em>AV</em></span>
+                  <span class="stat-chip"><b>{{ p.AG || '—' }}</b><em>{{ $t('teamManagement.tmPanel.ag') }}</em></span>
+                  <span class="stat-chip"><b>{{ p.PA || '—' }}</b><em>{{ $t('teamManagement.tmPanel.pa') }}</em></span>
+                  <span class="stat-chip"><b>{{ p.AV || '—' }}</b><em>{{ $t('teamManagement.tmPanel.av') }}</em></span>
                 </div>
               </td>
               <td class="skills">{{ p.skills && p.skills.length ? p.skills.join(', ') : '—' }}</td>
@@ -346,8 +350,8 @@ function kk(n: number) { return `${Math.round(n / 1000)}k`; }
               </div>
             </div>
             <div class="tm-staff-metrics">
-              <span class="tm-metric">Players <b>{{ playerCount }}</b>/16</span>
-              <span class="tm-metric">Budget <b :class="{ over: !!previewSummary && previewSummary.goldUsed > budgetTotal }">{{ previewSummary ? kk(previewSummary.goldUsed) : '0k' }}</b> / {{ kk(budgetTotal) }}</span>
+              <span class="tm-metric">{{ $t('teamManagement.tmPanel.players') }} <b>{{ playerCount }}</b>/16</span>
+              <span class="tm-metric">{{ $t('teamManagement.tmPanel.budget') }} <b :class="{ over: !!previewSummary && previewSummary.goldUsed > budgetTotal }">{{ previewSummary ? kk(previewSummary.goldUsed) : '0k' }}</b> / {{ kk(budgetTotal) }}</span>
             </div>
           </div>
           <div class="tm-staff-row">
@@ -362,10 +366,10 @@ function kk(n: number) { return `${Math.round(n / 1000)}k`; }
           </div>
         </div>
         <div v-if="previewSummary" class="tm-findings">
-          <div v-if="previewSummary.findings.length === 0 && previewSummary.valid" class="tm-finding ok">Legal team ✓</div>
+          <div v-if="previewSummary.findings.length === 0 && previewSummary.valid" class="tm-finding ok">{{ $t('teamManagement.tmPanel.legalTeam') }}</div>
           <div v-for="(f, i) in previewSummary.findings" :key="i" class="tm-finding" :class="{ err: f.startsWith('✗') }">{{ f }}</div>
         </div>
-        <button class="tm-btn tm-btn-go" :disabled="!canBuild || buildBusy" @click="buildTeam">Build Team</button>
+        <button class="tm-btn tm-btn-go" :disabled="!canBuild || buildBusy" @click="buildTeam">{{ $t('teamManagement.tmPanel.buildTeam') }}</button>
         <p v-if="buildStatus" class="tm-status">{{ buildStatus }}</p>
       </div>
     </div>
@@ -373,14 +377,14 @@ function kk(n: number) { return `${Math.round(n / 1000)}k`; }
     <!-- YOUR TEAMS ------------------------------------------------------------------------->
     <div class="tm-panel tm-teams">
       <div class="tm-teams-head">
-        <h3>Your teams</h3>
-        <button class="tm-btn tm-btn-ghost" :disabled="libBusy" @click="loadLibrary">↻ Refresh</button>
+        <h3>{{ $t('teamManagement.tmPanel.yourTeams') }}</h3>
+        <button class="tm-btn tm-btn-ghost" :disabled="libBusy" @click="loadLibrary">{{ $t('teamManagement.tmPanel.refresh') }}</button>
       </div>
       <ul v-if="library.length" class="tm-team-list">
         <li v-for="t in library" :key="t.teamId">
           <span class="tm-team-name">{{ t.teamName }}</span>
-          <span class="tm-team-meta">{{ t.race }}<template v-if="t.teamValue"> · {{ kk(t.teamValue) }}</template></span>
-          <span v-if="t.forkLoadable === false" class="tm-team-warn" title="Playable after the next fork restart">pending restart</span>
+          <span class="tm-team-meta">{{ terms(t.race) }}<template v-if="t.teamValue"> · {{ kk(t.teamValue) }}</template></span>
+          <span v-if="t.forkLoadable === false" class="tm-team-warn" :title="$t('teamManagement.tmPanel.playableAfterTheNext')">{{ $t('teamManagement.tmPanel.pendingRestart') }}</span>
         </li>
       </ul>
       <p v-if="libStatus" class="tm-status">{{ libStatus }}</p>

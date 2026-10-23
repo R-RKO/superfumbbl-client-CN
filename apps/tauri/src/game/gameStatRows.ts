@@ -6,20 +6,21 @@ import { diceStats, displayedDiceRows, emptyTally, type DiceCoverage, type DiceR
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { selectedLocalFumbblAssetUrl } from './fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from './teamCrests';
+import { $t } from '../i18n';
 
 export interface PgStatRow { key: string; label: string; home: string; away: string; homeLead: boolean; awayLead: boolean }
 
 /** wire PlayerResult fields (server PlayerResult.java) summed per team */
 export const POSTGAME_STATS: { key: string; label: string }[] = [
-  { key: 'touchdowns', label: 'Touchdowns' },
-  { key: 'casualties', label: 'Casualties' },
-  { key: 'completions', label: 'Completions' },
-  { key: 'passing', label: 'Passing yards' },
-  { key: 'rushing', label: 'Rushing yards' },
-  { key: 'interceptions', label: 'Interceptions' },
-  { key: 'blocks', label: 'Blocks' },
-  { key: 'fouls', label: 'Fouls' },
-  { key: 'spp', label: 'SPP earned' },
+  { key: 'touchdowns', get label() { return $t('cards.postGame.postgameStats.touchdowns'); } },
+  { key: 'casualties', get label() { return $t('cards.postGame.postgameStats.casualties'); } },
+  { key: 'completions', get label() { return $t('cards.postGame.postgameStats.completions'); } },
+  { key: 'passing', get label() { return $t('cards.postGame.postgameStats.passingYards'); } },
+  { key: 'rushing', get label() { return $t('cards.postGame.postgameStats.rushingYards'); } },
+  { key: 'interceptions', get label() { return $t('cards.postGame.postgameStats.interceptions'); } },
+  { key: 'blocks', get label() { return $t('cards.postGame.postgameStats.blocks'); } },
+  { key: 'fouls', get label() { return $t('cards.postGame.postgameStats.fouls'); } },
+  { key: 'spp', get label() { return $t('cards.postGame.postgameStats.sppEarned'); } },
 ];
 
 type Side = 'home' | 'away';
@@ -103,7 +104,7 @@ export function gameStatRows(game: GameJson | null | undefined, tallies?: { home
     } else if (key === 'fouls') {
       plain(key, label);
       const sh = teamSentOff(game, 'home'); const sa = teamSentOff(game, 'away');
-      rows.push({ key: 'sentOff', label: 'Sent off', home: String(sh), away: String(sa), homeLead: sh > sa, awayLead: sa > sh });
+      rows.push({ key: 'sentOff', get label() { return $t('cards.postGame.text.sentOff'); }, home: String(sh), away: String(sa), homeLead: sh > sa, awayLead: sa > sh });
     } else plain(key, label);
   }
   return rows;

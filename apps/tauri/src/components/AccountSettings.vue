@@ -4,6 +4,10 @@ import { settings } from '../game/settings';
 import { authenticateAccount, getAccount, rehydrateAccountSession, signInWithDiscordAccount, signOutAccount, updateAccount, type AccountIdentity } from '../game/accountApi';
 import { DesktopSignInCancelled } from '../game/desktopAuth';
 import { startTournamentNotificationPolling } from '../game/tournamentNotificationClient';
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 const account = ref<AccountIdentity | null>(null);
@@ -32,13 +36,13 @@ function loadEditor(identity: AccountIdentity) {
 
 async function authenticate() {
   const coach = settings.coach40k.trim();
-  if (!coach || !loginPassword.value) { status.value = 'Enter your Super FUMBBL coach and password.'; return; }
+  if (!coach || !loginPassword.value) { liveSetHere(status, 'value', () => t('ui.accountSettings.text.enterYourSuperFumbbl')); return; }
   busy.value = true;
   try {
     account.value = await authenticateAccount(coach, loginPassword.value);
     loadEditor(account.value);
     loginPassword.value = '';
-    status.value = 'Authenticated. Saving changes requires your password again.';
+    liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSavingChangesRequires'));
     startTournamentNotificationPolling();
   } catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
@@ -46,7 +50,7 @@ async function authenticate() {
 
 async function refresh() {
   busy.value = true;
-  try { account.value = await getAccount(); loadEditor(account.value); status.value = 'Identity status refreshed.'; }
+  try { account.value = await getAccount(); loadEditor(account.value); liveSetHere(status, 'value', () => t('ui.accountSettings.text.identityStatusRefreshed')); }
   catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
@@ -54,12 +58,12 @@ async function refresh() {
 async function openDiscordSso() {
   if (busy.value) return;
   const coach = settings.coach40k.trim();
-  if (!coach) { status.value = 'Enter your Super FUMBBL coach before signing in with Discord.'; return; }
+  if (!coach) { liveSetHere(status, 'value', () => t('ui.accountSettings.text.enterYourSuperFumbbl2')); return; }
   const controller = new AbortController();
   discordAbort = controller;
   busy.value = true;
   try {
-    status.value = `Waiting for Discord authorization for ${coach}…`;
+    liveSetHere(status, 'value', () => t('ui.accountSettings.text.waitingForDiscordAuthorization', { coach }));
     account.value = await signInWithDiscordAccount({
       coach,
       signal: controller.signal,
@@ -72,10 +76,11 @@ async function openDiscordSso() {
     });
     settings.coach40k = account.value.ffbCoachId;
     loadEditor(account.value);
-    status.value = `Signed in as ${account.value.ffbCoachId}.`;
+    const ffbCoachId = account.value.ffbCoachId;
+    liveSetHere(status, 'value', () => t('ui.accountSettings.text.signedInAsFfbcoachid', { ffbCoachId }));
     startTournamentNotificationPolling();
   } catch (error) {
-    status.value = error instanceof DesktopSignInCancelled ? 'Discord sign-in cancelled.' : error instanceof Error ? error.message : String(error);
+    status.value = error instanceof DesktopSignInCancelled ? t('ui.accountSettings.text.discordSignInCancelled') : error instanceof Error ? error.message : String(error);
   } finally {
     if (discordAbort === controller) discordAbort = null;
     busy.value = false;
@@ -86,7 +91,7 @@ function cancelDiscordSso() { discordAbort?.abort(); }
 
 async function signOut() {
   busy.value = true;
-  try { await signOutAccount(); account.value = null; status.value = 'Signed out.'; }
+  try { await signOutAccount(); account.value = null; liveSetHere(status, 'value', () => t('ui.accountSettings.text.signedOut')); }
   catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
@@ -103,7 +108,7 @@ async function saveProfile() {
     });
     account.value = await updateAccount({ profile, scheduling: { timezone: timezone.value, availability: rows } });
     loadEditor(account.value);
-    status.value = 'Account profile saved.';
+    liveSetHere(status, 'value', () => t('ui.accountSettings.text.accountProfileSaved'));
   } catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
@@ -111,59 +116,59 @@ async function saveProfile() {
 onMounted(async () => {
   try {
     const restored = await rehydrateAccountSession();
-    if (restored) { account.value = restored; loadEditor(restored); status.value = 'Authenticated session restored.'; }
-    else if (settings.coach40k.trim()) status.value = `Authenticate as ${settings.coach40k.trim()} to load your account.`;
-  } catch { status.value = 'Your session expired. Authenticate again.'; }
+    if (restored) { account.value = restored; loadEditor(restored); liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSessionRestored')); }
+    else if (settings.coach40k.trim()) liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticateAsP0To', { p0: settings.coach40k.trim() }));
+  } catch { liveSetHere(status, 'value', () => t('ui.accountSettings.text.yourSessionExpiredAuthenticate')); }
 });
 onBeforeUnmount(() => discordAbort?.abort());
 </script>
 
 <template>
   <fieldset class="settings-group account-card">
-    <legend>Account</legend>
+    <legend>{{ $t('settings.account.accountCard.account.account') }}</legend>
     <template v-if="!account">
-      <label>Super FUMBBL coach <input v-model="settings.coach40k" autocomplete="username" /></label>
-      <button type="button" :disabled="busy" @click="openDiscordSso">{{ busy ? 'Waiting for Discord…' : 'Sign in with Discord' }}</button>
-      <button v-if="busy" type="button" @click="cancelDiscordSso">Cancel sign-in</button>
-      <p class="hint">Discord opens in your system browser and returns a one-time session to this client.</p>
-      <label>Password <input v-model="loginPassword" type="password" autocomplete="current-password" @keyup.enter="authenticate" /></label>
-      <button type="button" :disabled="busy" @click="authenticate">Log in using userid/password</button>
+      <label>{{ $t('settings.account.accountCard.account.superFumbblCoach') }} <input v-model="settings.coach40k" autocomplete="username" /></label>
+      <button type="button" :disabled="busy" @click="openDiscordSso">{{ busy ? $t('settings.account.accountCard.account.waitingForDiscord') : $t('settings.account.accountCard.account.signInWithDiscord') }}</button>
+      <button v-if="busy" type="button" @click="cancelDiscordSso">{{ $t('settings.account.accountCard.account.cancelSignIn') }}</button>
+      <p class="hint">{{ $t('settings.account.accountCard.account.discordOpensInYour') }}</p>
+      <label>{{ $t('settings.account.accountCard.account.password') }} <input v-model="loginPassword" type="password" autocomplete="current-password" @keyup.enter="authenticate" /></label>
+      <button type="button" :disabled="busy" @click="authenticate">{{ $t('settings.account.accountCard.account.logInUsingUserid') }}</button>
     </template>
     <template v-else>
       <div class="identity-grid">
-        <span>Verified coach</span><b>✓ {{ account.ffbCoachId }}</b>
-        <span>Discord</span><b v-if="account.identities.discordUserId">✓ {{ account.identities.discordUsername || account.identities.discordUserId }}</b><em v-else>Not linked</em>
-        <span>Email</span><b>{{ account.identities.email || '—' }}</b>
-        <span>NAF</span><b>{{ account.identities.nafName || '—' }}{{ account.identities.nafId ? ` · ${account.identities.nafId}` : '' }}</b>
+        <span>{{ $t('settings.account.accountCard.account.verifiedCoach') }}</span><b>✓ {{ account.ffbCoachId }}</b>
+        <span>{{ $t('settings.account.accountCard.account.discord') }}</span><b v-if="account.identities.discordUserId">✓ {{ account.identities.discordUsername || account.identities.discordUserId }}</b><em v-else>{{ $t('settings.account.accountCard.account.notLinked') }}</em>
+        <span>{{ $t('settings.account.accountCard.account.email') }}</span><b>{{ account.identities.email || '—' }}</b>
+        <span>{{ $t('settings.account.accountCard.account.naf') }}</span><b>{{ account.identities.nafName || '—' }}{{ account.identities.nafId ? ` · ${account.identities.nafId}` : '' }}</b>
       </div>
       <div class="actions account-actions">
-        <button type="button" :disabled="busy" @click="openDiscordSso">{{ account.identities.discordUserId ? 'Re-authenticate Discord' : 'Link Discord in browser' }}</button>
-        <button type="button" :disabled="busy" @click="refresh">Refresh identity</button>
-        <button type="button" :disabled="busy" @click="signOut">Sign out</button>
+        <button type="button" :disabled="busy" @click="openDiscordSso">{{ account.identities.discordUserId ? $t('settings.account.accountCard.account.reAuthenticateDiscord') : $t('settings.account.accountCard.account.linkDiscordInBrowser') }}</button>
+        <button type="button" :disabled="busy" @click="refresh">{{ $t('settings.account.accountCard.account.refreshIdentity') }}</button>
+        <button type="button" :disabled="busy" @click="signOut">{{ $t('settings.account.accountCard.account.signOut') }}</button>
       </div>
-      <p class="hint">Coach and external identities are verified and read-only here. Discord sign-in uses the system browser, asks for one coach name, and keeps Discord credentials and tokens out of client settings.</p>
+      <p class="hint">{{ $t('settings.account.accountCard.account.coachAndExternalIdentities') }}</p>
 
       <fieldset class="settings-group">
-        <legend>Public profile</legend>
-        <label>Display name <input v-model="displayName" maxlength="500" /></label>
-        <label>Avatar URL <input v-model="avatar" maxlength="500" /></label>
+        <legend>{{ $t('settings.account.accountCard.publicProfile.publicProfile') }}</legend>
+        <label>{{ $t('settings.account.accountCard.publicProfile.displayName') }} <input v-model="displayName" maxlength="500" /></label>
+        <label>{{ $t('settings.account.accountCard.publicProfile.avatarUrl') }} <input v-model="avatar" maxlength="500" /></label>
         <div v-for="(row, index) in extraProfile" :key="index" class="profile-row">
-          <input v-model="row.key" placeholder="Field name" maxlength="100" />
-          <input v-model="row.value" placeholder="Value" maxlength="500" />
-          <button type="button" title="Remove field" @click="extraProfile.splice(index, 1)">✕</button>
+          <input v-model="row.key" :placeholder="$t('settings.account.accountCard.publicProfile.fieldName')" maxlength="100" />
+          <input v-model="row.value" :placeholder="$t('settings.account.accountCard.publicProfile.value')" maxlength="500" />
+          <button type="button" :title="$t('settings.account.accountCard.publicProfile.removeField')" @click="extraProfile.splice(index, 1)">✕</button>
         </div>
-        <button type="button" @click="extraProfile.push({ key: '', value: '' })">Add profile field</button>
+        <button type="button" @click="extraProfile.push({ key: '', value: '' })">{{ $t('settings.account.accountCard.publicProfile.addProfileField') }}</button>
       </fieldset>
 
       <fieldset class="settings-group">
-        <legend>Scheduling</legend>
-        <label>Time zone <input v-model="timezone" placeholder="America/Los_Angeles" maxlength="64" /></label>
+        <legend>{{ $t('settings.account.accountCard.scheduling.scheduling') }}</legend>
+        <label>{{ $t('settings.account.accountCard.scheduling.timeZone') }} <input v-model="timezone" :placeholder="$t('settings.account.accountCard.scheduling.americaLosAngeles')" maxlength="64" /></label>
         <div v-for="day in DAYS" :key="day" class="availability-row">
-          <b>{{ day.toUpperCase() }}</b><input v-model="availability[day]!.start" type="time" /><span>to</span><input v-model="availability[day]!.end" type="time" />
+          <b>{{ day.toUpperCase() }}</b><input v-model="availability[day]!.start" type="time" /><span>{{ $t('settings.account.accountCard.scheduling.to') }}</span><input v-model="availability[day]!.end" type="time" />
         </div>
       </fieldset>
 
-      <button class="primary" type="button" :disabled="busy" @click="saveProfile">Save account profile</button>
+      <button class="primary" type="button" :disabled="busy" @click="saveProfile">{{ $t('settings.account.accountCard.account.saveAccountProfile') }}</button>
     </template>
     <p class="hint" aria-live="polite">{{ status }}</p>
   </fieldset>

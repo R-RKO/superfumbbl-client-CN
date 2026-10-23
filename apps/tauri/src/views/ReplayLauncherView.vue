@@ -13,6 +13,7 @@ import { recentTeamCapNote } from '../game/fumbblRecentMatches';
 import {
   REPLAY_SEARCH_RESOLVERS, REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
   type AbortableFetch, type FumbblGroup, type ReplayRow, type ReplaySearchResult,
+  searchNoticeText,
 } from '../game/replaySearch';
 import { relativeTime } from '../game/fumbblPlayBlade';
 import { CONSOLE_PALETTE, THEME_PRESETS, deriveTheme } from '../game/theme';
@@ -21,6 +22,10 @@ import MatchRow from '../components/MatchRow.vue';
 import PostGamePanel from '../components/PostGamePanel.vue';
 import { loadPostGameSnapshot, postGameSnapshotKeys } from '../game/postGameCache';
 import { postGameKey, type PostGameSnapshot } from '../game/postGameProjection';
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 /**
  * Owner 10-06 (spec-replay-pane-revamp.md): the Replay pane. One search field ("Coach, league or game ID",
@@ -84,7 +89,7 @@ async function showSearch(run: (f: (input: string) => Promise<Response>) => Prom
   } catch (error) {
     if (seq !== searchSeq) return;
     search.result = null;
-    search.error = error instanceof ReplaySearchTimeout ? error.message : `Couldn't search — ${error instanceof Error ? error.message : String(error)}`;
+    liveSetHere(search, 'error', () => error instanceof ReplaySearchTimeout ? error.message : t('replayLauncher.text.couldnTSearchP0', { p0: error instanceof Error ? error.message : String(error) }));
   } finally {
     if (seq === searchSeq) { search.loading = false; searchAbort = null; }
   }
@@ -112,14 +117,14 @@ const rows = computed<ReplayRow[]>(() => search.result?.rows ?? []);
 const hideScores = computed(() => settings.replaySearchHideScores);
 const resultsTitle = computed(() => {
   const r = search.result;
-  if (!r) return 'Results';
+  if (!r) return t('replayLauncher.resultsTitle.results');
   switch (r.kind) {
-    case 'own': return 'Your recent games';
-    case 'coach': return `Recent games for ${r.coach ?? r.query}`;
-    case 'match': return `Match ${r.query}`;
-    case 'replay': return `Game ${r.query}`;
-    case 'league': return `League: ${r.group?.name ?? r.query}`;
-    default: return 'Results';
+    case 'own': return t('replayLauncher.resultsTitle.yourRecentGames');
+    case 'coach': return t('replayLauncher.resultsTitle.recentGamesForP0', { p0: r.coach ?? r.query });
+    case 'match': return t('replayLauncher.resultsTitle.matchQuery', { query: r.query });
+    case 'replay': return t('replayLauncher.resultsTitle.gameQuery', { query: r.query });
+    case 'league': return t('replayLauncher.resultsTitle.leagueP0', { p0: r.group?.name ?? r.query });
+    default: return t('replayLauncher.resultsTitle.results');
   }
 });
 const needsOwnCoach = computed(() => search.result?.kind === 'own' && !search.result.coach);
@@ -137,8 +142,8 @@ const altReadings = computed<{ label: string; query: string }[]>(() => {
   const r = search.result;
   if (!r?.bareId) return [];
   const id = r.bareId;
-  const alts = [{ label: `replay ${id}`, query: `replay:${id}` }];
-  if (r.kind === 'match') alts.push({ label: `league ${id}`, query: `league:${id}` });
+  const alts = [{ get label() { return t('replayLauncher.altReadings.replayId', { id }); }, query: `replay:${id}` }];
+  if (r.kind === 'match') alts.push({ get label() { return t('replayLauncher.altReadings.leagueId', { id }); }, query: `league:${id}` });
   return alts;
 });
 function searchFor(text: string): void {
@@ -148,9 +153,9 @@ function searchFor(text: string): void {
 const emptyMessage = computed(() => {
   const r = search.result;
   if (!r || rows.value.length || r.kind === 'league-pick') return '';
-  if (r.kind === 'none') return `No coach or league found for ${r.query}`;
-  if (r.kind === 'league') return `No played games in the recent tournaments of ${r.group?.name ?? r.query}`;
-  return `No games found for ${r.query || r.coach}`;
+  if (r.kind === 'none') return t('replayLauncher.emptyMessage.noCoachOrLeague', { query: r.query });
+  if (r.kind === 'league') return t('replayLauncher.emptyMessage.noPlayedGamesIn', { p0: r.group?.name ?? r.query });
+  return t('replayLauncher.emptyMessage.noGamesFoundFor', { p0: r.query || r.coach });
 });
 
 function rowWhen(row: ReplayRow): { rel: string; abs: string } {
@@ -195,9 +200,9 @@ async function replayRow(row: ReplayRow): Promise<void> {
       if (token === replayClickSeq) { lookupRowKey.value = null; lookupAbort = null; }
     }
     if (unmounted || token !== replayClickSeq || !sessionIsCurrent(before)) return;
-    if (timedOut) { replayLookupError.value = `Looking up the replay for match ${row.matchId} timed out.`; return; }
+    if (timedOut) { liveSetHere(replayLookupError, 'value', () => t('replayLauncher.text.lookingUpTheReplay', { matchId: row.matchId })); return; }
   }
-  if (!gameId) { if (row.replayLookup) replayLookupError.value = `FUMBBL has no replay for match ${row.matchId}.`; return; }
+  if (!gameId) { if (row.replayLookup) liveSetHere(replayLookupError, 'value', () => t('replayLauncher.text.fumbblHasNoReplay', { matchId: row.matchId })); return; }
   sharedReplayFileImporter.invalidate();
   applyServerTarget('fumbbl');
   const target = activeServerTarget();
@@ -292,7 +297,7 @@ async function loadFile(event: Event): Promise<void> {
     isCurrent: sessionIsCurrent,
     commit: commitOpenedFile,
   });
-  if (result.status === 'session-changed') localError.value = 'The replay session changed while the file was loading. Choose the file again.';
+  if (result.status === 'session-changed') liveSetHere(localError, 'value', () => t('replayLauncher.text.theReplaySessionChanged'));
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
@@ -304,14 +309,14 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
     <div class="replay-console">
       <header class="replay-heading">
         <div>
-          <span class="replay-kicker">Match archive</span>
-          <h1>Replays</h1>
-          <p>Search a FUMBBL coach, league or game ID, or open a replay file from this device.</p>
+          <span class="replay-kicker">{{ $t('replayLauncher.matchArchive') }}</span>
+          <h1>{{ $t('replayLauncher.replays') }}</h1>
+          <p>{{ $t('replayLauncher.searchAFumbblCoach') }}</p>
         </div>
       </header>
 
       <section class="replay-panel search-panel" aria-labelledby="replay-search-title" data-testid="replay-search">
-        <h2 id="replay-search-title" class="visually-hidden">Search replays</h2>
+        <h2 id="replay-search-title" class="visually-hidden">{{ $t('replayLauncher.replayPanel.searchReplays') }}</h2>
         <form class="search-row" role="search" @submit.prevent="runSearch">
           <input
             v-model="query"
@@ -320,38 +325,38 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
             type="search"
             autocomplete="off"
             spellcheck="false"
-            placeholder="Coach, league or game ID"
-            aria-label="Coach, league or game ID"
+            :placeholder="$t('replayLauncher.replayPanel.coachLeagueOrGame')"
+            :aria-label="$t('replayLauncher.replayPanel.coachLeagueOrGame')"
           />
           <!-- enabled while a search runs: a new search supersedes (aborts) the running one -->
-          <button class="bevel search-button" type="submit" :aria-busy="search.loading"><DisplayCaps :text="search.loading ? 'Searching…' : 'Search'" /></button>
+          <button class="bevel search-button" type="submit" :aria-busy="search.loading"><DisplayCaps :text="search.loading ? $t('replayLauncher.replayPanel.searching') : $t('replayLauncher.replayPanel.search')" /></button>
           <label class="hide-scores" data-tour="replay-hide-scores">
             <input v-model="settings.replaySearchHideScores" type="checkbox" />
-            <span>Hide scores and outcomes</span>
+            <span>{{ $t('replayLauncher.replayPanel.hideScoresAndOutcomes') }}</span>
           </label>
         </form>
         <div class="search-progress" :class="{ active: search.loading }" aria-hidden="true"><div class="search-progress-bar"></div></div>
         <div class="search-state" aria-live="polite">
-          <p v-if="search.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Searching…</p>
+          <p v-if="search.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>{{ $t('replayLauncher.replayPanel.searching') }}</p>
           <p v-else-if="search.error" class="error">{{ search.error }}</p>
-          <p v-else-if="needsOwnCoach" class="note">Set your FUMBBL coach name in Settings to see your recent games, or search for a coach or game ID.</p>
-          <p v-else-if="!search.result" class="note idle-note">Search a coach, league or game ID above — or press Search with the box empty for your own recent games.</p>
+          <p v-else-if="needsOwnCoach" class="note">{{ $t('replayLauncher.replayPanel.setYourFumbblCoach') }}</p>
+          <p v-else-if="!search.result" class="note idle-note">{{ $t('replayLauncher.replayPanel.searchACoachLeague') }}</p>
           <p v-else-if="emptyMessage" class="note">{{ emptyMessage }}</p>
-          <p v-if="!search.loading && search.result?.notice" class="note search-notice" role="status">{{ search.result.notice }}</p>
+          <p v-if="!search.loading && searchNoticeText(search.result)" class="note search-notice" role="status">{{ searchNoticeText(search.result) }}</p>
           <p v-if="!search.loading && search.result?.teamCap" class="note team-cap-note">{{ recentTeamCapNote(search.result.teamCap) }}</p>
           <p v-if="!search.loading && altReadings.length" class="note alt-readings">
-            Looking for
-            <template v-for="(alt, i) in altReadings" :key="alt.query"><template v-if="i"> or </template><button class="link" type="button" @click="searchFor(alt.query)">{{ alt.label }}</button></template>
-            instead?
+            {{ $t('replayLauncher.replayPanel.lookingFor') }}
+            <template v-for="(alt, i) in altReadings" :key="alt.query"><template v-if="i">{{ $t('replayLauncher.replayPanel.or') }}</template><button class="link" type="button" @click="searchFor(alt.query)">{{ alt.label }}</button></template>
+            {{ $t('replayLauncher.replayPanel.instead') }}
           </p>
         </div>
       </section>
 
       <section v-if="pickGroups.length" class="replay-panel results-panel" aria-labelledby="replay-pick-title" data-testid="replay-league-pick">
-        <h2 id="replay-pick-title" class="results-title">Leagues matching “{{ search.result?.query }}” <span class="count">{{ pickGroups.length }}</span></h2>
+        <h2 id="replay-pick-title" class="results-title">{{ $t('replayLauncher.replayPanel.leaguesMatchingQuery', { query: search.result?.query }) }} <span class="count">{{ pickGroups.length }}</span></h2>
         <ul class="league-pick">
           <li v-for="group in pickGroups" :key="group.id">
-            <button class="plain league-pick-button" type="button" :disabled="search.loading" :title="`League ${group.id}`" @click="pickGroup(group)">
+            <button class="plain league-pick-button" type="button" :disabled="search.loading" :title="$t('replayLauncher.replayPanel.leagueId', { id: group.id })" @click="pickGroup(group)">
               {{ group.name }}<small v-if="duplicatePickNames.has(group.name.toLowerCase())" class="pick-id"> #{{ group.id }}</small>
             </button>
           </li>
@@ -374,9 +379,9 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
             <template #actions>
               <div class="row-actions">
                 <button v-if="hasDetails(row) && !hideScores" class="bevel resume-button details-button" type="button"
-                  :title="`End-of-game details for game ${row.replayId}`" @click="openDetails(row)"><DisplayCaps text="Details" /></button>
+                  :title="$t('replayLauncher.replayPanel.endOfGameDetails', { replayId: row.replayId })" @click="openDetails(row)"><DisplayCaps :text="$t('replayLauncher.replayPanel.details')" /></button>
                 <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading || lookupRowKey === row.key || (!row.replayId && !row.replayLookup)"
-                  :title="row.replayId ? `Replay game ${row.replayId}` : row.replayLookup ? `Replay match ${row.matchId}` : 'FUMBBL has no replay for this match'" @click="replayRow(row)"><DisplayCaps text="Replay" /></button>
+                  :title="row.replayId ? $t('replayLauncher.replayPanel.replayGameReplayid', { replayId: row.replayId }) : row.replayLookup ? $t('replayLauncher.replayPanel.replayMatchMatchid', { matchId: row.matchId }) : $t('replayLauncher.replayPanel.fumbblHasNoReplay')" @click="replayRow(row)"><DisplayCaps :text="$t('replayLauncher.replayPanel.replay')" /></button>
                 <span v-if="row.when" class="row-when" :title="rowWhen(row).abs">{{ rowWhen(row).rel }}</span>
                 <span v-if="row.division" class="row-division">{{ row.division }}</span>
               </div>
@@ -387,15 +392,15 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
 
       <section class="replay-panel file-panel" aria-labelledby="file-replay-title">
         <div class="file-well">
-          <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /></span>
+          <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" :alt="$t('replayLauncher.replayPanel.fumbbl')" /></span>
           <div class="file-text">
-            <h2 id="file-replay-title">Open a replay file</h2>
-            <p class="file-copy">Open a FUMBBL replay, JSON replay bundle, or replay JNLP.</p>
+            <h2 id="file-replay-title">{{ $t('replayLauncher.replayPanel.openAReplayFile') }}</h2>
+            <p class="file-copy">{{ $t('replayLauncher.replayPanel.openAFumbblReplay') }}</p>
           </div>
           <button class="file-button fumbbl-open" type="button" :disabled="fileLoading || gameStore.replay.loading"
             :aria-busy="fileLoading" @click="openFilePicker">
             <span aria-hidden="true">▣</span>
-            <span><DisplayCaps :text="fileLoading ? 'Reading…' : 'Open FUMBBL Replay'" /></span>
+            <span><DisplayCaps :text="fileLoading ? $t('replayLauncher.replayPanel.reading') : $t('replayLauncher.replayPanel.openFumbblReplay')" /></span>
           </button>
         </div>
       </section>
@@ -405,23 +410,23 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
     </div>
 
     <!-- Details popup (PlayView's): the cached end-of-game pane. Never reachable while scores are hidden. -->
-    <div v-if="detailsRow && !hideScores" class="details-modal" role="dialog" aria-modal="true" :aria-label="`Details: ${detailsRow.left.name} vs ${detailsRow.right?.name ?? ''}`" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
+    <div v-if="detailsRow && !hideScores" class="details-modal" role="dialog" aria-modal="true" :aria-label="$t('replayLauncher.detailsModal.detailsNameVsP1', { name: detailsRow.left.name, p1: detailsRow.right?.name ?? '' })" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
       <div class="details-card">
         <header class="details-head">
           <span class="details-title">{{ detailsRow.left.name }} <span class="vs">vs</span> {{ detailsRow.right?.name ?? '' }}</span>
-          <small class="details-when">{{ rowWhen(detailsRow).rel }}<template v-if="detailsRow.matchId"> &middot; match {{ detailsRow.matchId }}</template></small>
-          <button class="details-close" type="button" aria-label="Close details" @click="closeDetails">&#x2715;</button>
+          <small class="details-when">{{ rowWhen(detailsRow).rel }}<template v-if="detailsRow.matchId"> {{ $t('replayLauncher.detailsModal.matchMatchid', { matchId: detailsRow.matchId }) }}</template></small>
+          <button class="details-close" type="button" :aria-label="$t('replayLauncher.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
         <div class="details-body">
-          <p v-if="detailsLoading" class="note">Loading&hellip;</p>
+          <p v-if="detailsLoading" class="note">{{ $t('replayLauncher.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSide(detailsRow, detailsSnapshot)" :local-side="detailsSnapshot.seat === 'play' ? detailsSide(detailsRow, detailsSnapshot) : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
-            <p class="note">No details stored for this game.</p>
-            <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>
+            <p class="note">{{ $t('replayLauncher.detailsModal.noDetailsStoredFor') }}</p>
+            <small>{{ $t('replayLauncher.detailsModal.detailsAreKeptFor') }}</small>
           </div>
         </div>
         <footer class="details-foot">
-          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)"><DisplayCaps text="Replay" /></button>
+          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)"><DisplayCaps :text="$t('replayLauncher.detailsModal.replay')" /></button>
         </footer>
       </div>
     </div>

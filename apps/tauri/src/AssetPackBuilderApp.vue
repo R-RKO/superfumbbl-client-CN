@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AssetPackSettings from './components/AssetPackSettings.vue';
+import { $t } from './i18n';
 
 declare const __APP_VERSION__: string;
 declare const __GIT_SHA__: string;
@@ -11,25 +12,25 @@ const source = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'nogit';
   <div class="asset-builder-app">
     <header class="builder-header">
       <div>
-        <p class="eyebrow">Super FUMBBL tooling</p>
-        <h1>F40KMod Builder</h1>
-        <p>Create portable presentation packs without opening the game client.</p>
+        <p class="eyebrow">{{ $t('assetPackBuilder.builderHeader.superFumbblTooling') }}</p>
+        <h1>{{ $t('assetPackBuilder.builderHeader.f40kmodBuilder') }}</h1>
+        <p>{{ $t('assetPackBuilder.builderHeader.createPortablePresentationPacks') }}</p>
       </div>
-      <div class="format-badge">F40KMOD1</div>
+      <div class="format-badge">{{ $t('assetPackBuilder.builderHeader.f40kmod1') }}</div>
     </header>
 
     <main>
-      <section class="builder-guide" aria-label="Builder workflow">
-        <article><strong>1 · Create a draft</strong><span>Name the pack or reopen a saved local draft.</span></article>
-        <article><strong>2 · Add media</strong><span>Assign sprites, skill icons, sounds, and pitches to exact targets.</span></article>
-        <article><strong>3 · Export</strong><span>Build one category or a combined .f40kmod and validate it before sharing.</span></article>
+      <section class="builder-guide" :aria-label="$t('assetPackBuilder.builderWorkflow')">
+        <article><strong>{{ $t('assetPackBuilder.n1CreateADraft') }}</strong><span>{{ $t('assetPackBuilder.nameThePackOr') }}</span></article>
+        <article><strong>{{ $t('assetPackBuilder.n2AddMedia') }}</strong><span>{{ $t('assetPackBuilder.assignSpritesSkillIcons') }}</span></article>
+        <article><strong>{{ $t('assetPackBuilder.n3Export') }}</strong><span>{{ $t('assetPackBuilder.buildOneCategoryOr') }}</span></article>
       </section>
       <AssetPackSettings builder-mode />
     </main>
 
     <footer>
-      <span>Builder {{ version }} · {{ source }}</span>
-      <span>Files stay local. No FUMBBL CDN access is used.</span>
+      <span>{{ $t('assetPackBuilder.builderVersionSource', { version, source }) }}</span>
+      <span>{{ $t('assetPackBuilder.filesStayLocalNo') }}</span>
     </footer>
   </div>
 </template>

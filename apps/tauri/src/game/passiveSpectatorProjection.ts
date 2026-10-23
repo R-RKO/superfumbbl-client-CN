@@ -8,6 +8,7 @@ import { prettySkillName } from './logic/prettySkillName';
 import { projectOnTheBallWaiting } from './onTheBallController';
 import type { SpectatorCheckpoint } from './replay/spectatorCheckpoint';
 import { hmpScatterMarksFrom } from './hmpScatterTrail';
+import { $t } from '../i18n';
 const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const PRAYER_PLAYER_CHOICE_MODES = new Set(['ironman', 'knuckledusters']);
 const rulesVersionOf = (g: GameJson): string => normKey(String(
@@ -51,7 +52,7 @@ export function interactivePrayerDialog(g: GameJson): InteractivePrayerDialog | 
     kind: playerMode ? 'player' : 'skill',
     instanceKey,
     ownerTeamId: ownerTeam.teamId,
-    coach: ownerTeam.coach || ownerTeam.teamName || 'The opposing coach',
+    coach: ownerTeam.coach || ownerTeam.teamName || $t('hud.waiting.text.theOpposingCoach'),
     team: ownerTeam.teamName || ownerTeam.coach || 'Team',
     entry,
   };
@@ -143,8 +144,8 @@ export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   const teamId = String(dialog.teamId ?? '');
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
-  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: `Waiting for ${subject}` }; // owner 10-07: the red title names the action; the line just names the coach
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
+  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07: the red title names the action; the line just names the coach
 }
 
 /** Owner 10-01 (S62): Solid Defence - the kicking coach first PICKS up to D3+3 players (`playerChoice` mode `solidDefence`,
@@ -160,8 +161,8 @@ export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === dialogTeamId) ?? (g.homePlaying ? g.teamHome : g.teamAway);
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
-  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: repositioning ? `Waiting for ${subject} (repositioning)` : `Waiting for ${subject}` }; // owner 10-07 copy
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
+  return { message: repositioning ? $t('hud.waiting.text.waitingForSubjectRepositioning', { subject }) : $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
 /** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
@@ -173,8 +174,8 @@ export function touchbackWaitingFromGame(g: GameJson, myTeamId: string | null): 
   const team = g.homePlaying ? g.teamAway : g.teamHome;
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
-  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
+  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
 /** Owner 10-01 (S91): "Your opponent is choosing the kick-off destination". Turn mode `kickoff` opens the kick: the
@@ -192,8 +193,8 @@ export function kickoffWaitingFromGame(g: GameJson, myTeamId: string | null): { 
   const team = g.homePlaying ? g.teamHome : g.teamAway;
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
-  const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The kicking coach');
-  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
+  const subject = myTeamId !== null ? $t('hud.waiting.subject.yourOpponent') : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.theKickingCoach'));
+  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
 /** Owner 10-02 (S99): Pick-Me-Up - the standing `playerChoice` dialog with mode `pickMeUp` (wire g1919953 cmd 1278:
@@ -204,8 +205,8 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   const teamId = String(dialog.teamId ?? '');
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
-  const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The other coach');
-  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
+  const subject = myTeamId !== null ? $t('hud.waiting.subject.yourOpponent') : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.theOtherCoach'));
+  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
 /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach - while the
@@ -228,7 +229,7 @@ export function pushWaitingFromGame(g: GameJson, myTeamId: string | null): { mes
   if (!chooser) return null;
   if (myTeamId !== null && String(chooser.teamId ?? '') === myTeamId) return null;
   const name = String(chooser.coach ?? '').trim() || String(chooser.teamName ?? '').trim() || 'the other coach';
-  return { message: `Waiting for ${name}` }; // owner 10-07: "Push / Waiting for Elyod is sufficient"
+  return { message: $t('hud.waiting.text.waitingForName', { name }) }; // owner 10-07: "Push / Waiting for Elyod is sufficient"
 }
 
 /** Owner 10-07: "<Coach> is deciding whether to reroll" for a failed PASS or CATCH (a scattered / bouncing ball's
@@ -250,8 +251,8 @@ export function reRollWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   const team = teams.find((t) => t?.playerArray?.some((pl) => pl.playerId === playerId));
   if (!team) return null;
   if (myTeamId !== null && String(team.teamId ?? '') === myTeamId) return null;
-  const name = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The other coach';
-  return { message: `Waiting for ${name}` }; // owner 10-07 copy (the title reads Reroll)
+  const name = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.name.theOtherCoach');
+  return { message: $t('hud.waiting.text.waitingForName', { name }) }; // owner 10-07 copy (the title reads Reroll)
 }
 
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
@@ -283,7 +284,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
   const followupTeam = offered && dialog?.dialogId === 'followupChoice'
     ? [g.teamHome, g.teamAway].find((team) => team.playerArray.some((player) => player.playerId === g.actingPlayer?.playerId)) : null;
   const followupWaiting = offered && dialog?.dialogId === 'followupChoice'
-    ? (followupTeam?.coach || followupTeam?.teamName || 'The blocking coach') + ' is deciding whether to follow up' : null;
+    ? (followupTeam?.coach || followupTeam?.teamName || $t('hud.waiting.followupWaiting.theBlockingCoach')) + ' is deciding whether to follow up' : null;
   // S46: the Blastin' second beat carries no dialog; the waiting line names the choosing coach and parks on the shooter.
   const blastinWaiting = blastinChoosingText(g);
   return {

@@ -12,6 +12,8 @@ import {
   type OverrideFileKind,
   type SpriteSide,
 } from '../game/configuredAssets';
+import { $t, terms } from '../i18n';
+import { t } from '../i18n';
 
 const props = defineProps<{ targetCatalog: AssetTargetCatalog }>();
 const BLOCK_FACE_IDS = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const; // PitchRenderer tumble order
@@ -85,18 +87,18 @@ async function clearOverride(kind: OverrideFileKind, key: string): Promise<void>
 }
 
 function spriteError(key: string): string { return errors.value[`sprite:${key}`] ?? ''; }
-function sideLabel(side: SpriteSide): string { return side === 'any' ? 'Any side' : side[0]!.toUpperCase() + side.slice(1); }
+function sideLabel(side: SpriteSide): string { return side === 'any' ? t('ui.configuredAssetsBrowser.text.anySide') : side[0]!.toUpperCase() + side.slice(1); }
 
 </script>
 
 <template>
   <fieldset class="settings-group configured-assets" data-testid="configured-assets">
-    <legend>Configured assets</legend>
-    <p class="hint">See the active source for each presentation asset. Choosing or clearing a file changes app files immediately and is not undone by Cancel; pack selections still follow Apply/Cancel.</p>
+    <legend>{{ $t('settings.assetPacks.configuredAssets.configuredAssets') }}</legend>
+    <p class="hint">{{ $t('settings.assetPacks.configuredAssets.seeTheActiveSource') }}</p>
 
     <details open>
-      <summary>Sprites</summary>
-      <h4>Base Teams</h4>
+      <summary>{{ $t('settings.assetPacks.configuredAssets.sprites') }}</summary>
+      <h4>{{ $t('settings.assetPacks.configuredAssets.baseTeams') }}</h4>
       <details v-for="team in state.baseTeams" :key="team.teamId" class="configured-team" :open="expandedTeams.has(team.teamId)">
         <summary @click.prevent="toggleTeam(team.teamId)">{{ team.label }}</summary>
         <div v-if="expandedTeams.has(team.teamId)" class="configured-list">
@@ -105,11 +107,11 @@ function sideLabel(side: SpriteSide): string { return side === 'any' ? 'Any side
             <div class="sprite-variants">
               <div v-for="variant in row.variants" :key="variant.overrideKey" class="sprite-variant" :data-override-key="variant.overrideKey">
                 <span>{{ sideLabel(variant.side) }}</span>
-                <img v-if="variant.url" :src="variant.url" :alt="`${row.label} ${variant.side} sprite`" />
-                <span v-else class="missing-preview">Built-in</span>
+                <img v-if="variant.url" :src="variant.url" :alt="$t('settings.assetPacks.configuredList.configuredAssets.labelSideSprite', { label: row.label, side: variant.side })" />
+                <span v-else class="missing-preview">{{ $t('settings.assetPacks.configuredList.configuredAssets.builtIn') }}</span>
                 <small>{{ variant.source }}</small>
-                <button type="button" :disabled="!!busyKey" @click="chooseOverride('sprite', variant.overrideKey)">Choose file...</button>
-                <button v-if="variant.userOverride" type="button" @click="clearOverride('sprite', variant.overrideKey)">Clear</button>
+                <button type="button" :disabled="!!busyKey" @click="chooseOverride('sprite', variant.overrideKey)">{{ $t('settings.assetPacks.configuredList.configuredAssets.chooseFile') }}</button>
+                <button v-if="variant.userOverride" type="button" @click="clearOverride('sprite', variant.overrideKey)">{{ $t('settings.assetPacks.configuredList.configuredAssets.clear') }}</button>
                 <span v-if="spriteError(variant.overrideKey)" class="configured-error" role="alert">{{ spriteError(variant.overrideKey) }}</span>
               </div>
             </div>
@@ -117,7 +119,7 @@ function sideLabel(side: SpriteSide): string { return side === 'any' ? 'Any side
         </div>
       </details>
       <details class="secret-league" data-testid="secret-league">
-        <summary>Secret League</summary>
+        <summary>{{ $t('settings.assetPacks.configuredAssets.secretLeague') }}</summary>
         <details v-for="team in state.secretLeagueTeams" :key="team.teamId" class="configured-team" :open="expandedTeams.has(team.teamId)">
           <summary @click.prevent="toggleTeam(team.teamId)">{{ team.label }}</summary>
           <div v-if="expandedTeams.has(team.teamId)" class="configured-list">
@@ -127,8 +129,8 @@ function sideLabel(side: SpriteSide): string { return side === 'any' ? 'Any side
                 <div v-for="variant in row.variants" :key="variant.overrideKey" class="sprite-variant" :data-override-key="variant.overrideKey">
                   <span>{{ sideLabel(variant.side) }}</span><img v-if="variant.url" :src="variant.url" alt="" />
                   <small>{{ variant.source }}</small>
-                  <button type="button" :disabled="!!busyKey" @click="chooseOverride('sprite', variant.overrideKey)">Choose file...</button>
-                  <button v-if="variant.userOverride" type="button" @click="clearOverride('sprite', variant.overrideKey)">Clear</button>
+                  <button type="button" :disabled="!!busyKey" @click="chooseOverride('sprite', variant.overrideKey)">{{ $t('settings.assetPacks.configuredList.configuredAssets.chooseFile') }}</button>
+                  <button v-if="variant.userOverride" type="button" @click="clearOverride('sprite', variant.overrideKey)">{{ $t('settings.assetPacks.configuredList.configuredAssets.clear') }}</button>
                   <span v-if="spriteError(variant.overrideKey)" class="configured-error" role="alert">{{ spriteError(variant.overrideKey) }}</span>
                 </div>
               </div>
@@ -139,45 +141,45 @@ function sideLabel(side: SpriteSide): string { return side === 'any' ? 'Any side
     </details>
 
     <details>
-      <summary>Block dice</summary>
+      <summary>{{ $t('settings.assetPacks.configuredAssets.blockDice') }}</summary>
       <div class="configured-list">
         <div v-for="row in state.blockDice" :key="row.face" class="configured-row block-die-row">
           <span>{{ row.label }}</span><img v-if="row.url" :src="row.url" alt="" />
           <small>{{ row.source }}</small>
-          <button type="button" :disabled="!!busyKey" @click="chooseOverride('blockDie', row.face)">Choose file...</button>
-          <button v-if="row.userOverride" type="button" @click="clearOverride('blockDie', row.face)">Clear</button>
-          <span v-if="errors[`blockDie:${row.face}`]" class="configured-error" role="alert">{{ errors[`blockDie:${row.face}`] }}</span>
+          <button type="button" :disabled="!!busyKey" @click="chooseOverride('blockDie', row.face)">{{ $t('settings.assetPacks.configuredList.configuredAssets.chooseFile') }}</button>
+          <button v-if="row.userOverride" type="button" @click="clearOverride('blockDie', row.face)">{{ $t('settings.assetPacks.configuredList.configuredAssets.clear') }}</button>
+          <span v-if="errors[`blockDie:${row.face}`]" class="configured-error" role="alert">{{ errors[$t('settings.assetPacks.configuredList.configuredAssets.blockdieFace', { face: row.face })] }}</span>
         </div>
       </div>
     </details>
 
     <details>
-      <summary>Sounds</summary>
+      <summary>{{ $t('settings.assetPacks.configuredAssets.sounds') }}</summary>
       <div class="configured-list">
         <div v-for="row in state.sounds" :key="row.id" class="configured-row">
           <span>{{ row.label }}</span><small>{{ row.source }}</small>
-          <button type="button" :disabled="!!busyKey" @click="chooseOverride('sound', row.id)">Choose file...</button>
-          <button v-if="row.userOverride" type="button" @click="clearOverride('sound', row.id)">Clear</button>
-          <span v-if="errors[`sound:${row.id}`]" class="configured-error" role="alert">{{ errors[`sound:${row.id}`] }}</span>
+          <button type="button" :disabled="!!busyKey" @click="chooseOverride('sound', row.id)">{{ $t('settings.assetPacks.configuredList.configuredAssets.chooseFile') }}</button>
+          <button v-if="row.userOverride" type="button" @click="clearOverride('sound', row.id)">{{ $t('settings.assetPacks.configuredList.configuredAssets.clear') }}</button>
+          <span v-if="errors[`sound:${row.id}`]" class="configured-error" role="alert">{{ errors[$t('settings.assetPacks.configuredList.configuredAssets.soundId', { id: row.id })] }}</span>
         </div>
       </div>
     </details>
 
     <details>
-      <summary>Team Logos</summary>
+      <summary>{{ $t('settings.assetPacks.configuredAssets.teamLogos') }}</summary>
       <div class="configured-list">
         <div v-for="row in state.logos" :key="row.race" class="configured-row logo-row">
-          <span>{{ row.race }}</span><img v-if="teamLogoUrl({ race: row.race })" :src="teamLogoUrl({ race: row.race })!" alt="" />
+          <span>{{ terms(row.race) }}</span><img v-if="teamLogoUrl({ race: row.race })" :src="teamLogoUrl({ race: row.race })!" alt="" />
           <small>{{ row.source }}</small>
-          <button type="button" :disabled="!!busyKey" @click="chooseOverride('logo', row.race)">Choose file...</button>
-          <button v-if="row.userOverride" type="button" @click="clearOverride('logo', row.race)">Clear</button>
-          <span v-if="errors[`logo:${row.race}`]" class="configured-error" role="alert">{{ errors[`logo:${row.race}`] }}</span>
+          <button type="button" :disabled="!!busyKey" @click="chooseOverride('logo', row.race)">{{ $t('settings.assetPacks.configuredList.configuredAssets.chooseFile') }}</button>
+          <button v-if="row.userOverride" type="button" @click="clearOverride('logo', row.race)">{{ $t('settings.assetPacks.configuredList.configuredAssets.clear') }}</button>
+          <span v-if="errors[`logo:${row.race}`]" class="configured-error" role="alert">{{ errors[$t('settings.assetPacks.configuredList.configuredAssets.logoRace', { race: row.race })] }}</span>
         </div>
       </div>
     </details>
 
     <details>
-      <summary>Other</summary>
+      <summary>{{ $t('settings.assetPacks.configuredAssets.other') }}</summary>
       <div class="configured-list">
         <div v-for="(row, index) in state.other" :key="`${row.kind}:${row.id}:${index}`" class="configured-row other-row">
           <span>{{ row.kind }}</span><code>{{ row.id }}</code><small>{{ row.source }}</small>

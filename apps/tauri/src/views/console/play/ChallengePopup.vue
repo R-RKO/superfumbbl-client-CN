@@ -15,6 +15,10 @@ import {
 } from '../../../game/forkChallenge';
 import { teamLogoUrl } from '../../../game/teamLogos';
 import CoordinationIdentityChip from '../../../components/CoordinationIdentityChip.vue';
+import { $t, terms, useLiveSet } from '../../../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../../../i18n';
 
 const emit = defineEmits<{ close: []; matched: [] }>();
 const opponent = ref('');
@@ -63,7 +67,7 @@ function markCrestFailed(team: LibraryTeam): void {
 function formatTeamValue(value: number | undefined): string {
   if (value === undefined) return 'TV ?';
   const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
-  return `TV ${thousands.toLocaleString()}k`;
+  return t('play.text.tvP0K', { p0: thousands.toLocaleString() });
 }
 
 async function loadLibrary(): Promise<void> {
@@ -72,17 +76,17 @@ async function loadLibrary(): Promise<void> {
   libraryStatus.value = '';
   if (!coach) {
     library.value = [];
-    libraryStatus.value = 'Set your Super FUMBBL coach name in Settings → Connection.';
+    liveSetHere(libraryStatus, 'value', () => t('play.text.setYourSuperFumbbl'));
     return;
   }
   libraryLoading.value = true;
   failedCrests.value = new Set();
   try {
     library.value = await loadTeamLibrary(coach);
-    if (!library.value.length) libraryStatus.value = 'Your library is empty — import a team to get started.';
+    if (!library.value.length) liveSetHere(libraryStatus, 'value', () => t('play.text.yourLibraryIsEmpty'));
   } catch (error) {
     library.value = [];
-    libraryStatus.value = `Couldn't load your library (${errText(error)}).`;
+    liveSetHere(libraryStatus, 'value', () => t('play.text.couldnTLoadYour', { p0: errText(error) }));
   } finally {
     libraryLoading.value = false;
   }
@@ -121,7 +125,7 @@ async function sendChallenge(): Promise<void> {
   const creds = forkCredentials();
   if (!creds.coach) {
     challenge.phase = 'error';
-    challenge.message = 'Set your Super FUMBBL coach name in Settings → Connection.';
+    liveSetHere(challenge, 'message', () => t('play.text.setYourSuperFumbbl'));
     challenge.error = challenge.message;
     return;
   }
@@ -142,7 +146,8 @@ onMounted(() => { void loadLibrary(); });
 onBeforeUnmount(() => {
   suggestionRequest += 1;
   if (suggestionTimer) clearTimeout(suggestionTimer);
-  if (challenge.phase === 'waiting') void controller.cancel();
+  // the cancel finishes after unmount; the controller (and its i18n registrations, Astra r3 #11) is released then
+  if (challenge.phase === 'waiting') void controller.cancel().finally(() => controller.dispose());
   else controller.dispose();
 });
 </script>
@@ -150,34 +155,34 @@ onBeforeUnmount(() => {
 <template>
   <div class="challenge-backdrop" @click.self="closePopup">
     <section class="challenge-card" role="dialog" aria-modal="true" aria-labelledby="challenge-title">
-      <button class="close-button" type="button" aria-label="Close challenge" :disabled="challenge.phase === 'submitting'" @click="closePopup">×</button>
+      <button class="close-button" type="button" :aria-label="$t('play.challengeCard.closeChallenge')" :disabled="challenge.phase === 'submitting'" @click="closePopup">×</button>
       <!-- Owner 08-18: header copy removed; while waiting, the status IS the headline. -->
       <h1 v-if="challenge.phase === 'waiting'" id="challenge-title" class="waiting-title" role="status">{{ challenge.message }}</h1>
-      <h1 v-else id="challenge-title" class="sr-only">Challenge a coach</h1>
+      <h1 v-else id="challenge-title" class="sr-only">{{ $t('play.challengeCard.challengeACoach') }}</h1>
 
       <template v-if="challenge.phase !== 'waiting'">
         <CoordinationIdentityChip />
         <label>
-          Enter coach name
-          <input v-model="opponent" type="text" autocomplete="off" placeholder="opponent coach name" @input="onOpponentInput" />
+          {{ $t('play.challengeCard.enterCoachName') }}
+          <input v-model="opponent" type="text" autocomplete="off" :placeholder="$t('play.challengeCard.opponentCoachName')" @input="onOpponentInput" />
         </label>
-        <div v-if="suggestions.length" class="suggestions" aria-label="Coach suggestions">
+        <div v-if="suggestions.length" class="suggestions" :aria-label="$t('play.challengeCard.coachSuggestions')">
           <button v-for="name in suggestions" :key="name" type="button" @click="pickSuggestion(name)">{{ name }}</button>
         </div>
 
         <div class="library-heading">
-          <span>Your team</span>
+          <span>{{ $t('play.challengeCard.yourTeam') }}</span>
           <button class="file-button compact" type="button" :disabled="libraryLoading" @click="loadLibrary">
-            {{ libraryLoading ? 'Loading…' : 'Refresh' }}
+            {{ libraryLoading ? $t('play.challengeCard.loading') : $t('play.challengeCard.refresh') }}
           </button>
         </div>
         <label class="team-filter">
-          Filter teams
-          <input v-model="teamFilter" type="search" autocomplete="off" placeholder="team name or race" />
+          {{ $t('play.challengeCard.filterTeams') }}
+          <input v-model="teamFilter" type="search" autocomplete="off" :placeholder="$t('play.challengeCard.teamNameOrRace')" />
         </label>
         <p v-if="libraryStatus" class="note">{{ libraryStatus }}</p>
         <p v-else-if="library.length && !filteredLibrary.length" class="note" role="status">
-          No teams match “{{ teamFilter.trim() }}”.
+          {{ $t('play.challengeCard.noTeamsMatchP0', { p0: teamFilter.trim() }) }}
         </p>
         <!-- Import-card markup/CSS ported from TeamBuilderView.vue:837-855,1441-1450. -->
         <div v-else class="library-grid">
@@ -196,7 +201,7 @@ onBeforeUnmount(() => {
             </span>
             <span>
               <strong>{{ team.teamName }}</strong>
-              <small>{{ team.race }} · {{ formatTeamValue(team.teamValue) }}</small>
+              <small>{{ terms(team.race) }} · {{ formatTeamValue(team.teamValue) }}</small>
             </span>
           </button>
         </div>
@@ -208,13 +213,13 @@ onBeforeUnmount(() => {
           :disabled="challenge.phase === 'submitting' || !selectedTeam || !opponent.trim()"
           @click="sendChallenge"
         >
-          {{ challenge.phase === 'submitting' ? 'Sending…' : 'Send challenge' }}
+          {{ challenge.phase === 'submitting' ? $t('play.challengeCard.sending') : $t('play.challengeCard.sendChallenge') }}
         </button>
       </template>
 
       <template v-else>
-        <span class="or">Checking every 2 seconds</span>
-        <button class="file-button" type="button" @click="controller.cancel">Cancel challenge</button>
+        <span class="or">{{ $t('play.challengeCard.checkingEvery2Seconds') }}</span>
+        <button class="file-button" type="button" @click="controller.cancel">{{ $t('play.challengeCard.cancelChallenge') }}</button>
       </template>
     </section>
   </div>

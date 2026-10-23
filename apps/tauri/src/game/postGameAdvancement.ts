@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Owner 09-14: the end-screen MVP view tells the coach when a player has banked enough SPP for their next advancement.
  * BB2020/BB2025 improvement table — SPP required for advancement N (1-based) by method:
@@ -36,8 +37,8 @@ export function advancementReadiness(sppTotal: number, advancementsTaken: number
   if (!Number.isFinite(sppTotal) || sppTotal <= 0) return null;
   const row = ADVANCEMENT_COSTS[Math.min(Math.max(0, Math.floor(advancementsTaken)), ADVANCEMENT_COSTS.length - 1)]!;
   if (advancementsTaken >= ADVANCEMENT_COSTS.length) return null; // the table ends at the sixth advancement
-  if (sppTotal >= row.characteristic) return { level: 'characteristic', text: 'Advancement ready! Upgrade a characteristic!' };
-  if (sppTotal >= row.chosenPrimaryOrRandomSecondary) return { level: 'primaryOrSecondary', text: 'Advancement ready! Take a primary or secondary!' };
-  if (sppTotal >= row.randomPrimary) return { level: 'primary', text: 'Advancement ready! Take a primary!' };
+  if (sppTotal >= row.characteristic) return { level: 'characteristic', get text() { return t('cards.postGame.text.advancementReadyUpgradeA'); } };
+  if (sppTotal >= row.chosenPrimaryOrRandomSecondary) return { level: 'primaryOrSecondary', get text() { return t('cards.postGame.text.advancementReadyTakeA'); } };
+  if (sppTotal >= row.randomPrimary) return { level: 'primary', get text() { return t('cards.postGame.text.advancementReadyTakeA2'); } };
   return null;
 }

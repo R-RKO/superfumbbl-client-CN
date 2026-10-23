@@ -10,6 +10,7 @@ import { formatTeamValue } from '../../../game/teamChoice';
 import { ui } from '../../../game/ui';
 import { waitingBanner } from '../../../game/waitingVsBanner';
 import WaitingVsBanner from '../../../components/WaitingVsBanner.vue';
+import { $t, terms } from '../../../i18n';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
 
@@ -43,14 +44,14 @@ function chooseTeam(teamId: string): void {
       </ul>
       <p v-if="modal.kind === 'waiting' && modal.message" class="hint">{{ modal.message }}</p>
       <template v-else-if="modal.kind === 'choose-team'">
-        <p class="hint">FUMBBL wants to know which team you are playing this game with.</p>
+        <p class="hint">{{ $t('play.savePrompt.fumbblWantsToKnow') }}</p>
         <div class="rejoin-team-list" role="list">
           <button v-for="team in modal.teams" :key="team.teamId" type="button" class="rejoin-team-card" role="listitem"
             @click="chooseTeam(team.teamId)">
             <span class="rejoin-team-name">{{ team.label }}</span>
             <span class="rejoin-team-meta">
-              <span v-if="team.race">{{ team.race }}</span>
-              <span v-if="team.teamValue != null" class="rejoin-team-tv">TV {{ formatTeamValue(team.teamValue) }}</span>
+              <span v-if="team.race">{{ terms(team.race) }}</span>
+              <span v-if="team.teamValue != null" class="rejoin-team-tv">{{ $t('play.savePrompt.tvP0', { p0: formatTeamValue(team.teamValue) }) }}</span>
             </span>
           </button>
         </div>
@@ -61,10 +62,10 @@ function chooseTeam(teamId: string): void {
       </template>
       <p v-for="note in modal.notes" :key="note" class="hint rejoin-note">{{ note }}</p>
       <div class="save-prompt-actions">
-        <button v-if="modal.kind === 'failed' && modal.canRetry" class="primary" @click="retryOfficialJoin()">Try again</button>
-        <button v-if="modal.kind === 'failed'" :class="{ primary: !modal.canRetry }" @click="dismissRejoin()">Close</button>
+        <button v-if="modal.kind === 'failed' && modal.canRetry" class="primary" @click="retryOfficialJoin()">{{ $t('play.savePrompt.tryAgain') }}</button>
+        <button v-if="modal.kind === 'failed'" :class="{ primary: !modal.canRetry }" @click="dismissRejoin()">{{ $t('play.savePrompt.close') }}</button>
         <button v-else @click="dismissRejoin({ cancel: true })">
-          {{ modal.kind === 'waiting' ? 'Stop waiting' : 'Cancel' }}
+          {{ modal.kind === 'waiting' ? $t('play.savePrompt.stopWaiting') : $t('play.savePrompt.cancel') }}
         </button>
       </div>
     </div>

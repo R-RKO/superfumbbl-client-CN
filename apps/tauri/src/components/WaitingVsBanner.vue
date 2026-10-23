@@ -4,6 +4,7 @@
 import { ref, watch } from 'vue';
 import { teamLogoUrl } from '../game/teamLogos';
 import { formatBannerTv, type BannerSide, type WaitingBannerModel } from '../game/waitingVsBanner';
+import { $t, terms } from '../i18n';
 
 /** `inline` (owner 10-09): sits in the flow directly above the waiting box instead of across the top of the board.
  *  Owner 10-21: the game-load rank panel is a second instance of THIS banner (never a hand-drawn copy):
@@ -50,11 +51,11 @@ function initials(name: string): string {
 </script>
 
 <template>
-  <section class="vs-banner" :class="{ inline, 'keep-words': keepWords }" :style="scaleStyle()" data-testid="waiting-vs-banner" aria-label="Match-up">
+  <section class="vs-banner" :class="{ inline, 'keep-words': keepWords }" :style="scaleStyle()" data-testid="waiting-vs-banner" :aria-label="$t('waitingBoard.vsBanner.matchUp')">
     <div v-for="slot in (['mine', 'opponent'] as const)" :key="slot" class="vs-side" :class="slot" :style="sideVars?.[slot]" :data-testid="`vs-${slot}`">
       <span class="vs-crest">
         <img v-if="crest(model[slot], kit(slot))" :src="crest(model[slot], kit(slot))!"
-          :alt="`${model[slot].teamName} logo`" @error="crestFailed(crest(model[slot], kit(slot)))" />
+          :alt="$t('waitingBoard.vsBanner.teamnameLogo', { teamName: model[slot].teamName })" @error="crestFailed(crest(model[slot], kit(slot)))" />
         <span v-else class="vs-initials" aria-hidden="true">{{ model[slot].unknown ? '?' : initials(model[slot].teamName) }}</span>
       </span>
       <span v-if="$slots.badge" class="vs-badge"><slot name="badge" :side="slot" /></span>
@@ -63,12 +64,12 @@ function initials(name: string): string {
         <span v-if="model[slot].coach" class="vs-coach" data-testid="vs-coach">{{ model[slot].coach }}</span>
         <span v-if="$slots.detail" class="vs-meta vs-detail"><slot name="detail" :side="slot" /></span>
         <span v-if="!hideMeta" class="vs-meta">
-          <span v-if="model[slot].race" data-testid="vs-race">{{ model[slot].race }}</span>
+          <span v-if="model[slot].race" data-testid="vs-race">{{ terms(model[slot].race) }}</span>
           <span v-if="formatBannerTv(model[slot].tv)" class="vs-tv" data-testid="vs-tv">{{ formatBannerTv(model[slot].tv) }}</span>
         </span>
       </span>
     </div>
-    <span class="vs-mark" aria-label="versus">VS</span>
+    <span class="vs-mark" :aria-label="$t('waitingBoard.vsBanner.versus')">VS</span>
   </section>
 </template>
 

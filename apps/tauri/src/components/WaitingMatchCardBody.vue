@@ -5,6 +5,7 @@
 // the game (room) name is only in the DOM while "Show room name" is pressed. Per card instance - it resets whenever
 // the card mounts again; nothing is persisted.
 import { ref } from 'vue';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   wait: { gameName?: string; teamName?: string; coach?: string; opponentCoach?: string };
@@ -20,20 +21,20 @@ function onToggleRoomName(): void { if (!props.locked) roomNameShown.value = !ro
 </script>
 
 <template>
-  <h2 v-if="wait.opponentCoach" class="waiting-card-title">Waiting for {{ wait.opponentCoach }}</h2>
-  <h2 v-else class="waiting-card-title">Waiting for the other coach</h2>
+  <h2 v-if="wait.opponentCoach" class="waiting-card-title">{{ $t('waitingBoard.waitingForOpponentcoach', { opponentCoach: wait.opponentCoach }) }}</h2>
+  <h2 v-else class="waiting-card-title">{{ $t('waitingBoard.waitingForTheOther') }}</h2>
   <p class="waiting-card-status">
     <span class="waiting-card-spinner" aria-hidden="true"></span>
-    <span v-if="wait.opponentCoach">Waiting for <strong>{{ wait.opponentCoach }}</strong> to join<span v-if="roomNameShown && wait.gameName" class="waiting-card-room-name"> “{{ wait.gameName }}”</span>… Are they afraid? 👀</span>
-    <span v-else-if="wait.gameName"><template v-if="roomNameShown"><span class="waiting-card-room-name">You're in “{{ wait.gameName }}”</span> — the game starts</template><template v-else>The game starts</template> as soon as the other coach joins the <em>same</em> game name.</span>
-    <span v-else>Waiting for the game to start — you'll drop in when your match is ready.</span>
+    <span v-if="wait.opponentCoach">{{ $t('waitingBoard.waitingFor') }} <strong>{{ wait.opponentCoach }}</strong>{{ $t('waitingBoard.toJoin') }}<span v-if="roomNameShown && wait.gameName" class="waiting-card-room-name"> “{{ wait.gameName }}”</span>{{ $t('waitingBoard.areTheyAfraid') }}</span>
+    <span v-else-if="wait.gameName"><template v-if="roomNameShown"><span class="waiting-card-room-name">{{ $t('waitingBoard.youReInGamename', { gameName: wait.gameName }) }}</span>{{ $t('waitingBoard.theGameStarts') }}</template><template v-else>{{ $t('waitingBoard.theGameStarts2') }}</template>{{ $t('waitingBoard.asSoonAsThe') }} <em>{{ $t('waitingBoard.same') }}</em>{{ $t('waitingBoard.gameName') }}</span>
+    <span v-else>{{ $t('waitingBoard.waitingForTheGame') }}</span>
   </p>
-  <p v-if="wait.teamName" class="waiting-card-hint hint">Playing as {{ wait.coach }} with {{ wait.teamName }}.</p>
+  <p v-if="wait.teamName" class="waiting-card-hint hint">{{ $t('waitingBoard.playingAsCoachWith', { coach: wait.coach, teamName: wait.teamName }) }}</p>
   <div class="waiting-card-actions" :class="{ 'has-room-toggle': !!wait.gameName }">
     <!-- Astra 10-21 r2 (controller): the host card is a v-pad-focus scope; B = Cancel, A starts on the toggle. -->
-    <button type="button" class="waiting-card-cancel" data-pad-cancel :aria-disabled="locked ? 'true' : undefined" @click="onCancel">Cancel</button>
+    <button type="button" class="waiting-card-cancel" data-pad-cancel :aria-disabled="locked ? 'true' : undefined" @click="onCancel">{{ $t('waitingBoard.cancel') }}</button>
     <button v-if="wait.gameName" type="button" class="waiting-card-room-toggle" data-pad-primary :aria-pressed="roomNameShown ? 'true' : 'false'"
-      :aria-disabled="locked ? 'true' : undefined" @click="onToggleRoomName">{{ roomNameShown ? 'Hide room name' : 'Show room name' }}</button>
+      :aria-disabled="locked ? 'true' : undefined" @click="onToggleRoomName">{{ roomNameShown ? $t('waitingBoard.hideRoomName') : $t('waitingBoard.showRoomName') }}</button>
   </div>
 </template>
 

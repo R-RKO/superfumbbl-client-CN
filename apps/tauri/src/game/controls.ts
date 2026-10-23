@@ -15,6 +15,7 @@
  */
 import { ref } from 'vue';
 import type { PadEvent } from './gamepad';
+import { $t } from '../i18n';
 
 export type InputMethod = 'auto' | 'keyboard' | 'controller';
 export type ActiveInput = 'controller' | 'mouse';
@@ -56,50 +57,50 @@ export function isMouseInput(value: string): boolean { return value === MOUSE_MI
 
 /** Every bindable action in the client (P1 inventory + owner round 2 reservations). Order = the Edit Bindings table. */
 export const CONTROL_ACTIONS = [
-  { id: 'gameMenu', label: 'Game menu / clear selection (main screen: Settings)', group: 'Game', context: 'any', keyboard: pair('Escape'), controller: pair('Start'), keyboardFixed: 'Esc' },
-  { id: 'endTurn', label: 'End Turn / Confirm Setup', group: 'Game', context: 'game', keyboard: pair(), controller: pair('View') },
-  { id: 'confirm', label: 'Confirm move / pass target', group: 'Game', context: 'game', keyboard: pair('Space'), controller: pair(), keyboardAlias: 'confirmKey' },
+  { id: 'gameMenu', get label() { return $t('settings.controlActions.gameMenuClearSelection'); }, group: 'Game', context: 'any', keyboard: pair('Escape'), controller: pair('Start'), keyboardFixed: 'Esc' },
+  { id: 'endTurn', get label() { return $t('settings.controlActions.endTurnConfirmSetup'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('View') },
+  { id: 'confirm', get label() { return $t('settings.controlActions.confirmMovePassTarget'); }, group: 'Game', context: 'game', keyboard: pair('Space'), controller: pair(), keyboardAlias: 'confirmKey' },
   // Owner 10-10: the keyboard side has NO default (it was P in the dev builds) until the owner rules on each new key.
-  { id: 'playerCard', label: 'Player card', group: 'Game', context: 'game', keyboard: pair(), controller: pair('Y') },
+  { id: 'playerCard', get label() { return $t('settings.controlActions.playerCard'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('Y') },
   // Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits"; restated:
   // "The middle mouse button for player portrait should disable player portraits" - the first press turns them OFF. Flips
   // Settings > UI "Player card" between Show automatically and Only when called. A mouse / keyboard feature (no pad
   // default, not behind the controller box).
-  { id: 'playerCardsToggle', label: 'Player portraits on / off', group: 'Game', context: 'game', keyboard: pair(MOUSE_MIDDLE), controller: pair() },
-  { id: 'cyclePlayerPrev', label: 'Previous player who can act', group: 'Game', context: 'game', keyboard: pair(), controller: pair('DpadLeft') },
-  { id: 'cyclePlayerNext', label: 'Next player who can act', group: 'Game', context: 'game', keyboard: pair(), controller: pair('DpadRight') },
+  { id: 'playerCardsToggle', get label() { return $t('settings.controlActions.playerPortraitsOnOff'); }, group: 'Game', context: 'game', keyboard: pair(MOUSE_MIDDLE), controller: pair() },
+  { id: 'cyclePlayerPrev', get label() { return $t('settings.controlActions.previousPlayerWhoCan'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('DpadLeft') },
+  { id: 'cyclePlayerNext', get label() { return $t('settings.controlActions.nextPlayerWhoCan'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('DpadRight') },
   // Controller support P2b (owner round 2): setup — LB places the current player on the next free line-of-scrimmage
   // square (centre outward), RB sends it to the reserves. Setup-phase only (Astra P3-14), and listed before the in-play
   // rows so a coach's own plain-LB binding cannot shadow it during setup. Plain LB acts on release (chords still work).
-  { id: 'setupPlaceLos', label: 'Setup: place on the line of scrimmage', group: 'Game', context: 'setup', keyboard: pair(), controller: pair('LB') },
-  { id: 'setupReserve', label: 'Setup: send to the reserves', group: 'Game', context: 'setup', keyboard: pair(), controller: pair('RB') },
+  { id: 'setupPlaceLos', get label() { return $t('settings.controlActions.setupPlaceOnThe'); }, group: 'Game', context: 'setup', keyboard: pair(), controller: pair('LB') },
+  { id: 'setupReserve', get label() { return $t('settings.controlActions.setupSendToThe'); }, group: 'Game', context: 'setup', keyboard: pair(), controller: pair('RB') },
   // Controller support P2a (owner 10-07): the pitch crosshair. The mouse is the keyboard side of these (fixed cells).
-  { id: 'crosshairMove', label: 'Move the crosshair', group: 'Game', context: 'game', keyboard: pair(), controller: pair('LeftStick'), keyboardFixed: 'Mouse', controllerFixed: 'Left stick' },
-  { id: 'crosshairSelect', label: 'Click at the crosshair', group: 'Game', context: 'game', keyboard: pair(), controller: pair('A'), keyboardFixed: 'Left click' },
-  { id: 'crosshairContext', label: 'Context menu at the crosshair', group: 'Game', context: 'game', keyboard: pair(), controller: pair('X'), keyboardFixed: 'Right click' },
-  { id: 'crosshairCancel', label: 'Cancel / dismiss', group: 'Game', context: 'game', keyboard: pair(), controller: pair('B'), keyboardFixed: 'Right click on grass' },
-  { id: 'precisionToggle', label: 'Precision crosshair on / off', group: 'Game', context: 'game', keyboard: pair(), controller: pair('L3'), keyboardFixed: '—' },
-  { id: 'cameraPan', label: 'Camera pan', group: 'Camera', context: 'game', keyboard: pair('KeyW'), controller: pair('RightStick'), keyboardFixed: 'W A S D / Arrows', controllerFixed: 'Right stick' },
+  { id: 'crosshairMove', get label() { return $t('settings.controlActions.moveTheCrosshair'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('LeftStick'), keyboardFixed: 'Mouse', controllerFixed: 'Left stick' },
+  { id: 'crosshairSelect', get label() { return $t('settings.controlActions.clickAtTheCrosshair'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('A'), keyboardFixed: 'Left click' },
+  { id: 'crosshairContext', get label() { return $t('settings.controlActions.contextMenuAtThe'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('X'), keyboardFixed: 'Right click' },
+  { id: 'crosshairCancel', get label() { return $t('settings.controlActions.cancelDismiss'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('B'), keyboardFixed: 'Right click on grass' },
+  { id: 'precisionToggle', get label() { return $t('settings.controlActions.precisionCrosshairOnOff'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('L3'), keyboardFixed: '—' },
+  { id: 'cameraPan', get label() { return $t('settings.controlActions.cameraPan'); }, group: 'Camera', context: 'game', keyboard: pair('KeyW'), controller: pair('RightStick'), keyboardFixed: 'W A S D / Arrows', controllerFixed: 'Right stick' },
   // Owner 10-07: zoom lives on the TRIGGERS (tap = one level, hold = continuous); LB / RB are unassigned in game
   // (LB held is the quick-bar chord modifier). Keys: none by default (owner 10-10; the dev builds had = / - and the
   // numpad + / -); bindable in the table.
-  { id: 'zoomIn', label: 'Zoom in (trigger: tap one level, hold continuous)', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('RT(tap)') },
-  { id: 'zoomOut', label: 'Zoom out (trigger: tap one level, hold continuous)', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LT(tap)') },
-  { id: 'autoDirector', label: 'Auto Director on / off', group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LB+DpadRight') },
+  { id: 'zoomIn', get label() { return $t('settings.controlActions.zoomInTriggerTap'); }, group: 'Camera', context: 'game', keyboard: pair(), controller: pair('RT(tap)') },
+  { id: 'zoomOut', get label() { return $t('settings.controlActions.zoomOutTriggerTap'); }, group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LT(tap)') },
+  { id: 'autoDirector', get label() { return $t('settings.controlActions.autoDirectorOnOff'); }, group: 'Camera', context: 'game', keyboard: pair(), controller: pair('LB+DpadRight') },
   // Owner 10-12: "a hot key to flip perspectives on the pitch" (north / south or east / west turned around; seats stay).
   // Flips the Settings checkbox "Flip the pitch view". `game` covers setup and kick-off as well. No pad default.
-  { id: 'pitchFlip', label: 'Flip the pitch view', group: 'Camera', context: 'game', keyboard: pair('KeyF'), controller: pair() },
-  { id: 'tackleZones', label: 'Tackle zones (cycle)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadUp') },
-  { id: 'sprites', label: 'Sprites (cycle)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadDown') },
-  { id: 'skillDisplay', label: 'Skill display (icons / markings)', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadLeft') },
-  { id: 'roster', label: 'Roster pop-out', group: 'Quick bar', context: 'game', keyboard: pair('KeyH'), controller: pair('LB+A'), keyboardAlias: 'rosterKey' },
-  { id: 'logExpand', label: 'Enlarge the Log window (again to restore)', group: 'Quick bar', context: 'game', keyboard: pair('KeyL'), controller: pair('LB+X'), keyboardAlias: 'logExpandKey' },
-  { id: 'openChat', label: 'Open chat (chat dock)', group: 'Quick bar', context: 'game', keyboard: pair('Enter'), controller: pair('LB+Y'), keyboardFixed: 'Enter' },
-  { id: 'telestrator', label: 'Telestrator (sketch) open / close', group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+B') },
-  { id: 'bladePrev', label: 'Previous blade (main screen)', group: 'Menus', context: 'main', keyboard: pair(), controller: pair('LB') },
-  { id: 'bladeNext', label: 'Next blade (main screen)', group: 'Menus', context: 'main', keyboard: pair(), controller: pair('RB') },
-  { id: 'virtualKeyboard', label: 'Virtual keyboard (coming soon)', group: 'Menus', context: 'any', keyboard: pair(), controller: pair('RT+X') },
-  { id: 'fullscreen', label: 'Toggle fullscreen', group: 'Menus', context: 'any', keyboard: pair('F11'), controller: pair(), keyboardFixed: 'F11 / Alt + Enter' },
+  { id: 'pitchFlip', get label() { return $t('settings.controlActions.flipThePitchView'); }, group: 'Camera', context: 'game', keyboard: pair('KeyF'), controller: pair() },
+  { id: 'tackleZones', get label() { return $t('settings.controlActions.tackleZonesCycle'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadUp') },
+  { id: 'sprites', get label() { return $t('settings.controlActions.spritesCycle'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadDown') },
+  { id: 'skillDisplay', get label() { return $t('settings.controlActions.skillDisplayIconsMarkings'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadLeft') },
+  { id: 'roster', get label() { return $t('settings.controlActions.rosterPopOut'); }, group: 'Quick bar', context: 'game', keyboard: pair('KeyH'), controller: pair('LB+A'), keyboardAlias: 'rosterKey' },
+  { id: 'logExpand', get label() { return $t('settings.controlActions.enlargeTheLogWindow'); }, group: 'Quick bar', context: 'game', keyboard: pair('KeyL'), controller: pair('LB+X'), keyboardAlias: 'logExpandKey' },
+  { id: 'openChat', get label() { return $t('settings.controlActions.openChatChatDock'); }, group: 'Quick bar', context: 'game', keyboard: pair('Enter'), controller: pair('LB+Y'), keyboardFixed: 'Enter' },
+  { id: 'telestrator', get label() { return $t('settings.controlActions.telestratorSketchOpenClose'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+B') },
+  { id: 'bladePrev', get label() { return $t('settings.controlActions.previousBladeMainScreen'); }, group: 'Menus', context: 'main', keyboard: pair(), controller: pair('LB') },
+  { id: 'bladeNext', get label() { return $t('settings.controlActions.nextBladeMainScreen'); }, group: 'Menus', context: 'main', keyboard: pair(), controller: pair('RB') },
+  { id: 'virtualKeyboard', get label() { return $t('settings.controlActions.virtualKeyboardComingSoon'); }, group: 'Menus', context: 'any', keyboard: pair(), controller: pair('RT+X') },
+  { id: 'fullscreen', get label() { return $t('settings.controlActions.toggleFullscreen'); }, group: 'Menus', context: 'any', keyboard: pair('F11'), controller: pair(), keyboardFixed: 'F11 / Alt + Enter' },
 ] as const satisfies readonly ControlAction[];
 
 export type ControlActionId = (typeof CONTROL_ACTIONS)[number]['id'];
@@ -406,8 +407,8 @@ export function setPlayerCardHook(hook: ((source: InputSource) => void) | null):
 export function requestPlayerCard(source: InputSource): void { playerCardHook(source); }
 
 const PAD_LABELS: Record<string, string> = {
-  View: 'View', Start: 'Start', 'LT(tap)': 'LT tap', 'RT(tap)': 'RT tap', DpadUp: 'D-pad ↑', DpadDown: 'D-pad ↓', DpadLeft: 'D-pad ←', DpadRight: 'D-pad →',
-  LeftStick: 'Left stick', RightStick: 'Right stick',
+  get View() { return $t('settings.controls.padLabels.view'); }, get Start() { return $t('settings.controls.padLabels.start'); }, get 'LT(tap)'() { return $t('settings.controls.padLabels.ltTap'); }, get 'RT(tap)'() { return $t('settings.controls.padLabels.rtTap'); }, get DpadUp() { return $t('settings.controls.padLabels.dPad'); }, get DpadDown() { return $t('settings.controls.padLabels.dPad2'); }, get DpadLeft() { return $t('settings.controls.padLabels.dPad3'); }, get DpadRight() { return $t('settings.controls.padLabels.dPad4'); },
+  get LeftStick() { return $t('settings.controls.padLabels.leftStick'); }, get RightStick() { return $t('settings.controls.padLabels.rightStick'); },
 };
 export function controllerInputLabel(input: string): string {
   if (!input) return '—';
@@ -504,7 +505,7 @@ export const activePadGlyphFamily = ref<PadGlyphFamily>('xbox');
  */
 export const activeInput = ref<ActiveInput>('mouse');
 export const INPUT_SWITCH_NOTICE_MS = 1500;
-export const INPUT_SWITCH_NOTICE: Record<ActiveInput, string> = { controller: 'Controller', mouse: 'Mouse & keyboard' };
+export const INPUT_SWITCH_NOTICE: Record<ActiveInput, string> = { get controller() { return $t('settings.controls.inputSwitchNotice.controller'); }, get mouse() { return $t('settings.controls.inputSwitchNotice.mouseKeyboard'); } };
 export const CONTROLLER_DISCONNECT_TOAST = 'Controller disconnected — mouse and keyboard still work';
 export const CONTROLLER_TOAST_MS = 8000;
 /** Mouse travel (px) that counts as using the mouse. */
@@ -530,12 +531,12 @@ export function padShortName(id: string): string {
   if (!name) name = 'Controller';
   return name.length > 40 ? `${name.slice(0, 39)}…` : name;
 }
-export function controllerConnectToast(id: string): string { return `Controller connected: ${padShortName(id)}`; }
+export function controllerConnectToast(id: string): string { return $t('settings.controls.text.controllerConnectedP0', { p0: padShortName(id) }); }
 /** Owner (o66mh): a pad without the W3C "standard" mapping (Steam Controller outside Steam Input, some DualSense /
  *  generic HID pads) cannot be read with the Xbox table — say so and how to fix it; its input is never used. */
 export function nonStandardPadToast(id: string): string {
-  return `Controller '${padShortName(id)}' uses a non-standard layout — Super FUMBBL needs an Xbox-style pad. `
-    + 'Steam Controller / DualSense users: run the client through Steam Input (add it as a non-Steam game) so it appears as an Xbox pad.';
+  return $t('settings.controls.text.controllerP0UsesA', { p0: padShortName(id) })
+    + $t('settings.controls.text.steamControllerDualsenseUsers');
 }
 /** Connected standard pads (the router counts connect / disconnect). Reactive for the camera fail-safe. */
 export const connectedPadCount = ref(0);
@@ -705,7 +706,7 @@ export function createControllerRouter(deps: ControllerRouterDeps): ControllerRo
       if (known && !known.standard) return; // a non-standard pad never counted or drove anything
       padCount.value = Math.max(0, padCount.value - 1);
       neutralise();
-      if (state.value === 'controller') deps.showToast?.(CONTROLLER_DISCONNECT_TOAST, CONTROLLER_TOAST_MS);
+      if (state.value === 'controller') deps.showToast?.($t('settings.controls.disconnectToast'), CONTROLLER_TOAST_MS);
       return;
     }
     if (event.type === 'release' && (event.input === 'LB' || event.input === 'RT')) setModifier(event.input, false);

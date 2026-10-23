@@ -157,6 +157,7 @@ import { rushTargetForPlayer } from './rushTarget';
 import { MOVE_BADGE_MAX, activationShowsMoveBadge, moveBadgeIndex, moveBadgeNormalLeft, moveBadgeSide } from './moveRemaining';
 import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
+import { onPitchLabelsChanged, pitchLabel, pitchLabelRevision } from './pitchLabels'; // i18n 10-23: drawn display words
 import { FONT_DISPLAY_FAMILY } from './fontStacks'; // owner 10-23: Cyrillic/CJK system faces behind Nuffle on every pitch label
 
 
@@ -1550,7 +1551,9 @@ const BALL_OUT_STAMP_STYLE = new TextStyle({
   stroke: { color: 0x000000, width: 2 }, align: 'center', lineHeight: BALL_OUT_STAMP_FONT_PX + 1,
 });
 /** Owner 10-07: the stamp's two lines. */
-export function ballOutStampLines(label: string): string[] {
+export function ballOutStampLines(label: string, shown: string = label): string[] {
+  // i18n: `label` is the invariant stamp kind; a renderer that localises passes its translated text (drawn as one line).
+  if (shown !== label) return [shown];
   return label === 'TOUCHBACK' ? ['TOUCH', 'BACK'] : label === 'OUT OF BOUNDS' ? ['OUT OF', 'BOUNDS'] : [label];
 }
 /** Owner 10-07: the plate's size in pitch pixels at depth scale 1 (~1.3 squares wide at most). */
@@ -2174,7 +2177,7 @@ export class PitchRenderer {
   }
   /** Human label for a die value (1..6). */
   static blockFaceLabel(value: number): string {
-    return PitchRenderer.BLOCK_FACE_LABELS[PitchRenderer.BLOCK_VALUE_TO_FACE[Math.max(1, Math.min(6, value | 0))]!]!;
+    return PitchRenderer.BLOCK_FACE_LABELS[PitchRenderer.BLOCK_VALUE_TO_FACE[Math.max(1, Math.min(6, value | 0))]!]!; // English (Classic); the Modern view localises
   }
 
   private app: Application | null = null;
@@ -6158,7 +6161,7 @@ export class PitchRenderer {
       .moveTo(-12, -9).lineTo(13, 0).lineTo(-12, 9).closePath()
       .fill({ color: 0x22a7ff, alpha: 0.98 })
       .stroke({ color: 0x001b35, width: 3, alpha: 1 });
-    const ballEdgeLabel = new Text({ text: 'BALL', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    const ballEdgeLabel = this.trackLabel('BALL', new Text({ text: this.label('BALL'), style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }));
     ballEdgeLabel.anchor.set(0.5, 1);
     ballEdgeLabel.position.set(0, -14);
     ballEdgeMarker.addChild(ballEdgeArrow, ballEdgeLabel);
@@ -6169,7 +6172,7 @@ export class PitchRenderer {
       .moveTo(-12, -9).lineTo(13, 0).lineTo(-12, 9).closePath()
       .fill({ color: 0xf5c542, alpha: 0.98 })
       .stroke({ color: 0x332400, width: 3, alpha: 1 });
-    const activeEdgeLabel = new Text({ text: 'ACTIVE', style: ACTIVE_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    const activeEdgeLabel = this.trackLabel('ACTIVE', new Text({ text: this.label('ACTIVE'), style: ACTIVE_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }));
     activeEdgeLabel.anchor.set(0.5, 1);
     activeEdgeLabel.position.set(0, -14);
     activeEdgeMarker.addChild(activeEdgeArrow, activeEdgeLabel);
@@ -6220,6 +6223,38 @@ export class PitchRenderer {
     const texts = this.retiredTexts;
     this.retiredTexts = [];
     for (const text of texts) if (!text.destroyed && !text.parent) text.destroy();
+  }
+
+  /** i18n 10-23: the client's language changed - redraw every drawn display word (end zones, dugout bands, the
+   *  apothecary caption, planner tags). The lettering cache is keyed on the drawn text, so the old language's art is
+   *  pruned by the redraw (cache invalidation without a second key). */
+  relabelForLocale(): void {
+    if (this.destroyed || !this.app || !this.localiseLabels) return;
+    // Retained Text objects (edge indicators, the ball token, K.O. tags, chips) are updated in place (Astra r2 #13).
+    this.retainedLabels = this.retainedLabels.filter(({ text }) => !text.destroyed);
+    for (const { text, english, relayout } of this.retainedLabels) { text.text = this.label(english); relayout?.(); }
+    this.drawPitch();
+    this.redrawDugoutsWithArrows();
+    this.drawTurnTrack();
+    this.redrawOverlays();
+  }
+  static relabelAll(): void {
+    for (const r of PitchRenderer.instances) if (r.localiseLabels) r.relabelForLocale();
+  }
+  /** i18n (Astra r2 #14): only a renderer that opts in draws localised words (the Modern view sets it); every other
+   *  renderer, e.g. FUMBBL Classic's, keeps the English labels. */
+  localiseLabels = false;
+  /** The drawn text for an English display label: localised only when this renderer opted in. */
+  private label(english: string): string {
+    return this.localiseLabels ? pitchLabel(english) : english;
+  }
+  private retainedLabels: Array<{ text: Text; english: string; relayout?: () => void }> = [];
+  /** Remember a retained Text that shows `english`, so a language change can update it in place; `relayout` re-fits
+   *  whatever is sized from the text (a stencil's plate) once the new text is set (Astra r3 #13). */
+  private trackLabel(english: string, text: Text, relayout?: () => void): Text {
+    if (this.retainedLabels.length > 256) this.retainedLabels = this.retainedLabels.filter(({ text: t }) => !t.destroyed);
+    this.retainedLabels.push({ text, english, relayout });
+    return text;
   }
 
   destroy(): void {
@@ -9670,7 +9705,7 @@ export class PitchRenderer {
               if (dieWord) this.o66TagRects.push(...placed.rects); // for later squares and the badge placement
             }
             const tagX = (k: string): number => a.x + (slotX.get(k) ?? 0) * ds;
-            const tagSig = `${tagStyle}:${gs.toFixed(3)}:${displayFontState()}:${moverSide ?? '-'}:${this.d6FaceVariant}:${this.d6FaceRevision}`; // font state: late-arriving lettering rebuilds the tags
+            const tagSig = `${tagStyle}:${gs.toFixed(3)}:${displayFontState()}:${pitchLabelRevision()}:${moverSide ?? '-'}:${this.d6FaceVariant}:${this.d6FaceRevision}`; // font state: late-arriving lettering rebuilds the tags
             // Owner o66p #8: lift the cost chips ABOVE the square's top edge (were sitting ON the square).
             const cy = a.y - TILE_H * 0.5 * ds;
             if (jumpPlate && srvRolls) {
@@ -10167,7 +10202,7 @@ export class PitchRenderer {
     const lineScale = (startScale + endScale) / 2;
     const colour = PASS_RANGE_COLORS[band === 'B+' ? 'B' : band];
     const labels: Record<PassRulerBand, string> = {
-      Q: 'QUICK', S: 'SHORT', L: 'LONG', B: 'LONG BOMB', 'B+': 'BEYOND LB',
+      Q: this.label('QUICK'), S: this.label('SHORT'), L: this.label('LONG'), B: this.label('LONG BOMB'), 'B+': this.label('BEYOND LB'),
     };
 
     const line = new Graphics()
@@ -10939,7 +10974,7 @@ export class PitchRenderer {
   /** Owner 10-14: the tag word as Graduate C lettering (cached art, 4x + mipmaps); a Sprite centred on its own origin. The
    *  fallback (no 2D canvas, i.e. a headless test) is a 4x mipmapped Text. `label` carries the plain word either way. */
   private plannerWordArt(kind: string): LetteringArt | null {
-    return this.letteringFor('plantag', kind.toUpperCase(), PLANNER_TAG_LETTERING, displayFontState(), new Set<string>());
+    return this.letteringFor('plantag', this.label(kind.toUpperCase()), PLANNER_TAG_LETTERING, displayFontState(), new Set<string>());
   }
   private buildPlannerWord(kind: string, u: number): Container {
     const art = this.plannerWordArt(kind);
@@ -10950,7 +10985,7 @@ export class PitchRenderer {
       sprite.label = kind.toUpperCase();
       return sprite;
     }
-    const text = new Text({ text: kind.toUpperCase(), style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    const text = new Text({ text: this.label(kind.toUpperCase()), style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     text.anchor.set(0.5, 0.5);
     text.scale.set(0.5 * u);
     text.label = kind.toUpperCase();
@@ -11805,7 +11840,7 @@ export class PitchRenderer {
         // stand on the corner apron, never inside the box).
         const banned = this.dugoutCountsOn && section.label === 'INJURED'
           ? offPitch.filter((d) => baseState(d.playerState) === PlayerStateBase.BANNED).length : 0;
-        setLabel(dugoutLabel(section.label, members.length + banned, this.dugoutCountsOn));
+        setLabel(dugoutLabel(this.label(section.label), members.length + banned, this.dugoutCountsOn)); // i18n: section ids stay invariant
         // Owner 2026-07-07: HARD-BOUNDED zones — every player that belongs in a section
         // stays VISIBLE inside it (no clipping/occlusion). When the count exceeds the slots
         // (rows below the label × columns), the rows PACK tighter into the section and the
@@ -12273,7 +12308,7 @@ export class PitchRenderer {
     // Text's line box was - its capitals box, or ALL of its ink when that is taller (Nuffle's "A" carries a spur below
     // the baseline), the ink then centred in the box.
     const stationScale = depthScale(apoX, boxY);
-    const caption = this.letteringFor('apothecary', 'APOTHECARY', DUGOUT_LETTERING, this.turnTrackFonts, this.turnTrackLetteringKeys);
+    const caption = this.letteringFor('apothecary', this.label('APOTHECARY'), DUGOUT_LETTERING, this.turnTrackFonts, this.turnTrackLetteringKeys);
     if (caption) {
       const label = new Sprite(caption.texture);
       label.label = 'APOTHECARY';
@@ -12331,7 +12366,7 @@ export class PitchRenderer {
         sprite.scale.set(KO_H / 1136);
         return withShadow(sprite, KO_H * 981 / 1136, KO_H);
       }
-      const ko = new Text({ text: 'K.O.', style: KO_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // owner 09-15: 4x raster (marking-text rule)
+      const ko = this.trackLabel('K.O.', new Text({ text: this.label('K.O.'), style: KO_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true })); // owner 09-15: 4x raster (marking-text rule)
       ko.anchor.set(0.5, 0.5);
       ko.angle = -12; // old-Batman-cartoon slant
       return withShadow(ko, 34, 16);
@@ -13216,7 +13251,7 @@ export class PitchRenderer {
       // "Pick-me-up?" label just above the arrow (scaled by depth, dark-stroked to read over the pitch).
       // #164: tokenPos so the label tracks the token's wing nudge, like the arrow above.
       const a = this.tokenPos(coord[0], coord[1], d.playerId);
-      const label = new Text({ text: 'Pick-me-up?', style: ACTION_CHIP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+      const label = this.trackLabel('Pick-me-up?', new Text({ text: this.label('Pick-me-up?'), style: ACTION_CHIP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }));
       label.anchor.set(0.5, 1);
       label.scale.set(arrow.scale);
       label.position.set(a.x, a.y - TILE_H * arrow.scale * 1.95);
@@ -15943,7 +15978,7 @@ export class PitchRenderer {
    *  and stores it as this.ballMarker so the ticker bobs it. */
   private buildBallToken(shape: 'arrow' | 'label-top' | 'label-bottom' | 'label-centre' = 'arrow'): Container {
     const marker = new Container();
-    const label = new Text({ text: 'BALL', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    const label = this.trackLabel('BALL', new Text({ text: this.label('BALL'), style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }));
     if (shape === 'arrow') {
       const arrow = new Text({ text: '▼', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       arrow.anchor.set(0.5, 1);
@@ -16885,7 +16920,7 @@ export class PitchRenderer {
   private buildStencilTag(label: string): Container {
     const c = new Container();
     const text = new Text({
-      text: label,
+      text: this.label(label),
       style: {
         fontFamily: '"Arial Black", Impact, sans-serif',
         fontSize: 11,
@@ -16901,9 +16936,16 @@ export class PitchRenderer {
       autoGenerateMipmaps: true,
     });
     text.anchor.set(0.5, 0.5);
-    const w = text.width + 8;
-    const plate = new Graphics().roundRect(-w / 2, -9, w, 18, 4).fill({ color: 0x14161a, alpha: 0.44 });
+    const plate = new Graphics();
+    const fitPlate = () => {
+      if (plate.destroyed) return;
+      const w = text.width + 8;
+      plate.clear().roundRect(-w / 2, -9, w, 18, 4).fill({ color: 0x14161a, alpha: 0.44 });
+    };
+    fitPlate();
     c.addChild(plate, text);
+    // a held stencil (FAILED during a reroll decision, ARMOR BREAKS! until the injury) follows a language change
+    this.trackLabel(label, text, fitPlate);
     return c;
   }
 
@@ -17442,7 +17484,7 @@ export class PitchRenderer {
         struck = true;
         if (miss) {
           const label = new Text({
-            text: 'MISS',
+            text: this.label('MISS'),
             style: new TextStyle({
               fontFamily: 'Arial Black, sans-serif', fontSize: 18, fontWeight: '900', fill: 0xff3838,
               stroke: { color: 0x250000, width: 4, join: 'round' },
@@ -19430,7 +19472,7 @@ export class PitchRenderer {
       // south = endX 0, away north). 'touchdown' keeps the plain word. Fall back to
       // "TOUCHDOWN" when a team name is missing (standalone/unnamed teams).
       const teamName = endX === 0 ? this.game?.teamHome.teamName : this.game?.teamAway.teamName;
-      const label = this.endZoneLabel === 'touchdown' ? 'TOUCHDOWN' : (teamName?.trim() || 'TOUCHDOWN');
+      const label = this.endZoneLabel === 'touchdown' ? this.label('TOUCHDOWN') : (teamName?.trim() || this.label('TOUCHDOWN'));
       // Owner 10-11: Graduate C lettering, composed once per label (letteringFor); the casing of the name as typed
       // does not matter. Full alpha so the white stays white. `fit` is the box sized to the band: the letters' advance
       // width and the capitals' height box, both centred on the sprite's centre.
@@ -21421,7 +21463,7 @@ export class PitchRenderer {
   private buildBallOutStamp(label: string): Container {
     const plate = new Container();
     const touchback = label === 'TOUCHBACK';
-    const text = new Text({ text: ballOutStampLines(label).join('\n'), style: BALL_OUT_STAMP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    const text = new Text({ text: ballOutStampLines(label, this.label(label)).join('\n'), style: BALL_OUT_STAMP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     text.anchor.set(0.5, 0.5);
     // Sized from the label rather than measured, so the plate is built without a canvas (and stays ~1 square).
     const { w, h } = ballOutStampSize(label);
@@ -22913,8 +22955,8 @@ export class PitchRenderer {
     // #95 (owner): caption ONLY on the REAL server STUNNED state — suppressed for the dugout's
     // faked-STUNNED KO/casualty stubs (withCaption=false) so it stops showing on every downed player.
     if (stunned && withCaption) {
-      const label = new Text({
-        text: 'STUNNED',
+      const label = this.trackLabel('STUNNED', new Text({
+        text: this.label('STUNNED'),
         style: {
           fontFamily: 'Arial Black, Arial, sans-serif',
           fontSize: 8,
@@ -22927,7 +22969,7 @@ export class PitchRenderer {
         resolution: 4,
         textureStyle: { scaleMode: 'linear' },
         autoGenerateMipmaps: true,
-      });
+      }));
       label.anchor.set(0.5, 0.5);
       // #90 (owner): the caption must fit INSIDE one tile. Per the owner's "drop letter-spacing
       // before legibility": spacing 2→1 first, then scale-to-fit against the tile width so it can
@@ -24227,3 +24269,6 @@ export class PitchRenderer {
     this.updateOverlayScales(); // B2-4/B2-20: badges counter-scale with zoom
   }
 }
+
+// i18n 10-23: redraw every live renderer's display words when the client's language changes.
+onPitchLabelsChanged(() => PitchRenderer.relabelAll());

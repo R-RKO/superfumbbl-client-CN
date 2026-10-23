@@ -13,6 +13,7 @@ import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
 import { availableActions, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
+import { t } from '../../i18n';
 
 export type EndActivationConfirmKind = 'blitz' | 'punt' | 'handOver' | 'pass' | 'foul' | 'generic';
 
@@ -78,7 +79,7 @@ export function plottedRouteCancelConfirmKind(input: { pendingFoul: boolean; cli
 }
 /** `label` is bigGuyRollEndLabel (Spec S23), so the card names the same negatrait as the menu row. */
 export function rollEndConfirmCopy(label: string) {
-  return { title: label, text: 'Roll the negatrait and end this activation? The player has not moved yet.', confirmLabel: label };
+  return { title: label, get text() { return t('hud.actions.text.rollTheNegatraitAnd'); }, confirmLabel: label };
 }
 /** Pure decision for the generic end-activation confirm: whether confirming rolls, and the copy that says so (null =
  *  keep the ordinary copy). Rolls only for an explicit origin, a generic confirm, and the live intent's own player. */

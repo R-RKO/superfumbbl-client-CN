@@ -1,6 +1,7 @@
 import { settings } from './settings';
 import builtinSounds from './builtinSounds.json';
 import soundEventIds from './soundEventIds.json';
+import { t } from '../i18n';
 
 /**
  * FUMBBL sound playback (F-3, owner 2026-07-02): the wire's modelSync frames
@@ -26,67 +27,67 @@ export interface SoundEntry {
 // The 39 FUMBBL sounds (client.ini `sound.<id>.file`) + breatheFire (our
 // fireball variant). `touchdown` maps to td.ogg upstream.
 export const SOUND_CATALOG: SoundEntry[] = [
-  { id: 'block', label: 'Block', file: 'block.ogg' },
-  { id: 'blunder', label: 'Blunder', file: 'blunder.ogg' },
-  { id: 'bounce', label: 'Ball bounce', file: 'bounce44.wav' },
-  { id: 'catch', label: 'Catch', file: 'catch44.wav' },
-  { id: 'chainsaw', label: 'Chainsaw', file: 'chainsaw.ogg' },
-  { id: 'click', label: 'Click', file: 'click44.wav' },
-  { id: 'ding', label: 'Ding', file: 'ding.ogg' },
-  { id: 'dodge', label: 'Dodge', file: 'dodge.ogg' },
-  { id: 'duh', label: 'Duh', file: 'duh.ogg' },
-  { id: 'ew', label: 'Ew', file: 'ew.ogg' },
-  { id: 'explode', label: 'Explode', file: 'explode.ogg' },
-  { id: 'fall', label: 'Fall', file: 'fall.ogg' },
-  { id: 'fireball', label: 'Fireball', file: 'fireball.ogg' },
-  { id: 'breatheFire', label: 'Breathe Fire', file: 'breathe_fire.ogg' },
-  { id: 'foul', label: 'Foul', file: 'foul.ogg' },
-  { id: 'hypno', label: 'Hypnotic Gaze', file: 'hypno.ogg' },
-  { id: 'injury', label: 'Injury', file: 'injury.ogg' },
-  { id: 'kick', label: 'Kick', file: 'kick.ogg' },
-  { id: 'ko', label: 'Knocked out', file: 'ko.ogg' },
-  { id: 'metal', label: 'Metal', file: 'metal.ogg' },
-  { id: 'nomnom', label: 'Nom nom (eat)', file: 'nomnom.ogg' },
-  { id: 'organ', label: 'Organ', file: 'organ.ogg' },
-  { id: 'pickup', label: 'Ball pickup', file: 'pickup.ogg' },
-  { id: 'pumpcrowd', label: 'Crowd pump', file: 'pumpcrowd.ogg' },
-  { id: 'question', label: 'Question', file: 'question.ogg' },
-  { id: 'rip', label: 'RIP (killed)', file: 'rip.ogg' },
-  { id: 'roar', label: 'Roar', file: 'roar.ogg' },
-  { id: 'root', label: 'Take Root', file: 'root.ogg' },
-  { id: 'slurp', label: 'Slurp', file: 'slurp.ogg' },
-  { id: 'stab', label: 'Stab', file: 'stab.ogg' },
-  { id: 'step', label: 'Step', file: 'step44.wav' },
-  { id: 'swoop', label: 'Swoop', file: 'swoop.ogg' },
-  { id: 'throw', label: 'Throw', file: 'throw44.wav' },
-  { id: 'touchdown', label: 'Touchdown', file: 'td.ogg' },
-  { id: 'trapdoor', label: 'Trap door', file: 'trapdoor.ogg' },
-  { id: 'vomit', label: 'Vomit', file: 'vomit.ogg' },
-  { id: 'whistle', label: 'Whistle', file: 'whistle.ogg' },
-  { id: 'woooaaah', label: 'Wooo aaah (crowd)', file: 'woooaaah.ogg' },
-  { id: 'yoink', label: 'Yoink', file: 'yoink.ogg' },
-  { id: 'zap', label: 'Zap', file: 'zap.ogg' },
+  { id: 'block', get label() { return t('settings.sounds.soundCatalog.block'); }, file: 'block.ogg' },
+  { id: 'blunder', get label() { return t('settings.sounds.soundCatalog.blunder'); }, file: 'blunder.ogg' },
+  { id: 'bounce', get label() { return t('settings.sounds.soundCatalog.ballBounce'); }, file: 'bounce44.wav' },
+  { id: 'catch', get label() { return t('settings.sounds.soundCatalog.catch'); }, file: 'catch44.wav' },
+  { id: 'chainsaw', get label() { return t('settings.sounds.soundCatalog.chainsaw'); }, file: 'chainsaw.ogg' },
+  { id: 'click', get label() { return t('settings.sounds.soundCatalog.click'); }, file: 'click44.wav' },
+  { id: 'ding', get label() { return t('settings.sounds.soundCatalog.ding'); }, file: 'ding.ogg' },
+  { id: 'dodge', get label() { return t('settings.sounds.soundCatalog.dodge'); }, file: 'dodge.ogg' },
+  { id: 'duh', get label() { return t('settings.sounds.soundCatalog.duh'); }, file: 'duh.ogg' },
+  { id: 'ew', get label() { return t('settings.sounds.soundCatalog.ew'); }, file: 'ew.ogg' },
+  { id: 'explode', get label() { return t('settings.sounds.soundCatalog.explode'); }, file: 'explode.ogg' },
+  { id: 'fall', get label() { return t('settings.sounds.soundCatalog.fall'); }, file: 'fall.ogg' },
+  { id: 'fireball', get label() { return t('settings.sounds.soundCatalog.fireball'); }, file: 'fireball.ogg' },
+  { id: 'breatheFire', get label() { return t('settings.sounds.soundCatalog.breatheFire'); }, file: 'breathe_fire.ogg' },
+  { id: 'foul', get label() { return t('settings.sounds.soundCatalog.foul'); }, file: 'foul.ogg' },
+  { id: 'hypno', get label() { return t('settings.sounds.soundCatalog.hypnoticGaze'); }, file: 'hypno.ogg' },
+  { id: 'injury', get label() { return t('settings.sounds.soundCatalog.injury'); }, file: 'injury.ogg' },
+  { id: 'kick', get label() { return t('settings.sounds.soundCatalog.kick'); }, file: 'kick.ogg' },
+  { id: 'ko', get label() { return t('settings.sounds.soundCatalog.knockedOut'); }, file: 'ko.ogg' },
+  { id: 'metal', get label() { return t('settings.sounds.soundCatalog.metal'); }, file: 'metal.ogg' },
+  { id: 'nomnom', get label() { return t('settings.sounds.soundCatalog.nomNomEat'); }, file: 'nomnom.ogg' },
+  { id: 'organ', get label() { return t('settings.sounds.soundCatalog.organ'); }, file: 'organ.ogg' },
+  { id: 'pickup', get label() { return t('settings.sounds.soundCatalog.ballPickup'); }, file: 'pickup.ogg' },
+  { id: 'pumpcrowd', get label() { return t('settings.sounds.soundCatalog.crowdPump'); }, file: 'pumpcrowd.ogg' },
+  { id: 'question', get label() { return t('settings.sounds.soundCatalog.question'); }, file: 'question.ogg' },
+  { id: 'rip', get label() { return t('settings.sounds.soundCatalog.ripKilled'); }, file: 'rip.ogg' },
+  { id: 'roar', get label() { return t('settings.sounds.soundCatalog.roar'); }, file: 'roar.ogg' },
+  { id: 'root', get label() { return t('settings.sounds.soundCatalog.takeRoot'); }, file: 'root.ogg' },
+  { id: 'slurp', get label() { return t('settings.sounds.soundCatalog.slurp'); }, file: 'slurp.ogg' },
+  { id: 'stab', get label() { return t('settings.sounds.soundCatalog.stab'); }, file: 'stab.ogg' },
+  { id: 'step', get label() { return t('settings.sounds.soundCatalog.step'); }, file: 'step44.wav' },
+  { id: 'swoop', get label() { return t('settings.sounds.soundCatalog.swoop'); }, file: 'swoop.ogg' },
+  { id: 'throw', get label() { return t('settings.sounds.soundCatalog.throw'); }, file: 'throw44.wav' },
+  { id: 'touchdown', get label() { return t('settings.sounds.soundCatalog.touchdown'); }, file: 'td.ogg' },
+  { id: 'trapdoor', get label() { return t('settings.sounds.soundCatalog.trapDoor'); }, file: 'trapdoor.ogg' },
+  { id: 'vomit', get label() { return t('settings.sounds.soundCatalog.vomit'); }, file: 'vomit.ogg' },
+  { id: 'whistle', get label() { return t('settings.sounds.soundCatalog.whistle'); }, file: 'whistle.ogg' },
+  { id: 'woooaaah', get label() { return t('settings.sounds.soundCatalog.woooAaahCrowd'); }, file: 'woooaaah.ogg' },
+  { id: 'yoink', get label() { return t('settings.sounds.soundCatalog.yoink'); }, file: 'yoink.ogg' },
+  { id: 'zap', get label() { return t('settings.sounds.soundCatalog.zap'); }, file: 'zap.ogg' },
   // Owner 2026-07-03: our own turnover sting — a synthesized (public-domain) sad
   // trombone, replacing FUMBBL's 'duh' for the turnover splash. Not a wire SoundId.
-  { id: 'sad_trombone', label: 'Sad trombone (turnover)', file: 'sad_trombone.wav' },
+  { id: 'sad_trombone', get label() { return t('settings.sounds.soundCatalog.sadTromboneTurnover'); }, file: 'sad_trombone.wav' },
   // Owner 2026-07-06: a synthesized cartoon "boing" for a Jump/Leap — FUMBBL's
   // SoundId set has no leap/springboard sound, so this is our own sting (not a
   // wire SoundId), overridable like any other.
-  { id: 'boing', label: 'Boing (jump / leap)', file: 'boing.wav' },
+  { id: 'boing', get label() { return t('settings.sounds.soundCatalog.boingJumpLeap'); }, file: 'boing.wav' },
   // Owner 2026-07-08: an "angel" sting for a Steady Footing SAVE (a player who'd be
   // Knocked Down rolls a 6 and stays up). PLACEHOLDER — no bundled file yet, so it's
   // silent until the owner drops an angel.ogg into /sounds or sets a local override in
   // Settings › Sounds. Not a wire SoundId.
-  { id: 'angel', label: 'Angel (Steady Footing save)', file: 'angel.ogg' },
-  { id: 'chatToast', label: 'Chat toast', file: 'chatToast.ogg' },
-  { id: 'setupPlace', label: 'Setup: player placed', file: 'setupPlace.ogg' },
+  { id: 'angel', get label() { return t('settings.sounds.soundCatalog.angelSteadyFootingSave'); }, file: 'angel.ogg' },
+  { id: 'chatToast', get label() { return t('settings.sounds.soundCatalog.chatToast'); }, file: 'chatToast.ogg' },
+  { id: 'setupPlace', get label() { return t('settings.sounds.soundCatalog.setupPlayerPlaced'); }, file: 'setupPlace.ogg' },
   // Owner 10-19: client-only UI cues (Cyberleaf Retro SFX, shipped unmodified inside the app: installer + app patches, owner 10-19). Each can be turned off
   // (or, for the waypoint, swapped) in Settings › Sound via settings.soundStyles.
-  { id: 'plannerWaypoint', label: 'Planner: waypoint plotted', file: 'plannerWaypoint.wav' },
-  { id: 'actionCancel', label: 'Action cancelled', file: 'actionCancel.wav' },
-  { id: 'turnClockMinute', label: 'Turn clock: 1 minute left, and 10 to 6 s', file: 'turnClockMinute.wav' },
-  { id: 'turnClockCountdown', label: 'Turn clock: last 5 seconds', file: 'turnClockCountdown.wav' },
-  { id: 'rollFailed', label: 'Failed roll', file: 'rollFailed.wav' },
+  { id: 'plannerWaypoint', get label() { return t('settings.sounds.soundCatalog.plannerWaypointPlotted'); }, file: 'plannerWaypoint.wav' },
+  { id: 'actionCancel', get label() { return t('settings.sounds.soundCatalog.actionCancelled'); }, file: 'actionCancel.wav' },
+  { id: 'turnClockMinute', get label() { return t('settings.sounds.soundCatalog.turnClock1Minute'); }, file: 'turnClockMinute.wav' },
+  { id: 'turnClockCountdown', get label() { return t('settings.sounds.soundCatalog.turnClockLast5'); }, file: 'turnClockCountdown.wav' },
+  { id: 'rollFailed', get label() { return t('settings.sounds.soundCatalog.failedRoll'); }, file: 'rollFailed.wav' },
 ];
 
 /** Owner 10-19: `settings.soundStyles[id] === SOUND_STYLE_OFF` silences that one event (Settings › Sound). */

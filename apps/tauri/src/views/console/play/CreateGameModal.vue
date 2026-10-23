@@ -11,6 +11,7 @@ import {
   type MyGamesState,
 } from '../../../game/forkChallenge';
 import ChallengePopup from './ChallengePopup.vue';
+import { $t } from '../../../i18n';
 
 const emit = defineEmits<{ close: [] }>();
 const challengeOpen = ref(false);
@@ -53,26 +54,26 @@ onMounted(() => { refreshMyGames(); });
 <template>
   <div class="modal-backdrop" @click.self="emit('close')">
     <section class="create-card" role="dialog" aria-modal="true" aria-labelledby="create-game-title">
-      <button class="close-button" type="button" aria-label="Close Create Game" @click="emit('close')">×</button>
-      <p class="eyebrow">SUPER FUMBBL</p>
+      <button class="close-button" type="button" :aria-label="$t('play.createCard.closeCreateGame')" @click="emit('close')">×</button>
+      <p class="eyebrow">{{ $t('play.createCard.superFumbbl') }}</p>
       <img class="brand-logo" :src="superFumbblLogoUrl" alt="" />
-      <h1 id="create-game-title">Create Game</h1>
-      <p>Challenge another coach with a team from your fork library, or rejoin a server-listed game.</p>
+      <h1 id="create-game-title">{{ $t('play.createCard.createGame') }}</h1>
+      <p>{{ $t('play.createCard.challengeAnotherCoachWith') }}</p>
 
-      <button class="primary" type="button" @click="challengeOpen = true">CREATE A CHALLENGE</button>
-      <span class="or">or</span>
+      <button class="primary" type="button" @click="challengeOpen = true">{{ $t('play.createCard.createAChallenge') }}</button>
+      <span class="or">{{ $t('play.createCard.or') }}</span>
 
       <!-- Presentational port of SpectateView.vue:7764-7789. -->
       <section class="gb-mygames" aria-labelledby="my-games-title">
         <div class="gb-mygames-head">
-          <h2 id="my-games-title">Your games in progress</h2>
+          <h2 id="my-games-title">{{ $t('play.createCard.yourGamesInProgress') }}</h2>
           <button class="file-button refresh" type="button" :disabled="myGames.loading" @click="refreshMyGames(true)">
-            {{ myGames.loading ? 'Loading…' : 'Refresh' }}
+            {{ myGames.loading ? $t('play.createCard.loading') : $t('play.createCard.refresh') }}
           </button>
         </div>
-        <p v-if="myGames.loading" class="note">Loading your games…</p>
-        <p v-else-if="myGames.error" class="error">Couldn't load your games — {{ myGames.error }}</p>
-        <p v-else-if="!myGames.games.length" class="note">No games in progress.</p>
+        <p v-if="myGames.loading" class="note">{{ $t('play.createCard.loadingYourGames') }}</p>
+        <p v-else-if="myGames.error" class="error">{{ $t('play.createCard.couldnTLoadYour', { error: myGames.error }) }}</p>
+        <p v-else-if="!myGames.games.length" class="note">{{ $t('play.createCard.noGamesInProgress') }}</p>
         <ul v-else class="gb-mygames-list">
           <li v-for="game in myGames.games" :key="game.gameId" class="gb-mygames-row">
             <span class="gb-mygames-vs">
@@ -80,13 +81,13 @@ onMounted(() => { refreshMyGames(); });
               <time v-if="game.scheduled || game.started">{{ gameTime(game) }}</time>
             </span>
             <span class="gb-mygames-status" :data-inprogress="game.inProgress">
-              {{ game.inProgress ? (game.half ? `H${game.half} T${game.turn}` : 'in progress') : 'scheduled' }}
+              {{ game.inProgress ? (game.half ? `H${game.half} T${game.turn}` : $t('play.createCard.inProgress')) : 'scheduled' }}
             </span>
-            <button class="primary rejoin" type="button" @click="rejoinMyGame(game)">Rejoin</button>
+            <button class="primary rejoin" type="button" @click="rejoinMyGame(game)">{{ $t('play.createCard.rejoin') }}</button>
           </li>
         </ul>
       </section>
-      <p class="note">Games and teams shown here come directly from config-web.</p>
+      <p class="note">{{ $t('play.createCard.gamesAndTeamsShown') }}</p>
     </section>
 
     <ChallengePopup v-if="challengeOpen" @close="challengeOpen = false" @matched="emit('close')" />

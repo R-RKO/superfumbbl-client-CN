@@ -5,6 +5,7 @@ import { REPLAY_SPEED_LABELS, type ReplaySpeed } from '../game/replay/replayCont
 import type { ReviewControlsBinding } from '../game/replay/reviewControlsBinding';
 import { settings } from '../game/settings';
 import { anchorPanelPosition, dodgePanelObstacle, edgePanelStyle, persistClampedPanelPosition } from '../game/edgePanelLayout';
+import { $t } from '../i18n';
 
 const props = defineProps<{ review?: ReviewControlsBinding }>();
 const replaySpeedOptions = REPLAY_SPEED_LABELS.flatMap((label, index) =>
@@ -288,29 +289,29 @@ function openRecentHistory(): void {
 </script>
 
 <template>
-  <div ref="panelEl" class="replay-controls" :style="panelStyle" :data-playing="playing" :data-state="status.phase" role="toolbar" tabindex="0" aria-label="Replayer controls" aria-keyshortcuts="Space ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight" @keydown.stop="onTransportKeydown" @pointerdown.stop @contextmenu.stop.prevent>
-    <button type="button" class="replay-grip" title="Drag replay controls" aria-label="Drag replay controls" @pointerdown="startDrag">⠿</button>
+  <div ref="panelEl" class="replay-controls" :style="panelStyle" :data-playing="playing" :data-state="status.phase" role="toolbar" tabindex="0" :aria-label="$t('replayLauncher.replayerControls')" aria-keyshortcuts="Space ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight" @keydown.stop="onTransportKeydown" @pointerdown.stop @contextmenu.stop.prevent>
+    <button type="button" class="replay-grip" :title="$t('replayLauncher.dragReplayControls')" :aria-label="$t('replayLauncher.dragReplayControls')" @pointerdown="startDrag">⠿</button>
     <div class="replay-control-group transport-controls">
-      <button class="transport-icon" :disabled="!canTurnBack" title="Previous turn" aria-label="Previous turn" @click="props.review ? props.review.turn(-1) : gameStore.replayTurnBackward()">
+      <button class="transport-icon" :disabled="!canTurnBack" :title="$t('replayLauncher.previousTurn')" :aria-label="$t('replayLauncher.previousTurn')" @click="props.review ? props.review.turn(-1) : gameStore.replayTurnBackward()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14m12-14-7 7 7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!canActivationBack" title="Previous activation" aria-label="Previous activation" @click="skipActivation(-1)">
+      <button class="transport-icon" :disabled="!canActivationBack" :title="$t('replayLauncher.previousActivation')" :aria-label="$t('replayLauncher.previousActivation')" @click="skipActivation(-1)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-7 7 7 7m9-14-7 7 7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!ready || status.cursor <= minimum" title="Previous step" aria-label="Previous step" @click="props.review ? props.review.stepBackward() : gameStore.replayCommandBackward()">
+      <button class="transport-icon" :disabled="!ready || status.cursor <= minimum" :title="$t('replayLauncher.previousStep')" :aria-label="$t('replayLauncher.previousStep')" @click="props.review ? props.review.stepBackward() : gameStore.replayCommandBackward()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" /></svg>
       </button>
       <button class="transport-icon transport-primary" :disabled="!playing && !canPlay" :aria-pressed="playing"
-        :title="playing ? 'Pause' : 'Play'" :aria-label="playing ? 'Pause' : 'Play'" @click="togglePlayback">
+        :title="playing ? $t('replayLauncher.pause') : $t('replayLauncher.play')" :aria-label="playing ? $t('replayLauncher.pause') : $t('replayLauncher.play')" @click="togglePlayback">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path v-if="playing" class="transport-fill" d="M6 5h4v14H6zm8 0h4v14h-4z" /><path v-else class="transport-fill" d="m8 4 12 8-12 8z" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!ready || status.cursor >= status.total" title="Next step" aria-label="Next step" @click="stepForward">
+      <button class="transport-icon" :disabled="!ready || status.cursor >= status.total" :title="$t('replayLauncher.nextStep')" :aria-label="$t('replayLauncher.nextStep')" @click="stepForward">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!canActivationForward" title="Next activation" aria-label="Next activation" @click="skipActivation(1)">
+      <button class="transport-icon" :disabled="!canActivationForward" :title="$t('replayLauncher.nextActivation')" :aria-label="$t('replayLauncher.nextActivation')" @click="skipActivation(1)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 7 7-7 7m9-14 7 7-7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!canTurnForward" title="Next turn" aria-label="Next turn" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
+      <button class="transport-icon" :disabled="!canTurnForward" :title="$t('replayLauncher.nextTurn')" :aria-label="$t('replayLauncher.nextTurn')" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 5 7 7-7 7M18 5v14" /></svg>
       </button>
     </div>
@@ -318,10 +319,10 @@ function openRecentHistory(): void {
          bar (same width), the pair vertically centred against the single-height controls beside it. -->
     <div class="replay-position-stack">
       <label class="replay-turn-select">
-        <span class="sr-only">Jump to recorded turn boundary</span>
+        <span class="sr-only">{{ $t('replayLauncher.jumpToRecordedTurn') }}</span>
         <select :disabled="!ready || turnMarkers.length === 0" :value="selectedTurnMarker ? turnMarkerKey(selectedTurnMarker) : ''"
-          aria-label="Jump to recorded turn boundary" @change="selectTurn">
-          <option value="" disabled>Turns</option>
+          :aria-label="$t('replayLauncher.jumpToRecordedTurn')" @change="selectTurn">
+          <option value="" disabled>{{ $t('replayLauncher.turns') }}</option>
           <!-- Owner 09-25: jump points beyond the turns — the inducement phase and the end-game pane. -->
           <option v-for="chapter in chapters" :key="chapter.id" :value="`chapter:${chapter.id}`" class="chapter-option">{{ chapter.label }}</option>
           <option v-for="marker in turnMarkers" :key="turnMarkerKey(marker)" :value="turnMarkerKey(marker)">{{ marker.label }}</option>
@@ -330,32 +331,32 @@ function openRecentHistory(): void {
     </div>
     <div class="replay-scrubber-stack">
       <label class="replay-scrubber">
-        <span class="sr-only">Replay position</span>
+        <span class="sr-only">{{ $t('replayLauncher.replayPosition') }}</span>
         <input :disabled="!ready" type="range" :min="minimum" :max="status.total" :value="status.cursor"
-          aria-label="Replay position" @pointerdown="props.review?.beginScrub()" @pointerup="props.review?.endScrub()" @pointercancel="props.review?.endScrub()"
+          :aria-label="$t('replayLauncher.replayPosition')" @pointerdown="props.review?.beginScrub()" @pointerup="props.review?.endScrub()" @pointercancel="props.review?.endScrub()"
           @keydown="props.review?.beginScrub()" @keyup="props.review?.endScrub()" @blur="props.review?.endScrub()" @change="props.review?.endScrub()"
           @input="seek(Number(($event.target as HTMLInputElement).value))" />
       </label>
-      <span class="replay-position" aria-label="Current replay position" :title="status.commandNr != null ? 'Command #' + status.commandNr : undefined">
+      <span class="replay-position" :aria-label="$t('replayLauncher.currentReplayPosition')" :title="status.commandNr != null ? $t('replayLauncher.command') + status.commandNr : undefined">
         <strong>{{ status.cursor }}</strong><i>/</i>{{ status.total }}
       </span>
     </div>
     <span class="control-separator" aria-hidden="true"></span>
     <label class="replay-speed">
-      <span class="sr-only">Speed</span>
-      <select :value="speed" aria-label="Replay speed" aria-describedby="replay-speed-help"
-        title="Real time follows the recorded server clock; coaching pauses longer than 2 seconds are shortened."
+      <span class="sr-only">{{ $t('replayLauncher.speed') }}</span>
+      <select :value="speed" :aria-label="$t('replayLauncher.replaySpeed')" aria-describedby="replay-speed-help"
+        :title="$t('replayLauncher.realTimeFollowsThe')"
         @change="changeSpeed">
         <option v-for="option in replaySpeedOptions" :key="option.label" :value="option.value">{{ option.label }}</option>
       </select>
-      <span id="replay-speed-help" class="sr-only">Real time follows the recorded server clock with long coaching pauses shortened.</span>
+      <span id="replay-speed-help" class="sr-only">{{ $t('replayLauncher.realTimeFollowsThe2') }}</span>
     </label>
     <div v-if="props.review && (props.review.segments.length > 1 || props.review.pinned)" class="review-coverage">
       <label>
-        <span>History segment</span>
+        <span>{{ $t('replayLauncher.historySegment') }}</span>
         <!-- Owner 09-15: each segment's turns are nested under it (see selectSegmentOrTurn). -->
-        <select aria-label="History segment" :value="selectedSegmentValue" @change="selectSegmentOrTurn">
-          <option v-if="!props.review.segments.some((segment) => segment.id === props.review!.selectedSegment)" value="" disabled>Pinned position outside recent history</option>
+        <select :aria-label="$t('replayLauncher.historySegment')" :value="selectedSegmentValue" @change="selectSegmentOrTurn">
+          <option v-if="!props.review.segments.some((segment) => segment.id === props.review!.selectedSegment)" value="" disabled>{{ $t('replayLauncher.pinnedPositionOutsideRecent') }}</option>
           <template v-for="segment in props.review.segments" :key="segment.id">
             <option :value="`seg:${segment.id}`">{{ segmentRowLabel(segment) }}</option>
             <option v-for="(marker, index) in segmentTurnStarts(segment.id)" :key="turnMarkerKey(marker)" :value="`turn:${turnMarkerKey(marker)}`"
@@ -364,11 +365,11 @@ function openRecentHistory(): void {
         </select>
       </label>
       <button v-if="props.review.pinned && props.review.segments.length" type="button" class="open-recent-history"
-        aria-label="Open recent history" @click="openRecentHistory">Open recent history</button>
+        :aria-label="$t('replayLauncher.openRecentHistory')" @click="openRecentHistory">{{ $t('replayLauncher.openRecentHistory') }}</button>
     </div>
     <span v-if="props.review?.notice" class="review-notice" role="status">{{ props.review.notice }}</span>
     <span v-if="status.failure" class="replay-failure" role="alert"><b aria-hidden="true">!</b>{{ status.failure.message }}</span>
-    <span class="replay-resizer" title="Resize replay controls" aria-label="Resize replay controls" role="button" @pointerdown="startResize">⤡</span>
+    <span class="replay-resizer" :title="$t('replayLauncher.resizeReplayControls')" :aria-label="$t('replayLauncher.resizeReplayControls')" role="button" @pointerdown="startResize">⤡</span>
   </div>
 </template>
 

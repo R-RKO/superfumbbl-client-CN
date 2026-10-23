@@ -207,30 +207,30 @@ function fitToPanel(): void {
 /** One line in the frame's chrome whenever the queue view is NOT what the frame shows, saying why. */
 const status = computed(() => {
   if (surface.shell !== 'available') return '';
-  if (focus.supported === false) return 'This version of the app cannot show only the queue - showing the whole page. The latest installer can.';
-  if (enhanced.value && offersWaiting.value) return 'Match offer received';
+  if (focus.supported === false) return t('home.status.thisVersionOfThe');
+  if (enhanced.value && offersWaiting.value) return t('home.status.matchOfferReceived');
   if (!enhanced.value || focus.found !== false) return '';
   switch (focus.reason) {
-    case 'dialog': return 'FUMBBL is showing a dialog - showing the whole page until it closes.';
-    case 'frame': return 'The queue panel is inside a frame on this page - showing the whole page.';
-    case 'shadow': return 'The queue panel is inside a component this window cannot crop - showing the whole page.';
-    case 'error': return `The page reported an error${focus.error ? ` (${focus.error})` : ''} - showing the whole page.`;
+    case 'dialog': return t('home.status.fumbblIsShowingA');
+    case 'frame': return t('home.status.theQueuePanelIs');
+    case 'shadow': return t('home.status.theQueuePanelIs2');
+    case 'error': return t('fumbblFloat.focus.pageError', { detail: focus.error ? ` (${focus.error})` : '' });
     // Owner 10-09 ("The screen is black on the float"): a frame is never silently empty. If the page would cut the
     // panel off, the crop is not used at all and the frame says so.
-    case 'clipped': return 'The queue view cannot be drawn on this page - showing the whole page.';
-    case 'no-answer': return 'The page did not answer - showing the whole page.';
+    case 'clipped': return t('home.status.theQueueViewCannot');
+    case 'no-answer': return t('home.status.thePageDidNot');
     case 'loading': return '';
-    default: return 'Queue panel not found on this page - showing the page.';
+    default: return t('home.status.queuePanelNotFound');
   }
 });
 
 /** Shown under the site; visible only while the site is not. */
 const note = computed(() => {
-  if (surface.shell === 'detecting') return 'Loading FUMBBL…';
-  if (surface.shell !== 'available') return 'The FUMBBL.COM pane needs the latest installer.';
-  if (surface.blocked) return 'The page kept leaving fumbbl.com, so it was stopped. Open the FUMBBL.COM page to try again.';
-  if (surface.failed) return 'The FUMBBL website could not be shown here. Open the FUMBBL.COM page to try again.';
-  return 'FUMBBL is still open. It is hidden while a menu or dialog is in front of this window.';
+  if (surface.shell === 'detecting') return t('home.note.loadingFumbbl');
+  if (surface.shell !== 'available') return t('home.note.theFumbblComPane');
+  if (surface.blocked) return t('home.note.thePageKeptLeaving');
+  if (surface.failed) return t('home.note.theFumbblWebsiteCould');
+  return t('home.note.fumbblIsStillOpen');
 });
 
 // ---- move (header only) ---------------------------------------------------------------------------------------------
@@ -422,6 +422,10 @@ watch([enhanced, floatShowing], ([can, showing]) => {
   recheck = window.setInterval(() => homeFocus.set('queue'), FOCUS_RECHECK_MS);
 }, { immediate: true });
 
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 let release: (() => void) | null = null;
 
@@ -471,23 +475,23 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
     class="fumbbl-float"
     :class="{ 'fumbbl-float--moving': moving }"
     :style="frameStyle"
-    aria-label="FUMBBL window"
+    :aria-label="$t('home.fumbblWindow')"
     data-testid="fumbbl-float"
     v-bind="clickThrough"
   >
     <header class="fumbbl-float-head" data-testid="fumbbl-float-head" @pointerdown="startDrag">
-      <span class="fumbbl-float-grip" title="Drag to move" aria-hidden="true">⠿</span>
-      <span class="fumbbl-float-title">FUMBBL</span>
+      <span class="fumbbl-float-grip" :title="$t('home.dragToMove')" aria-hidden="true">⠿</span>
+      <span class="fumbbl-float-title">{{ $t('home.fumbbl') }}</span>
       <button
         type="button"
         class="fumbbl-float-btn fumbbl-float-close"
         data-testid="fumbbl-float-close"
-        aria-label="Close the FUMBBL window"
+        :aria-label="$t('home.closeTheFumbblWindow')"
         :title="queued.queued === 'yes'
-          ? 'You are in the draw: leave the draw on the page before closing this window'
+          ? $t('home.youAreInThe')
           : queued.queued === 'maybe'
-            ? 'You may still be in the draw: this window asks before it closes'
-            : 'Close this window and the FUMBBL page in it (it stops running; open FUMBBL.COM to load it again)'"
+            ? $t('home.youMayStillBe')
+            : $t('home.closeThisWindowAnd')"
         :data-queued="queued.queued"
         @click="close()"
       >×</button>
@@ -502,12 +506,12 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
           class="fumbbl-float-btn"
           data-testid="fumbbl-float-fit"
           :data-auto="settings.fumbblFloatQueueSize === null"
-          title="Fit the window to the Blackbox panel"
+          :title="$t('home.fitTheWindowTo')"
           @click="fitToPanel()"
-        >Fit</button>
+        >{{ $t('home.fit') }}</button>
       </div>
       <div class="fumbbl-float-zoom">
-        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-zoom-out" aria-label="Zoom out" :disabled="zoom <= FLOAT_ZOOM_MIN" @click="setZoom(stepHomeZoom(zoom, -1, FLOAT_ZOOM_MIN))">−</button>
+        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-zoom-out" :aria-label="$t('home.zoomOut')" :disabled="zoom <= FLOAT_ZOOM_MIN" @click="setZoom(stepHomeZoom(zoom, -1, FLOAT_ZOOM_MIN))">−</button>
         <input
           class="fumbbl-float-zoom-range"
           data-testid="fumbbl-float-zoom"
@@ -516,12 +520,12 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
           :max="HOME_ZOOM_MAX"
           :step="HOME_ZOOM_STEP"
           :value="zoom"
-          aria-label="FUMBBL window zoom"
+          :aria-label="$t('home.fumbblWindowZoom')"
           :aria-valuetext="homeZoomLabel(zoom, FLOAT_ZOOM_MIN)"
           @input="setZoom(($event.target as HTMLInputElement).valueAsNumber)"
         />
-        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-zoom-in" aria-label="Zoom in" :disabled="zoom >= HOME_ZOOM_MAX" @click="setZoom(stepHomeZoom(zoom, 1, FLOAT_ZOOM_MIN))">+</button>
-        <button type="button" class="fumbbl-float-btn fumbbl-float-zoom-value" data-testid="fumbbl-float-zoom-reset" title="Reset to 100%" @click="setZoom(1)">{{ homeZoomLabel(zoom, FLOAT_ZOOM_MIN) }}</button>
+        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-zoom-in" :aria-label="$t('home.zoomIn')" :disabled="zoom >= HOME_ZOOM_MAX" @click="setZoom(stepHomeZoom(zoom, 1, FLOAT_ZOOM_MIN))">+</button>
+        <button type="button" class="fumbbl-float-btn fumbbl-float-zoom-value" data-testid="fumbbl-float-zoom-reset" :title="$t('home.resetTo100')" @click="setZoom(1)">{{ homeZoomLabel(zoom, FLOAT_ZOOM_MIN) }}</button>
       </div>
     </div>
     <p v-if="status" class="fumbbl-float-status" role="note" data-testid="fumbbl-float-status" :title="status" :data-reason="focus.supported === false ? 'unsupported' : offersWaiting ? 'offers' : focus.reason">{{ status }}</p>
@@ -530,18 +534,18 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
          (the app's Esc handling treats dialogs specially). -->
     <div v-if="notice" class="fumbbl-float-notice" role="alert" data-testid="fumbbl-float-notice" :data-kind="notice">
       <p class="fumbbl-float-notice-text">{{ notice === 'queued'
-        ? 'You are still in the draw. Leave the draw before closing this window.'
-        : 'You may still be in the draw: the page is not showing it right now. Leave the draw before closing this window.' }}</p>
+        ? $t('home.fumbblFloatNotice.youAreStillIn')
+        : $t('home.fumbblFloatNotice.youMayStillBe') }}</p>
       <div class="fumbbl-float-notice-actions">
         <button
           v-if="canCloseAnyway"
           type="button"
           class="fumbbl-float-btn"
           data-testid="fumbbl-float-notice-close"
-          title="Close this window and the FUMBBL page in it although you may still be in the draw"
+          :title="$t('home.fumbblFloatNotice.closeThisWindowAnd')"
           @click="closeAnyway()"
-        >Close anyway</button>
-        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-notice-ok" @click="acknowledgeNotice()">OK</button>
+        >{{ $t('home.fumbblFloatNotice.closeAnyway') }}</button>
+        <button type="button" class="fumbbl-float-btn" data-testid="fumbbl-float-notice-ok" @click="acknowledgeNotice()">{{ $t('home.fumbblFloatNotice.ok') }}</button>
       </div>
     </div>
     <div ref="hostEl" class="fumbbl-float-host" :data-showing="surface.showing && surface.owner === 'float'">
@@ -551,7 +555,7 @@ const clickThrough = { [FOCUS_CLICK_THROUGH_ATTRIBUTE]: '' };
       <span
         class="fumbbl-float-resize"
         data-testid="fumbbl-float-resize"
-        title="Drag to resize"
+        :title="$t('home.dragToResize')"
         aria-hidden="true"
         @pointerdown="startResize"
       ></span>

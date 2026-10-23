@@ -30,6 +30,7 @@ import {
   startHomeJoinWatch,
   stepHomeZoom,
 } from '../game/fumbblHome';
+import { $t } from '../i18n';
 
 
 const host = ref<HTMLElement | null>(null);
@@ -204,16 +205,16 @@ onBeforeUnmount(() => {
         type="button"
         class="history-step"
         data-testid="fumbbl-history-back"
-        title="Go back a page on FUMBBL"
+        :title="$t('home.fumbblHomeBlade.goBackAPage')"
         @click="fumbblHomeHistory('back')"
-      >‹ Back</button>
+      >{{ $t('home.fumbblHomeBlade.back') }}</button>
       <button
         type="button"
         class="history-step"
         data-testid="fumbbl-history-forward"
-        title="Go forward a page on FUMBBL"
+        :title="$t('home.fumbblHomeBlade.goForwardAPage')"
         @click="fumbblHomeHistory('forward')"
-      >Forward ›</button>
+      >{{ $t('home.fumbblHomeBlade.forward') }}</button>
     </div>
     <!-- Owner 10-08: keep the site (and a Gamefinder queue in it) open in a small movable window while watching a game
          or a replay. In this strip, never over the site. -->
@@ -224,45 +225,45 @@ onBeforeUnmount(() => {
       data-testid="fumbbl-float-toggle"
       :aria-pressed="ui.fumbblFloating"
       :title="ui.fumbblFloating
-        ? 'FUMBBL stays open in a small window when you leave this page. Click to turn that off.'
-        : 'Keep FUMBBL open in a small movable window while you watch a game or a replay - for example while you wait in the Gamefinder queue.'"
+        ? $t('home.fumbblHomeBlade.fumbblStaysOpenIn')
+        : $t('home.fumbblHomeBlade.keepFumbblOpenIn')"
       @click="toggleFloating()"
-    >{{ ui.fumbblFloating ? 'Keeping Queue Open' : 'Keep Queue Open' }}</button>
+    >{{ ui.fumbblFloating ? $t('home.fumbblHomeBlade.keepingQueueOpen') : $t('home.fumbblHomeBlade.keepQueueOpen') }}</button>
   </div>
   <section ref="host" class="fumbbl-home-pane" aria-label="FUMBBL.COM" :data-showing="showing">
     <div v-if="shell === 'detecting'" class="fumbbl-home-note" role="note">
-      <p class="hint">Loading FUMBBL…</p>
+      <p class="hint">{{ $t('home.fumbblHomeBlade.loadingFumbbl') }}</p>
     </div>
     <div v-else-if="shell !== 'available'" class="fumbbl-home-note" role="note">
       <h3>FUMBBL.COM</h3>
-      <p class="hint">The FUMBBL.COM pane needs the latest installer.</p>
-      <button type="button" @click="openInBrowser()">Open in browser</button>
+      <p class="hint">{{ $t('home.fumbblHomeBlade.theFumbblComPane') }}</p>
+      <button type="button" @click="openInBrowser()">{{ $t('home.fumbblHomeBlade.openInBrowser') }}</button>
     </div>
     <div v-else-if="blocked" class="fumbbl-home-note" role="note">
       <h3>FUMBBL.COM</h3>
-      <p class="hint">The page kept leaving fumbbl.com, so it was stopped here.</p>
+      <p class="hint">{{ $t('home.fumbblHomeBlade.thePageKeptLeaving') }}</p>
       <div class="fumbbl-home-actions">
-        <button type="button" class="primary" @click="openInBrowser()">Open in browser</button>
-        <button type="button" @click="retryBlocked()">Try again</button>
+        <button type="button" class="primary" @click="openInBrowser()">{{ $t('home.fumbblHomeBlade.openInBrowser') }}</button>
+        <button type="button" @click="retryBlocked()">{{ $t('home.fumbblHomeBlade.tryAgain') }}</button>
       </div>
     </div>
     <div v-else-if="failed" class="fumbbl-home-note" role="note">
       <h3>FUMBBL.COM</h3>
-      <p class="hint">The FUMBBL website could not be shown here.</p>
+      <p class="hint">{{ $t('home.fumbblHomeBlade.theFumbblWebsiteCould') }}</p>
       <div class="fumbbl-home-actions">
-        <button type="button" class="primary" @click="retry()">Try again</button>
-        <button type="button" @click="openInBrowser()">Open in browser</button>
+        <button type="button" class="primary" @click="retry()">{{ $t('home.fumbblHomeBlade.tryAgain') }}</button>
+        <button type="button" @click="openInBrowser()">{{ $t('home.fumbblHomeBlade.openInBrowser') }}</button>
       </div>
     </div>
     <div v-else class="fumbbl-home-note fumbbl-home-under" aria-hidden="true">
-      <p class="hint">Loading FUMBBL…</p>
+      <p class="hint">{{ $t('home.fumbblHomeBlade.loadingFumbbl') }}</p>
     </div>
   </section>
   <!-- Owner 10-06: zoom for the docked site ("text can be a bit small"). A strip BELOW the pane element, never over it:
        the site's bounds are the pane's own rect, so the native webview never covers this control and the occlusion
        probe never sees it. -->
   <div v-if="shell === 'available'" class="fumbbl-home-zoom">
-    <button type="button" class="zoom-step" aria-label="Zoom out" :disabled="zoom <= HOME_ZOOM_MIN" @click="setZoom(stepHomeZoom(zoom, -1))">−</button>
+    <button type="button" class="zoom-step" :aria-label="$t('home.fumbblHomeBlade.zoomOut')" :disabled="zoom <= HOME_ZOOM_MIN" @click="setZoom(stepHomeZoom(zoom, -1))">−</button>
     <input
       class="zoom-range"
       type="range"
@@ -270,12 +271,12 @@ onBeforeUnmount(() => {
       :max="HOME_ZOOM_MAX"
       :step="HOME_ZOOM_STEP"
       :value="zoom"
-      aria-label="FUMBBL page zoom"
+      :aria-label="$t('home.fumbblHomeBlade.fumbblPageZoom')"
       :aria-valuetext="homeZoomLabel(zoom)"
       @input="setZoom(($event.target as HTMLInputElement).valueAsNumber)"
     />
-    <button type="button" class="zoom-step" aria-label="Zoom in" :disabled="zoom >= HOME_ZOOM_MAX" @click="setZoom(stepHomeZoom(zoom, 1))">+</button>
-    <button type="button" class="zoom-value" title="Reset to 100%" @click="setZoom(1)">{{ homeZoomLabel(zoom) }}</button>
+    <button type="button" class="zoom-step" :aria-label="$t('home.fumbblHomeBlade.zoomIn')" :disabled="zoom >= HOME_ZOOM_MAX" @click="setZoom(stepHomeZoom(zoom, 1))">+</button>
+    <button type="button" class="zoom-value" :title="$t('home.fumbblHomeBlade.resetTo100')" @click="setZoom(1)">{{ homeZoomLabel(zoom) }}</button>
   </div>
   </div>
 </template>

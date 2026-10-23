@@ -10,6 +10,10 @@ import {
 } from '../game/configWebAuth';
 import { pairConfigWebSession } from '../game/configWebSso';
 import { botConfigBaseUrl, settings } from '../game/settings';
+import { $t, useLiveSet } from '../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../i18n';
 
 type PublicIdentity = Omit<ConfigWebCoordinationIdentity, 'token'>;
 const identity = ref<PublicIdentity | null>(configWebCoordinationIdentity());
@@ -34,7 +38,7 @@ async function signInDiscord(): Promise<void> {
   pairingAbort?.abort();
   pairingAbort = new AbortController();
   busy.value = true;
-  status.value = 'Complete Discord sign-in in your browser…';
+  liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.completeDiscordSignIn'));
   const result = await pairConfigWebSession({
     baseUrl: botConfigBaseUrl(),
     transport,
@@ -44,26 +48,26 @@ async function signInDiscord(): Promise<void> {
   busy.value = false;
   if (result.kind === 'ok') {
     identity.value = configWebCoordinationIdentity();
-    status.value = `Signed in as ${result.identity.displayName}.`;
+    liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.signedInAsDisplayname', { displayName: result.identity.displayName }));
   } else if (result.kind === 'cancelled') status.value = '';
-  else if (result.kind === 'expired') status.value = 'Discord sign-in expired. Try again.';
-  else status.value = `Coordination sign-in is unavailable (${result.detail}). Game joining is unaffected.`;
+  else if (result.kind === 'expired') liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.discordSignInExpired'));
+  else liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.coordinationSignInIs', { detail: result.detail }));
 }
 
 async function signInWithCredentials(): Promise<void> {
   const coach = settings.coach40k.trim();
   const password = coachPassword();
   if (!coach || !password) {
-    status.value = 'Set your Super FUMBBL userid/password in Settings → Connection.';
+    liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.setYourSuperFumbbl'));
     return;
   }
   busy.value = true;
   try {
     const token = await ensureConfigWebToken({ coach, password }, transport, botConfigBaseUrl());
     identity.value = configWebCoordinationIdentity();
-    status.value = token ? `Signed in as ${coach}.` : 'Userid/password sign-in failed. Game joining is unaffected.';
+    liveSetHere(status, 'value', () => token ? t('hud.coordinationIdentityChip.text.signedInAsCoach', { coach }) : t('hud.coordinationIdentityChip.text.useridPasswordSignIn'));
   } catch (error) {
-    status.value = `Coordination sign-in is unavailable (${(error as Error)?.message ?? String(error)}). Game joining is unaffected.`;
+    liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.coordinationSignInIs2', { p0: (error as Error)?.message ?? String(error) }));
   } finally { busy.value = false; }
 }
 
@@ -72,25 +76,25 @@ function signOut(): void {
   clearConfigWebToken();
   identity.value = null;
   busy.value = false;
-  status.value = 'Signed out of coordination features.';
+  liveSetHere(status, 'value', () => t('hud.coordinationIdentityChip.text.signedOutOfCoordination'));
 }
 
 onBeforeUnmount(() => pairingAbort?.abort());
 </script>
 
 <template>
-  <aside class="coordination" aria-label="Coordination identity">
+  <aside class="coordination" :aria-label="$t('hud.coordinationIdentityChip.coordinationIdentity')">
     <div v-if="identity" class="identity-chip">
       <img v-if="identity.avatarUrl" :src="identity.avatarUrl" alt="" referrerpolicy="no-referrer" />
       <span class="identity-avatar" v-else aria-hidden="true">{{ identity.displayName.slice(0, 1).toUpperCase() }}</span>
-      <span><small>Coordination</small><b>{{ identity.displayName }}</b></span>
-      <button type="button" :disabled="busy" @click="signOut">Sign out</button>
+      <span><small>{{ $t('hud.coordinationIdentityChip.coordination') }}</small><b>{{ identity.displayName }}</b></span>
+      <button type="button" :disabled="busy" @click="signOut">{{ $t('hud.coordinationIdentityChip.signOut') }}</button>
     </div>
     <div v-else class="identity-actions">
       <button class="discord-button" type="button" :disabled="busy" @click="signInDiscord">
-        {{ busy ? 'Waiting…' : 'Sign in with Discord' }}
+        {{ busy ? $t('hud.coordinationIdentityChip.waiting') : $t('hud.coordinationIdentityChip.signInWithDiscord') }}
       </button>
-      <button class="credential-button" type="button" :disabled="busy" @click="signInWithCredentials">log in using userid/password</button>
+      <button class="credential-button" type="button" :disabled="busy" @click="signInWithCredentials">{{ $t('hud.coordinationIdentityChip.logInUsingUserid') }}</button>
     </div>
     <p v-if="status" class="coordination-status" role="status">{{ status }}</p>
   </aside>

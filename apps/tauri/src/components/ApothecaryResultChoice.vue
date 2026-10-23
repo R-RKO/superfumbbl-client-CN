@@ -2,6 +2,7 @@
 import { computed, type CSSProperties } from 'vue';
 import type { PlayerSpp } from '../game/logic/playerSpp';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
+import { $t } from '../i18n';
 
 export interface ApothecaryResultChoiceView {
   player: string;
@@ -28,26 +29,26 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
 
 <template>
   <PitchConfirmationPanel class="apo-result-choice" :class="[seatClass, { readonly: !choice.mine }]"
-    title="Choose Injury Result" label="Apothecary injury result choice" :position-style="panelStyle" draggable
+    :title="$t('dialogs.apothecaryResultChoice.chooseInjuryResult')" :label="$t('dialogs.apothecaryResultChoice.apothecaryInjuryResultChoice')" :position-style="panelStyle" draggable
     test-id="apothecary-result-choice" @drag-start="$emit('dragStart', $event)">
     <div class="apo-result-head">
       <span class="apo-result-icon"><img :src="iconUrl" alt="" /></span>
-      <span><span class="apo-result-kicker">{{ choice.mine ? 'Your apothecary reroll' : 'Opposition apothecary reroll' }}</span><strong>{{ choice.player }}</strong><span v-if="choice.spp" class="apo-result-spp" data-testid="apothecary-spp">SPP {{ choice.spp.total }}<span v-if="choice.spp.earned > 0" class="apo-result-spp-gain"> +{{ choice.spp.earned }}</span></span></span>
+      <span><span class="apo-result-kicker">{{ choice.mine ? $t('dialogs.apothecaryResultChoice.yourApothecaryReroll') : $t('dialogs.apothecaryResultChoice.oppositionApothecaryReroll') }}</span><strong>{{ choice.player }}</strong><span v-if="choice.spp" class="apo-result-spp" data-testid="apothecary-spp">{{ $t('dialogs.apothecaryResultChoice.sppTotal', { total: choice.spp.total }) }}<span v-if="choice.spp.earned > 0" class="apo-result-spp-gain"> +{{ choice.spp.earned }}</span></span></span>
     </div>
     <div class="apo-results">
       <!-- Owner: the D16 roll values are gone (the injury names carry the choice); names render one-line. -->
       <button type="button" class="apo-result original" :disabled="!choice.mine"
         @pointerdown.stop @click.stop="$emit('choose', 'old')">
-        <span class="apo-result-label">Original</span>
+        <span class="apo-result-label">{{ $t('dialogs.apothecaryResultChoice.original') }}</span>
         <strong>{{ choice.oldInjury }}</strong>
       </button>
       <button type="button" class="apo-result rerolled" :disabled="!choice.mine"
         @pointerdown.stop @click.stop="$emit('choose', 'new')">
-        <span class="apo-result-label">Rerolled</span>
+        <span class="apo-result-label">{{ $t('dialogs.apothecaryResultChoice.rerolled') }}</span>
         <strong>{{ choice.newInjury }}</strong>
       </button>
     </div>
-    <div class="apo-result-help">{{ choice.mine ? 'Choose which authoritative injury result to keep.' : 'Waiting for the injured coach to choose…' }}</div>
+    <div class="apo-result-help">{{ choice.mine ? $t('dialogs.apothecaryResultChoice.chooseWhichAuthoritativeInjury') : $t('dialogs.apothecaryResultChoice.waitingForTheInjured') }}</div>
   </PitchConfirmationPanel>
 </template>
 

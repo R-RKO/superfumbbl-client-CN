@@ -8,6 +8,7 @@ import { playerName } from './reportFormatter';
 import { adjacentSavageryTargetIds, dodgeSkillCancelledAt, normSquare, skillMarkedUsed } from './logic/availableActions';
 import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
+import { t, terms, data } from '../i18n';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -39,8 +40,8 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
   const action = jumpActionName(reRollActionName(dialog.reRolledAction), jumpKind);
   const name = playerName(game, playerId);
   const label = /foul ?appearance/i.test(String(dialog.reRolledAction ?? ''))
-    ? (mine ? `${name} failed their Foul Appearance roll. Use a reroll?` : `${name} is deciding whether to reroll…`)
-    : `Reroll ${action}${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
+    ? (mine ? t('dialogs.reroll.label.nameFailedTheirFoul', { name }) : t('dialogs.reroll.label.nameIsDecidingWhether', { name }))
+    : modifier ? t('dialogs.reroll.short.orUse', { action: terms(action), skill: terms(prettySkillName(modifier)) }) : t('dialogs.reroll.short.plain', { action: terms(action) });
   const rulesVersion = game.gameOptions.gameOptionArray.find((o) => o.gameOptionId === 'rulesVersion')?.gameOptionValue;
   const roll = presentation.roll ?? d6RerollRoll(prior?.roll ?? undefined, rulesVersion, dialog.reRolledAction);
   const needed = passTruth ? presentation.needed : presentation.needed ?? d6RerollNeeded(dialog.minimumRoll, prior?.needed ?? undefined, rulesVersion, dialog.reRolledAction, presentation.thresholdless);
@@ -202,7 +203,7 @@ export function ttmSuperbTarget(messages: string[]): number | undefined {
 /** Owner 10-19: the wire's "Jump" reads as the mover's own skill - "Leap" or "Pogo Stick" (logActionPlates.jumpKindFor). */
 export function jumpActionName(action: string, jumpKind: 'jump' | 'leap' | 'pogo' | undefined): string {
   if (!/^jump$/i.test(action.trim()) || !jumpKind || jumpKind === 'jump') return action;
-  return jumpKind === 'leap' ? 'Leap' : 'Pogo Stick';
+  return terms(jumpKind === 'leap' ? 'Leap' : 'Pogo Stick');
 }
 
 export function reRollPromptPresentation(
@@ -248,9 +249,11 @@ export function reRollPromptPresentation(
   // Exact-match the raw wire action so `Punt Direction` (a different, unaffected offer) is not caught.
   const isBncDirection = String(dp.reRolledAction ?? '').trim() === 'Direction';
   const question = isBncDirection
-    ? 'Reroll direction?'
-    : `Do you want to reroll the ${failed ? 'failed ' : ''}${action}`
-      + `${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
+    ? t('dialogs.reroll.question.rerollDirection')
+    // i18n (Astra r1 #8): four whole questions; the action and skill are game terms in the active locale.
+    : modifier
+      ? t(failed ? 'dialogs.reroll.question.failedOrUse' : 'dialogs.reroll.question.orUse', { action: terms(action), skill: terms(prettySkillName(modifier)) })
+      : t(failed ? 'dialogs.reroll.question.failed' : 'dialogs.reroll.question.plain', { action: terms(action) });
   let needed = thresholdless ? undefined : dialogNeeded;
   if (passTruth?.reportId === 'passRoll') needed = passTruth.minimumRoll;
   if (passTruth?.reportId === 'throwTeamMateRoll') needed = ttmSuperbTarget(rawMessages);
@@ -278,15 +281,15 @@ export function offeredReRollOptions(
   const rrProps = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
   const hasPro = rrProps.includes('PRO') || !!dp.proReRollOption;
   const hasMascot = rrProps.includes('MASCOT');
-  const specialTeamLabel = rrProps.includes('BRILLIANT_COACHING') ? 'Brilliant Coaching'
-    : rrProps.includes('PUMP_UP_THE_CROWD') ? 'Pump up the Crowd'
-      : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
+  const specialTeamLabel = rrProps.includes('BRILLIANT_COACHING') ? t('dialogs.reroll.specialTeamLabel.brilliantCoaching')
+    : rrProps.includes('PUMP_UP_THE_CROWD') ? t('dialogs.reroll.specialTeamLabel.pumpUpTheCrowd')
+      : rrProps.includes('SHOW_STAR') ? t('dialogs.reroll.specialTeamLabel.starOfTheShow')
         : null;
   // Owner 09-19 (wire g1944287 seq 295/470): the server only enters useTeamReRoll for the "Team ReRoll" source
   // (upstream bb2025 RollMechanic.useReRoll:288-314) and picks the special source itself, Brilliant Coaching
   // before TRR (findUsedTeamReRollSource:441-458). A "Brilliant Coaching ReRoll" source has no skill behind
   // it, so the server dropped the answer: no re-roll, nothing consumed, the pick-up failure stood.
-  const specialTeamSource = specialTeamLabel ? 'Team ReRoll' : null;
+  const specialTeamSource = specialTeamLabel ? data('Team ReRoll') : null; // wire value, never localised
   const hasTeam = rrProps.some((property) =>
     ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property))
     || !!dp.teamReRollOption;
@@ -295,17 +298,17 @@ export function offeredReRollOptions(
   if (modifyingSkill && modifyingSkill !== skillName) {
     options.push({ label: valuedSkillLabel(modifyingSkill, skillDisplayValues), source: modifyingSkill, response: 'skill', role: 'modifier' });
   }
-  if (hasPro) options.push({ label: 'Pro', source: 'Pro', response: 'reroll', role: 'source' });
+  if (hasPro) options.push({ get label() { return t('dialogs.reroll.text.pro'); }, source: 'Pro', response: 'reroll', role: 'source' });
   for (const composite of proCompositeReRollOptions(rrProps)) {
     options.push({ ...composite, response: 'reroll', role: 'source' });
   }
   if (specialTeamLabel && specialTeamSource) {
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
   } else if (hasMascot) {
-    options.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', response: 'reroll', role: 'source' });
-    if (hasTeam) options.push({ label: 'Mascot + RR', source: 'Mascot TRR', response: 'reroll', role: 'source' });
+    options.push({ get label() { return t('dialogs.reroll.text.teamMascotNoReroll'); }, source: 'Team Mascot', response: 'reroll', role: 'source' });
+    if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.mascotRr'); }, source: 'Mascot TRR', response: 'reroll', role: 'source' });
   } else if (hasTeam) {
-    options.push({ label: 'Team Reroll', source: 'Team ReRoll', response: 'reroll', role: 'source' });
+    options.push({ get label() { return t('dialogs.reroll.text.teamReroll'); }, source: 'Team ReRoll', response: 'reroll', role: 'source' });
   }
   return options;
 }
@@ -316,10 +319,10 @@ export function proCompositeReRollOptions(rrProps: string[]): { label: string; s
   const hasTeam = rrProps.some((property) =>
     ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property));
   const options: { label: string; source: string }[] = [];
-  if (hasTeam) options.push({ label: 'Pro, then Team Reroll', source: 'Pro TRR' });
-  if (hasMascot) options.push({ label: 'Pro, then Team Mascot', source: 'Pro Mascot' });
+  if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamReroll'); }, source: 'Pro TRR' });
+  if (hasMascot) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot'); }, source: 'Pro Mascot' });
   if (hasMascot && hasTeam) {
-    options.push({ label: 'Pro, then Team Mascot, then Team Reroll', source: 'Pro Mascot TRR' });
+    options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot2'); }, source: 'Pro Mascot TRR' });
   }
   return options;
 }

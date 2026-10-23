@@ -48,3 +48,4 @@ sim/logs/*.out
 # python bytecode (tools/fly-brain-server)
 __pycache__/
 *.pyc
+apps/tauri/src/i18n/sources/*.raw.json

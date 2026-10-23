@@ -19,6 +19,7 @@ import { ROSTER_POPOUT_DEFAULT_ROWS, ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, 
 import type { PostGameSide, Side } from '../game/postGameProjection';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
+import { $t } from '../i18n';
 
 const props = withDefaults(defineProps<{
   teams: { home: PostGameSide; away: PostGameSide } | null;
@@ -209,16 +210,16 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-show="!suppressed" ref="panelEl" class="roster-popout" role="dialog" aria-label="Roster" data-testid="roster-popout" :style="frameStyle">
+    <div v-show="!suppressed" ref="panelEl" class="roster-popout" role="dialog" :aria-label="$t('cards.rosterPopout.roster')" data-testid="roster-popout" :style="frameStyle">
       <div ref="headEl" class="roster-popout-head" @pointerdown="startDrag">
-        <span class="roster-popout-grip" title="Drag to move" aria-hidden="true">⠿</span>
-        <span class="roster-popout-title"><img class="roster-popout-icon" :src="helmetIcon" alt="" /> ROSTER</span>
-        <button type="button" class="roster-popout-btn" title="Close (Esc)" aria-label="Close roster" @click="emit('close')">✕</button>
+        <span class="roster-popout-grip" :title="$t('cards.rosterPopout.dragToMove')" aria-hidden="true">⠿</span>
+        <span class="roster-popout-title"><img class="roster-popout-icon" :src="helmetIcon" alt="" />{{ $t('cards.rosterPopout.roster2') }}</span>
+        <button type="button" class="roster-popout-btn" :title="$t('cards.rosterPopout.closeEsc')" :aria-label="$t('cards.rosterPopout.closeRoster')" @click="emit('close')">✕</button>
       </div>
       <div ref="bodyEl" class="roster-popout-body">
         <PostGameRoster v-if="teams" v-model:side="side" :teams="teams" :portrait="portrait" :local-side="localSide" scalable
           :skill-mode="skillMode" :icon-style="iconStyle" />
-        <p v-else class="roster-popout-empty">No game loaded</p>
+        <p v-else class="roster-popout-empty">{{ $t('cards.rosterPopout.noGameLoaded') }}</p>
       </div>
     </div>
   </Teleport>

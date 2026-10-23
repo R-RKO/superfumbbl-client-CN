@@ -1,9 +1,11 @@
-import { createApp } from 'vue';
+import { createApp, watch } from 'vue';
 import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import App from './App.vue';
 import { initCredentials } from './game/credentials';
 import { installFocusClickGuard } from './game/focusClickGuard';
 import { installFontStackVariables } from './game/fontStacks';
+import { setLocale } from './i18n';
+import { installPitchLabels } from './game/pitchLabels';
 import { initSettingsFile, settings } from './game/settings';
 import {
   assetMods,
@@ -76,6 +78,11 @@ async function boot() {
   }
   // Owner 10-05: the click that brings an unfocused window back is not an order - it is dropped; the next one counts.
   installFocusClickGuard();
+  // Owner 10-23: the client language follows settings.language live (no restart).
+  watch(() => settings.language, (locale) => setLocale(locale), { immediate: true });
+  // The canvas's drawn words follow the language too. Never allowed to block boot (an English pitch is the fallback).
+  try { installPitchLabels(); } catch (error) { console.warn('Pitch labels stay English: the label provider could not be installed', error); }
+  // Components import $t from src/i18n themselves (i18nPlugin also exists for templates that do not).
   createApp(App).mount('#app');
 }
 

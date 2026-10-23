@@ -29,6 +29,7 @@ import { prayerForWireValue } from './prayerCatalog';
 import { createTurnPresentationContext, turnEndIsTurnover, turnoverArmStep, type TurnPresentationContext } from './turnPresentation';
 import { cutCost, emptyCutShort, turnShare, FIRST_ACTION_SHARE, type CutShort } from './turnsCutShort';
 import { breakDelta, emptyBreaks, injuryRollOutcomes, rollOutcomes, type BreakOutcome, type LuckBreaks } from './luckBreaks';
+import { $t, data } from '../i18n';
 
 export { normalCdf, oneInOdds, type DiceLuck, type Likelihood } from './diceLuck';
 
@@ -316,9 +317,9 @@ export function diceCoverageNote(coverage: DiceCoverage | null | undefined): Dic
 }
 /** The pane's wording (owner to rule). */
 export const DICE_COVERAGE_TEXT: Readonly<Record<DiceCoverageNote, string>> = {
-  whole: 'Whole game',
-  'before-join-missing': 'Dice from before you joined are not included.',
-  gap: 'Dice rolled while the live feed was down are not included.',
+  get whole() { return $t('hud.diceStats.diceCoverageText.wholeGame'); },
+  get 'before-join-missing'() { return $t('hud.diceStats.diceCoverageText.diceFromBeforeYou'); },
+  get gap() { return $t('hud.diceStats.diceCoverageText.diceRolledWhileThe'); },
 };
 
 export function emptyTally(): DiceTally {
@@ -827,7 +828,8 @@ const LEVEL_OUTCOME = ['Stun', 'KO', 'Casualty'] as const;
 function bookTurns(stats: DiceStats, game: GameJson, clock: TurnClock, teamId: string, attacker: string, victimTeamId: string, playerId: string, level: InjuryLevel | null, crowd = false, attackId: number | null = null): TurnsBooking {
   const rec = attackId == null ? null : attackRecord(stats, teamId, attackId);
   if (level == null) return { value: 0, level: null, entry: null, attackId };
-  if (rec) rec.outcome = crowd ? `Crowd surf ${LEVEL_OUTCOME[level].toLowerCase()}` : LEVEL_OUTCOME[level];
+  // i18n 10-23 (Astra r1 #1): outcomes are invariant DATA (recordHappened parses them); the Luck display localises them.
+  if (rec) rec.outcome = data(crowd ? `Crowd surf ${LEVEL_OUTCOME[level].toLowerCase()}` : LEVEL_OUTCOME[level]);
   const turnNr = clockTurnOf(game, clock, victimTeamId);
   // a crowd stun sends the player to the reserves for the rest of the drive: counted live like a knock-out
   const value = crowd && level === 0 ? 0 : level === 2 && clock.half >= 3 ? 0 : bookedTurns(level, turnsScore(clock.half, turnNr, 0));
@@ -1188,7 +1190,7 @@ const STEADY_FOOTING = 'Steady Footing';
 /** The Luck story's name of a block: "2-die block", the defender picking "2-die uphill block (−2)". */
 function blockLabel(nrOfDice: number): string {
   const n = Math.abs(nrOfDice);
-  return nrOfDice < 0 ? `${n}-die uphill block (−${n})` : `${n}-die block`;
+  return data(nrOfDice < 0 ? `${n}-die uphill block (−${n})` : `${n}-die block`); // invariant Luck label
 }
 /** The active prayers of `team` (turnData.inducementSet.prayers) include Fan Interaction: the crowd push names the
  *  acting player as its attacker (bb2025 StepPushback.java:181-184), so his Mighty Blow reaches the injury roll. */
@@ -1345,7 +1347,7 @@ function noteSteadyFootingTurns(stats: DiceStats, playerId: string | null, r: Re
   if (!hit || r.successful !== true) return;
   delete stats.turnsFooting![playerId!];
   const rec = attackRecord(stats, hit.teamId, hit.attackId);
-  if (rec && rec.outcome === rec.idle) rec.outcome = 'Steady Footing';
+  if (rec && rec.outcome === rec.idle) rec.outcome = data('Steady Footing');
 }
 /** The first roll of a Chainsaw attack (a block made with the chainsaw): its chance to hit, then armour +3. */
 function noteChainsawTurns(stats: DiceStats, game: GameJson | null, attacker: string | null, r: Report, clock: TurnClock | null): void {
@@ -1417,7 +1419,7 @@ function noteInjuryTurns(stats: DiceStats, game: GameJson | null, commandNr: num
     unbookTurns(stats, attackerTeam.teamId, attackerId, link.booked);
     link.booked = bookTurns(stats, game, clock, attackerTeam.teamId, attackerId, own.teamId, defenderId, level, false, link.attackId ?? null);
     const rec = link.attackId == null ? null : attackRecord(stats, attackerTeam.teamId, link.attackId);
-    if (rec && level == null && armour && !broken) rec.outcome = 'Armour held';
+    if (rec && level == null && armour && !broken) rec.outcome = data('Armour held');
     return;
   }
   if (!clock || unvalued) { turnsUnmeasured(tallies); return; }
@@ -1678,7 +1680,7 @@ function rebuildTurnsBreaks(stats: DiceStats): void {
         { p: o.cas / o.den, favours: credited }, { p: o.crowdStun / o.den, favours: credited },
       ];
       const happened = rec.outcome === rec.idle && pending.has(rec.id) ? null : recordHappened(rec);
-      const labelHead = `${rec.outcome} on ${rec.fall ? '' : `${rec.label} vs `}`;
+      const labelHead = data(`${rec.outcome} on ${rec.fall ? '' : `${rec.label} vs `}`); // invariant Luck data (luckLabelDisplay renders it)
       const labelTail = rec.fall ? `'s own ${rec.label}` : '';
       const label = `${labelHead}${rec.victimName}${labelTail}`;
       for (const id of new Set([credited, rec.victimTeamId])) {
@@ -2114,10 +2116,10 @@ export function activationFacts(t: DiceTally): DiceFact[] {
   const facts: DiceFact[] = [];
   const avg = t.turns.reduce((a, x) => a + x.activations, 0) / t.turns.length;
   const turnovers = t.turns.filter((x) => x.turnover);
-  facts.push({ label: 'Activations per turn', value: avg.toFixed(1), detail: `${t.turns.length} turns · ${turnovers.length} turnover${turnovers.length === 1 ? '' : 's'}` });
+  facts.push({ get label() { return $t('hud.diceStats.text.activationsPerTurn'); }, value: avg.toFixed(1), get detail() { return $t('hud.diceStats.text.lengthTurnsLength1Turnover', { length: t.turns.length, length1: turnovers.length }); } });
   if (turnovers.length) {
     const worst = turnovers.reduce((a, x) => (x.activations < a.activations ? x : a));
-    facts.push({ label: 'Fewest activations before a turnover', value: `${worst.activations}`, detail: `${worst.half}HT${worst.turn}` });
+    facts.push({ get label() { return $t('hud.diceStats.text.fewestActivationsBeforeA'); }, value: `${worst.activations}`, get detail() { return $t('hud.diceStats.text.halfHtTurn', { half: worst.half, turn: worst.turn }); } });
   }
   return facts;
 }
@@ -2149,28 +2151,28 @@ export function diceFacts(t: DiceTally): DiceFact[] {
   const streak = luckiestStreak(t);
   if (streak) {
     const n = Math.max(1, Math.round(1 / streak.odds));
-    facts.push({ label: 'Luckiest streak', value: `1 in ${n.toLocaleString()}`,
-      detail: `${streak.targets.length} in a row\n${streak.targets.map((x) => `${x}+`).join(' · ')}` }); // two lines: count, then the dice
+    facts.push({ get label() { return $t('hud.diceStats.text.luckiestStreak'); }, value: `1 in ${n.toLocaleString()}`,
+      get detail() { return $t('hud.diceStats.text.lengthInARow', { length: streak.targets.length, p1: streak.targets.map((x) => `${x}+`).join(' · ') }); } }); // two lines: count, then the dice
   }
   const noOnes = longestRun(t.d6Seq, (v) => v !== 1);
-  if (t.d6Seq.length) facts.push({ label: 'Longest run without a 1', value: `${noOnes} dice`, detail: `of ${t.d6Seq.length} D6 rolled` });
+  if (t.d6Seq.length) facts.push({ get label() { return $t('hud.diceStats.text.longestRunWithoutA'); }, value: `${noOnes} dice`, get detail() { return $t('hud.diceStats.text.ofLengthD6Rolled', { length: t.d6Seq.length }); } });
   const sixes = longestRun(t.d6Seq, (v) => v === 6);
-  if (sixes >= 2) facts.push({ label: 'Most sixes in a row', value: `${sixes}`, detail: `${t.d6[6] ?? 0} sixes all game` });
+  if (sixes >= 2) facts.push({ get label() { return $t('hud.diceStats.text.mostSixesInA'); }, value: `${sixes}`, get detail() { return $t('hud.diceStats.text.p0SixesAllGame', { p0: t.d6[6] ?? 0 }); } });
   const pows = longestRun(t.blockSeq, (v) => v === 6);
-  if (t.blockSeq.length) facts.push({ label: 'Most pows in a row', value: `${pows}`, detail: `${t.block[6] ?? 0} pows in ${t.blockSeq.length} block dice` });
+  if (t.blockSeq.length) facts.push({ get label() { return $t('hud.diceStats.text.mostPowsInA'); }, value: `${pows}`, get detail() { return $t('hud.diceStats.text.p0PowsInLength', { p0: t.block[6] ?? 0, length: t.blockSeq.length }); } });
   const skulls = longestRun(t.blockSeq, (v) => v === 1);
-  if (skulls >= 2) facts.push({ label: 'Most skulls in a row', value: `${skulls}`, detail: `${t.block[1] ?? 0} skulls all game` });
+  if (skulls >= 2) facts.push({ get label() { return $t('hud.diceStats.text.mostSkullsInA'); }, value: `${skulls}`, get detail() { return $t('hud.diceStats.text.p0SkullsAllGame', { p0: t.block[1] ?? 0 }); } });
   if (t.armour.length) {
     const hi = Math.max(...t.armour); const lo = Math.min(...t.armour);
-    facts.push({ label: 'Armour rolls', value: `${lo} – ${hi}`, detail: `${t.armour.length} rolls, average ${(t.armour.reduce((a, b) => a + b, 0) / t.armour.length).toFixed(1)}` });
+    facts.push({ get label() { return $t('hud.diceStats.text.armourRolls'); }, value: `${lo} – ${hi}`, get detail() { return $t('hud.diceStats.text.lengthRollsAverageP1', { length: t.armour.length, p1: (t.armour.reduce((a, b) => a + b, 0) / t.armour.length).toFixed(1) }); } });
   }
   if (t.injury.length) {
     const hi = Math.max(...t.injury);
-    facts.push({ label: 'Biggest injury roll', value: `${hi}`, detail: `${t.injury.length} injury rolls` });
+    facts.push({ get label() { return $t('hud.diceStats.text.biggestInjuryRoll'); }, value: `${hi}`, get detail() { return $t('hud.diceStats.text.lengthInjuryRolls', { length: t.injury.length }); } });
   }
   const failedSixes = t.tests.filter((x) => x.target === 6).length;
   const madeSixes = t.tests.filter((x) => x.target === 6 && x.ok).length;
-  if (failedSixes) facts.push({ label: 'Needed a 6', value: `${madeSixes} of ${failedSixes}`, detail: madeSixes ? 'made it' : 'never landed' });
+  if (failedSixes) facts.push({ get label() { return $t('hud.diceStats.text.neededA6'); }, value: `${madeSixes} of ${failedSixes}`, detail: madeSixes ? 'made it' : 'never landed' });
   facts.push(...activationFacts(t)); // owner 09-25
   return facts;
 }

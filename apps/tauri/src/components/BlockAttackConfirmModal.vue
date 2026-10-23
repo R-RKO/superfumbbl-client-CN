@@ -2,6 +2,7 @@
 import D6Face from './D6Face.vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import type { BlockAttackPreview } from '../game/logic/availableActions';
+import { $t } from '../i18n';
 
 defineProps<{ preview: BlockAttackPreview; targetName: string }>();
 defineEmits<{ confirm: []; cancel: [] }>();
@@ -9,21 +10,21 @@ defineEmits<{ confirm: []; cancel: [] }>();
 
 <template>
   <PitchConfirmationPanel class="block-attack-confirm" :title="preview.title"
-    :label="`${preview.title} against ${targetName}`" test-id="block-attack-confirm" compact>
+    :label="$t('dialogs.blockAttackConfirmModal.titleAgainstTargetname', { title: preview.title, targetName })" test-id="block-attack-confirm" compact>
     <div class="attack-target">{{ targetName }}</div>
     <div class="attack-roll" :aria-label="`${preview.title} ${preview.detail}`">
       <span class="attack-emoji" aria-hidden="true">{{ preview.emoji }}</span>
       <template v-if="preview.activationTarget != null">
-        <D6Face :value="preview.activationTarget" :label="`${preview.title} needs ${preview.activationTarget}`" />+
+        <D6Face :value="preview.activationTarget" :label="$t('dialogs.blockAttackConfirmModal.titleNeedsActivationtarget', { title: preview.title, activationTarget: preview.activationTarget })" />+
       </template>
       <span v-if="preview.armourTarget != null" class="armour-roll">🛡️
-        <D6Face :value="preview.armourTarget" :label="`Armour needs ${preview.armourTarget}`" />+
+        <D6Face :value="preview.armourTarget" :label="$t('dialogs.blockAttackConfirmModal.armourNeedsArmourtarget', { armourTarget: preview.armourTarget })" />+
       </span>
     </div>
     <div class="attack-detail">{{ preview.detail }}</div>
     <template #actions>
-      <button type="button" class="confirm" @click.stop="$emit('confirm')">Confirm</button>
-      <button type="button" data-pad-cancel @click.stop="$emit('cancel')">Cancel</button>
+      <button type="button" class="confirm" @click.stop="$emit('confirm')">{{ $t('dialogs.blockAttackConfirmModal.confirm') }}</button>
+      <button type="button" data-pad-cancel @click.stop="$emit('cancel')">{{ $t('dialogs.blockAttackConfirmModal.cancel') }}</button>
     </template>
   </PitchConfirmationPanel>
 </template>

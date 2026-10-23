@@ -31,6 +31,10 @@ import {
   type TournamentAwardKey,
   type TournamentTeamBuild,
 } from '../../game/tournamentApi';
+import { $t, terms, useLiveSet } from '../../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
+import { t } from '../../i18n';
 
 interface InitialTournamentData {
   active: Tournament[];
@@ -103,16 +107,16 @@ const tiebreakerRules = computed(() => (detail.value?.tournament.tiebreakers ?? 
   .filter((code) => code !== 'seed')
   .map((code, index) => {
     const labels: Record<string, [string, string]> = {
-      sonnebornBerger: ['SBR', 'Sonneborn–Berger: full points from defeated opponents plus half from drawn opponents.'],
-      buchholz: ['Buchholz', 'Total points scored by all opponents faced.'],
-      opponentWinPercentage: ['Opp. Win %', 'Combined win percentage of opponents faced.'],
-      headToHead: ['Head-to-Head', 'The direct result between tied teams.'],
-      touchdownDifferential: ['TDD', 'Touchdown differential: touchdowns scored minus touchdowns allowed.'],
-      touchdownsFor: ['TDs For', 'Total touchdowns scored.'],
-      casualtyDifferential: ['CasD', 'Casualty differential: casualties inflicted minus casualties sustained.'],
-      casualtiesFor: ['Cas For', 'Total casualties inflicted.'],
+      sonnebornBerger: ['SBR', t('tournaments.tiebreakerRules.sonnebornBergerFullPoints')],
+      buchholz: ['Buchholz', t('tournaments.tiebreakerRules.totalPointsScoredBy')],
+      opponentWinPercentage: [t('tournaments.tiebreakerRules.oppWin'), t('tournaments.tiebreakerRules.combinedWinPercentageOf')],
+      headToHead: ['Head-to-Head', t('tournaments.tiebreakerRules.theDirectResultBetween')],
+      touchdownDifferential: ['TDD', t('tournaments.tiebreakerRules.touchdownDifferentialTouchdownsScored')],
+      touchdownsFor: [t('tournaments.tiebreakerRules.tdsFor'), t('tournaments.tiebreakerRules.totalTouchdownsScored')],
+      casualtyDifferential: ['CasD', t('tournaments.tiebreakerRules.casualtyDifferentialCasualtiesInflicted')],
+      casualtiesFor: [t('tournaments.tiebreakerRules.casFor'), t('tournaments.tiebreakerRules.totalCasualtiesInflicted')],
     };
-    const [label, description] = labels[code] ?? [code, 'Tournament ranking rule.'];
+    const [label, description] = labels[code] ?? [code, t('tournaments.tiebreakerRules.tournamentRankingRule')];
     return { order: index + 1, code, label, description };
   }));
 const activeWait = computed(() => challenge.phase === 'submitting' || challenge.phase === 'waiting');
@@ -139,7 +143,7 @@ function initials(name: string): string {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return 'To be arranged';
+  if (!value) return t('tournaments.text.toBeArranged');
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
@@ -167,10 +171,10 @@ function teamFor(teamId: string): TournamentEntrant | null {
 }
 
 function opponentName(match: TournamentScheduledMatch): string {
-  return match.opponentTeamName ?? (match.opponentTeamId ? teamFor(match.opponentTeamId)?.teamName : undefined) ?? 'Tournament pairing';
+  return match.opponentTeamName ?? (match.opponentTeamId ? teamFor(match.opponentTeamId)?.teamName : undefined) ?? t('tournaments.text.tournamentPairing');
 }
 
-function entrantName(entrant: TournamentEntrant): string { return entrant.teamName ?? `Team ${entrant.teamId}`; }
+function entrantName(entrant: TournamentEntrant): string { return entrant.teamName ?? t('tournaments.text.teamTeamid', { teamId: entrant.teamId }); }
 function entrantCoach(entrant: TournamentEntrant): string { return entrant.coach.ffbCoachId || entrant.coachId; }
 function awardCandidateNames(award: TournamentAwardKey): string {
   const ids = detail.value?.tournament.awards?.[award]?.generatedCandidateEntrantIds ?? [];
@@ -189,7 +193,7 @@ async function showTeam(teamId: string): Promise<void> {
   try {
     selectedTeamBuild.value = await api.getTeamBuild(detail.value.tournament.id, entrant.entrantId, credentials().coach);
   } catch (error) {
-    teamBuildError.value = `Couldn't load this team build (${errText(error)}).`;
+    liveSetHere(teamBuildError, 'value', () => t('tournaments.text.couldnTLoadThis', { p0: errText(error) }));
   } finally {
     teamBuildLoading.value = false;
   }
@@ -226,10 +230,10 @@ async function loadTournament(tournamentId: string): Promise<void> {
     finishWinnerId.value = detail.value.standings[0]?.entrantId ?? '';
     for (const award of awardKeys) awardRecipients[award] = [...(detail.value.tournament.awards?.[award]?.recipientEntrantIds ?? [])];
     if (opponentResult.status === 'fulfilled') nextOpponent.value = opponentResult.value;
-    else nextOpponentError.value = `Next matchup is unavailable (${errText(opponentResult.reason)}).`;
+    else liveSetHere(nextOpponentError, 'value', () => t('tournaments.text.nextMatchupIsUnavailable', { p0: errText(opponentResult.reason) }));
     await loadTournamentAccess();
   } catch (error) {
-    detailError.value = `Couldn't load this tournament (${errText(error)}).`;
+    liveSetHere(detailError, 'value', () => t('tournaments.text.couldnTLoadThis2', { p0: errText(error) }));
   } finally {
     detailLoading.value = false;
   }
@@ -284,7 +288,7 @@ async function loadActiveTournaments(): Promise<void> {
   } catch (error) {
     tournaments.value = [];
     detail.value = null;
-    listError.value = `Couldn't load tournaments (${errText(error)}).`;
+    liveSetHere(listError, 'value', () => t('tournaments.text.couldnTLoadTournaments', { p0: errText(error) }));
   } finally {
     listLoading.value = false;
   }
@@ -303,7 +307,7 @@ async function loadFinished(page = 1, expand = true): Promise<void> {
     finishedHasMore.value = result.hasMore;
     finishedExpanded.value = expand || !!finishedSearch.value;
   } catch (error) {
-    listError.value = `Couldn't load finished tournaments (${errText(error)}).`;
+    liveSetHere(listError, 'value', () => t('tournaments.text.couldnTLoadFinished', { p0: errText(error) }));
   } finally { listLoading.value = false; }
 }
 
@@ -317,8 +321,8 @@ async function submitApplication(): Promise<void> {
   try {
     const result = await api.submitApplication(detail.value.tournament.id, selectedApplicationTeamId.value, myApplication.value?.revision);
     myApplication.value = result.application; myValidation.value = result.validation;
-    applicationMessage.value = result.validation.valid ? 'Application submitted. The owner will review its current roster.' : 'Application saved, but its current roster is invalid.';
-  } catch (error) { applicationMessage.value = `Couldn't submit the application (${errText(error)}).`; }
+    liveSetHere(applicationMessage, 'value', () => result.validation.valid ? t('tournaments.text.applicationSubmittedTheOwner') : t('tournaments.text.applicationSavedButIts'));
+  } catch (error) { liveSetHere(applicationMessage, 'value', () => t('tournaments.text.couldnTSubmitThe', { p0: errText(error) })); }
   finally { applicationBusy.value = false; }
 }
 
@@ -330,6 +334,13 @@ async function refreshAfterAdmin(message: string): Promise<void> {
   adminMessage.value = message;
 }
 
+/** One whole message per application action (i18n: never an English verb inside a sentence). */
+const APPLICATION_ACTION_MESSAGES: Readonly<Record<TournamentApplicationAction, { done: string; failed: string }>> = {
+  approve: { done: 'tournaments.text.applicationApproved', failed: 'tournaments.text.couldNotApproveApplication' },
+  decline: { done: 'tournaments.text.applicationDeclined', failed: 'tournaments.text.couldNotDeclineApplication' },
+  ban: { done: 'tournaments.text.teamBanned', failed: 'tournaments.text.couldNotBanTeam' },
+  pending: { done: 'tournaments.text.applicationMarkedPending', failed: 'tournaments.text.couldNotMarkApplicationPending' },
+};
 async function runApplicationAction(view: TournamentApplicationView, action: TournamentApplicationAction): Promise<void> {
   if (!detail.value || adminRevision.value === undefined) return;
   adminBusy.value = true; adminMessage.value = '';
@@ -339,8 +350,8 @@ async function runApplicationAction(view: TournamentApplicationView, action: Tou
       ...(action === 'approve' ? { tournamentRevision: adminRevision.value } : {}),
       ...(action === 'decline' ? { feedback: applicationFeedback[view.application.id] ?? '' } : {}),
     });
-    await refreshAfterAdmin(`Application ${action}d.`);
-  } catch (error) { adminMessage.value = `Couldn't ${action} application (${errText(error)}).`; }
+    await refreshAfterAdmin(t(APPLICATION_ACTION_MESSAGES[action].done));
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t(APPLICATION_ACTION_MESSAGES[action].failed, { error: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -364,7 +375,7 @@ async function adjudicateMatch(match: TournamentScheduledMatch): Promise<void> {
   try {
     await api.adjudicate(detail.value.tournament.id, match.matchId, { revision: match.revision, winnerEntrantId: state.winnerEntrantId, loserEntrantId: loser.entrantId, winnerScore: state.winnerScore, loserScore: state.loserScore, winnerCasualties: state.winnerCasualties, loserCasualties: state.loserCasualties, reason: state.reason });
     await refreshAfterAdmin('Match adjudicated.');
-  } catch (error) { adminMessage.value = `Couldn't adjudicate match (${errText(error)}).`; }
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTAdjudicateMatch', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -374,7 +385,7 @@ async function replaceEntrant(entrant: TournamentEntrant): Promise<void> {
   try {
     await api.replaceEntrant(detail.value.tournament.id, entrant.entrantId, { revision: adminRevision.value, coachId: replacementCoach[entrant.entrantId] ?? '', teamId: replacementTeam[entrant.entrantId] ?? '', reason: entrantReason[entrant.entrantId] ?? '' });
     await refreshAfterAdmin('Entrant replaced.');
-  } catch (error) { adminMessage.value = `Couldn't replace entrant (${errText(error)}).`; }
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTReplaceEntrant', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -384,18 +395,18 @@ async function dropEntrant(entrant: TournamentEntrant): Promise<void> {
   try {
     await api.dropEntrant(detail.value.tournament.id, entrant.entrantId, { revision: adminRevision.value, reason: entrantReason[entrant.entrantId] ?? '' });
     await refreshAfterAdmin('Entrant dropped.');
-  } catch (error) { adminMessage.value = `Couldn't drop entrant (${errText(error)}).`; }
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTDropEntrant', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
 async function finishTournament(): Promise<void> {
   if (!detail.value || adminRevision.value === undefined || !finishWinnerId.value) return;
-  if (!window.confirm(`Finish ${detail.value.tournament.name} and record the selected winner?`)) return;
+  if (!window.confirm(t('tournaments.text.finishNameAndRecord', { name: detail.value.tournament.name }))) return;
   adminBusy.value = true;
   try {
     await api.finishTournament(detail.value.tournament.id, { revision: adminRevision.value, winnerEntrantId: finishWinnerId.value, confirmed: true, reason: finishReason.value });
     await refreshAfterAdmin('Tournament finished and award candidates generated.');
-  } catch (error) { adminMessage.value = `Couldn't finish tournament (${errText(error)}).`; }
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTFinishTournament', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -405,7 +416,7 @@ async function overrideAward(award: TournamentAwardKey): Promise<void> {
   try {
     await api.overrideAward(detail.value.tournament.id, award, { revision: adminRevision.value, recipientEntrantIds: awardRecipients[award] ?? [], reason: awardReasons[award] ?? '' });
     await refreshAfterAdmin('Award recipients updated.');
-  } catch (error) { adminMessage.value = `Couldn't update award (${errText(error)}).`; }
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTUpdateAward', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -416,8 +427,8 @@ async function downloadNaf(): Promise<void> {
     const file = await api.downloadNaf(detail.value.tournament.id);
     const url = URL.createObjectURL(new Blob([file.text], { type: file.contentType ?? 'application/xml' }));
     const link = document.createElement('a'); link.href = url; link.download = file.filename ?? `${detail.value.tournament.id}-naf.xml`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
-    adminMessage.value = 'NAF XML downloaded.';
-  } catch (error) { adminMessage.value = `Couldn't export NAF XML (${errText(error)}).`; }
+    liveSetHere(adminMessage, 'value', () => t('tournaments.text.nafXmlDownloaded'));
+  } catch (error) { liveSetHere(adminMessage, 'value', () => t('tournaments.text.couldnTExportNaf', { p0: errText(error) })); }
   finally { adminBusy.value = false; }
 }
 
@@ -435,7 +446,7 @@ async function launchMatch(match: TournamentScheduledMatch): Promise<void> {
   const creds = credentials();
   if (!creds.coach) {
     challenge.phase = 'error';
-    challenge.message = 'Set your Super FUMBBL identity in Account before launching this match.';
+    liveSetHere(challenge, 'message', () => t('tournaments.text.setYourSuperFumbbl'));
     challenge.error = challenge.message;
     return;
   }
@@ -551,7 +562,7 @@ async function submitEditTournament(): Promise<void> {
   const startsAtIso = editDraft.startsAt ? new Date(editDraft.startsAt).toISOString() : '';
   if (startsAtIso && startsAtIso !== (tournament.startsAt ?? '')) body.startsAt = startsAtIso;
   if (editDraft.primaryTiebreaker && editDraft.primaryTiebreaker !== (tournament.tiebreakers[0] ?? '')) body.primaryTiebreaker = editDraft.primaryTiebreaker;
-  if (!Object.keys(body).length) { editError.value = 'Nothing changed.'; return; }
+  if (!Object.keys(body).length) { liveSetHere(editError, 'value', () => t('tournaments.text.nothingChanged')); return; }
   editBusy.value = true;
   editError.value = '';
   try {
@@ -572,7 +583,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  if (activeWait.value) void challengeController.cancel();
+  if (activeWait.value) void challengeController.cancel().finally(() => challengeController.dispose()); // releases its i18n registrations (Astra r3 #11)
   else challengeController.dispose();
 });
 </script>
@@ -581,80 +592,80 @@ onBeforeUnmount(() => {
   <section class="tournaments-view" aria-labelledby="tournaments-title">
     <header class="view-heading">
       <div>
-        <p class="eyebrow">SUPER FUMBBL COMPETITION</p>
-        <h1 id="tournaments-title">Tournaments</h1>
-        <p>Standings, rosters and your scheduled matches in one place.</p>
+        <p class="eyebrow">{{ $t('tournaments.superFumbblCompetition') }}</p>
+        <h1 id="tournaments-title">{{ $t('tournaments.tournaments') }}</h1>
+        <p>{{ $t('tournaments.standingsRostersAndYour') }}</p>
       </div>
       <button class="secondary-button" type="button" :disabled="listLoading" @click="loadActiveTournaments">
-        {{ listLoading ? 'Refreshing…' : 'Refresh' }}
+        {{ listLoading ? $t('tournaments.refreshing') : $t('tournaments.refresh') }}
       </button>
       <!-- Owner: organizers/admins create tournaments in-client (replicates the tournaments.html panel). -->
       <button v-if="canCreateTournament" class="create-tournament-button" type="button" :aria-expanded="createOpen" @click="createOpen ? (createOpen = false) : openCreatePane()">
-        {{ createOpen ? 'Close Create' : 'Create Tournament' }}
+        {{ createOpen ? $t('tournaments.closeCreate') : $t('tournaments.createTournament') }}
       </button>
     </header>
 
     <CoordinationIdentityChip />
 
-    <section v-if="canCreateTournament && createOpen" class="create-tournament-pane" aria-label="Create tournament">
-      <h2>Create Tournament</h2>
+    <section v-if="canCreateTournament && createOpen" class="create-tournament-pane" :aria-label="$t('tournaments.createTournamentPane.createTournament')">
+      <h2>{{ $t('tournaments.createTournamentPane.createTournament2') }}</h2>
       <form class="create-tournament-grid" @submit.prevent="submitCreateTournament">
-        <label class="ct-field ct-full"><span>Name</span><input v-model="createDraft.name" type="text" maxlength="100" required /></label>
-        <label class="ct-field ct-full"><span>Ruleset</span>
+        <label class="ct-field ct-full"><span>{{ $t('tournaments.createTournamentPane.name') }}</span><input v-model="createDraft.name" type="text" maxlength="100" required /></label>
+        <label class="ct-field ct-full"><span>{{ $t('tournaments.createTournamentPane.ruleset') }}</span>
           <select v-model="createDraft.packageName" required>
-            <option v-if="!createPackages.length" value="">No saved packages</option>
+            <option v-if="!createPackages.length" value="">{{ $t('tournaments.createTournamentPane.noSavedPackages') }}</option>
             <option v-for="entry in createPackages" :key="entry.name" :value="entry.name">{{ entry.name }}</option>
           </select>
         </label>
-        <label class="ct-field"><span># of Players</span><input v-model.number="createDraft.maxPlayers" type="number" min="2" step="1" required /></label>
-        <label class="ct-field"><span>Type</span>
+        <label class="ct-field"><span>{{ $t('tournaments.createTournamentPane.ofPlayers') }}</span><input v-model.number="createDraft.maxPlayers" type="number" min="2" step="1" required /></label>
+        <label class="ct-field"><span>{{ $t('tournaments.createTournamentPane.type') }}</span>
           <select v-model="createDraft.format">
-            <option value="swiss">Swiss</option>
-            <option value="roundRobin">Round-Robin</option>
-            <option value="knockout">Knockout</option>
+            <option value="swiss">{{ $t('tournaments.createTournamentPane.swiss') }}</option>
+            <option value="roundRobin">{{ $t('tournaments.createTournamentPane.roundRobin') }}</option>
+            <option value="knockout">{{ $t('tournaments.createTournamentPane.knockout') }}</option>
           </select>
         </label>
-        <label class="ct-field"><span>Primary tiebreaker</span>
+        <label class="ct-field"><span>{{ $t('tournaments.createTournamentPane.primaryTiebreaker') }}</span>
           <select v-model="createDraft.primaryTiebreaker">
-            <option value="buchholz">Buchholz</option>
-            <option value="sonnebornBerger">SBR</option>
+            <option value="buchholz">{{ $t('tournaments.createTournamentPane.buchholz') }}</option>
+            <option value="sonnebornBerger">{{ $t('tournaments.createTournamentPane.sbr') }}</option>
           </select>
         </label>
-        <button class="create-tournament-button ct-submit" type="submit" :disabled="createBusy || !createPackages.length || !createDraft.name.trim()">{{ createBusy ? 'Creating…' : 'Create Draft' }}</button>
+        <button class="create-tournament-button ct-submit" type="submit" :disabled="createBusy || !createPackages.length || !createDraft.name.trim()">{{ createBusy ? $t('tournaments.createTournamentPane.creating') : $t('tournaments.createTournamentPane.createDraft') }}</button>
       </form>
       <p v-if="createError" class="error-copy" role="alert">{{ createError }}</p>
     </section>
 
     <div class="tournament-layout">
-      <aside class="tournament-picker" aria-label="Tournament discovery">
+      <aside class="tournament-picker" :aria-label="$t('tournaments.tournamentPicker.tournamentDiscovery')">
         <p v-if="listError" class="error-copy" role="alert">{{ listError }}</p>
-        <p v-else-if="listLoading && !tournaments.length && !futureTournaments.length" class="status-copy" role="status">Loading tournaments…</p>
+        <p v-else-if="listLoading && !tournaments.length && !futureTournaments.length" class="status-copy" role="status">{{ $t('tournaments.tournamentPicker.loadingTournaments') }}</p>
         <section aria-labelledby="active-tournaments-title">
-          <h2 id="active-tournaments-title">Active</h2>
-          <p v-if="!tournaments.length" class="status-copy">No active tournaments.</p>
+          <h2 id="active-tournaments-title">{{ $t('tournaments.tournamentPicker.active') }}</h2>
+          <p v-if="!tournaments.length" class="status-copy">{{ $t('tournaments.tournamentPicker.noActiveTournaments') }}</p>
           <div v-else class="tournament-list">
             <button v-for="tournament in tournaments" :key="tournament.id" class="tournament-card" type="button" :aria-current="selectedTournamentId === tournament.id ? 'true' : undefined" @click="loadTournament(tournament.id)">
-              <span class="season">Live · {{ tournament.format }}</span><strong>{{ tournament.name }}</strong><span>Round {{ tournament.currentRound }} of {{ tournament.roundCount }}</span><span>{{ tournament.entrantCount ?? '—' }} teams</span>
+              <span class="season">{{ $t('tournaments.tournamentPicker.liveFormat', { format: tournament.format }) }}</span><strong>{{ tournament.name }}</strong><span>{{ $t('tournaments.tournamentPicker.roundCurrentroundOfRoundcount', { currentRound: tournament.currentRound, roundCount: tournament.roundCount }) }}</span><span>{{ $t('tournaments.tournamentPicker.p0Teams', { p0: tournament.entrantCount ?? '—' }) }}</span>
             </button>
           </div>
         </section>
         <section aria-labelledby="future-tournaments-title">
-          <h2 id="future-tournaments-title">Future</h2>
-          <p v-if="!futureTournaments.length" class="status-copy">No future tournaments.</p>
+          <h2 id="future-tournaments-title">{{ $t('tournaments.tournamentPicker.future') }}</h2>
+          <p v-if="!futureTournaments.length" class="status-copy">{{ $t('tournaments.tournamentPicker.noFutureTournaments') }}</p>
           <div v-else class="tournament-list">
             <button v-for="tournament in futureTournaments" :key="tournament.id" class="tournament-card" type="button" :aria-current="selectedTournamentId === tournament.id ? 'true' : undefined" @click="loadTournament(tournament.id)">
-              <span class="season">Applications · {{ tournament.format }}</span><strong>{{ tournament.name }}</strong><span>{{ tournament.rulesetPackName ?? 'Ruleset pending' }}</span><span>{{ tournament.entrantCount ?? '—' }} teams</span>
+              <span class="season">{{ $t('tournaments.tournamentPicker.applicationsFormat', { format: tournament.format }) }}</span><strong>{{ tournament.name }}</strong><span>{{ tournament.rulesetPackName ?? $t('tournaments.tournamentPicker.rulesetPending') }}</span><span>{{ $t('tournaments.tournamentPicker.p0Teams', { p0: tournament.entrantCount ?? '—' }) }}</span>
             </button>
           </div>
         </section>
         <section aria-labelledby="finished-tournaments-title">
-          <h2 id="finished-tournaments-title">Finished</h2>
+          <h2 id="finished-tournaments-title">{{ $t('tournaments.tournamentPicker.finished') }}</h2>
           <form class="finished-search" role="search" @submit.prevent="loadFinished(1)">
-            <label class="sr-only" for="finished-search">Search finished tournaments</label>
-            <input id="finished-search" v-model="finishedSearch" type="search" placeholder="Search finished" />
-            <button class="text-button" type="submit">Search</button>
+            <label class="sr-only" for="finished-search">{{ $t('tournaments.tournamentPicker.searchFinishedTournaments') }}</label>
+            <input id="finished-search" v-model="finishedSearch" type="search" :placeholder="$t('tournaments.tournamentPicker.searchFinished')" />
+            <button class="text-button" type="submit">{{ $t('tournaments.tournamentPicker.search') }}</button>
           </form>
-          <p v-if="!finishedTournaments.length" class="status-copy">No finished tournaments.</p>
+          <p v-if="!finishedTournaments.length" class="status-copy">{{ $t('tournaments.tournamentPicker.noFinishedTournaments') }}</p>
           <div v-else class="tournament-list">
           <button
             v-for="tournament in finishedTournaments"
@@ -664,72 +675,72 @@ onBeforeUnmount(() => {
             :aria-current="selectedTournamentId === tournament.id ? 'true' : undefined"
             @click="loadTournament(tournament.id)"
           >
-            <span class="season">Finished · {{ tournament.format }}</span>
+            <span class="season">{{ $t('tournaments.tournamentPicker.finishedFormat', { format: tournament.format }) }}</span>
             <strong>{{ tournament.name }}</strong>
-            <span>{{ tournament.winnerEntrantId ? 'Winner recorded' : `${tournament.roundCount} rounds` }}</span>
-            <span>{{ tournament.entrantCount ?? '—' }} teams</span>
+            <span>{{ tournament.winnerEntrantId ? $t('tournaments.tournamentPicker.winnerRecorded') : $t('tournaments.tournamentPicker.roundcountRounds', { roundCount: tournament.roundCount }) }}</span>
+            <span>{{ $t('tournaments.tournamentPicker.p0Teams', { p0: tournament.entrantCount ?? '—' }) }}</span>
           </button>
           </div>
-          <button v-if="!finishedExpanded && finishedTotal > 3" class="secondary-button discovery-button" type="button" @click="loadFinished(1, true)">Show all {{ finishedTotal }}</button>
-          <nav v-else-if="finishedExpanded && finishedTotal > 15" class="pagination" aria-label="Finished tournament pages">
-            <button class="text-button" type="button" :disabled="finishedPage <= 1" @click="loadFinished(finishedPage - 1)">Previous</button>
-            <span>Page {{ finishedPage }}</span>
-            <button class="text-button" type="button" :disabled="!finishedHasMore" @click="loadFinished(finishedPage + 1)">Next</button>
+          <button v-if="!finishedExpanded && finishedTotal > 3" class="secondary-button discovery-button" type="button" @click="loadFinished(1, true)">{{ $t('tournaments.tournamentPicker.showAllFinishedtotal', { finishedTotal }) }}</button>
+          <nav v-else-if="finishedExpanded && finishedTotal > 15" class="pagination" :aria-label="$t('tournaments.tournamentPicker.finishedTournamentPages')">
+            <button class="text-button" type="button" :disabled="finishedPage <= 1" @click="loadFinished(finishedPage - 1)">{{ $t('tournaments.tournamentPicker.previous') }}</button>
+            <span>{{ $t('tournaments.tournamentPicker.pageFinishedpage', { finishedPage }) }}</span>
+            <button class="text-button" type="button" :disabled="!finishedHasMore" @click="loadFinished(finishedPage + 1)">{{ $t('tournaments.tournamentPicker.next') }}</button>
           </nav>
         </section>
       </aside>
 
       <main class="tournament-detail" :aria-busy="detailLoading">
-        <p v-if="detailLoading" class="status-copy" role="status">Loading tournament…</p>
+        <p v-if="detailLoading" class="status-copy" role="status">{{ $t('tournaments.loadingTournament') }}</p>
         <div v-else-if="detailError" class="empty-panel" role="alert">
           <p>{{ detailError }}</p>
-          <button class="secondary-button" type="button" @click="loadTournament(selectedTournamentId)">Retry</button>
+          <button class="secondary-button" type="button" @click="loadTournament(selectedTournamentId)">{{ $t('tournaments.emptyPanel.retry') }}</button>
         </div>
-        <div v-else-if="!detail" class="empty-panel">Select an active tournament to see its standings.</div>
+        <div v-else-if="!detail" class="empty-panel">{{ $t('tournaments.emptyPanel.selectAnActiveTournament') }}</div>
 
         <template v-else-if="selectedEntrant">
-          <button class="back-button" type="button" @click="closeTeam">← Back to tournament</button>
+          <button class="back-button" type="button" @click="closeTeam">{{ $t('tournaments.backToTournament') }}</button>
           <article class="team-sheet" :aria-labelledby="`team-${selectedEntrant.teamId}-title`">
             <header class="team-sheet-heading">
               <span v-if="!selectedEntrant.logoUrl" class="team-crest large" aria-hidden="true">{{ initials(entrantName(selectedEntrant)) }}</span>
               <img v-else class="team-logo large" :src="selectedEntrant.logoUrl" alt="" />
               <div>
-                <p class="eyebrow">TEAM OVERVIEW</p>
+                <p class="eyebrow">{{ $t('tournaments.teamSheet.teamOverview') }}</p>
                 <h2 :id="`team-${selectedEntrant.teamId}-title`">{{ selectedTeamBuild?.team.name ?? entrantName(selectedEntrant) }}</h2>
-                <p>{{ selectedTeamBuild?.team.race ?? selectedEntrant.race ?? 'Race unavailable' }} · coached by {{ entrantCoach(selectedEntrant) }}</p>
+                <p>{{ selectedTeamBuild?.team.race ?? selectedEntrant.race ?? $t('tournaments.teamSheet.raceUnavailable') }} {{ $t('tournaments.teamSheet.coachedByP0', { p0: entrantCoach(selectedEntrant) }) }}</p>
               </div>
             </header>
 
-            <p v-if="teamBuildLoading" class="status-copy" role="status">Loading team build…</p>
-            <div v-else-if="teamBuildError" class="error-copy" role="alert"><p>{{ teamBuildError }}</p><button class="secondary-button" type="button" @click="showTeam(selectedEntrant.teamId)">Retry</button></div>
+            <p v-if="teamBuildLoading" class="status-copy" role="status">{{ $t('tournaments.teamSheet.loadingTeamBuild') }}</p>
+            <div v-else-if="teamBuildError" class="error-copy" role="alert"><p>{{ teamBuildError }}</p><button class="secondary-button" type="button" @click="showTeam(selectedEntrant.teamId)">{{ $t('tournaments.teamSheet.retry') }}</button></div>
             <template v-else-if="selectedTeamBuild">
               <dl class="team-facts">
-                <div><dt>Team value</dt><dd>{{ formatTeamValue(selectedTeamBuild.team.teamValue) }}</dd></div>
-                <div><dt>Treasury</dt><dd>{{ formatGold(selectedTeamBuild.team.treasury) }}</dd></div>
-                <div><dt>Rerolls</dt><dd>{{ selectedTeamBuild.team.rerolls }}</dd></div>
-                <div><dt>Fan factor</dt><dd>{{ selectedTeamBuild.team.fanFactor }}</dd></div>
-                <div><dt>Apothecary</dt><dd>{{ selectedTeamBuild.team.apothecary ? 'Yes' : 'No' }}</dd></div>
-                <div><dt>Assistant coaches</dt><dd>{{ selectedTeamBuild.team.assistantCoaches }}</dd></div>
-                <div><dt>Cheerleaders</dt><dd>{{ selectedTeamBuild.team.cheerleaders }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.teamValue') }}</dt><dd>{{ formatTeamValue(selectedTeamBuild.team.teamValue) }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.treasury') }}</dt><dd>{{ formatGold(selectedTeamBuild.team.treasury) }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.rerolls') }}</dt><dd>{{ selectedTeamBuild.team.rerolls }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.fanFactor') }}</dt><dd>{{ selectedTeamBuild.team.fanFactor }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.apothecary') }}</dt><dd>{{ selectedTeamBuild.team.apothecary ? $t('tournaments.teamSheet.yes') : $t('tournaments.teamSheet.no') }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.assistantCoaches') }}</dt><dd>{{ selectedTeamBuild.team.assistantCoaches }}</dd></div>
+                <div><dt>{{ $t('tournaments.teamSheet.cheerleaders') }}</dt><dd>{{ selectedTeamBuild.team.cheerleaders }}</dd></div>
               </dl>
               <section class="inert-build" aria-labelledby="build-title">
-                <div><p class="eyebrow">TOURNAMENT BUILD</p><h3 id="build-title">Read-only roster snapshot</h3></div>
+                <div><p class="eyebrow">{{ $t('tournaments.teamSheet.tournamentBuild') }}</p><h3 id="build-title">{{ $t('tournaments.teamSheet.readOnlyRosterSnapshot') }}</h3></div>
                 <p>{{ selectedTeamBuild.capabilities.editRoster.reason }}</p>
-                <p class="status-copy">{{ selectedTeamBuild.team.rulesetPackName ?? 'Standard ruleset' }} · {{ selectedTeamBuild.team.leagues.join(', ') || 'No league tags' }}</p>
-                <p v-if="selectedTeamBuild.team.specialRules.length" class="status-copy">Special rules: {{ selectedTeamBuild.team.specialRules.join(', ') }}</p>
+                <p class="status-copy">{{ selectedTeamBuild.team.rulesetPackName ?? $t('tournaments.teamSheet.standardRuleset') }} · {{ selectedTeamBuild.team.leagues.join(', ') || $t('tournaments.teamSheet.noLeagueTags') }}</p>
+                <p v-if="selectedTeamBuild.team.specialRules.length" class="status-copy">{{ $t('tournaments.teamSheet.specialRulesP0', { p0: selectedTeamBuild.team.specialRules.join(', ') }) }}</p>
               </section>
               <section aria-labelledby="roster-title">
-                <h3 id="roster-title">Roster</h3>
-                <p v-if="!selectedTeamBuild.team.players.length" class="status-copy">No players are present in this build.</p>
+                <h3 id="roster-title">{{ $t('tournaments.teamSheet.roster') }}</h3>
+                <p v-if="!selectedTeamBuild.team.players.length" class="status-copy">{{ $t('tournaments.teamSheet.noPlayersArePresent') }}</p>
                 <div v-else class="table-scroll">
                   <table class="roster-table">
-                    <caption class="sr-only">{{ selectedTeamBuild.team.name }} player roster</caption>
-                    <thead><tr><th scope="col">#</th><th scope="col">Player</th><th scope="col">Position</th><th scope="col">Stats</th><th scope="col">Skills &amp; traits</th><th scope="col">Injuries</th><th scope="col">SPP</th><th scope="col">Value</th></tr></thead>
+                    <caption class="sr-only">{{ $t('tournaments.teamSheet.namePlayerRoster', { name: selectedTeamBuild.team.name }) }}</caption>
+                    <thead><tr><th scope="col">#</th><th scope="col">{{ $t('tournaments.teamSheet.player') }}</th><th scope="col">{{ $t('tournaments.teamSheet.position') }}</th><th scope="col">{{ $t('tournaments.teamSheet.stats') }}</th><th scope="col">{{ $t('tournaments.teamSheet.skillsTraits') }}</th><th scope="col">{{ $t('tournaments.teamSheet.injuries') }}</th><th scope="col">{{ $t('tournaments.teamSheet.spp') }}</th><th scope="col">{{ $t('tournaments.teamSheet.value') }}</th></tr></thead>
                     <tbody>
                       <tr v-for="player in selectedTeamBuild.team.players" :key="player.id" :class="{ 'mng-player': player.mng }">
-                        <td>{{ player.number }}</td><th scope="row"><span>{{ player.name }}</span><small v-if="player.mng">MNG</small></th>
-                        <td>{{ player.position ?? player.positionId }}</td><td>{{ playerStats(player) }}</td>
-                        <td>{{ player.skills.join(', ') || '—' }}</td><td>{{ player.injuries.join(', ') || '—' }}</td>
+                        <td>{{ player.number }}</td><th scope="row"><span>{{ player.name }}</span><small v-if="player.mng">{{ $t('tournaments.teamSheet.mng') }}</small></th>
+                        <td>{{ terms(player.position ?? player.positionId) }}</td><td>{{ playerStats(player) }}</td>
+                        <td>{{ player.skills.map((x) => terms(x)).join(', ') || '—' }}</td><td>{{ player.injuries.map((x) => terms(x)).join(', ') || '—' }}</td>
                         <td class="numeric">{{ player.spp }}</td><td>{{ formatGold(player.currentValue) }}</td>
                       </tr>
                     </tbody>
@@ -745,25 +756,25 @@ onBeforeUnmount(() => {
             <div>
               <p class="eyebrow">{{ detail.tournament.format }} · {{ detail.tournament.status }}</p>
               <h2>{{ detail.tournament.name }}</h2>
-              <p>Round {{ detail.tournament.currentRound }} of {{ detail.tournament.roundCount }} · {{ detail.entrants.length }} teams · {{ detail.tournament.rulesetPackName ?? 'Standard ruleset' }}</p>
+              <p>{{ $t('tournaments.round') }} {{ detail.tournament.currentRound }} {{ $t('tournaments.of') }} {{ detail.tournament.roundCount }} · {{ detail.entrants.length }} {{ $t('tournaments.teams') }} {{ detail.tournament.rulesetPackName ?? $t('tournaments.standardRuleset') }}</p>
             </div>
           </header>
 
           <section v-if="isFuture" class="content-panel application-panel" aria-labelledby="application-title">
-            <div class="section-heading"><div><p class="eyebrow">ENTER THE TOURNAMENT</p><h3 id="application-title">Team application</h3></div><span>Ruleset: {{ detail.tournament.rulesetPackName ?? 'Not configured' }}</span></div>
-            <button v-if="detail.tournament.rulesetPackName" class="secondary-button" type="button" @click="createTournamentTeam">Create team for this tournament</button>
+            <div class="section-heading"><div><p class="eyebrow">{{ $t('tournaments.contentPanel.enterTheTournament') }}</p><h3 id="application-title">{{ $t('tournaments.contentPanel.teamApplication') }}</h3></div><span>{{ $t('tournaments.contentPanel.ruleset') }} {{ detail.tournament.rulesetPackName ?? $t('tournaments.contentPanel.notConfigured') }}</span></div>
+            <button v-if="detail.tournament.rulesetPackName" class="secondary-button" type="button" @click="createTournamentTeam">{{ $t('tournaments.contentPanel.createTeamForThis') }}</button>
             <div v-if="myApplication" class="application-status" :data-status="myApplication.status">
-              <strong>{{ myApplication.status }}</strong><span>Team {{ myApplication.team.teamId }}</span>
-              <p v-if="myApplication.feedback">Owner feedback: {{ myApplication.feedback }}</p>
-              <p v-if="myApplication.status === 'banned'">This team is permanently banned from this tournament and cannot be resubmitted.</p>
+              <strong>{{ myApplication.status }}</strong><span>{{ $t('tournaments.contentPanel.teamTeamid', { teamId: myApplication.team.teamId }) }}</span>
+              <p v-if="myApplication.feedback">{{ $t('tournaments.contentPanel.ownerFeedbackFeedback', { feedback: myApplication.feedback }) }}</p>
+              <p v-if="myApplication.status === 'banned'">{{ $t('tournaments.contentPanel.thisTeamIsPermanently') }}</p>
             </div>
             <label v-if="myApplication?.status !== 'approved' && myApplication?.status !== 'banned'" class="form-field">
-              <span>{{ myApplication?.status === 'declined' ? 'Choose a team and resubmit' : 'Team from your library' }}</span>
-              <select v-model="selectedApplicationTeamId"><option value="" disabled>Select a team</option><option v-for="team in libraryTeams" :key="team.teamId" :value="team.teamId">{{ team.teamName }} · {{ team.race }}</option></select>
+              <span>{{ myApplication?.status === 'declined' ? $t('tournaments.contentPanel.chooseATeamAnd') : $t('tournaments.contentPanel.teamFromYourLibrary') }}</span>
+              <select v-model="selectedApplicationTeamId"><option value="" disabled>{{ $t('tournaments.contentPanel.selectATeam') }}</option><option v-for="team in libraryTeams" :key="team.teamId" :value="team.teamId">{{ team.teamName }} · {{ terms(team.race) }}</option></select>
             </label>
-            <button v-if="myApplication?.status !== 'approved' && myApplication?.status !== 'banned'" class="launch-button" type="button" :disabled="applicationBusy || !selectedApplicationTeamId" @click="submitApplication">{{ applicationBusy ? 'Validating…' : myApplication ? 'Resubmit application' : 'Submit application' }}</button>
+            <button v-if="myApplication?.status !== 'approved' && myApplication?.status !== 'banned'" class="launch-button" type="button" :disabled="applicationBusy || !selectedApplicationTeamId" @click="submitApplication">{{ applicationBusy ? $t('tournaments.contentPanel.validating') : myApplication ? $t('tournaments.contentPanel.resubmitApplication') : $t('tournaments.contentPanel.submitApplication') }}</button>
             <div v-if="myValidation" class="validation-box" :class="myValidation.valid ? 'valid' : 'invalid'">
-              <strong>{{ myValidation.valid ? 'Valid' : 'Invalid' }} now</strong><time :datetime="myValidation.checkedAt">Checked {{ formatDate(myValidation.checkedAt) }}</time>
+              <strong>{{ myValidation.valid ? $t('tournaments.contentPanel.valid') : $t('tournaments.contentPanel.invalid') }} {{ $t('tournaments.contentPanel.now') }}</strong><time :datetime="myValidation.checkedAt">{{ $t('tournaments.contentPanel.checkedP0', { p0: formatDate(myValidation.checkedAt) }) }}</time>
               <ul v-if="myValidation.errors.length"><li v-for="error in myValidation.errors" :key="error">{{ error }}</li></ul>
               <ul v-if="myValidation.warnings.length"><li v-for="warning in myValidation.warnings" :key="warning">{{ warning }}</li></ul>
             </div>
@@ -773,21 +784,21 @@ onBeforeUnmount(() => {
           <p v-if="nextOpponentError" class="status-copy" role="status">{{ nextOpponentError }}</p>
           <section v-if="nextOpponent?.opponent && likelyOpponent" class="next-matchup" aria-labelledby="next-matchup-title">
             <div>
-              <p class="eyebrow">LIKELY NEXT MATCHUP</p>
-              <h3 id="next-matchup-title">{{ nextOpponent.provisional ? 'Provisional pairing' : 'Confirmed next opponent' }}</h3>
-              <p>{{ nextOpponent.provisional ? 'Projected from the current standings' : 'Scheduled pairing' }}<template v-if="nextOpponent.roundNumber"> · Round {{ nextOpponent.roundNumber }}</template></p>
+              <p class="eyebrow">{{ $t('tournaments.likelyNextMatchup') }}</p>
+              <h3 id="next-matchup-title">{{ nextOpponent.provisional ? $t('tournaments.provisionalPairing') : $t('tournaments.confirmedNextOpponent') }}</h3>
+              <p>{{ nextOpponent.provisional ? $t('tournaments.projectedFromTheCurrent') : $t('tournaments.scheduledPairing') }}<template v-if="nextOpponent.roundNumber"> {{ $t('tournaments.roundRoundnumber', { roundNumber: nextOpponent.roundNumber }) }}</template></p>
             </div>
             <button class="team-link matchup-link" type="button" @click="showTeam(likelyOpponent.teamId)">
               <span v-if="!likelyOpponent.logoUrl" class="team-crest" aria-hidden="true">{{ initials(entrantName(likelyOpponent)) }}</span>
               <img v-else class="team-logo" :src="likelyOpponent.logoUrl" alt="" />
-              <span><strong>{{ entrantName(likelyOpponent) }}</strong><small>{{ entrantCoach(likelyOpponent) }} · {{ likelyOpponent.race ?? 'Race unavailable' }}</small></span>
+              <span><strong>{{ entrantName(likelyOpponent) }}</strong><small>{{ entrantCoach(likelyOpponent) }} · {{ likelyOpponent.race ?? $t('tournaments.raceUnavailable') }}</small></span>
               <span aria-hidden="true">→</span>
             </button>
           </section>
 
           <section class="content-panel" aria-labelledby="scheduled-matches-title">
-            <div class="section-heading"><div><p class="eyebrow">YOUR FIXTURES</p><h3 id="scheduled-matches-title">Scheduled matches</h3></div></div>
-            <p v-if="!detail.scheduledMatches.length" class="status-copy">You have no scheduled matches in this tournament.</p>
+            <div class="section-heading"><div><p class="eyebrow">{{ $t('tournaments.contentPanel.yourFixtures') }}</p><h3 id="scheduled-matches-title">{{ $t('tournaments.contentPanel.scheduledMatches') }}</h3></div></div>
+            <p v-if="!detail.scheduledMatches.length" class="status-copy">{{ $t('tournaments.contentPanel.youHaveNoScheduled') }}</p>
             <ul v-else class="match-list">
               <li v-for="match in detail.scheduledMatches" :key="match.matchId" class="match-row">
                 <button v-if="match.opponentTeamId" class="team-link opponent-link" type="button" @click="showTeam(match.opponentTeamId)">
@@ -796,27 +807,27 @@ onBeforeUnmount(() => {
                   <span><strong>{{ opponentName(match) }}</strong><small>{{ match.opponentCoach }}</small></span>
                 </button>
                 <span v-else class="team-link opponent-link"><span><strong>{{ opponentName(match) }}</strong><small>{{ match.status }}</small></span></span>
-                <span class="match-time"><small>Round {{ match.round }}</small><time v-if="match.scheduledAt" :datetime="match.scheduledAt">{{ formatDate(match.scheduledAt) }}</time><span v-else>To be arranged</span></span>
+                <span class="match-time"><small>{{ $t('tournaments.contentPanel.roundRound', { round: match.round }) }}</small><time v-if="match.scheduledAt" :datetime="match.scheduledAt">{{ formatDate(match.scheduledAt) }}</time><span v-else>{{ $t('tournaments.contentPanel.toBeArranged') }}</span></span>
                 <button
                   v-if="currentMatch?.matchId === match.matchId && activeWait"
                   class="waiting-button"
                   type="button"
                   @click="reopenWaiting"
-                >Waiting…</button>
+                >{{ $t('tournaments.contentPanel.waiting') }}</button>
                 <button v-else class="launch-button" type="button" :disabled="!match.canLaunch || activeWait" @click="launchMatch(match)">
-                  {{ match.canLaunch ? (match.waiting ? 'Join opponent' : 'Launch match') : 'Not ready' }}
+                  {{ match.canLaunch ? (match.waiting ? $t('tournaments.contentPanel.joinOpponent') : $t('tournaments.contentPanel.launchMatch')) : $t('tournaments.contentPanel.notReady') }}
                 </button>
               </li>
             </ul>
           </section>
 
           <section class="content-panel standings-panel" aria-labelledby="standings-title">
-            <div class="section-heading"><div><p class="eyebrow">LIVE TABLE</p><h3 id="standings-title">Standings</h3></div><span>Click any team for its overview</span></div>
+            <div class="section-heading"><div><p class="eyebrow">{{ $t('tournaments.contentPanel.liveTable') }}</p><h3 id="standings-title">{{ $t('tournaments.contentPanel.standings') }}</h3></div><span>{{ $t('tournaments.contentPanel.clickAnyTeamFor') }}</span></div>
             <div class="table-scroll">
               <table class="standings-table">
-                <caption class="sr-only">{{ detail.tournament.name }} standings after round {{ detail.tournament.currentRound }}</caption>
+                <caption class="sr-only">{{ $t('tournaments.contentPanel.nameStandingsAfterRound', { name: detail.tournament.name, currentRound: detail.tournament.currentRound }) }}</caption>
                 <thead>
-                  <tr><th scope="col">Rank</th><th scope="col">Team</th><th scope="col">Pts</th><th scope="col"><abbr title="Sonneborn–Berger strength of schedule">SB</abbr></th><th scope="col">Buchholz</th><th scope="col"><abbr title="Wins, draws and losses">W/D/L</abbr></th><th scope="col"><abbr title="Touchdown differential">TDD</abbr></th><th scope="col"><abbr title="Casualty differential">Cas diff</abbr></th><th scope="col"><abbr title="Casualties for and against">CF/CA</abbr></th><th scope="col"><abbr title="Touchdowns for and against">TDF/TDA</abbr></th></tr>
+                  <tr><th scope="col">{{ $t('tournaments.contentPanel.rank') }}</th><th scope="col">{{ $t('tournaments.contentPanel.team') }}</th><th scope="col">{{ $t('tournaments.contentPanel.pts') }}</th><th scope="col"><abbr :title="$t('tournaments.contentPanel.sonnebornBergerStrengthOf')">{{ $t('tournaments.contentPanel.sb') }}</abbr></th><th scope="col">{{ $t('tournaments.contentPanel.buchholz') }}</th><th scope="col"><abbr :title="$t('tournaments.contentPanel.winsDrawsAndLosses')">W/D/L</abbr></th><th scope="col"><abbr :title="$t('tournaments.contentPanel.touchdownDifferential')">{{ $t('tournaments.contentPanel.tdd') }}</abbr></th><th scope="col"><abbr :title="$t('tournaments.contentPanel.casualtyDifferential')">{{ $t('tournaments.contentPanel.casDiff') }}</abbr></th><th scope="col"><abbr :title="$t('tournaments.contentPanel.casualtiesForAndAgainst')">{{ $t('tournaments.contentPanel.cfCa') }}</abbr></th><th scope="col"><abbr :title="$t('tournaments.contentPanel.touchdownsForAndAgainst')">{{ $t('tournaments.contentPanel.tdfTda') }}</abbr></th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="standing in detail.standings" :key="standing.teamId">
@@ -838,114 +849,114 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="content-panel rules-panel" aria-labelledby="tiebreakers-title">
-            <div class="section-heading"><div><p class="eyebrow">RANKING RULES</p><h3 id="tiebreakers-title">Tiebreakers</h3></div><span>Applied in order</span></div>
+            <div class="section-heading"><div><p class="eyebrow">{{ $t('tournaments.contentPanel.rankingRules') }}</p><h3 id="tiebreakers-title">{{ $t('tournaments.contentPanel.tiebreakers') }}</h3></div><span>{{ $t('tournaments.contentPanel.appliedInOrder') }}</span></div>
             <ol class="tiebreaker-list">
               <li v-for="rule in tiebreakerRules" :key="rule.code"><span class="rule-order">{{ rule.order }}</span><div><strong>{{ rule.label }}</strong><p>{{ rule.description }}</p></div></li>
             </ol>
           </section>
 
           <section v-if="administration" class="content-panel administration-panel" aria-labelledby="administration-title">
-            <div class="section-heading"><div><p class="eyebrow">SERVER-AUTHORIZED</p><h3 id="administration-title">Tournament owner dashboard</h3></div><span>Revision {{ administration.administration.revision }}</span></div>
+            <div class="section-heading"><div><p class="eyebrow">{{ $t('tournaments.contentPanel.serverAuthorized') }}</p><h3 id="administration-title">{{ $t('tournaments.contentPanel.tournamentOwnerDashboard') }}</h3></div><span>{{ $t('tournaments.contentPanel.revisionRevision', { revision: administration.administration.revision }) }}</span></div>
             <p v-if="adminMessage" class="status-copy" role="status">{{ adminMessage }}</p>
 
             <!-- Owner: organizer live-edit panel (tournament-api.md) — pre-filled, only changed fields
                  PATCH; format/ruleset lock once rounds exist (server-enforced, mirrored here). -->
             <section class="admin-group" aria-labelledby="edit-tournament-title">
-              <h4 id="edit-tournament-title">Edit tournament</h4>
+              <h4 id="edit-tournament-title">{{ $t('tournaments.contentPanel.editTournament') }}</h4>
               <form class="create-tournament-grid" @submit.prevent="submitEditTournament">
-                <label class="ct-field"><span># of Players</span><input v-model.number="editDraft.maxPlayers" type="number" min="2" step="1" /></label>
-                <label class="ct-field"><span>Starts at</span><input v-model="editDraft.startsAt" type="datetime-local" /></label>
-                <label class="ct-field"><span>Type</span>
-                  <select v-model="editDraft.format" :disabled="roundsExist" :title="roundsExist ? 'Format is locked once rounds exist.' : undefined">
-                    <option value="swiss">Swiss</option>
-                    <option value="roundRobin">Round-Robin</option>
-                    <option value="knockout">Knockout</option>
+                <label class="ct-field"><span>{{ $t('tournaments.contentPanel.ofPlayers') }}</span><input v-model.number="editDraft.maxPlayers" type="number" min="2" step="1" /></label>
+                <label class="ct-field"><span>{{ $t('tournaments.contentPanel.startsAt') }}</span><input v-model="editDraft.startsAt" type="datetime-local" /></label>
+                <label class="ct-field"><span>{{ $t('tournaments.contentPanel.type') }}</span>
+                  <select v-model="editDraft.format" :disabled="roundsExist" :title="roundsExist ? $t('tournaments.contentPanel.formatIsLockedOnce') : undefined">
+                    <option value="swiss">{{ $t('tournaments.contentPanel.swiss') }}</option>
+                    <option value="roundRobin">{{ $t('tournaments.contentPanel.roundRobin') }}</option>
+                    <option value="knockout">{{ $t('tournaments.contentPanel.knockout') }}</option>
                   </select>
                 </label>
-                <label class="ct-field"><span>Ruleset</span>
-                  <select v-model="editDraft.packageName" :disabled="roundsExist" :title="roundsExist ? 'The ruleset is locked once rounds exist.' : undefined">
-                    <option v-if="!createPackages.length" :value="editDraft.packageName">{{ editDraft.packageName || 'No saved packages' }}</option>
+                <label class="ct-field"><span>{{ $t('tournaments.contentPanel.ruleset2') }}</span>
+                  <select v-model="editDraft.packageName" :disabled="roundsExist" :title="roundsExist ? $t('tournaments.contentPanel.theRulesetIsLocked') : undefined">
+                    <option v-if="!createPackages.length" :value="editDraft.packageName">{{ editDraft.packageName || $t('tournaments.contentPanel.noSavedPackages') }}</option>
                     <option v-for="entry in createPackages" :key="entry.name" :value="entry.name">{{ entry.name }}</option>
                   </select>
                 </label>
-                <label class="ct-field"><span>Primary tiebreaker</span>
+                <label class="ct-field"><span>{{ $t('tournaments.contentPanel.primaryTiebreaker') }}</span>
                   <select v-model="editDraft.primaryTiebreaker">
-                    <option value="buchholz">Buchholz</option>
-                    <option value="sonnebornBerger">SBR</option>
+                    <option value="buchholz">{{ $t('tournaments.contentPanel.buchholz') }}</option>
+                    <option value="sonnebornBerger">{{ $t('tournaments.contentPanel.sbr') }}</option>
                   </select>
                 </label>
-                <button class="create-tournament-button ct-submit" type="submit" :disabled="editBusy">{{ editBusy ? 'Saving…' : 'Save Changes' }}</button>
+                <button class="create-tournament-button ct-submit" type="submit" :disabled="editBusy">{{ editBusy ? $t('tournaments.contentPanel.saving') : $t('tournaments.contentPanel.saveChanges') }}</button>
               </form>
               <p v-if="editError" class="error-copy" role="alert">{{ editError }}</p>
             </section>
 
             <section class="admin-group" aria-labelledby="applications-review-title">
-              <h4 id="applications-review-title">Pending applications</h4>
-              <p v-if="!reviewApplications.length" class="status-copy">No applications awaiting review.</p>
+              <h4 id="applications-review-title">{{ $t('tournaments.contentPanel.pendingApplications') }}</h4>
+              <p v-if="!reviewApplications.length" class="status-copy">{{ $t('tournaments.contentPanel.noApplicationsAwaitingReview') }}</p>
               <article v-for="application in reviewApplications" :key="application.application.id" class="admin-row">
-                <div><strong>{{ application.application.coachId }}</strong><span>Team {{ application.application.team.teamId }} · {{ application.application.status }}</span></div>
-                <div class="validation-box compact" :class="application.validation.valid ? 'valid' : 'invalid'"><strong>{{ application.validation.valid ? 'Valid' : 'Invalid' }} now</strong><span>{{ application.validation.errors.join(' · ') || application.validation.warnings.join(' · ') || 'No validation findings.' }}</span></div>
-                <label class="form-field"><span>Decline feedback</span><textarea v-model="applicationFeedback[application.application.id]" rows="2" /></label>
+                <div><strong>{{ application.application.coachId }}</strong><span>{{ $t('tournaments.contentPanel.teamTeamidStatus', { teamId: application.application.team.teamId, status: application.application.status }) }}</span></div>
+                <div class="validation-box compact" :class="application.validation.valid ? 'valid' : 'invalid'"><strong>{{ application.validation.valid ? $t('tournaments.contentPanel.valid') : $t('tournaments.contentPanel.invalid') }} {{ $t('tournaments.contentPanel.now') }}</strong><span>{{ application.validation.errors.join(' · ') || application.validation.warnings.join(' · ') || $t('tournaments.contentPanel.noValidationFindings') }}</span></div>
+                <label class="form-field"><span>{{ $t('tournaments.contentPanel.declineFeedback') }}</span><textarea v-model="applicationFeedback[application.application.id]" rows="2" /></label>
                 <div class="row-actions">
-                  <button class="secondary-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'pending')">Mark pending</button>
-                  <button class="launch-button" type="button" :disabled="adminBusy || !application.validation.valid" @click="runApplicationAction(application, 'approve')">Approve</button>
-                  <button class="secondary-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'decline')">Decline</button>
-                  <button class="danger-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'ban')">Ban team</button>
+                  <button class="secondary-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'pending')">{{ $t('tournaments.contentPanel.markPending') }}</button>
+                  <button class="launch-button" type="button" :disabled="adminBusy || !application.validation.valid" @click="runApplicationAction(application, 'approve')">{{ $t('tournaments.contentPanel.approve') }}</button>
+                  <button class="secondary-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'decline')">{{ $t('tournaments.contentPanel.decline') }}</button>
+                  <button class="danger-button" type="button" :disabled="adminBusy" @click="runApplicationAction(application, 'ban')">{{ $t('tournaments.contentPanel.banTeam') }}</button>
                 </div>
               </article>
             </section>
 
             <section class="admin-group" aria-labelledby="entrants-admin-title">
-              <h4 id="entrants-admin-title">Entrants</h4>
+              <h4 id="entrants-admin-title">{{ $t('tournaments.contentPanel.entrants') }}</h4>
               <details v-for="entrant in detail.entrants" :key="entrant.entrantId" class="admin-details">
-                <summary><strong>{{ entrantName(entrant) }}</strong> · {{ entrantCoach(entrant) }}<span v-if="entrant.droppedAt"> · Dropped</span></summary>
+                <summary><strong>{{ entrantName(entrant) }}</strong> · {{ entrantCoach(entrant) }}<span v-if="entrant.droppedAt">{{ $t('tournaments.contentPanel.dropped') }}</span></summary>
                 <div class="admin-form-grid">
-                  <label class="form-field"><span>Replacement coach identity</span><input v-model="replacementCoach[entrant.entrantId]" /></label>
-                  <label class="form-field"><span>Replacement team ID</span><input v-model="replacementTeam[entrant.entrantId]" /></label>
-                  <label class="form-field wide"><span>Required reason</span><input v-model="entrantReason[entrant.entrantId]" /></label>
+                  <label class="form-field"><span>{{ $t('tournaments.contentPanel.replacementCoachIdentity') }}</span><input v-model="replacementCoach[entrant.entrantId]" /></label>
+                  <label class="form-field"><span>{{ $t('tournaments.contentPanel.replacementTeamId') }}</span><input v-model="replacementTeam[entrant.entrantId]" /></label>
+                  <label class="form-field wide"><span>{{ $t('tournaments.contentPanel.requiredReason') }}</span><input v-model="entrantReason[entrant.entrantId]" /></label>
                 </div>
-                <div class="row-actions"><button class="secondary-button" type="button" :disabled="adminBusy || !replacementCoach[entrant.entrantId] || !replacementTeam[entrant.entrantId] || !entrantReason[entrant.entrantId]" @click="replaceEntrant(entrant)">Replace entrant</button><button class="danger-button" type="button" :disabled="adminBusy || !!entrant.droppedAt || !entrantReason[entrant.entrantId]" @click="dropEntrant(entrant)">Drop entrant</button></div>
+                <div class="row-actions"><button class="secondary-button" type="button" :disabled="adminBusy || !replacementCoach[entrant.entrantId] || !replacementTeam[entrant.entrantId] || !entrantReason[entrant.entrantId]" @click="replaceEntrant(entrant)">{{ $t('tournaments.contentPanel.replaceEntrant') }}</button><button class="danger-button" type="button" :disabled="adminBusy || !!entrant.droppedAt || !entrantReason[entrant.entrantId]" @click="dropEntrant(entrant)">{{ $t('tournaments.contentPanel.dropEntrant') }}</button></div>
               </details>
             </section>
 
             <section class="admin-group" aria-labelledby="adjudication-title">
-              <h4 id="adjudication-title">Match adjudication</h4>
-              <p v-if="!detail.scheduledMatches.length" class="status-copy">No visible scheduled matches.</p>
+              <h4 id="adjudication-title">{{ $t('tournaments.contentPanel.matchAdjudication') }}</h4>
+              <p v-if="!detail.scheduledMatches.length" class="status-copy">{{ $t('tournaments.contentPanel.noVisibleScheduledMatches') }}</p>
               <details v-for="match in detail.scheduledMatches" :key="match.matchId" class="admin-details">
-                <summary>Round {{ match.round }} · {{ matchSides(match).map(side => side.coach.ffbCoachId).join(' vs ') || match.matchId }} · {{ match.status }}</summary>
+                <summary>{{ $t('tournaments.contentPanel.roundRoundP1Status', { round: match.round, p1: matchSides(match).map(side => side.coach.ffbCoachId).join(' vs ') || match.matchId, status: match.status }) }}</summary>
                 <template v-if="matchSides(match).length === 2 && match.revision !== undefined">
                   <div class="admin-form-grid">
-                    <label class="form-field"><span>Winner</span><select v-model="adjudicationState(match).winnerEntrantId"><option v-for="side in matchSides(match)" :key="side.entrantId" :value="side.entrantId">{{ side.coach.ffbCoachId }}</option></select></label>
-                    <label class="form-field"><span>Winner score</span><input v-model.number="adjudicationState(match).winnerScore" type="number" min="0" /></label>
-                    <label class="form-field"><span>Loser score</span><input v-model.number="adjudicationState(match).loserScore" type="number" min="0" /></label>
-                    <label class="form-field"><span>Winner casualties</span><input v-model.number="adjudicationState(match).winnerCasualties" type="number" min="0" /></label>
-                    <label class="form-field"><span>Loser casualties</span><input v-model.number="adjudicationState(match).loserCasualties" type="number" min="0" /></label>
-                    <label class="form-field wide"><span>Required reason</span><input v-model="adjudicationState(match).reason" /></label>
+                    <label class="form-field"><span>{{ $t('tournaments.contentPanel.winner') }}</span><select v-model="adjudicationState(match).winnerEntrantId"><option v-for="side in matchSides(match)" :key="side.entrantId" :value="side.entrantId">{{ side.coach.ffbCoachId }}</option></select></label>
+                    <label class="form-field"><span>{{ $t('tournaments.contentPanel.winnerScore') }}</span><input v-model.number="adjudicationState(match).winnerScore" type="number" min="0" /></label>
+                    <label class="form-field"><span>{{ $t('tournaments.contentPanel.loserScore') }}</span><input v-model.number="adjudicationState(match).loserScore" type="number" min="0" /></label>
+                    <label class="form-field"><span>{{ $t('tournaments.contentPanel.winnerCasualties') }}</span><input v-model.number="adjudicationState(match).winnerCasualties" type="number" min="0" /></label>
+                    <label class="form-field"><span>{{ $t('tournaments.contentPanel.loserCasualties') }}</span><input v-model.number="adjudicationState(match).loserCasualties" type="number" min="0" /></label>
+                    <label class="form-field wide"><span>{{ $t('tournaments.contentPanel.requiredReason') }}</span><input v-model="adjudicationState(match).reason" /></label>
                   </div>
-                  <button class="launch-button" type="button" :disabled="adminBusy || !adjudicationState(match).reason" @click="adjudicateMatch(match)">Record adjudication</button>
+                  <button class="launch-button" type="button" :disabled="adminBusy || !adjudicationState(match).reason" @click="adjudicateMatch(match)">{{ $t('tournaments.contentPanel.recordAdjudication') }}</button>
                 </template>
-                <p v-else class="status-copy">This pairing cannot be adjudicated from the current server projection.</p>
+                <p v-else class="status-copy">{{ $t('tournaments.contentPanel.thisPairingCannotBe') }}</p>
               </details>
             </section>
 
             <section v-if="detail.tournament.status === 'active'" class="admin-group finish-group" aria-labelledby="finish-title">
-              <h4 id="finish-title">Finish tournament</h4>
-              <p>Rank 1 is selected by default. Finishing requires explicit confirmation and generates award candidates.</p>
-              <div class="admin-form-grid"><label class="form-field"><span>Winner</span><select v-model="finishWinnerId"><option v-for="entrant in detail.entrants" :key="entrant.entrantId" :value="entrant.entrantId">{{ entrantName(entrant) }} · {{ entrantCoach(entrant) }}</option></select></label><label class="form-field wide"><span>Reason (optional)</span><input v-model="finishReason" /></label></div>
-              <button class="danger-button" type="button" :disabled="adminBusy || !finishWinnerId" @click="finishTournament">Finish tournament</button>
+              <h4 id="finish-title">{{ $t('tournaments.contentPanel.finishTournament') }}</h4>
+              <p>{{ $t('tournaments.contentPanel.rank1IsSelected') }}</p>
+              <div class="admin-form-grid"><label class="form-field"><span>{{ $t('tournaments.contentPanel.winner') }}</span><select v-model="finishWinnerId"><option v-for="entrant in detail.entrants" :key="entrant.entrantId" :value="entrant.entrantId">{{ entrantName(entrant) }} · {{ entrantCoach(entrant) }}</option></select></label><label class="form-field wide"><span>{{ $t('tournaments.contentPanel.reasonOptional') }}</span><input v-model="finishReason" /></label></div>
+              <button class="danger-button" type="button" :disabled="adminBusy || !finishWinnerId" @click="finishTournament">{{ $t('tournaments.contentPanel.finishTournament') }}</button>
             </section>
 
             <section v-if="detail.tournament.awards" class="admin-group" aria-labelledby="awards-title">
-              <h4 id="awards-title">Awards and overrides</h4>
+              <h4 id="awards-title">{{ $t('tournaments.contentPanel.awardsAndOverrides') }}</h4>
               <details v-for="award in awardKeys" :key="award" class="admin-details">
-                <summary>{{ award }} · candidates: {{ awardCandidateNames(award) }}</summary>
-                <fieldset class="recipient-list"><legend>Recipients</legend><label v-for="entrant in detail.entrants" :key="entrant.entrantId"><input v-model="awardRecipients[award]" type="checkbox" :value="entrant.entrantId" /> {{ entrantName(entrant) }}</label></fieldset>
-                <label class="form-field"><span>Required override reason</span><input v-model="awardReasons[award]" /></label>
-                <button class="secondary-button" type="button" :disabled="adminBusy || !awardReasons[award]" @click="overrideAward(award)">Override recipients</button>
+                <summary>{{ $t('tournaments.contentPanel.awardCandidatesP1', { award, p1: awardCandidateNames(award) }) }}</summary>
+                <fieldset class="recipient-list"><legend>{{ $t('tournaments.contentPanel.recipients.recipients') }}</legend><label v-for="entrant in detail.entrants" :key="entrant.entrantId"><input v-model="awardRecipients[award]" type="checkbox" :value="entrant.entrantId" /> {{ entrantName(entrant) }}</label></fieldset>
+                <label class="form-field"><span>{{ $t('tournaments.contentPanel.requiredOverrideReason') }}</span><input v-model="awardReasons[award]" /></label>
+                <button class="secondary-button" type="button" :disabled="adminBusy || !awardReasons[award]" @click="overrideAward(award)">{{ $t('tournaments.contentPanel.overrideRecipients') }}</button>
               </details>
             </section>
 
-            <div class="row-actions"><button class="secondary-button" type="button" :disabled="adminBusy" @click="downloadNaf">Download NAF XML</button></div>
+            <div class="row-actions"><button class="secondary-button" type="button" :disabled="adminBusy" @click="downloadNaf">{{ $t('tournaments.contentPanel.downloadNafXml') }}</button></div>
           </section>
         </template>
       </main>
@@ -953,20 +964,20 @@ onBeforeUnmount(() => {
 
     <div v-if="waitingDialogVisible && currentMatch" class="dialog-backdrop" @click.self="dismissWaiting">
       <section ref="waitingDialog" class="waiting-dialog" role="alertdialog" aria-modal="true" aria-labelledby="waiting-title" tabindex="-1" @keydown.esc="dismissWaiting">
-        <p class="eyebrow">MATCH LAUNCH</p>
-        <h2 id="waiting-title">Waiting for Opponent</h2>
+        <p class="eyebrow">{{ $t('tournaments.waitingDialog.matchLaunch') }}</p>
+        <h2 id="waiting-title">{{ $t('tournaments.waitingDialog.waitingForOpponent') }}</h2>
         <div class="waiting-opponent">
           <span v-if="!currentMatch.opponentLogoUrl" class="team-crest large" aria-hidden="true">{{ initials(opponentName(currentMatch)) }}</span>
           <img v-else class="team-logo large" :src="currentMatch.opponentLogoUrl" alt="" />
           <div><strong>{{ opponentName(currentMatch) }}</strong><span>{{ currentMatch.opponentCoach }}</span></div>
         </div>
-        <p v-if="challenge.phase === 'submitting'" class="waiting-status" role="status">Sending your scheduled challenge…</p>
+        <p v-if="challenge.phase === 'submitting'" class="waiting-status" role="status">{{ $t('tournaments.waitingDialog.sendingYourScheduledChallenge') }}</p>
         <p v-else :class="challenge.phase === 'error' ? 'error-copy' : 'waiting-status'" role="status" aria-live="polite">{{ challenge.message }}</p>
-        <p v-if="activeWait" class="polling-note">This screen checks for your opponent every two seconds. You may dismiss it and return while the wait continues.</p>
+        <p v-if="activeWait" class="polling-note">{{ $t('tournaments.waitingDialog.thisScreenChecksFor') }}</p>
         <div class="dialog-actions">
-          <button v-if="challenge.phase === 'error'" class="launch-button" type="button" @click="retryMatch">Retry</button>
-          <button class="secondary-button" type="button" @click="selectAnotherMatch">Select another match</button>
-          <button class="text-button" type="button" @click="dismissWaiting">Dismiss</button>
+          <button v-if="challenge.phase === 'error'" class="launch-button" type="button" @click="retryMatch">{{ $t('tournaments.waitingDialog.retry') }}</button>
+          <button class="secondary-button" type="button" @click="selectAnotherMatch">{{ $t('tournaments.waitingDialog.selectAnotherMatch') }}</button>
+          <button class="text-button" type="button" @click="dismissWaiting">{{ $t('tournaments.waitingDialog.dismiss') }}</button>
         </div>
       </section>
     </div>

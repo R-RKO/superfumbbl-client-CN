@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue';
 import DisplayCaps from './DisplayCaps.vue';
+import { $t } from '../i18n';
+import { t } from '../i18n';
 
 export interface SendOffResultView {
   kind: 'argue' | 'bribe';
@@ -24,13 +26,13 @@ const resultText = computed(() => {
   const r = props.result;
   if (r.kind === 'argue') {
     if (r.sentOff) return r.coachBanned
-      ? `${r.playerName} is sent off — and the coach is banned!`
-      : `${r.playerName} is sent off!`;
-    return 'Argue succeeds! The player stays on the pitch.';
+      ? t('dialogs.sendOffResult.resultText.playernameIsSentOff', { playerName: r.playerName })
+      : t('dialogs.sendOffResult.resultText.playernameIsSentOff2', { playerName: r.playerName });
+    return t('dialogs.sendOffResult.resultText.argueSucceedsThePlayer');
   }
   return r.sentOff
-    ? `The bribe fails — ${r.playerName} is sent off!`
-    : 'Bribe succeeds! The player stays on the pitch.';
+    ? t('dialogs.sendOffResult.resultText.theBribeFailsPlayername', { playerName: r.playerName })
+    : t('dialogs.sendOffResult.resultText.bribeSucceedsThePlayer');
 });
 
 const surfaceStyle: CSSProperties = {
@@ -45,10 +47,10 @@ const surfaceStyle: CSSProperties = {
 
 <template>
   <section class="sendoff-result-panel" :class="[{ success: !result.sentOff, banned: result.coachBanned }, `side-${result.side}`]"
-    :style="surfaceStyle" data-testid="sendoff-result" aria-live="polite" aria-label="Referee decision result">
+    :style="surfaceStyle" data-testid="sendoff-result" aria-live="polite" :aria-label="$t('dialogs.sendOffResult.sendoffResultPanel.refereeDecisionResult')">
     <header class="sendoff-result-header">
       <img v-if="refereeIconUrl" :src="refereeIconUrl" class="sendoff-result-ref" alt="" aria-hidden="true" />
-      <span class="sendoff-result-kicker"><DisplayCaps :text="result.rerolled ? 'Bribery & Corruption reroll' : result.kind === 'bribe' ? 'Bribe result' : 'Argue the Call'" /></span>
+      <span class="sendoff-result-kicker"><DisplayCaps :text="result.rerolled ? $t('dialogs.sendOffResult.sendoffResultPanel.briberyCorruptionReroll') : result.kind === 'bribe' ? $t('dialogs.sendOffResult.sendoffResultPanel.bribeResult') : $t('dialogs.sendOffResult.sendoffResultPanel.argueTheCall')" /></span>
       <span class="sendoff-result-side">{{ result.side }}</span>
     </header>
     <div class="sendoff-result-body">
@@ -64,10 +66,10 @@ const surfaceStyle: CSSProperties = {
           <span class="sendoff-verdict">{{ result.sentOff ? '✕' : '✓' }}</span>
         </span>
         <span v-else class="sendoff-verdict">{{ result.coachBanned ? '⚖✕' : result.sentOff ? '✕' : '✓' }}</span>
-        <span v-if="result.rerolled" class="sendoff-reroll-mark" aria-label="Bribery and Corruption reroll">↻</span>
+        <span v-if="result.rerolled" class="sendoff-reroll-mark" :aria-label="$t('dialogs.sendOffResult.sendoffResultPanel.briberyAndCorruptionReroll')">↻</span>
       </div>
       <div class="sendoff-result-copy">
-        <strong class="sendoff-result-title"><DisplayCaps :text="result.sentOff ? 'Sent Off' : 'Call Overturned'" /></strong>
+        <strong class="sendoff-result-title"><DisplayCaps :text="result.sentOff ? $t('dialogs.sendOffResult.sendoffResultPanel.sentOff') : $t('dialogs.sendOffResult.sendoffResultPanel.callOverturned')" /></strong>
         <span class="sendoff-result-text">{{ resultText }}</span>
       </div>
     </div>

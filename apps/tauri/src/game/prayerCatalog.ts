@@ -1,3 +1,4 @@
+import { $t } from '../i18n';
 export interface PrayerCatalogEntry {
   roll: number;
   name: string;
@@ -18,22 +19,22 @@ export interface PrayerCatalogEntry {
 
 /** BB2025 Prayers to Nuffle D16 table, in authoritative roll order. */
 export const PRAYER_TABLE: readonly PrayerCatalogEntry[] = [
-  { roll: 1, name: 'Treacherous Trapdoor', tag: 'Trapdoor', icon: '🕳️', animationType: 'prayerTrapdoor', text: (t) => `${t} prays for a Treacherous Trapdoor!`, effect: 'Trapdoors appear. A player stepping on one falls through on a roll of 1.' },
-  { roll: 2, name: 'Friends with the Ref', icon: '🤝', animationType: 'friendsWithTheRef', text: (t) => `${t} makes Friends with the Ref!`, effect: 'Argue the Call succeeds on a 5+.' },
-  { roll: 3, name: 'Stiletto', icon: '🗡️', animationType: 'stiletto', text: (t) => `${t} prays for a Stiletto!`, effect: 'One random available player gains Stab.', playerEventMessage: 'gains Stab' },
-  { roll: 4, name: 'Iron Man', icon: '🦾', animationType: 'ironMan', text: (t) => `${t} prays for Iron Man!`, effect: 'One chosen available player gains 1 AV (maximum 11+).', playerEventMessage: 'gains 1 AV' },
-  { roll: 5, name: 'Knuckle Dusters', icon: '👊', animationType: 'knuckleDusters', text: (t) => `${t} prays for Knuckle Dusters!`, effect: 'One chosen available player gains Mighty Blow (+1).', playerEventMessage: 'gains Mighty Blow (+1)' },
-  { roll: 6, name: 'Bad Habits', icon: '🚬', animationType: 'badhabits', text: (t) => `${t}'s squad picks up Bad Habits!`, effect: 'D3 random opposing players gain Loner (2+).', playerEventMessage: 'gains Loner (2+)' },
-  { roll: 7, name: 'Greasy Cleats', icon: '🥾', animationType: 'greasyCleats', text: (t) => `${t} prays for Greasy Cleats!`, effect: 'One random opposing player loses 1 MA.', playerEventMessage: 'loses 1 MA' },
-  { roll: 8, name: 'Blessing of Nuffle', icon: '🙏', animationType: 'blessedStatueOfNuffle', text: (t) => `${t} receives the Blessing of Nuffle!`, effect: 'One random available player gains Pro.', playerEventMessage: 'gains Pro' },
-  { roll: 9, name: 'Moles under the Pitch', tag: 'Moles', icon: '🐁', animationType: 'molesUnderThePitch', text: (t) => `${t} prays for Moles under the Pitch!`, effect: 'Rushes by opposing players suffer a -1 modifier.' },
-  { roll: 10, name: 'Perfect Passing', icon: '🎯', animationType: 'perfectPassing', text: (t) => `${t} prays for Perfect Passing!`, effect: 'Completions generate 2 SPP instead of 1.' },
-  { roll: 11, name: 'Dazzling Catching', icon: '🧤', animationType: 'dazzlingCatching', text: (t) => `${t} prays for Dazzling Catching!`, effect: 'Caught passes generate 1 SPP for either team.' },
-  { roll: 12, name: 'Fan Interaction', icon: '📣', animationType: 'fanInteraction', text: (t) => `${t} whips up a Fan Interaction!`, effect: 'Crowd-push casualties generate 2 SPP.' },
-  { roll: 13, name: 'Fouling Frenzy', icon: '🥊', animationType: 'foulingFrenzy', text: (t) => `${t} prays for a Fouling Frenzy!`, effect: 'Foul casualties generate 2 SPP.' },
-  { roll: 14, name: 'Throw a Rock', icon: '🪨', animationType: 'throwARockPrayer', text: (t) => `${t} prays to Throw a Rock!`, effect: 'Once this game, a random standing opponent on the pitch is hit on a 4+.', laterInvocation: true },
-  { roll: 15, name: 'Under Scrutiny', icon: '🔍', animationType: 'underScrutiny', text: (t) => `${t}'s star comes Under Scrutiny!`, effect: 'Opposing fouls are always spotted when armour is broken.' },
-  { roll: 16, name: 'Intensive Training', icon: '🏋️', animationType: 'intensiveTraining', text: (t) => `${t} prays for Intensive Training!`, effect: 'One random available player gains a chosen Primary skill.', deferredEffect: true },
+  { roll: 1, name: 'Treacherous Trapdoor', tag: 'Trapdoor', icon: '🕳️', animationType: 'prayerTrapdoor', text: (t) => $t('hud.prayers.prayerTable.tPraysForA', { t }), get effect() { return $t('hud.prayers.prayerTable.trapdoorsAppearAPlayer'); } },
+  { roll: 2, name: 'Friends with the Ref', icon: '🤝', animationType: 'friendsWithTheRef', text: (t) => $t('hud.prayers.prayerTable.tMakesFriendsWith', { t }), get effect() { return $t('hud.prayers.prayerTable.argueTheCallSucceeds'); } },
+  { roll: 3, name: 'Stiletto', icon: '🗡️', animationType: 'stiletto', text: (t) => $t('hud.prayers.prayerTable.tPraysForA2', { t }), get effect() { return $t('hud.prayers.prayerTable.oneRandomAvailablePlayer'); }, playerEventMessage: 'gains Stab' },
+  { roll: 4, name: 'Iron Man', icon: '🦾', animationType: 'ironMan', text: (t) => $t('hud.prayers.prayerTable.tPraysForIron', { t }), get effect() { return $t('hud.prayers.prayerTable.oneChosenAvailablePlayer'); }, playerEventMessage: 'gains 1 AV' },
+  { roll: 5, name: 'Knuckle Dusters', icon: '👊', animationType: 'knuckleDusters', text: (t) => $t('hud.prayers.prayerTable.tPraysForKnuckle', { t }), get effect() { return $t('hud.prayers.prayerTable.oneChosenAvailablePlayer2'); }, playerEventMessage: 'gains Mighty Blow (+1)' },
+  { roll: 6, name: 'Bad Habits', icon: '🚬', animationType: 'badhabits', text: (t) => $t('hud.prayers.prayerTable.tSSquadPicks', { t }), get effect() { return $t('hud.prayers.prayerTable.d3RandomOpposingPlayers'); }, playerEventMessage: 'gains Loner (2+)' },
+  { roll: 7, name: 'Greasy Cleats', icon: '🥾', animationType: 'greasyCleats', text: (t) => $t('hud.prayers.prayerTable.tPraysForGreasy', { t }), get effect() { return $t('hud.prayers.prayerTable.oneRandomOpposingPlayer'); }, playerEventMessage: 'loses 1 MA' },
+  { roll: 8, name: 'Blessing of Nuffle', icon: '🙏', animationType: 'blessedStatueOfNuffle', text: (t) => $t('hud.prayers.prayerTable.tReceivesTheBlessing', { t }), get effect() { return $t('hud.prayers.prayerTable.oneRandomAvailablePlayer2'); }, playerEventMessage: 'gains Pro' },
+  { roll: 9, name: 'Moles under the Pitch', tag: 'Moles', icon: '🐁', animationType: 'molesUnderThePitch', text: (t) => $t('hud.prayers.prayerTable.tPraysForMoles', { t }), get effect() { return $t('hud.prayers.prayerTable.rushesByOpposingPlayers'); } },
+  { roll: 10, name: 'Perfect Passing', icon: '🎯', animationType: 'perfectPassing', text: (t) => $t('hud.prayers.prayerTable.tPraysForPerfect', { t }), get effect() { return $t('hud.prayers.prayerTable.completionsGenerate2Spp'); } },
+  { roll: 11, name: 'Dazzling Catching', icon: '🧤', animationType: 'dazzlingCatching', text: (t) => $t('hud.prayers.prayerTable.tPraysForDazzling', { t }), get effect() { return $t('hud.prayers.prayerTable.caughtPassesGenerate1'); } },
+  { roll: 12, name: 'Fan Interaction', icon: '📣', animationType: 'fanInteraction', text: (t) => $t('hud.prayers.prayerTable.tWhipsUpA', { t }), get effect() { return $t('hud.prayers.prayerTable.crowdPushCasualtiesGenerate'); } },
+  { roll: 13, name: 'Fouling Frenzy', icon: '🥊', animationType: 'foulingFrenzy', text: (t) => $t('hud.prayers.prayerTable.tPraysForA3', { t }), get effect() { return $t('hud.prayers.prayerTable.foulCasualtiesGenerate2'); } },
+  { roll: 14, name: 'Throw a Rock', icon: '🪨', animationType: 'throwARockPrayer', text: (t) => $t('hud.prayers.prayerTable.tPraysToThrow', { t }), get effect() { return $t('hud.prayers.prayerTable.onceThisGameA'); }, laterInvocation: true },
+  { roll: 15, name: 'Under Scrutiny', icon: '🔍', animationType: 'underScrutiny', text: (t) => $t('hud.prayers.prayerTable.tSStarComes', { t }), get effect() { return $t('hud.prayers.prayerTable.opposingFoulsAreAlways'); } },
+  { roll: 16, name: 'Intensive Training', icon: '🏋️', animationType: 'intensiveTraining', text: (t) => $t('hud.prayers.prayerTable.tPraysForIntensive', { t }), get effect() { return $t('hud.prayers.prayerTable.oneRandomAvailablePlayer3'); }, deferredEffect: true },
 ] as const;
 
 /** Owner 09-06: an ACTIVE prayer as the wire carries it in turnData.inducementSet.prayers (the upstream Prayer

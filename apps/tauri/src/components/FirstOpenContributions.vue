@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { $t } from '../i18n';
+import { t } from '../i18n';
 /** First-open contributions screen (owner 08-27): shown once, after the legal notice is
  *  acknowledged. Order is deliberate and owner-ruled: Christer and the FUMBBL contributors
  *  FIRST, then the Super FUMBBL contributors. Names mirror ATTRIBUTION.md (itself a mirror
@@ -6,64 +8,72 @@
 const emit = defineEmits<{ continue: [] }>();
 
 const FUMBBL_DEVELOPERS: ReadonlyArray<{ name: string; role: string }> = [
-  { name: 'Christer Kaivo-oja', role: 'FUMBBL site owner and website developer; assistant FFB developer — the upstream this client stands on' },
-  { name: 'Mr-Klipp', role: 'Co-developer in the early days of FUMBBL; core site code' },
-  { name: 'SkiJunkie', role: 'JavaBBowl developer — the original FUMBBL client' },
-  { name: 'Kalimar', role: 'Primary FFB developer, 2013–2017' },
-  { name: 'Candlejack', role: 'Primary FFB developer from 2019; Dice Stats module' },
-  { name: 'HimalayaP1C7', role: 'Gamefinder 2.0 and Blackbox 2.0 front-ends' },
+  { name: 'Christer Kaivo-oja', get role() { return t('contributions.fumbblDevelopers.fumbblSiteOwnerAnd'); } },
+  { name: 'Mr-Klipp', get role() { return t('contributions.fumbblDevelopers.coDeveloperInThe'); } },
+  { name: 'SkiJunkie', get role() { return t('contributions.fumbblDevelopers.javabbowlDeveloperTheOriginal'); } },
+  { name: 'Kalimar', get role() { return t('contributions.fumbblDevelopers.primaryFfbDeveloper2013'); } },
+  { name: 'Candlejack', get role() { return t('contributions.fumbblDevelopers.primaryFfbDeveloperFrom'); } },
+  { name: 'HimalayaP1C7', get role() { return t('contributions.fumbblDevelopers.gamefinder20And'); } },
 ];
 
 const FUMBBL_ASSET_GROUPS: ReadonlyArray<{ group: string; names: string }> = [
-  { group: 'Roster logos', names: 'Mr_Foulscumm · Qaz · Frylen · Garion · ryanfitz' },
-  { group: 'Portraits', names: 'Knut_Rockie · ryanfitz · Garion · Marcepan' },
-  { group: 'Icons', names: 'Pat · Nick Kelsh · WhatBall · Cowhead · harvestmouse · Balle2000 · MisterFurious · Marcepan · Tussock' },
-  { group: 'Sounds', names: 'PurpleChest · bigbullies · Mischa Kissin Tip' },
-  { group: 'Pitches & banners', names: 'Garion · Kam · WhatBall · Angelux · ZioCrock · ArrestedDevelopment' },
+  { get group() { return t('contributions.group.rosterLogos'); }, names: 'Mr_Foulscumm · Qaz · Frylen · Garion · ryanfitz' },
+  { get group() { return t('contributions.group.portraits'); }, names: 'Knut_Rockie · ryanfitz · Garion · Marcepan' },
+  { get group() { return t('contributions.group.icons'); }, names: 'Pat · Nick Kelsh · WhatBall · Cowhead · harvestmouse · Balle2000 · MisterFurious · Marcepan · Tussock' },
+  { get group() { return t('contributions.group.sounds'); }, names: 'PurpleChest · bigbullies · Mischa Kissin Tip' },
+  { get group() { return t('contributions.group.pitchesBanners'); }, names: 'Garion · Kam · WhatBall · Angelux · ZioCrock · ArrestedDevelopment' },
 ];
 
 const SUPER_FUMBBL: ReadonlyArray<{ name: string; role: string }> = [
-  { name: 'Flutethecat', role: 'Super FUMBBL project lead — client, fork server, and tournament services' },
-  { name: 'Kristofer Bengtsson (KrisB)', role: 'Block dice face art (the Rick dice option)' },
-  { name: 'Eduardo Tunni', role: 'Graduate typeface (menu and pitch lettering), SIL Open Font License 1.1' },
-  { name: 'The Super FUMBBL contributors', role: 'Everyone credited in the project LICENSE and commit history' },
+  { name: 'Flutethecat', get role() { return t('contributions.superFumbbl.superFumbblProjectLead'); } },
+  { name: 'Kristofer Bengtsson (KrisB)', get role() { return t('contributions.superFumbbl.blockDiceFaceArt'); } },
+  { name: 'Eduardo Tunni', get role() { return t('contributions.superFumbbl.graduateTypefaceMenuAnd'); } },
+  { get name() { return t('contributions.group.superFumbblContributors'); }, get role() { return t('contributions.superFumbbl.everyoneCreditedInThe'); } },
 ];
 </script>
 
 <template>
   <div class="contrib-shell" role="dialog" aria-modal="true" aria-labelledby="first-open-contrib-title">
     <div class="contrib-card">
-      <h1 id="first-open-contrib-title">Contributions</h1>
+      <h1 id="first-open-contrib-title">{{ $t('contributions.contribCard.contributions') }}</h1>
       <p class="contrib-lede">
-        Super FUMBBL exists because of the people below. FUMBBL and FFB came first — so do they.
+        {{ $t('contributions.contribCard.superFumbblExistsBecause') }}
       </p>
       <div class="contrib-scroll">
-        <section aria-label="FUMBBL and FFB contributors">
-          <h2>FUMBBL &amp; FFB</h2>
+        <section :aria-label="$t('contributions.contribCard.fumbblAndFfbContributors')">
+          <h2>{{ $t('contributions.contribCard.fumbblFfb') }}</h2>
           <ul>
             <li v-for="person in FUMBBL_DEVELOPERS" :key="person.name">
               <strong>{{ person.name }}</strong><span>{{ person.role }}</span>
             </li>
           </ul>
-          <h3>Community assets</h3>
+          <h3>{{ $t('contributions.contribCard.communityAssets') }}</h3>
           <ul>
             <li v-for="entry in FUMBBL_ASSET_GROUPS" :key="entry.group">
               <strong>{{ entry.group }}</strong><span>{{ entry.names }}</span>
             </li>
           </ul>
-          <p class="contrib-note">Full asset attribution: fumbbl.com/p/attribution (mirrored in ATTRIBUTION.md).</p>
+          <p class="contrib-note">{{ $t('contributions.contribCard.fullAssetAttributionFumbbl') }}</p>
         </section>
-        <section aria-label="Super FUMBBL contributors">
-          <h2>Super FUMBBL</h2>
+        <section :aria-label="$t('contributions.contribCard.superFumbblContributors')">
+          <h2>{{ $t('contributions.contribCard.superFumbbl') }}</h2>
           <ul>
             <li v-for="person in SUPER_FUMBBL" :key="person.name">
               <strong>{{ person.name }}</strong><span>{{ person.role }}</span>
             </li>
           </ul>
         </section>
+        <!-- Owner 10-23: translation credits. -->
+        <section :aria-label="$t('contributions.translations.aria')" data-testid="contrib-translations">
+          <h2>{{ $t('contributions.translations.title') }}</h2>
+          <ul>
+            <li><strong>GHY</strong><span>{{ $t('contributions.translations.zhHansContributor') }}</span></li>
+            <li><strong>BSData</strong><span>{{ $t('contributions.translations.bsdata') }}</span></li>
+          </ul>
+        </section>
       </div>
       <div class="contrib-footer">
-        <button class="contrib-continue" type="button" @click="emit('continue')">Continue ▸</button>
+        <button class="contrib-continue" type="button" @click="emit('continue')">{{ $t('contributions.contribCard.continue') }}</button>
       </div>
     </div>
   </div>

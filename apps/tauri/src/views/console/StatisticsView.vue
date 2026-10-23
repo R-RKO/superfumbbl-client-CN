@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { botConfigBaseUrl, resolveJoinCreds, settings } from '../../game/settings';
+import { $t, capHead, capTail } from '../../i18n';
 
 interface CoachRecord {
   coach: string;
@@ -76,38 +77,38 @@ onMounted(() => { void loadRecords(); });
   <main class="statistics-view" aria-labelledby="statistics-title">
     <header class="statistics-header">
       <div>
-        <h1 id="statistics-title"><span>S</span>tatistics</h1>
-        <p>Finished match records from the Super FUMBBL fork.</p>
+        <h1 id="statistics-title"><span>{{ capHead('statistics.statisticsHeader.capStatistics') }}</span>{{ capTail('statistics.statisticsHeader.capStatistics') }}</h1>
+        <p>{{ $t('statistics.statisticsHeader.finishedMatchRecordsFrom') }}</p>
       </div>
       <button type="button" :disabled="loading" @click="loadRecords">
-        {{ loading ? 'Loading…' : 'Refresh' }}
+        {{ loading ? $t('statistics.statisticsHeader.loading') : $t('statistics.statisticsHeader.refresh') }}
       </button>
     </header>
 
     <section class="standings-panel" aria-live="polite">
-      <p v-if="loading && records.length === 0" class="state-message">Loading statistics…</p>
+      <p v-if="loading && records.length === 0" class="state-message">{{ $t('statistics.standingsPanel.loadingStatistics') }}</p>
       <div v-else-if="error" class="state-message error-message" role="alert">
         <p>{{ error }}</p>
-        <button type="button" @click="loadRecords">Refresh</button>
+        <button type="button" @click="loadRecords">{{ $t('statistics.standingsPanel.refresh') }}</button>
       </div>
-      <p v-else-if="records.length === 0" class="state-message">No finished games recorded on the fork yet.</p>
+      <p v-else-if="records.length === 0" class="state-message">{{ $t('statistics.standingsPanel.noFinishedGamesRecorded') }}</p>
       <div v-else class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th class="text-column" scope="col">Coach</th>
-              <th v-if="showPackage" class="text-column" scope="col">Package</th>
+              <th class="text-column" scope="col">{{ $t('statistics.standingsPanel.coach') }}</th>
+              <th v-if="showPackage" class="text-column" scope="col">{{ $t('statistics.standingsPanel.package') }}</th>
               <th scope="col">P</th>
               <th scope="col">W</th>
               <th scope="col">D</th>
               <th scope="col">L</th>
-              <th scope="col">TD for</th>
-              <th scope="col">TD against</th>
-              <th scope="col">TD diff</th>
-              <th scope="col">Cas for</th>
-              <th scope="col">Cas against</th>
-              <th scope="col">Cas diff</th>
-              <th scope="col">Winnings</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.tdFor') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.tdAgainst') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.tdDiff') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.casFor') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.casAgainst') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.casDiff') }}</th>
+              <th scope="col">{{ $t('statistics.standingsPanel.winnings') }}</th>
             </tr>
           </thead>
           <tbody>

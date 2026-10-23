@@ -4,6 +4,7 @@ import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { reactiveSkillIconLarge, reactiveSkillIconUrl } from '../game/assetModUi';
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { addedSkillsLast, chipSubtext, type PlayerDetailSkill } from '../game/skillDisplay';
+import { $t, terms } from '../i18n';
 
 const props = withDefaults(defineProps<{
   skills: readonly PlayerDetailSkill[];
@@ -55,7 +56,7 @@ function initials(skill: string): string {
 
 // Owner 09-10: the tooltip carries the skill name only (rules-text descriptions removed).
 function tooltipText(skill: PlayerDetailSkill): string {
-  return skill.label;
+  return terms(skill.label);
 }
 
 // Owner 09-09: the tooltip is TELEPORTED to <body> and fixed-positioned — inside the scrollable player card the
@@ -86,23 +87,23 @@ function hideTip(): void { tip.skill = null; }
 </script>
 
 <template>
-  <div class="card-skills" :class="listClass" role="list" aria-label="Player skills">
+  <div class="card-skills" :class="listClass" role="list" :aria-label="$t('cards.playerDetailSkillList.playerSkills')">
     <span v-for="(skill, index) in shownSkills" :key="`${skill.name}:${skill.label}:${index}`"
       class="skill-chip" :class="mode === 'markings' ? playerSkillCategoryClass(skill.name) : undefined"
       :data-display="mode" :data-added="markAdded && skill.added ? 'true' : undefined"
       :data-subtext="mode === 'icons' && chipSubtext(skill) ? 'true' : undefined"
-      :aria-label="skill.label" role="listitem"
+      :aria-label="terms(skill.label)" role="listitem"
       :data-tooltip="mode === 'icons' ? tooltipText(skill) : undefined"
-      :title="mode === 'icons' ? undefined : skill.label"
+      :title="mode === 'icons' ? undefined : terms(skill.label)"
       :tabindex="mode === 'icons' ? 0 : undefined"
       @pointerenter="showTip(skill, $event)" @focus="showTip(skill, $event)"
       @pointerleave="hideTip" @blur="hideTip">
       <template v-if="mode === 'icons'">
-        <img v-if="chipIcon(skill.name)" :src="chipIcon(skill.name)!.url" :class="{ 'chip-master': chipIcon(skill.name)!.size === 128 }" :alt="skill.label" />
+        <img v-if="chipIcon(skill.name)" :src="chipIcon(skill.name)!.url" :class="{ 'chip-master': chipIcon(skill.name)!.size === 128 }" :alt="terms(skill.label)" />
         <span v-else class="skill-initials">{{ initials(skill.name) }}</span>
         <span v-if="chipSubtext(skill)" class="chip-subtext" data-testid="chip-subtext">{{ chipSubtext(skill) }}</span>
       </template>
-      <span v-else class="skill-text">{{ skill.label }}</span>
+      <span v-else class="skill-text">{{ terms(skill.label) }}</span>
     </span>
   </div>
   <Teleport to="body">
@@ -113,7 +114,7 @@ function hideTip(): void { tip.skill = null; }
         <span v-else class="skill-initials">{{ initials(tip.skill.name) }}</span>
       </span>
       <span class="skill-tip-body">
-        <b class="skill-tip-name">{{ tip.skill.label }}</b>
+        <b class="skill-tip-name">{{ terms(tip.skill.label) }}</b>
       </span>
     </div>
   </Teleport>

@@ -20,6 +20,7 @@ import { reactive, watch } from 'vue';
 import type { SessionState } from '@fumbbl40k/ffb-protocol';
 import { gameStore } from './store';
 import type { TeamChoiceEntry } from './teamChoice';
+import { t } from '../i18n';
 
 export interface RejoinLaunch {
   gameId: number;
@@ -88,9 +89,9 @@ export function isNotYourTeamStatus(status: unknown): boolean {
 
 function titleFor(launch: RejoinLaunch, kind: 'progress' | 'waiting' | 'failed'): string {
   const join = launch.action === 'join';
-  if (kind === 'failed') return join ? 'Join failed' : 'Rejoin failed';
-  if (kind === 'waiting') return 'Waiting for Opponent'; // owner 10-06: the coach is in and waiting for the other coach to arrive
-  return join ? 'Joining your game' : 'Rejoining your game';
+  if (kind === 'failed') return join ? t('rejoin.text.joinFailed') : t('rejoin.text.rejoinFailed');
+  if (kind === 'waiting') return t('rejoin.text.waitingForOpponent'); // owner 10-06: the coach is in and waiting for the other coach to arrive
+  return join ? t('rejoin.text.joiningYourGame') : t('rejoin.text.rejoiningYourGame');
 }
 
 /** Plain lines under the steps: the up-front notice, the point-8 correction text, and what was sent on Not Your Team. */
@@ -127,9 +128,9 @@ function hostOf(url: string): string {
 
 function baseSteps(launch: RejoinLaunch): RejoinStep[] {
   return [
-    { key: 'connect', label: `Connecting to ${hostOf(launch.url)}…`, status: 'pending' },
-    { key: 'join', label: `Joining ${launch.gameLabel ?? `game ${launch.gameId}`} as ${launch.coach}…`, status: 'pending' },
-    { key: 'game', label: 'Waiting for opponent…', status: 'pending' },
+    { key: 'connect', get label() { return t('rejoin.text.connectingToP0', { p0: hostOf(launch.url) }); }, status: 'pending' },
+    { key: 'join', get label() { return t('rejoin.text.joiningP0AsCoach', { p0: launch.gameLabel ?? `game ${launch.gameId}`, coach: launch.coach }); }, status: 'pending' },
+    { key: 'game', get label() { return t('rejoin.text.waitingForOpponent2'); }, status: 'pending' },
   ];
 }
 
@@ -203,11 +204,11 @@ export function deriveRejoinModal(launch: RejoinLaunch | null, snap: RejoinSnaps
     const [connect, join, game] = steps as [RejoinStep, RejoinStep, RejoinStep];
     return {
       kind: 'choose-team',
-      title: 'Choose your team',
+      get title() { return t('rejoin.text.chooseYourTeam'); },
       steps: [
         { ...connect, status: 'done' },
         { ...join, status: 'done' },
-        { key: 'team', label: 'Choose your team', status: 'active' },
+        { key: 'team', get label() { return t('rejoin.text.chooseYourTeam'); }, status: 'active' },
         { ...game, status: 'pending' },
       ],
       teams: launch.teamChoice.entries,

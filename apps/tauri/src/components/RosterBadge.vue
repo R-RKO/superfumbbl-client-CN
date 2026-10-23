@@ -7,6 +7,7 @@
  * own inline markup (the pick panes' check mark shares its badge slot); a change to the badge look belongs in both.
  */
 import { ROSTER_INJURY_TEXT, ROSTER_INJURY_TITLE, ROSTER_RIP_SKULL_URL, rosterInjuryArt, rosterLevelArt, type RosterInjuryBadge } from '../game/rosterLevelArt';
+import { $t } from '../i18n';
 
 defineProps<{ injury?: RosterInjuryBadge | null; injuryNew?: boolean; advancements?: number }>();
 </script>
@@ -15,8 +16,8 @@ defineProps<{ injury?: RosterInjuryBadge | null; injuryNew?: boolean; advancemen
   <span v-if="injury || (advancements ?? 0) > 0" class="roster-badge" :data-level="advancements ?? 0" :data-injury="injury || null">
     <span v-if="injury === 'rip' && ROSTER_RIP_SKULL_URL" class="roster-badge-rip" :data-new="injuryNew ? 'true' : null" :title="ROSTER_INJURY_TITLE.rip">
       <img class="roster-badge-rip-skull" :src="ROSTER_RIP_SKULL_URL" alt="" />
-      <img v-if="rosterInjuryArt('rip')" class="roster-badge-rip-text" :src="rosterInjuryArt('rip')!.src" :srcset="rosterInjuryArt('rip')!.srcset" alt="RIP" />
-      <span v-else class="roster-badge-rip-text roster-badge-text roster-badge-inj-text">RIP</span>
+      <img v-if="rosterInjuryArt('rip')" class="roster-badge-rip-text" :src="rosterInjuryArt('rip')!.src" :srcset="rosterInjuryArt('rip')!.srcset" :alt="$t('hud.rosterBadge.rip')" />
+      <span v-else class="roster-badge-rip-text roster-badge-text roster-badge-inj-text">{{ $t('hud.rosterBadge.rip') }}</span>
     </span>
     <template v-else-if="injury">
       <img v-if="rosterInjuryArt(injury)" class="roster-badge-inj-img" :data-new="injuryNew ? 'true' : null" :src="rosterInjuryArt(injury)!.src"
@@ -25,8 +26,8 @@ defineProps<{ injury?: RosterInjuryBadge | null; injuryNew?: boolean; advancemen
     </template>
     <template v-else>
       <img v-if="rosterLevelArt(advancements!)" class="roster-badge-lvl-img" :src="rosterLevelArt(advancements!)!.src"
-        :srcset="rosterLevelArt(advancements!)!.srcset" :alt="`LVL ${advancements}`" :title="`Level ${advancements}`" />
-      <span v-else class="roster-badge-text" :title="`Level ${advancements}`">LVL {{ advancements }}</span>
+        :srcset="rosterLevelArt(advancements!)!.srcset" :alt="$t('hud.rosterBadge.lvlAdvancements', { advancements })" :title="$t('hud.rosterBadge.levelAdvancements', { advancements })" />
+      <span v-else class="roster-badge-text" :title="$t('hud.rosterBadge.levelAdvancements', { advancements })">{{ $t('hud.rosterBadge.lvlAdvancements', { advancements }) }}</span>
     </template>
   </span>
 </template>

@@ -2,6 +2,7 @@
 import { computed, type CSSProperties } from 'vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import DisplayCaps from './DisplayCaps.vue';
+import { $t, terms } from '../i18n';
 
 const props = defineProps<{
   playerName: string;
@@ -32,31 +33,31 @@ defineEmits<{
 
 <template>
   <PitchConfirmationPanel class="sendoff-prompt"
-    label="Referee send-off decision" :position-style="panelStyle" draggable
+    :label="$t('dialogs.sendOffPrompt.refereeSendOffDecision')" :position-style="panelStyle" draggable
     test-id="sendoff-prompt" @drag-start="$emit('dragStart', $event)">
-    <template #title><DisplayCaps text="Spotted by the Ref!" /></template>
+    <template #title><DisplayCaps :text="$t('dialogs.sendOffPrompt.spottedByTheRef')" /></template>
     <div class="sendoff-summary">
       <span class="sendoff-ref-frame" aria-hidden="true">
         <img :src="refereeIconUrl" class="sendoff-ref" alt="" />
       </span>
       <span class="sendoff-copy">
-        <span class="sendoff-kicker"><DisplayCaps text="Referee decision" /></span>
+        <span class="sendoff-kicker"><DisplayCaps :text="$t('dialogs.sendOffPrompt.refereeDecision')" /></span>
         <strong class="sendoff-player">{{ playerName }}</strong>
-        <span v-if="positionName" class="sendoff-position">{{ positionName }}</span>
-        <span class="sendoff-instruction">Choose how to answer the call.</span>
+        <span v-if="positionName" class="sendoff-position">{{ terms(positionName) }}</span>
+        <span class="sendoff-instruction">{{ $t('dialogs.sendOffPrompt.chooseHowToAnswer') }}</span>
       </span>
     </div>
     <template #actions>
       <button v-if="canArgue" type="button" class="sendoff-btn sendoff-action argue"
         @pointerdown.stop @click.stop="$emit('argue')">
-        <span aria-hidden="true">⚖</span> <DisplayCaps text="Argue the call" />
+        <span aria-hidden="true">⚖</span> <DisplayCaps :text="$t('dialogs.sendOffPrompt.argueTheCall')" />
       </button>
       <button v-if="canBribe" type="button" class="sendoff-btn sendoff-action bribe"
         @pointerdown.stop @click.stop="$emit('bribe')">
-        <img :src="coinIconUrl" class="sendoff-coin" alt="" /> <DisplayCaps text="Bribe" />
+        <img :src="coinIconUrl" class="sendoff-coin" alt="" /> <DisplayCaps :text="$t('dialogs.sendOffPrompt.bribe')" />
       </button>
       <button type="button" class="sendoff-btn sendoff-action pass" data-pad-cancel
-        @pointerdown.stop @click.stop="$emit('pass')"><DisplayCaps text="Pass" /></button>
+        @pointerdown.stop @click.stop="$emit('pass')"><DisplayCaps :text="$t('dialogs.sendOffPrompt.pass')" /></button>
     </template>
   </PitchConfirmationPanel>
 </template>

@@ -37,6 +37,9 @@ import CoachCard from './play/CoachCard.vue';
 import { fetchFumbblCoachProfile, type FumbblCoachProfile } from '../../game/fumbblCoachProfile';
 import { EXAMPLE_GAME_ID, exampleSnapshot } from '../../game/clientTourExample';
 import { FORK_EDITION } from '../../game/edition';
+import { $t, terms, useLiveSet } from '../../i18n';
+/** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
+const liveSetHere = useLiveSet();
 
 /**
  * Owner 09-25 (HANDOFF-fumbbl-play-blade.md): the FUMBBL Play blade. Header "Play" + Open JNLP; left card
@@ -81,7 +84,7 @@ async function refreshActive(): Promise<void> {
     activeGames.value = parseActiveGames(await res.json(), coach.value);
     activeError.value = '';
   } catch (error) {
-    activeError.value = `Could not load your live games: ${error instanceof Error ? error.message : String(error)}`;
+    liveSetHere(activeError, 'value', () => $t('play.text.couldNotLoadYour', { p0: error instanceof Error ? error.message : String(error) }));
   } finally { activeLoading.value = false; }
 }
 /** The lobby's own list may hold a waiting (not yet started) game that /api/match/current does not show. */
@@ -151,7 +154,7 @@ async function refreshRecent(): Promise<void> {
     recentTeamCap.value = teamCap;
     recentError.value = '';
   } catch (error) {
-    recentError.value = `Could not load your recent games: ${error instanceof Error ? error.message : String(error)}`;
+    liveSetHere(recentError, 'value', () => $t('play.text.couldNotLoadYour2', { p0: error instanceof Error ? error.message : String(error) }));
   } finally { recentLoading.value = false; }
 }
 function replayMatch(row: FumbblRecentMatch): void {
@@ -255,13 +258,13 @@ const opponentTeam = computed<TeamPreview | null>(() => {
 const lobbyReady = computed(() => fumbblLobbyState.value === 'ready');
 const lobbyStatus = computed(() => {
   switch (fumbblLobbyState.value) {
-    case 'connecting': return 'Opening connection to FUMBBL…';
-    case 'versioning': return 'Checking FUMBBL client compatibility…';
-    case 'authenticating': return 'Authenticating the JNLP with FUMBBL…';
-    case 'joining': return `Request sent — waiting for ${fumbblLobbyWaitTarget.value || 'opponent'}…`;
+    case 'connecting': return $t('play.lobbyStatus.openingConnectionToFumbbl');
+    case 'versioning': return $t('play.lobbyStatus.checkingFumbblClientCompatibility');
+    case 'authenticating': return $t('play.lobbyStatus.authenticatingTheJnlpWith');
+    case 'joining': return $t('play.lobbyStatus.requestSentWaitingFor', { p0: fumbblLobbyWaitTarget.value || 'opponent' });
     // SERVER_JOIN acknowledges our lobby entry and consumes the one-time token. It does not mean an opponent
     // exists: only the following SERVER_GAME_STATE proves the match is ready, and that handoff closes this blade.
-    case 'joined': return `Joined lobby — waiting for ${fumbblLobbyWaitTarget.value || 'opponent'}…`;
+    case 'joined': return $t('play.lobbyStatus.joinedLobbyWaitingFor', { p0: fumbblLobbyWaitTarget.value || 'opponent' });
     default: return '';
   }
 });
@@ -319,10 +322,10 @@ async function openJnlpFile(event: Event): Promise<void> {
   try {
     const request = await readJnlpFile(file);
     const result = routeJnlpRequest(request, { deferFumbblPlayer: true, sourceName: file.name });
-    if (result === 'invalid') loadError.value = 'This file does not contain a playable FUMBBL request.';
+    if (result === 'invalid') liveSetHere(loadError, 'value', () => $t('play.text.thisFileDoesNot'));
     else if (result === 'blocked') loadError.value = jnlpEntryError.value; // a required update is pending
   } catch (error) {
-    loadError.value = `Could not read the JNLP file: ${error instanceof Error ? error.message : String(error)}`;
+    liveSetHere(loadError, 'value', () => $t('play.text.couldNotReadThe', { p0: error instanceof Error ? error.message : String(error) }));
   }
 }
 function launchNamed(): void { fumbblJoinByName(); }
@@ -357,7 +360,7 @@ function initials(name: string | undefined): string {
 function formatTeamValue(value: number | undefined): string | undefined {
   if (!value) return undefined;
   const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
-  return `TV ${thousands.toLocaleString()}k`;
+  return $t('play.text.tvP0K', { p0: thousands.toLocaleString() });
 }
 function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter(row.myScore, row.opponentScore); }
 
@@ -433,18 +436,18 @@ function crestFailed(url: string | null): void {
 </script>
 
 <template>
-  <main class="play-view" aria-label="FUMBBL Play">
+  <main class="play-view" :aria-label="$t('play.fumbblPlay')">
     <header class="play-head">
-      <h1 id="play-title">Play</h1>
+      <h1 id="play-title">{{ $t('play.play') }}</h1>
       <CoachCard :name="coach" :profile="coachProfile" />
       <div class="head-actions">
         <!-- Owner 09-25: Super FUMBBL games keep their own button (fork edition), as before. -->
         <button v-if="FORK_EDITION" class="bevel super-button" type="button" @click="createGameOpen = true">
           <img :src="superFumbblLogoUrl" alt="" />
-          <span><DisplayCaps text="Play on Super FUMBBL" /></span>
-          <span class="test-environment-splash">TEST ENVIRONMENT</span>
+          <span><DisplayCaps :text="$t('play.playOnSuperFumbbl')" /></span>
+          <span class="test-environment-splash">{{ $t('play.testEnvironmentSplash.testEnvironment') }}</span>
         </button>
-        <button class="bevel" type="button" @click="fileInput?.click()"><DisplayCaps text="Open JNLP" /></button>
+        <button class="bevel" type="button" @click="fileInput?.click()"><DisplayCaps :text="$t('play.openJnlp')" /></button>
       </div>
     </header>
     <p v-if="loadError" class="load-error" role="alert">{{ loadError }}</p>
@@ -452,70 +455,70 @@ function crestFailed(url: string | null): void {
     <div class="play-body">
       <section class="card list-card active-card" aria-labelledby="active-title">
         <div class="card-head">
-          <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
+          <h2 id="active-title">{{ $t('play.listCard.myActiveGames') }} <span class="count">{{ activeCount }}</span></h2>
           <!-- Owner 09-25: Refresh sits top-right of the card, in line with the title. -->
-          <button v-if="coach" class="bevel small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll"><DisplayCaps :text="activeLoading ? 'Refreshing…' : 'Refresh'" /></button>
+          <button v-if="coach" class="bevel small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll"><DisplayCaps :text="activeLoading ? $t('play.listCard.refreshing') : $t('play.listCard.refresh')" /></button>
         </div>
-        <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings to see your games here.</p>
+        <p v-if="!coach" class="empty">{{ $t('play.listCard.setYourFumbblCoach') }}</p>
 
         <template v-if="fumbblLobby">
           <article v-if="!fumbblLobby.password" class="loaded-card">
             <p class="loaded-line">
-              {{ checkmark }} {{ fumbblLobby.sourceName || 'JNLP loaded' }}
-              <template v-if="fumbblLobby.gameId"> &middot; game {{ fumbblLobby.gameId }}</template>
+              {{ checkmark }} {{ fumbblLobby.sourceName || $t('play.listCard.jnlpLoaded') }}
+              <template v-if="fumbblLobby.gameId"> {{ $t('play.listCard.gameGameid', { gameId: fumbblLobby.gameId }) }}</template>
             </p>
             <div class="match-grid">
               <div class="team-side" data-team-side="own">
-                <span class="team-coach">{{ ownTeam?.coach || 'Coach unavailable' }}</span>
+                <span class="team-coach">{{ ownTeam?.coach || $t('play.listCard.coachUnavailable') }}</span>
                 <span class="team-logo-frame">
-                  <img v-if="logo(ownTeam, 'own')" class="race-logo" :src="logo(ownTeam, 'own')!" :alt="`${ownTeam?.name || 'Team'} logo`" @error="markLogoFailed('own')" />
+                  <img v-if="logo(ownTeam, 'own')" class="race-logo" :src="logo(ownTeam, 'own')!" :alt="$t('play.listCard.p0Logo', { p0: ownTeam?.name || $t('ui.playView.listCard.team') })" @error="markLogoFailed('own')" />
                   <span v-else class="logo-fallback" aria-hidden="true">{{ initials(ownTeam?.name) }}</span>
                 </span>
                 <strong class="team-name">{{ ownTeam?.name || '—' }}</strong>
-                <small v-if="ownTeam?.race" class="team-race">{{ ownTeam.race }}</small>
+                <small v-if="ownTeam?.race" class="team-race">{{ terms(ownTeam.race) }}</small>
                 <small v-if="formatTeamValue(ownTeam?.teamValue)" class="team-tv">{{ formatTeamValue(ownTeam?.teamValue) }}</small>
               </div>
               <span class="versus">VS</span>
               <div class="team-side" data-team-side="opponent">
-                <span class="team-coach">{{ opponentTeam?.coach || 'Coach unavailable' }}</span>
+                <span class="team-coach">{{ opponentTeam?.coach || $t('play.listCard.coachUnavailable') }}</span>
                 <span class="team-logo-frame">
-                  <img v-if="logo(opponentTeam, 'opponent')" class="race-logo" :src="logo(opponentTeam, 'opponent')!" :alt="`${opponentTeam?.name || 'Opponent'} logo`" @error="markLogoFailed('opponent')" />
+                  <img v-if="logo(opponentTeam, 'opponent')" class="race-logo" :src="logo(opponentTeam, 'opponent')!" :alt="$t('play.listCard.p0Logo', { p0: opponentTeam?.name || $t('ui.playView.listCard.opponent') })" @error="markLogoFailed('opponent')" />
                   <span v-else class="logo-fallback" aria-hidden="true">{{ initials(opponentTeam?.name) }}</span>
                 </span>
-                <strong class="team-name">{{ opponentTeam?.name || 'Opponent unavailable' }}</strong>
-                <small v-if="opponentTeam?.race" class="team-race">{{ opponentTeam.race }}</small>
+                <strong class="team-name">{{ opponentTeam?.name || $t('play.listCard.opponentUnavailable') }}</strong>
+                <small v-if="opponentTeam?.race" class="team-race">{{ terms(opponentTeam.race) }}</small>
                 <small v-if="formatTeamValue(opponentTeam?.teamValue)" class="team-tv">{{ formatTeamValue(opponentTeam?.teamValue) }}</small>
               </div>
               <button v-if="fumbblLobby.gameId" class="bevel play-button" type="button" :disabled="!lobbyReady" @click="fumbblJoinLoaded(fumbblLobby.gameId)">
-                {{ playGlyph }} <DisplayCaps text="Play" />
+                {{ playGlyph }} <DisplayCaps :text="$t('play.listCard.play')" />
               </button>
               <span v-else class="play-slot" aria-hidden="true"></span>
             </div>
             <form class="lobby-controls" @submit.prevent="launchNamed">
-              <label for="fumbbl-game-name">Game name</label>
+              <label for="fumbbl-game-name">{{ $t('play.listCard.gameName') }}</label>
               <div class="join-row">
-                <input id="fumbbl-game-name" v-model="fumbblLobbyGameName" type="text" autocomplete="off" placeholder="Both coaches enter the same name" />
-                <button class="bevel small" type="submit" :disabled="!lobbyReady || !fumbblLobbyGameName.trim()">{{ playGlyph }} <DisplayCaps text="Join" /></button>
+                <input id="fumbbl-game-name" v-model="fumbblLobbyGameName" type="text" autocomplete="off" :placeholder="$t('play.listCard.bothCoachesEnterThe')" />
+                <button class="bevel small" type="submit" :disabled="!lobbyReady || !fumbblLobbyGameName.trim()">{{ playGlyph }} <DisplayCaps :text="$t('play.listCard.join')" /></button>
               </div>
               <div class="lobby-actions">
-                <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps text="List Games" /></button>
-                <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps text="Cancel" /></button>
+                <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps :text="$t('play.listCard.listGames')" /></button>
+                <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps :text="$t('play.listCard.cancel')" /></button>
                 <small v-if="lobbyStatus" role="status" aria-live="polite">{{ lobbyStatus }}</small>
               </div>
             </form>
           </article>
           <article v-else class="lobby-card">
-            <p class="loaded-line">{{ checkmark }} FUMBBL lobby as {{ fumbblLobby.coach }}</p>
+            <p class="loaded-line">{{ $t('play.listCard.checkmarkFumbblLobbyAs', { checkmark, coach: fumbblLobby.coach }) }}</p>
             <div class="lobby-actions">
-              <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps text="List Games" /></button>
-              <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps text="Cancel" /></button>
+              <button class="plain" type="button" :disabled="!lobbyReady" @click="fumbblListGames"><DisplayCaps :text="$t('play.listCard.listGames')" /></button>
+              <button class="plain" type="button" @click="clearFumbblLobby"><DisplayCaps :text="$t('play.listCard.cancel')" /></button>
               <small v-if="lobbyStatus" role="status" aria-live="polite">{{ lobbyStatus }}</small>
-              <small v-else-if="fumbblLobbyListRequested && !fumbblLobbyGames.length" class="lobby-note">No waiting games in the lobby.</small>
+              <small v-else-if="fumbblLobbyListRequested && !fumbblLobbyGames.length" class="lobby-note">{{ $t('play.listCard.noWaitingGamesIn') }}</small>
             </div>
           </article>
           <p v-if="fumbblLobbyError" class="load-error" role="alert">{{ fumbblLobbyError }}</p>
           <div v-if="fumbblLobbyListRequested" class="game-list" aria-live="polite">
-            <p v-if="!fumbblLobby.password && !fumbblLobbyGames.length" class="empty">You do not have any open games to join.</p>
+            <p v-if="!fumbblLobby.password && !fumbblLobbyGames.length" class="empty">{{ $t('play.listCard.youDoNotHave') }}</p>
             <!-- Owner 10-02: a lobby-listed game is a full game row - my team | status | opponent + Join/Rejoin
                  (Rejoin when FFB's list says the game has started). The list carries no race/TV/score: those come
                  only from teams already on this page (live games, recent games, the JNLP preview), else omitted. -->
@@ -531,12 +534,12 @@ function crestFailed(url: string | null): void {
                 <span class="row-text">
                   <strong class="row-name">{{ lr.own.name || '—' }}</strong>
                   <small v-if="lr.own.coach" class="row-meta row-coach">{{ lr.own.coach }}</small>
-                  <small v-if="lr.own.race" class="row-meta row-race">{{ lr.own.race }}</small>
+                  <small v-if="lr.own.race" class="row-meta row-race">{{ terms(lr.own.race) }}</small>
                   <small v-if="formatTeamValue(lr.own.tv)" class="row-meta row-tv">{{ formatTeamValue(lr.own.tv) }}</small>
                 </span>
               </div>
-              <div class="row-centre" :title="`Game ${entry.gameId}`">
-                <span class="row-status">{{ lr.started ? 'In progress' : 'Waiting' }}</span>
+              <div class="row-centre" :title="$t('play.listCard.gameGameid2', { gameId: entry.gameId })">
+                <span class="row-status">{{ lr.started ? $t('play.listCard.inProgress') : $t('play.listCard.waiting') }}</span>
                 <span class="row-score row-score-vs">vs</span>
               </div>
               <div class="row-right">
@@ -544,7 +547,7 @@ function crestFailed(url: string | null): void {
                   <img v-if="listedCrest(lr.opponent)" class="row-logo" :src="listedCrest(lr.opponent)!" alt="" @error="crestFailed(listedCrest(lr.opponent))" />
                   <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(lr.opponent!.name || lr.opponent!.coach) }}</span>
                   <span class="row-text">
-                    <strong class="row-name">{{ lr.opponent!.name || 'Opponent' }}</strong>
+                    <strong class="row-name">{{ lr.opponent!.name || $t('play.listCard.opponent') }}</strong>
                     <small v-if="lr.opponent!.coach" class="row-meta row-coach">{{ lr.opponent!.coach }}</small>
                     <small v-if="lr.opponent!.race" class="row-meta row-race">{{ lr.opponent!.race }}</small>
                     <small v-if="formatTeamValue(lr.opponent!.tv)" class="row-meta row-tv">{{ formatTeamValue(lr.opponent!.tv) }}</small>
@@ -552,16 +555,16 @@ function crestFailed(url: string | null): void {
                 </div>
                 <div v-else class="row-team away row-team-empty">
                   <span class="row-logo logo-fallback" aria-hidden="true">?</span>
-                  <span class="row-text"><strong class="row-name row-waiting">Waiting for opponent</strong></span>
+                  <span class="row-text"><strong class="row-name row-waiting">{{ $t('play.listCard.waitingForOpponent') }}</strong></span>
                 </div>
                 <button
                   class="bevel resume-button join-button"
                   type="button"
                   :disabled="!lobbyReady || ownSide(entry) === null"
-                  :title="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}`"
-                  :aria-label="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}${lr.opponent ? ` against ${lr.opponent.name || lr.opponent.coach}` : ''}`"
+                  :title="$t('play.listCard.p0GameGameid', { p0: lr.started ? $t('ui.playView.listCard.rejoin') : $t('ui.playView.listCard.join'), gameId: entry.gameId })"
+                  :aria-label="lr.opponent ? $t(lr.started ? 'play.aria.rejoinAgainst' : 'play.aria.joinAgainst', { gameId: entry.gameId, opponent: lr.opponent.name || lr.opponent.coach }) : $t(lr.started ? 'play.aria.rejoin' : 'play.aria.join', { gameId: entry.gameId })"
                   @click="launchListed(entry)"
-                ><DisplayCaps :text="lr.started ? 'Rejoin' : 'Join'" /></button>
+                ><DisplayCaps :text="lr.started ? $t('play.listCard.rejoin') : $t('play.listCard.join')" /></button>
               </div>
             </article>
           </div>
@@ -577,12 +580,12 @@ function crestFailed(url: string | null): void {
             <span class="row-text">
               <strong class="row-name">{{ myTeam(game).name }}</strong>
               <small class="row-meta row-coach">{{ myTeam(game).coach }}</small>
-              <small v-if="myTeam(game).race" class="row-meta row-race">{{ myTeam(game).race }}</small>
+              <small v-if="myTeam(game).race" class="row-meta row-race">{{ terms(myTeam(game).race) }}</small>
               <small v-if="formatTeamValue(myTeam(game).tv)" class="row-meta row-tv">{{ formatTeamValue(myTeam(game).tv) }}</small>
             </span>
           </div>
-          <div class="row-centre" :title="`Game ${game.id}`">
-            <span class="row-status">In progress</span>
+          <div class="row-centre" :title="$t('play.listCard.gameId', { id: game.id })">
+            <span class="row-status">{{ $t('play.listCard.inProgress') }}</span>
             <span class="row-phase">{{ phaseLabel(game) }}</span>
             <span class="row-score"><span class="row-score-n">{{ myTeam(game).score }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ theirTeam(game).score }}</span></span>
           </div>
@@ -593,7 +596,7 @@ function crestFailed(url: string | null): void {
               <span class="row-text">
                 <strong class="row-name">{{ theirTeam(game).name }}</strong>
                 <small class="row-meta row-coach">{{ theirTeam(game).coach }}</small>
-                <small v-if="theirTeam(game).race" class="row-meta row-race">{{ theirTeam(game).race }}</small>
+                <small v-if="theirTeam(game).race" class="row-meta row-race">{{ terms(theirTeam(game).race) }}</small>
                 <small v-if="formatTeamValue(theirTeam(game).tv)" class="row-meta row-tv">{{ formatTeamValue(theirTeam(game).tv) }}</small>
               </span>
             </div>
@@ -601,28 +604,28 @@ function crestFailed(url: string | null): void {
               class="bevel resume-button rejoin-button"
               type="button"
               :disabled="!canResume || (pendingResume?.id === game.id)"
-              :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to rejoin from here'"
+              :title="canResume ? $t('play.listCard.reconnectToGameId', { id: game.id }) : $t('play.listCard.saveYourFumbblPassword')"
               @click="resumeGame(game)"
-            ><DisplayCaps :text="pendingResume?.id === game.id ? 'Connecting…' : 'Rejoin'" /></button>
+            ><DisplayCaps :text="pendingResume?.id === game.id ? $t('play.listCard.connecting') : $t('play.listCard.rejoin')" /></button>
           </div>
         </article>
 
         <p v-if="activeError" class="load-error" role="alert">{{ activeError }}</p>
-        <p v-if="coach && !activeCount && !activeLoading" class="empty">No active games</p>
+        <p v-if="coach && !activeCount && !activeLoading" class="empty">{{ $t('play.listCard.noActiveGames') }}</p>
         <div v-if="coach && !settings.password" class="card-foot">
-          <small class="lobby-note">Save your FUMBBL password in Settings to rejoin games from here.</small>
+          <small class="lobby-note">{{ $t('play.listCard.saveYourFumbblPassword2') }}</small>
         </div>
       </section>
 
       <!-- Owner 09-25: My Recent Games mirrors the Active Games card — same rows (crest · name · coach · TV | score |
            opponent | action), stacked under it. Races/TV come from the FUMBBL match API (fumbblRecentMatches). -->
       <section class="card list-card recent-card" aria-labelledby="recent-title" data-tour="play-recent">
-        <h2 id="recent-title">My Recent Games <span class="count">{{ recent.length }}</span></h2>
+        <h2 id="recent-title">{{ $t('play.listCard.myRecentGames') }} <span class="count">{{ recent.length }}</span></h2>
         <p v-if="coach && recentTeamCap" class="team-cap-note">{{ recentTeamCapNote(recentTeamCap) }}</p>
-        <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings.</p>
+        <p v-if="!coach" class="empty">{{ $t('play.listCard.setYourFumbblCoach2') }}</p>
         <p v-else-if="recentError" class="load-error" role="alert">{{ recentError }}</p>
-        <p v-else-if="recentLoading && !recent.length" class="empty">Loading&hellip;</p>
-        <p v-else-if="!recent.length" class="empty">No recent games</p>
+        <p v-else-if="recentLoading && !recent.length" class="empty">{{ $t('play.listCard.loading') }}</p>
+        <p v-else-if="!recent.length" class="empty">{{ $t('play.listCard.noRecentGames') }}</p>
         <div v-else class="recent-list">
           <!-- Owner 10-06: the row markup lives in components/MatchRow.vue (shared with the Replay pane's search results). -->
           <MatchRow
@@ -638,8 +641,8 @@ function crestFailed(url: string | null): void {
             <template #actions>
               <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
               <div class="row-actions">
-                <button class="bevel resume-button details-button" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)"><DisplayCaps text="Details" /></button>
-                <button class="bevel resume-button row-replay-button" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)"><DisplayCaps text="Replay" /></button>
+                <button class="bevel resume-button details-button" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :data-cached="hasDetails(row)" :title="hasDetails(row) ? $t('play.listCard.endOfGameDetails', { matchId: row.matchId }) : $t('play.listCard.noStoredDetailsFor', { matchId: row.matchId })" @click="openDetails(row)"><DisplayCaps :text="$t('play.listCard.details')" /></button>
+                <button class="bevel resume-button row-replay-button" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="$t('play.listCard.replayMatchMatchid', { matchId: row.matchId })" @click="replayMatch(row)"><DisplayCaps :text="$t('play.listCard.replay')" /></button>
                 <!-- Owner 10-01 (S78): when it was played sits under the buttons, not in the result box. -->
                 <span class="row-when">{{ relativeTime(row.when) }}</span>
               </div>
@@ -650,24 +653,24 @@ function crestFailed(url: string | null): void {
     </div>
 
     <!-- Owner 09-25: DETAILS popup — the cached end-of-game pane (Result / MVP / Statistics / Roster + Dice). -->
-    <div v-if="detailsRow" class="details-modal" role="dialog" aria-modal="true" :aria-label="`Details: ${detailsRow.myTeam} vs ${detailsRow.opponentTeam}`" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
+    <div v-if="detailsRow" class="details-modal" role="dialog" aria-modal="true" :aria-label="$t('play.detailsModal.detailsMyteamVsOpponentteam', { myTeam: detailsRow.myTeam, opponentTeam: detailsRow.opponentTeam })" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
       <div class="details-card">
         <header class="details-head">
-          <span class="details-title"><template v-if="detailsExample"><span class="details-example">Example game</span> </template>{{ detailsRow.myTeam }} <span class="vs">vs</span> {{ detailsRow.opponentTeam }}</span>
-          <small v-if="!detailsExample" class="details-when">{{ relativeTime(detailsRow.when) }} &middot; match {{ detailsRow.matchId }}</small>
-          <button class="details-close" type="button" aria-label="Close details" @click="closeDetails">&#x2715;</button>
+          <span class="details-title"><template v-if="detailsExample"><span class="details-example">{{ $t('play.detailsModal.exampleGame') }}</span> </template>{{ detailsRow.myTeam }} <span class="vs">vs</span> {{ detailsRow.opponentTeam }}</span>
+          <small v-if="!detailsExample" class="details-when">{{ $t('play.detailsModal.p0MatchMatchid', { p0: relativeTime(detailsRow.when), matchId: detailsRow.matchId }) }}</small>
+          <button class="details-close" type="button" :aria-label="$t('play.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
         <div class="details-body">
-          <p v-if="detailsLoading" class="empty">Loading&hellip;</p>
+          <p v-if="detailsLoading" class="empty">{{ $t('play.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
-            <p class="empty">No details stored for this game.</p>
-            <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>
+            <p class="empty">{{ $t('play.detailsModal.noDetailsStoredFor') }}</p>
+            <small>{{ $t('play.detailsModal.detailsAreKeptFor') }}</small>
           </div>
         </div>
         <footer class="details-foot">
           <!-- Owner 10-01 (S73): no Dice button here - the pane's own Dice tab opens it. -->
-          <button v-if="!detailsExample" class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)"><DisplayCaps text="Replay" /></button>
+          <button v-if="!detailsExample" class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)"><DisplayCaps :text="$t('play.detailsModal.replay')" /></button>
         </footer>
       </div>
     </div>

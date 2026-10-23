@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { $t } from '../i18n';
 
 const props = withDefaults(defineProps<{
   label: string;
@@ -41,7 +42,7 @@ function onKeydown(event: KeyboardEvent) {
     :data-testid="testId" @click="$emit('activate')" @keydown="onKeydown">
     <span class="confirm-action-label">{{ label }}</span>
     <kbd class="confirm-action-key" aria-hidden="true">{{ shortcutLabel }}</kbd>
-    <span class="confirm-action-shortcut-sr">Keyboard shortcut: {{ shortcutLabel }}</span>
+    <span class="confirm-action-shortcut-sr">{{ $t('hud.confirmActionButton.keyboardShortcutShortcutlabel', { shortcutLabel }) }}</span>
   </button>
 </template>
 

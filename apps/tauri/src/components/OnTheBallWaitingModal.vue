@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue';
+import { $t } from '../i18n';
+import { t } from '../i18n';
 
 // Owner 09-06: the notice docks directly under the top-centre panel at that panel's width (positionStyle from
 // SpectateView) and is movable — the card takes pointer events only when draggable; the backdrop never does.
@@ -9,11 +11,13 @@ const props = withDefaults(defineProps<{
 }>(), {
   positionStyle: undefined,
   draggable: false,
-  title: 'On the Ball',
+  title: undefined,
   noticeId: 'on-the-ball-waiting',
   zIndex: undefined,
 });
 defineEmits<{ dragStart: [event: PointerEvent] }>();
+/** i18n (Astra r1 #5): a prop default is resolved once per instance, so the localised default is a computed instead. */
+const shownTitle = computed(() => props.title ?? t('dialogs.onTheBallWaitingModal.props.onTheBall'));
 /** Owner 10-02: "wrap after 'selecting'" - a "<who> is selecting / repositioning players for ..." line breaks after
  *  the verb and the card shrinks to its two lines (centred under the panel) instead of spanning the panel's width. */
 const lines = computed<string[] | null>(() => {
@@ -32,18 +36,18 @@ const lines = computed<string[] | null>(() => {
       <section class="on-the-ball-waiting fit" :class="{ draggable }"
         role="status" aria-live="polite"
         :aria-labelledby="`${noticeId}-title`" :aria-describedby="`${noticeId}-message`"
-        :data-testid="noticeId" :title="draggable ? 'Drag to move' : undefined"
+        :data-testid="noticeId" :title="draggable ? $t('dialogs.onTheBallWaitingModal.dragToMove') : undefined"
         @pointerdown="draggable && $emit('dragStart', $event)">
-        <h2 :id="`${noticeId}-title`">{{ title }}</h2>
+        <h2 :id="`${noticeId}-title`">{{ shownTitle }}</h2>
         <p :id="`${noticeId}-message`" :aria-label="message"><span v-for="(line, i) in lines" :key="i" class="otb-line">{{ line }}</span></p>
       </section>
     </div>
     <section v-else class="on-the-ball-waiting" :class="{ anchored: !!positionStyle, draggable }" :style="positionStyle"
       role="status" aria-live="polite"
       :aria-labelledby="`${noticeId}-title`" :aria-describedby="`${noticeId}-message`"
-      :data-testid="noticeId" :title="draggable ? 'Drag to move' : undefined"
+      :data-testid="noticeId" :title="draggable ? $t('dialogs.onTheBallWaitingModal.dragToMove') : undefined"
       @pointerdown="draggable && $emit('dragStart', $event)">
-      <h2 :id="`${noticeId}-title`">{{ title }}</h2>
+      <h2 :id="`${noticeId}-title`">{{ shownTitle }}</h2>
       <p :id="`${noticeId}-message`">{{ message }}</p>
     </section>
   </div>
