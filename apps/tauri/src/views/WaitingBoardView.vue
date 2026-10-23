@@ -16,8 +16,9 @@ import WaitingVsBanner from '../components/WaitingVsBanner.vue';
 import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
 import { PAD_FOCUS_PRIORITY, vPadFocus } from '../game/cardFocus';
 import {
-  clearFumbblTeamCache, projectWaitingBanner, resolveBannerTeams, waitingBanner, type FumbblTeamInfo,
+  clearFumbblTeamCache, coachStatsLine, projectWaitingBanner, withCoachStats, type CoachStatsLine, resolveBannerTeams, waitingBanner, type FumbblTeamInfo,
 } from '../game/waitingVsBanner';
+import { fetchFumbblCoachProfile, type CoachProfileFetch } from '../game/fumbblCoachProfile';
 import { deriveRejoinModal, rejoinFlow, storeRejoinSnapshot } from '../game/rejoinFlow';
 
 const host = ref<HTMLElement | null>(null);
@@ -79,8 +80,31 @@ let unmounted = false;
 const banner = computed(() => {
   const wait = gameStore.state.waitingForMatch;
   if (!wait) return null;
-  return projectWaitingBanner(wait, fumbblLobbyGames.value, { mine: fetchedMine.value, opponent: fetchedOpponent.value });
+  const model = projectWaitingBanner(wait, fumbblLobbyGames.value, { mine: fetchedMine.value, opponent: fetchedOpponent.value });
+  return withCoachStats(model, wait.official, coachStats.value);
 });
+// Owner 10-23: each coach's FUMBBL CR + Overall record under the name - the rank bar's own loader and session cache
+// (fetchFumbblCoachProfile, one lookup per coach name), official joins only, no polling, silent on failure.
+const coachStats = ref(new Map<string, CoachStatsLine | null>());
+const requestedCoaches = new Set<string>();
+function loadCoachStats(): void {
+  const wait = gameStore.state.waitingForMatch;
+  if (!wait?.official) return;
+  const fetcher = (inTauri ? (tauriFetch as typeof fetch) : fetch) as CoachProfileFetch;
+  const names = [wait.coach, wait.opponentCoach, banner.value?.opponent.coach].map((n) => n?.trim()).filter((n): n is string => !!n);
+  for (const name of new Set(names)) {
+    const key = name.toLowerCase();
+    if (requestedCoaches.has(key)) continue;
+    requestedCoaches.add(key);
+    void fetchFumbblCoachProfile(name, fetcher).then((profile) => {
+      const stats = coachStatsLine(profile) ?? null;
+      if (!stats && import.meta.env.DEV) console.debug('[waiting-board] no FUMBBL coach stats for', name);
+      if (unmounted) return;
+      const next = new Map(coachStats.value); next.set(key, stats); coachStats.value = next;
+    }).catch(() => { /* silent */ });
+  }
+}
+watch([() => gameStore.state.waitingForMatch, () => banner.value?.opponent.coach], loadCoachStats, { deep: true, immediate: true });
 // Owner 10-09: "I don't know what the box in red is but it shouldn't be visible here" - while the app-level
 // join-progress window is up ("Waiting for Opponent" with its steps and Stop waiting), this board's own waiting card
 // sat half-hidden behind it. One box at a time: the join window when it is open (it shows the banner too), else ours.

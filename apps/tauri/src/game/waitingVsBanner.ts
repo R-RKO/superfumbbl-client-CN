@@ -44,12 +44,18 @@ export interface FumbblTeamInfo {
   tournamentOpponents: string[];
 }
 
+export interface CoachStatsLine { cr?: string; record?: string }
+
 export interface BannerSide {
   teamName: string;
   coach?: string;
   race?: string;
   tv?: number;
   teamId?: string;
+  /** Owner 10-23: the coach's FUMBBL rating and Overall record ("CR 1624", "20-12-16"), official joins only.
+   *  `statsPending`: the lookup is still running - the banner reserves the line so it never jumps when data lands. */
+  coachStats?: CoachStatsLine;
+  statsPending?: boolean;
   /** nothing names this side yet (no team, no coach): the label is a waiting notice, not a team name */
   unknown?: boolean;
 }
@@ -201,6 +207,34 @@ export function formatBannerTv(value: number | undefined): string | undefined {
   if (!value) return undefined;
   const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
   return `TV ${thousands.toLocaleString('en-US')}k`;
+}
+
+/** Owner 10-23: "CR 1624" and "W-D-L" from the SAME coach profile the game-load rank bar reads (fumbblCoachProfile:
+ *  cr = the coach page's Overall CR, record = the Overall W/D/L). Undefined when FUMBBL sent neither. */
+export function coachStatsLine(profile: { cr?: number; record?: { w: number; d: number; l: number } } | null | undefined): CoachStatsLine | undefined {
+  if (!profile) return undefined;
+  const line: CoachStatsLine = {};
+  if (profile.cr !== undefined) line.cr = `CR ${profile.cr}`;
+  if (profile.record) line.record = `${profile.record.w}-${profile.record.d}-${profile.record.l}`;
+  return line.cr || line.record ? line : undefined;
+}
+
+/** The banner with each side's coach stats. `profiles` is keyed by lower-cased coach name; a name not in it is still
+ *  loading (`statsPending`) while `loading` is true. A fork / standalone wait is returned untouched (names only). */
+export function withCoachStats(
+  model: WaitingBannerModel,
+  official: boolean | undefined,
+  profiles: ReadonlyMap<string, CoachStatsLine | null>,
+): WaitingBannerModel {
+  if (!official) return model;
+  const side = (s: BannerSide): BannerSide => {
+    const coach = s.coach?.trim().toLowerCase();
+    if (!coach) return s;
+    if (!profiles.has(coach)) return { ...s, statsPending: true };
+    const stats = profiles.get(coach);
+    return stats ? { ...s, coachStats: stats } : s;
+  };
+  return { mine: side(model.mine), opponent: side(model.opponent) };
 }
 
 type FetchLike = (input: string) => Promise<Response>;

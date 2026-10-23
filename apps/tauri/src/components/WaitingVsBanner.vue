@@ -43,6 +43,10 @@ function crestFailed(url: string | null): void {
   if (!url) return;
   const next = new Set(failed.value); next.add(url); failed.value = next;
 }
+/** "CR 162.3 · 10-2-3": one text element so a narrow column ellipsizes the END of the line, never the CR. */
+function statsText(side: BannerSide): string {
+  return [side.coachStats?.cr, side.coachStats?.record].filter(Boolean).join(' · ');
+}
 function initials(name: string): string {
   const words = name.replace(/['’]/g, '').replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
   const [first = '?', second] = words;
@@ -62,6 +66,7 @@ function initials(name: string): string {
       <span class="vs-text">
         <strong class="vs-team" data-testid="vs-team">{{ model[slot].teamName }}</strong>
         <span v-if="model[slot].coach" class="vs-coach" data-testid="vs-coach">{{ model[slot].coach }}</span>
+        <span v-if="model[slot].coachStats || model[slot].statsPending" class="vs-stats" data-testid="vs-stats">{{ statsText(model[slot]) }}</span>
         <span v-if="$slots.detail" class="vs-meta vs-detail"><slot name="detail" :side="slot" /></span>
         <span v-if="!hideMeta" class="vs-meta">
           <span v-if="model[slot].race" data-testid="vs-race">{{ terms(model[slot].race) }}</span>
@@ -103,6 +108,12 @@ function initials(name: string): string {
 .vs-coach { font-size: calc(max(var(--ui-min-primary-text-size, 16px), 0.95rem) * var(--vs-type, var(--vs-scale, 1))); color: #e8918c; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vs-meta { display: flex; gap: calc(8px * var(--vs-scale, 1)); font-size: calc(max(var(--ui-min-secondary-text-size, 13px), 0.82rem) * var(--vs-type, var(--vs-scale, 1))); color: var(--ui-text-muted, #b8bcc6); }
 .vs-side.opponent .vs-meta { justify-content: flex-end; }
+/* Owner 10-23: the coach's FUMBBL rating and record under the coach name; one line, truncated, reserved while loading. */
+.vs-stats {
+  display: block; min-width: 0; min-height: 1.2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: calc(max(var(--ui-min-secondary-text-size, 13px), 0.82rem) * var(--vs-type, var(--vs-scale, 1))); color: #f2d4a0; font-weight: 700;
+}
+.vs-side.opponent .vs-stats { text-align: right; }
 .vs-tv { font-weight: 700; color: #f2d4a0; }
 /* Owner 10-21 (rank panel slots; absent on the waiting board): the badge sits between the crest and the names, and the
    detail line under the coach is the meta row's small type in small capitals. */
