@@ -85,7 +85,14 @@ import { logTimestamp } from './logTime';
 
 import { PRAYER_TABLE, prayerForPlayerEventMessage, type PrayerCatalogEntry } from './prayerCatalog';
 import { applyServerAddPlayer } from './serverAddPlayer';
-import { stopPresentationSounds, playSound, setSoundsSuppressed, setSoundWeather } from './sounds';
+import { stopPresentationSounds, playSound, setSoundsSuppressed, setSoundWeather, onSoundError, resetSoundErrorReports } from './sounds';
+// Owner 10-23: a sound that fails to load/decode lands in the client log (and so in bug reports), not only
+// on the web console. One line per source (sounds.ts dedupes). Linux/WebKitGTK without GStreamer plugins
+// is the known case (OP Train, Debian .deb).
+onSoundError(({ soundId, src, code, message }) => {
+  const file = (src.split('/').pop() ?? src).split(/[?#]/)[0]!.slice(0, 60);
+  log('system', `⚠ sound "${soundId}" failed to play (${code === null ? '' : `media error ${code}: `}${message}) — ${file}`);
+});
 import { settings, FORK_SERVER_HOST } from './settings';
 import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
@@ -520,6 +527,7 @@ function clearLogKeepingChatForRejoin(): void {
   if (chatGameKey && visibleLogLanes.chat.length) chatStash = { key: chatGameKey, rows: [...visibleLogLanes.chat] };
   chatGameKey = '';
   legacyState.log = [];
+  resetSoundErrorReports(); // the sound-failure line went with the log; let the next failure write it again
 }
 /** A live game's state arrived on `url`: restore the chat kept for this very game, or drop another game's. */
 function noteChatGame(url: string, coach: string, gameId: unknown): void {

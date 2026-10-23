@@ -323,6 +323,37 @@ export function onSoundCue(listener: (soundId: string) => void): () => void {
   return () => { soundCueListeners.delete(listener); };
 }
 
+/** Owner 10-23 (OP Train, Debian): a sound that fails to LOAD or DECODE used to warn only on the web console,
+ *  which a terminal run and the bug-report app log never see. Listeners (the store) route it into the client
+ *  log so a report carries it. One line per source: a missing codec fails every play of the same file. */
+const soundErrorListeners = new Set<(detail: SoundErrorDetail) => void>();
+export interface SoundErrorDetail { soundId: string; src: string; code: number | null; message: string }
+export function onSoundError(listener: (detail: SoundErrorDetail) => void): () => void {
+  soundErrorListeners.add(listener);
+  return () => { soundErrorListeners.delete(listener); };
+}
+const reportedSoundErrors = new Set<string>();
+/** The client log was cleared (new connection / left game): report failures again so the next report carries them. */
+export function resetSoundErrorReports(): void { reportedSoundErrors.clear(); }
+/** Astra 10-23: the browser's MediaError text is unbounded and may carry a URL — one line, no query/fragment, capped. */
+function sanitizeMediaMessage(raw: string): string {
+  return raw.replace(/[\r\n\t]+/g, ' ').replace(/([?#])[^\s)]*/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120);
+}
+const MEDIA_ERROR_NAMES: Record<number, string> = { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'source not supported' };
+function reportSoundError(soundId: string, src: string, audio: HTMLAudioElement): void {
+  if (reportedSoundErrors.has(src)) return;
+  reportedSoundErrors.add(src);
+  const err = audio.error;
+  const code = typeof err?.code === 'number' ? err.code : null;
+  const browserText = err?.message ? sanitizeMediaMessage(err.message) : '';
+  const message = browserText || (code !== null ? MEDIA_ERROR_NAMES[code] ?? `media error ${code}` : 'unknown');
+  console.warn(`sound failed: ${src.slice(0, 60)} (${message})`);
+  const detail: SoundErrorDetail = { soundId, src, code, message };
+  for (const listener of [...soundErrorListeners]) {
+    try { listener(detail); } catch { /* presentation-only */ }
+  }
+}
+
 export function playSound(soundId: string | null | undefined): void {
   if (!soundId || suppressed || soundEventOff(soundId)) return;
   for (const listener of [...soundCueListeners]) {
@@ -339,7 +370,8 @@ export function playSound(soundId: string | null | undefined): void {
   let audio = cache.get(src);
   if (!audio) {
     audio = new Audio(src);
-    audio.addEventListener('error', () => console.warn(`sound missing: ${src.slice(0, 60)}`));
+    const el = audio;
+    audio.addEventListener('error', () => reportSoundError(soundId, src, el));
     cache.set(src, audio);
   }
   audio.volume = volume / 100;
@@ -359,6 +391,7 @@ export function previewSound(soundId: string): void {
   const src = sourceFor(soundId);
   if (!src) return;
   const audio = new Audio(src);
+  audio.addEventListener('error', () => reportSoundError(soundId, src, audio));
   audio.volume = Math.max(0.4, Math.min(1, settings.soundVolume / 100));
   trackPlayback(audio, src);
   void audio.play().catch(() => { playingAudio.delete(audio); notifyAudioSettlement(); });
