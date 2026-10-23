@@ -1,0 +1,497 @@
+[
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Kroxa Tal starts a Block Action.",
+  "d6": [],
+  "blockDice": [],
+  "names": [
+   {
+    "index": 0,
+    "length": 9,
+    "team": "home",
+    "playerId": "example-home-1"
+   }
+  ],
+  "tags": [],
+  "action": {
+   "kind": "block",
+   "side": "home"
+  },
+  "g": {
+   "text": "Kroxa Tal starts a Block Action.",
+   "d6": [],
+   "blockDice": [],
+   "names": [
+    {
+     "index": 0,
+     "length": 9,
+     "team": "home",
+     "playerId": "example-home-1"
+    }
+   ],
+   "tags": [],
+   "indent": 0
+  },
+  "u": [
+   {
+    "text": "Kroxa Tal starts a Block Action.",
+    "indent": 0,
+    "spans": [
+     {
+      "start": 0,
+      "length": 9,
+      "style": "bold"
+     },
+     {
+      "start": 9,
+      "length": 23,
+      "style": "bold"
+     }
+    ],
+    "names": [
+     {
+      "index": 0,
+      "length": 9,
+      "team": "home",
+      "playerId": "example-home-1"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Kroxa Tal blocks Snag Ironhide:",
+  "d6": [],
+  "blockDice": [],
+  "names": [],
+  "tags": [],
+  "u": [
+   {
+    "text": "Kroxa Tal blocks Snag Ironhide:",
+    "indent": 1,
+    "spans": [
+     {
+      "start": 0,
+      "length": 9,
+      "style": "bold"
+     },
+     {
+      "start": 9,
+      "length": 8,
+      "style": "bold"
+     },
+     {
+      "start": 17,
+      "length": 13,
+      "style": "bold"
+     },
+     {
+      "start": 30,
+      "length": 1,
+      "style": "bold"
+     }
+    ],
+    "names": [
+     {
+      "index": 0,
+      "length": 9,
+      "team": "home",
+      "playerId": "example-home-1"
+     },
+     {
+      "index": 17,
+      "length": 13,
+      "team": "away",
+      "playerId": "example-away-1"
+     }
+    ]
+   }
+  ],
+  "upstreamOnly": true
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Block Kroxa Tal vs Snag Ironhide: Push Back, Push Back",
+  "d6": [],
+  "blockDice": [
+   {
+    "index": 34,
+    "value": 3,
+    "result": "Push Back"
+   },
+   {
+    "index": 45,
+    "value": 3,
+    "result": "Push Back"
+   }
+  ],
+  "names": [
+   {
+    "index": 6,
+    "length": 9,
+    "team": "home",
+    "playerId": "example-home-1"
+   },
+   {
+    "index": 19,
+    "length": 13,
+    "team": "away",
+    "playerId": "example-away-1"
+   }
+  ],
+  "tags": [
+   {
+    "index": 0,
+    "length": 5,
+    "kind": "title"
+   }
+  ],
+  "action": {
+   "kind": "block",
+   "side": "home"
+  },
+  "g": {
+   "text": "Kroxa Tal blocks Snag Ironhide: Push Back, Push Back",
+   "d6": [],
+   "blockDice": [
+    {
+     "index": 32,
+     "value": 3,
+     "result": "Push Back"
+    },
+    {
+     "index": 43,
+     "value": 3,
+     "result": "Push Back"
+    }
+   ],
+   "names": [
+    {
+     "index": 0,
+     "length": 9,
+     "team": "home",
+     "playerId": "example-home-1"
+    },
+    {
+     "index": 17,
+     "length": 13,
+     "team": "away",
+     "playerId": "example-away-1"
+    }
+   ],
+   "tags": [],
+   "indent": 1,
+   "join": "block"
+  },
+  "u": [
+   {
+    "text": "Block Roll [ PUSHBACK ] [ PUSHBACK ]",
+    "indent": 2,
+    "spans": [
+     {
+      "start": 0,
+      "length": 36,
+      "style": "roll"
+     }
+    ],
+    "names": []
+   }
+  ]
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Greenhand chooses Push Back",
+  "d6": [],
+  "blockDice": [
+   {
+    "index": 18,
+    "value": 3,
+    "result": "Push Back"
+   }
+  ],
+  "names": [],
+  "tags": [],
+  "action": {
+   "kind": "block",
+   "side": "home"
+  },
+  "g": {
+   "text": "Greenhand chooses Push Back",
+   "d6": [],
+   "blockDice": [
+    {
+     "index": 18,
+     "value": 3,
+     "result": "Push Back"
+    }
+   ],
+   "names": [],
+   "tags": [],
+   "indent": 2,
+   "joinPrevious": "block"
+  },
+  "u": [
+   {
+    "text": "Block Result [ PUSHBACK ]",
+    "indent": 2,
+    "spans": [
+     {
+      "start": 0,
+      "length": 25,
+      "style": "roll"
+     }
+    ],
+    "names": []
+   }
+  ]
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Snag Ironhide is pushed back",
+  "d6": [],
+  "blockDice": [],
+  "names": [
+   {
+    "index": 0,
+    "length": 13,
+    "team": "away",
+    "playerId": "example-away-1"
+   }
+  ],
+  "tags": [],
+  "action": {
+   "kind": "block",
+   "side": "home"
+  },
+  "g": {
+   "text": "Snag Ironhide is pushed back!",
+   "d6": [],
+   "blockDice": [],
+   "names": [
+    {
+     "index": 0,
+     "length": 13,
+     "team": "away",
+     "playerId": "example-away-1"
+    }
+   ],
+   "tags": [],
+   "indent": 2
+  },
+  "graphicalOnly": true
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Snag Ironhide uses Sidestep to avoid being pushed.",
+  "d6": [],
+  "blockDice": [],
+  "names": [],
+  "tags": [],
+  "u": [
+   {
+    "text": "Snag Ironhide uses Sidestep to avoid being pushed.",
+    "indent": 3,
+    "spans": [],
+    "names": [
+     {
+      "index": 0,
+      "length": 13,
+      "team": "away",
+      "playerId": "example-away-1"
+     }
+    ]
+   }
+  ],
+  "upstreamOnly": true
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Xolo Quetz starts a Move Action.",
+  "d6": [],
+  "blockDice": [],
+  "names": [
+   {
+    "index": 0,
+    "length": 10,
+    "team": "home",
+    "playerId": "example-home-2"
+   }
+  ],
+  "tags": [],
+  "action": {
+   "kind": "move",
+   "side": "home"
+  },
+  "g": {
+   "text": "Xolo Quetz starts a Move Action.",
+   "d6": [],
+   "blockDice": [],
+   "names": [
+    {
+     "index": 0,
+     "length": 10,
+     "team": "home",
+     "playerId": "example-home-2"
+    }
+   ],
+   "tags": [],
+   "indent": 0
+  },
+  "u": [
+   {
+    "text": "Xolo Quetz starts a Move Action.",
+    "indent": 0,
+    "spans": [
+     {
+      "start": 0,
+      "length": 10,
+      "style": "bold"
+     },
+     {
+      "start": 10,
+      "length": 22,
+      "style": "bold"
+     }
+    ],
+    "names": [
+     {
+      "index": 0,
+      "length": 10,
+      "team": "home",
+      "playerId": "example-home-2"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "time": "",
+  "kind": "report",
+  "text": "Xolo Quetz dodges: rolls 2 (5+) | fails",
+  "d6": [
+   {
+    "index": 25,
+    "value": 2,
+    "kind": "roll",
+    "team": "home"
+   },
+   {
+    "index": 28,
+    "value": 5,
+    "kind": "target",
+    "team": "home"
+   }
+  ],
+  "blockDice": [],
+  "names": [
+   {
+    "index": 0,
+    "length": 10,
+    "team": "home",
+    "playerId": "example-home-2"
+   }
+  ],
+  "tags": [
+   {
+    "index": 19,
+    "length": 6,
+    "kind": "hidden"
+   },
+   {
+    "index": 34,
+    "length": 5,
+    "kind": "fail"
+   }
+  ],
+  "action": {
+   "kind": "dodge",
+   "side": "home"
+  },
+  "g": {
+   "text": "Xolo Quetz dodges: rolls 2 (5+) | fails",
+   "d6": [
+    {
+     "index": 25,
+     "value": 2,
+     "kind": "roll",
+     "team": "home"
+    },
+    {
+     "index": 28,
+     "value": 5,
+     "kind": "target",
+     "team": "home"
+    }
+   ],
+   "blockDice": [],
+   "names": [
+    {
+     "index": 0,
+     "length": 10,
+     "team": "home",
+     "playerId": "example-home-2"
+    }
+   ],
+   "tags": [
+    {
+     "index": 19,
+     "length": 6,
+     "kind": "hidden"
+    },
+    {
+     "index": 34,
+     "length": 5,
+     "kind": "fail"
+    }
+   ],
+   "indent": 1
+  },
+  "u": [
+   {
+    "text": "Dodge Roll [ 2 ]",
+    "indent": 1,
+    "spans": [
+     {
+      "start": 0,
+      "length": 16,
+      "style": "roll"
+     }
+    ],
+    "names": []
+   },
+   {
+    "text": "Xolo Quetz trips while dodging.",
+    "indent": 2,
+    "spans": [],
+    "names": [
+     {
+      "index": 0,
+      "length": 10,
+      "team": "home",
+      "playerId": "example-home-2"
+     }
+    ]
+   },
+   {
+    "text": "Roll a 5+ to succeed (Roll >= 5+)",
+    "indent": 2,
+    "spans": [
+     {
+      "start": 0,
+      "length": 33,
+      "style": "neededRoll"
+     }
+    ],
+    "names": []
+   }
+  ]
+ }
+]

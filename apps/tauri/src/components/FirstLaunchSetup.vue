@@ -6,7 +6,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl, type BlockDieSide, type BlockDieSurface } from '@fumbbl40k/ffb-pitch';
 import D6Face from './D6Face.vue';
-import { settings } from '../game/settings';
+import SetupLogStylePreview from './SetupLogStylePreview.vue';
+import { settings, settingsProvenance } from '../game/settings';
 import { flushFumbblPassword } from '../game/credentials';
 import { importFumbblMarkings } from '../game/fumbblMarkingsImport';
 import { invalidateMarkingsImports } from '../game/markingRules';
@@ -17,14 +18,17 @@ import {
   PACK_SWITCH_TIMEOUT_MS,
   FONT_SAMPLE,
   applySetupOption,
+  detectSystemLocale,
+  initialSetupLocale,
   prefillSetupOption,
+  systemLanguageTags,
   setupOptionAssignmentToClear,
   setupOptionTitle,
   visibleSetupSteps,
   type SetupOption,
   type SetupStep,
 } from '../game/setupWizard';
-import { $t, terms, useLiveSet, liveValue } from '../i18n';
+import { $t, availableLocales, terms, useLiveSet, liveValue } from '../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
 import { t } from '../i18n';
@@ -69,6 +73,27 @@ function d6Sides(variant: string): Array<BlockDieSide | null> {
 function surfaceFaceUrls(surface: BlockDieSurface): string[] {
   return PitchRenderer.bundledBlockFaceUrls(settings.blockDiceFamily, surface);
 }
+
+// Owner 10-23 (Language panel, the first one): the system language, mapped onto our locales. On a brand-new install
+// (nothing stored before this launch, no explicit pick yet) it is applied at once (settings.language, the same field the
+// Settings dropdown binds; main.ts switches the locale live), so the wizard opens in it; anything else is left alone
+// and simply preselected (Astra r1: a relaunch after quitting mid-wizard keeps the stored language).
+const detectedLocale = detectSystemLocale(systemLanguageTags());
+{
+  const initial = initialSetupLocale(settings, detectedLocale, settingsProvenance.freshInstall);
+  if (initial) settings.language = initial;
+}
+function localeName(id: string): string {
+  return availableLocales.find((l) => l.id === id)?.name ?? id;
+}
+/** The Language panel's system-language line: detected / closest available (Traditional -> Simplified Chinese) /
+ *  not available. It describes the SYSTEM only; the selected card shows the current choice. */
+const detectedLine = computed(() => {
+  const d = detectedLocale;
+  if (d.fallback) return t('setupWizard.language.fallback', { tag: d.tag, language: localeName(d.locale) });
+  if (!d.matched && d.tag) return t('setupWizard.language.unsupported', { tag: d.tag });
+  return t('setupWizard.language.detected', { language: localeName(d.locale) });
+});
 
 const steps = computed<SetupStep[]>(() => visibleSetupSteps({ hasHomeLogin: !!props.homeLogin }));
 const index = ref(0);
@@ -296,13 +321,16 @@ function finish(): void {
       <div ref="cardBody" class="setup-body">
         <!-- Choice steps: large selectable cards with radio semantics. -->
         <template v-if="step.kind === 'choice'">
-          <div class="setup-options" :class="{ 'setup-options--rows': step.id === 'blockDice' || step.id === 'blockDiceSurface' || step.id === 'diceColour' }" role="radiogroup"
+          <p v-if="step.id === 'language'" class="setup-hint setup-detected" data-testid="setup-detected-language">
+            {{ detectedLine }}
+          </p>
+          <div class="setup-options" :class="{ 'setup-options--rows': step.id === 'blockDice' || step.id === 'blockDiceSurface' || step.id === 'diceColour', 'setup-options--languages': step.id === 'language' }" role="radiogroup"
             :aria-labelledby="'first-launch-setup-title'">
             <div v-for="(option, i) in step.options" :key="option.id"
               :ref="(el) => { if (el) optionRefs[i] = el as HTMLElement; }"
               class="setup-option" :class="{ 'setup-option--row': step.id === 'blockDice' || step.id === 'blockDiceSurface' || step.id === 'diceColour' }"
               role="radio" :aria-checked="selectedFor(step) === option.id" :aria-disabled="picksLocked" :tabindex="tabIndexFor(step, option, i)"
-              :data-option="option.id" @click="choose(step, option)" @keydown="onOptionKeydown($event, step, i)">
+              :data-option="option.id" :lang="option.lang" @click="choose(step, option)" @keydown="onOptionKeydown($event, step, i)">
               <span class="setup-radio" aria-hidden="true"></span>
               <div class="setup-option-main">
                 <div v-if="step.id === 'skills' && option.id === 'icons'" class="setup-images setup-skill-icons">
@@ -313,6 +341,7 @@ function finish(): void {
                   <!-- Owner 10-06: how the icons read on the pitch, over the players' heads -->
                   <img v-if="imageUrl('icons-illustrated')" class="setup-skill-icons-pitch" :src="imageUrl('icons-illustrated')" :alt="$t('setupWizard.playersWithSkillIcons')" />
                 </div>
+                <SetupLogStylePreview v-else-if="option.logStylePreview" :log-style="option.logStylePreview" />
                 <div v-else-if="option.fontStack" class="setup-font-sample" :style="{ fontFamily: option.fontStack }">
                   <span class="setup-font-title">{{ FONT_SAMPLE.title }}</span>
                   <span>{{ FONT_SAMPLE.sentence }}</span>
@@ -477,6 +506,11 @@ function finish(): void {
 .setup-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; }
 .setup-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
 .setup-options--rows { grid-template-columns: 1fr; }
+/* Owner 10-23: the Language panel - sixteen compact cards, each name in its own language. */
+.setup-options--languages { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.setup-options--languages .setup-option { align-items: center; padding: 10px 12px; }
+.setup-options--languages .setup-radio { margin-top: 0; }
+.setup-detected { margin: 0 0 10px; }
 .setup-option {
   position: relative;
   display: flex;

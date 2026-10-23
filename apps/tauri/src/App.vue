@@ -2524,7 +2524,8 @@ onBeforeUnmount(() => {
             <legend>{{ $t('settings.language.label') }}</legend>
             <label class="row">
               <span>{{ $t('settings.language.choose') }}</span>
-              <select v-model="settings.language" data-testid="language-select">
+              <!-- Astra r1: an explicit pick (English too) marks the language chosen, so the system language never overrides it -->
+              <select v-model="settings.language" data-testid="language-select" @change="settings.languageChosen = true">
                 <option v-for="loc in availableLocales" :key="loc.id" :value="loc.id" :lang="loc.id">{{ loc.name }}</option>
               </select>
             </label>

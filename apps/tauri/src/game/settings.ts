@@ -34,6 +34,10 @@ const SETTINGS_VERSION = 35; // v35: camera pan speed default 16 px (owner 10-07
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
  *  persist watcher is guarded (see persistSettings) so defaults can never overwrite a good blob. */
 export const settingsHealth = reactive({ loadedFromDefaults: false, notices: [] as string[] });
+/** Owner 10-23 (Astra r1): where this launch's settings came from. `freshInstall` = nothing was stored anywhere before
+ *  this launch (no localStorage blob or backup, and - in the shell - no settings file, backup or recovery file). The
+ *  setup wizard adopts the system language only then. */
+export const settingsProvenance = { freshInstall: false };
 
 function noteSettingsIssue(msg: string): void {
   settingsHealth.notices.push(msg);
@@ -408,6 +412,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-23: client language (src/i18n). Applies live; every client-authored string and every server game term
    *  the client labels follows it. Server report text stays English (server-derived law). */
   language: Locale;
+  /** Owner 10-23 (Astra r1): the user picked `language` explicitly (the setup wizard's Language card or the Settings
+   *  dropdown, English included). Until then the wizard may adopt the system language - and only on a fresh install. */
+  languageChosen: boolean;
   /** UI theme engine (owner 2026-07-14, spec black-red-ui-scheme.md): a preset or a custom Primary/Secondary
    *  pair drives the derived `--ui-*` token set (Settings → Accessibility). Default = the Black/Red headline. */
   uiTheme: 'brand-red' | 'fumbbl' | 'custom';
@@ -796,6 +803,7 @@ const DEFAULTS: AppSettings = {
   markColor: '#e03030', // owner 2026-07-04f: pitch markings default red
   colorblindMode: 'off',
   language: 'en',
+  languageChosen: false,
   uiTheme: 'brand-red',
   uiPrimary: '#A10005',
   uiSecondary: '#000000',
@@ -1489,6 +1497,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if ((merged.colorblindMode as string) === 'redgreen') merged.colorblindMode = 'deuteranopia';
     if (!['off', 'deuteranopia', 'protanopia', 'tritanopia'].includes(merged.colorblindMode)) merged.colorblindMode = 'off';
     merged.language = normalizeLocale(merged.language); // owner 10-23: unknown / missing -> English
+    merged.languageChosen = merged.languageChosen === true; // Astra r1: only an explicit pick sets it
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a
     // fresh install needs no migration, and a transiently-null read of an EXISTING blob must
@@ -1545,7 +1554,7 @@ function load(): AppSettings {
     }
   }
   // Genuine fresh install: nothing stored anywhere and the store itself is healthy.
-  if (!readFailed && rawText === null && bakText === null) return hydrate(null);
+  if (!readFailed && rawText === null && bakText === null) { settingsProvenance.freshInstall = true; return hydrate(null); }
   // Nothing readable. Run on DEFAULTS, but the persist watcher is GUARDED (persistSettings):
   // defaults must never overwrite a blob that reads fine later — the one-bad-read wipe.
   settingsHealth.loadedFromDefaults = true;
@@ -1871,6 +1880,7 @@ export async function initSettingsFile(): Promise<void> {
   // file → file.bak
   for (const [text, source] of [[payload.primary, 'file'], [payload.backup, 'file backup']] as const) {
     if (text === null) continue;
+    settingsProvenance.freshInstall = false; // a settings file existed before this launch (readable or not)
     try {
       adoptLoaded(hydrate(text, false));
       fileMode = true;
@@ -1938,6 +1948,7 @@ export async function initSettingsFile(): Promise<void> {
   if (payload.recovery !== null) {
     try {
       adoptLoaded(hydrate(payload.recovery, false));
+      settingsProvenance.freshInstall = false;
       diskAuthority = true;
       if (v26UserOverrideMigrationPending) {
         v26DeferredFileAdoption = true;

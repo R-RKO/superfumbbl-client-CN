@@ -1,7 +1,7 @@
 import type { AppSettings } from './settings';
 import { UI_FONTS } from './uiFonts';
 import { resolveBlockDieSurface } from '@fumbbl40k/ffb-pitch/src/blockDieSurface';
-import { t } from '../i18n';
+import { DEFAULT_LOCALE, availableLocales, t, type Locale } from '../i18n';
 
 /**
  * First-launch setup wizard (owner 10-06): the pure step model behind components/FirstLaunchSetup.vue — steps,
@@ -18,6 +18,7 @@ export const SETUP_WIZARD_VERSION = 1;
 export const PACK_SWITCH_TIMEOUT_MS = 15_000;
 
 export type SetupStepId =
+  | 'language'
   | 'font'
   | 'leftClick'
   | 'blitz'
@@ -27,6 +28,7 @@ export type SetupStepId =
   | 'skills'
   | 'stadium'
   | 'orientation'
+  | 'logStyle'
   | 'login'
   | 'homeLogin'
   | 'modPacks'
@@ -44,7 +46,10 @@ export type SetupSettings = Pick<AppSettings,
   | 'skillBadgeFamily'
   | 'showStadium'
   | 'pitchOrientation'
-  | 'assetPackAssignments'>;
+  | 'assetPackAssignments'
+  | 'language'
+  | 'languageChosen'
+  | 'logStyle'>;
 
 export interface SetupOption {
   id: string;
@@ -59,6 +64,11 @@ export interface SetupOption {
    *  the dice use — PitchRenderer.prepareBlockFaces / bundledBlockFaceUrls), not a screenshot. 'team' (owner 10-15,
    *  Home / Away) shows two rows: the blue home set and the red away set. */
   blockSurface?: 'black' | 'white' | 'team';
+  /** The Language step: the BCP 47 tag of this option's own name (its `lang` attribute, so each name renders in its script). */
+  lang?: string;
+  /** The Log style step: a static example of the same log moment in this style (components/SetupLogStylePreview.vue,
+   *  the real log row helpers and components over fixture rows). */
+  logStylePreview?: AppSettings['logStyle'];
   /** A sample block rendered in this CSS font stack (the Font step; the same stacks App.vue applies as --ui-font). */
   fontStack?: string;
   /** The plain setting writes this option makes when selected. */
@@ -89,7 +99,65 @@ export const FONT_SAMPLE = {
   digits: '0 1 2 3 4 5 6 7 8 9',
 } as const;
 
+/**
+ * Owner 10-23: the system language mapped onto our locales - the first of the user's preferred tags that maps wins:
+ * an exact tag (case-insensitive), then its base language; Chinese -> zh-Hans; Serbian -> sr-Cyrl unless the tag names
+ * the Latin script. Nothing maps -> English, `matched: false` (the panel says the system language is not available).
+ * Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) maps to Simplified as a FALLBACK (`fallback: true`): the panel
+ * names it the closest available language, never "detected".
+ */
+export interface DetectedLocale { locale: Locale; matched: boolean; fallback: boolean; tag: string }
+export function detectSystemLocale(tags: readonly (string | null | undefined)[]): DetectedLocale {
+  const clean = tags.map((tag) => (typeof tag === 'string' ? tag.trim().replace(/_/g, '-') : '')).filter(Boolean);
+  for (const tag of clean) {
+    const lower = tag.toLowerCase();
+    const exact = availableLocales.find((l) => l.id.toLowerCase() === lower);
+    if (exact) return { locale: exact.id, matched: true, fallback: false, tag };
+    const parts = lower.split('-');
+    const base = parts[0]!;
+    if (base === 'zh') {
+      const traditional = !parts.includes('hans') && (parts.includes('hant') || parts.some((p) => p === 'tw' || p === 'hk' || p === 'mo'));
+      return { locale: 'zh-Hans', matched: true, fallback: traditional, tag };
+    }
+    if (base === 'sr') return { locale: parts.includes('latn') ? 'sr-Latn' : 'sr-Cyrl', matched: true, fallback: false, tag };
+    const byBase = availableLocales.find((l) => l.id.toLowerCase() === base);
+    if (byBase) return { locale: byBase.id, matched: true, fallback: false, tag };
+  }
+  return { locale: DEFAULT_LOCALE, matched: false, fallback: false, tag: clean[0] ?? '' };
+}
+/** The browser's preferred language tags (navigator.languages, then navigator.language); [] without a navigator. */
+export function systemLanguageTags(): string[] {
+  try {
+    const nav = (globalThis as { navigator?: { languages?: readonly string[]; language?: string } }).navigator;
+    if (!nav) return [];
+    return [...(nav.languages ?? []), ...(nav.language ? [nav.language] : [])];
+  } catch {
+    return [];
+  }
+}
+/**
+ * The language the wizard switches to on open: the detected one ONLY on a brand-new install (`freshInstall`: nothing was
+ * stored before this launch - settingsProvenance) whose language nobody has picked yet, so the very first panel already
+ * reads in the system language. Anything else returns null and the panel just preselects the current setting: a re-run,
+ * a relaunch after quitting mid-wizard (the settings now exist), an existing install, an explicit pick (English too).
+ */
+export function initialSetupLocale(s: Pick<AppSettings, 'language' | 'languageChosen' | 'setupWizardSeenVersion'>, detected: DetectedLocale, freshInstall: boolean): Locale | null {
+  if (!freshInstall || s.languageChosen || !setupWizardNeeded(s.setupWizardSeenVersion) || s.language !== DEFAULT_LOCALE) return null;
+  return detected.locale !== s.language ? detected.locale : null;
+}
+
 export const SETUP_STEPS: readonly SetupStep[] = [
+  {
+    // Owner 10-23: the VERY FIRST panel. Each language is named in its own language (the Settings dropdown's labels);
+    // picking one writes settings.language, which main.ts applies live, so this panel and every later one re-render.
+    id: 'language',
+    kind: 'choice',
+    get title() { return t('settings.language.label'); },
+    get lede() { return t('setupWizard.language.lede'); },
+    // A pick is explicit (Astra r1): it also sets languageChosen, so the system language never overrides it later.
+    options: availableLocales.map((l) => ({ id: l.id, title: l.name, lang: l.id, images: [], writes: { language: l.id, languageChosen: true } })),
+    prefill: (s) => s.language,
+  },
   {
     id: 'font',
     kind: 'choice',
@@ -229,6 +297,20 @@ export const SETUP_STEPS: readonly SetupStep[] = [
       },
     ],
     prefill: (s) => (s.pitchOrientation === 'ew' ? 'ew' : 'ns'),
+  },
+  {
+    // Owner 10-23: the last display choice, before the account steps. Labels and the Graphical / FUMBBL descriptions
+    // are Settings > Display > Log's own; each card shows the same log moment in that style.
+    id: 'logStyle',
+    kind: 'choice',
+    get title() { return t('settings.display.log.logStyle'); },
+    get lede() { return t('setupWizard.logStyle.lede'); },
+    options: [
+      { id: 'text', get title() { return t('settings.display.log.text'); }, get description() { return t('setupWizard.logStyle.textDescription'); }, images: [], logStylePreview: 'text', writes: { logStyle: 'text' } },
+      { id: 'graphical', get title() { return t('settings.display.log.graphical'); }, get description() { return t('settings.display.log.graphicalEachLineIs'); }, images: [], logStylePreview: 'graphical', writes: { logStyle: 'graphical' } },
+      { id: 'fumbbl', get title() { return t('settings.display.log.fumbbl'); }, get description() { return t('settings.display.log.theFumbblClientS'); }, images: [], logStylePreview: 'fumbbl', writes: { logStyle: 'fumbbl' } },
+    ],
+    prefill: (s) => (s.logStyle === 'graphical' || s.logStyle === 'fumbbl' ? s.logStyle : 'text'),
   },
   {
     id: 'login',
