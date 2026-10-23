@@ -16617,6 +16617,11 @@ function sendChat() {
           :message="gameStore.state.pushWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Pastries lane 10-23: a coach answering a player-aimed useInducement (Bretonnian Pastries / Igor); every other seat waits on them. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.useInducementWaiting" :title="gameStore.state.useInducementWaiting.title" notice-id="use-inducement-waiting"
+          :message="gameStore.state.useInducementWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- Owner 10-07: the other coach's reroll decision on a failed pass / catch (incl. a scattered ball's catch). -->
         <OnTheBallWaitingModal v-if="gameStore.state.reRollWaiting" :title="$t('hud.reroll')" notice-id="reroll-waiting"
           :message="gameStore.state.reRollWaiting.message"

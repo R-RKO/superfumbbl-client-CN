@@ -419,7 +419,15 @@ const D6_ROLL_FIELDS: Record<string, string[]> = {
   chainsawRoll: ['roll'], animosityRoll: ['roll'], throwTeamMateRoll: ['roll'], jumpUpRoll: ['roll'], weepingDaggerRoll: ['roll'],
   projectileVomit: ['roll'], lookIntoMyEyesRoll: ['roll'], balefulHex: ['roll'], allYouCanEat: ['roll'], catchOfTheDay: ['roll'],
   gettingEvenRoll: ['roll'], saboteurRoll: ['roll'], chompRoll: ['roll'],
+  // Bretonnian Pastries (10-23, pending upstream): one D6 for the Knocked-out player's team; a 2+ roll (pastriesAsTest).
+  bretonnianPastriesRoll: ['roll'],
 };
+
+/** ReportBretonnianPastriesRoll carries {roll, successful} and no minimum: the rule is a plain 2+ (a natural 1 fails), so
+ *  it is scored as a 2+ action trial with the server's own `successful`. Without the flag it is no trial. */
+function pastriesAsTest(r: Record<string, unknown>): Record<string, unknown> {
+  return typeof r.successful === 'boolean' ? { ...r, minimumRoll: 2 } : r;
+}
 
 function pushD6(tallies: DiceTally[], value: unknown, category?: 'armourFaces' | 'injuryFaces' | 'dodgeFaces'): void {
   if (!isD6(value)) return;
@@ -1517,7 +1525,8 @@ function noteBreakEvent(stats: DiceStats, game: GameJson | null, outcomes: reado
   }
 }
 const ROLL_NAMES: Record<string, string> = { dodgeRoll: 'dodge', goForItRoll: 'rush', pickUpRoll: 'pick-up', catchRoll: 'catch', passRoll: 'pass', interceptionRoll: 'interception',
-  jumpRoll: 'jump', leapRoll: 'leap', standUpRoll: 'stand-up', throwTeamMateRoll: 'team-mate throw', rightStuffRoll: 'landing', breatheFire: 'Breathe Fire', chainsawRoll: 'Chainsaw' };
+  jumpRoll: 'jump', leapRoll: 'leap', standUpRoll: 'stand-up', throwTeamMateRoll: 'team-mate throw', rightStuffRoll: 'landing', breatheFire: 'Breathe Fire', chainsawRoll: 'Chainsaw',
+  bretonnianPastriesRoll: data('Bretonnian Pastries') }; // invariant Luck data ("2+ Bretonnian Pastries made")
 /** An action roll the Action dice row scores (pushActionLuck's own rule): success favours the roller's team. */
 function noteActionBreak(stats: DiceStats, game: GameJson | null, id: string, r: Report, rollerId: string | null, ruleUnknown: boolean, clock: TurnClock | null): void {
   const minimum = Number(r.minimumRoll);
@@ -2053,7 +2062,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       if (fields.includes('roll')) {
         // Breathe Fire's `successful` means "knocked down"; the trial against its minimum is the server's result.
         const bf = id === 'breatheFire' ? breatheFirePassed(r) : null;
-        const tested = bf === null ? r : { ...r, successful: bf };
+        const tested = id === 'bretonnianPastriesRoll' ? pastriesAsTest(r) : bf === null ? r : { ...r, successful: bf };
         pushTest(tallies, tested);
         const ruleUnknown = passingRuleUnknown(game, id, playerId ?? actingId);
         pushActionLuck(tallies, tested, ruleUnknown);

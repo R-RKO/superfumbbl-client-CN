@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Der Server hat {label} hier nicht akzeptiert.",
   "store.text.theTurnEndedThe": "Der Zug ist beendet. Die Abfrage des Servers steht noch.",
   "store.text.unknownPlayerActionAction": "Unbekannte Spieleraktion „{action}“ ist gesperrt.",
+  "store.text.useBretonnianPastriesOn": "Bretonisches Gebäck für {player} nutzen? Bei 2+ kehrt der Spieler in die Reserve zurück; bei 1 bleibt er K.O. und das Gebäck ist verloren.",
+  "store.text.useInducementOnPlayer": "{inducement} für {player} nutzen?",
   "store.text.whichInducementDoYou": "Welchen Anreiz möchtest du nutzen?",
   "store.text.whichSpellShouldYour": "Welchen Zauber soll dein Zauberer wirken?",
   "store.tick.notDeclaredThePrevious": "Nicht angesagt: Die vorherige Aktivierung wurde nicht rechtzeitig beendet. Versuche es erneut.",

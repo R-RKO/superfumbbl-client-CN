@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "The server did not accept {label} here.",
   "store.text.theTurnEndedThe": "The turn ended. The server's prompt is still up.",
   "store.text.unknownPlayerActionAction": "Unknown player action \"{action}\" is locked.",
+  "store.text.useBretonnianPastriesOn": "Use Bretonnian Pastries on {player}? On 2+ they return to Reserves; on 1 they stay Knocked-out and the Pastries are lost.",
+  "store.text.useInducementOnPlayer": "Use {inducement} on {player}?",
   "store.text.whichInducementDoYou": "Which inducement do you want to use?",
   "store.text.whichSpellShouldYour": "Which spell should your wizard cast?",
   "store.tick.notDeclaredThePrevious": "Not declared: the previous activation did not end in time. Try again.",

@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "De server accepteerde {label} hier niet.",
   "store.text.theTurnEndedThe": "De beurt is beëindigd. De melding van de server staat nog open.",
   "store.text.unknownPlayerActionAction": "Onbekende spelersactie “{action}” is vergrendeld.",
+  "store.text.useBretonnianPastriesOn": "Bretonnische Gebakjes gebruiken op {player}? Bij 2+ gaat de speler terug naar de Reserves; bij 1 blijft hij knock-out en zijn de Gebakjes verloren.",
+  "store.text.useInducementOnPlayer": "{inducement} gebruiken op {player}?",
   "store.text.whichInducementDoYou": "Welk inducement wil je gebruiken?",
   "store.text.whichSpellShouldYour": "Welke spreuk moet je tovenaar uitspreken?",
   "store.tick.notDeclaredThePrevious": "Niet aangekondigd: de vorige activering is niet op tijd beëindigd. Probeer het opnieuw.",

@@ -8,6 +8,8 @@ import { prettySkillName } from './logic/prettySkillName';
 import { projectOnTheBallWaiting } from './onTheBallController';
 import type { SpectatorCheckpoint } from './replay/spectatorCheckpoint';
 import { hmpScatterMarksFrom } from './hmpScatterTrail';
+import { wireInducementTypes } from './inducementUse';
+import { inducementDisplayName } from './useInducementPrompt';
 import { $t } from '../i18n';
 const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const PRAYER_PLAYER_CHOICE_MODES = new Set(['ironman', 'knuckledusters']);
@@ -209,6 +211,22 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
+/** Bretonnian Pastries lane (10-23): an upstream `useInducement` dialog aimed at a named player (DialogUseInducementParameter
+ *  teamId + playerId: Pastries on a Knocked-out player, Igor on a dead one) is answered by that team's coach; every other
+ *  seat (the other coach, spectators, replay) is told who is deciding. The title names the inducement when one type is
+ *  offered. Player-less offers (the Wizard's between-turn window) stay silent, as before. */
+export function useInducementWaitingFromGame(g: GameJson, myTeamId: string | null): { title: string; message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (dialog?.dialogId !== 'useInducement' || dialog.playerId == null || dialog.playerId === '') return null;
+  const teamId = String(dialog.teamId ?? '');
+  const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const types = wireInducementTypes(dialog.inducementTypeArray);
+  const title = types.length === 1 ? inducementDisplayName(types[0]!) : $t('cards.inducementsPhase.blades.inducements');
+  const subject = myTeamId !== null ? $t('hud.waiting.subject.yourOpponent') : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.theOtherCoach'));
+  return { title, message: $t('hud.waiting.text.waitingForSubject', { subject }) };
+}
+
 /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach - while the
  *  server has more than one open pushback square out. The chooser is the Side Step defender's coach on the first
  *  link when the pushed player carries Side Step, else the attacking coach (a chain push stays theirs). On a coach's
@@ -307,6 +325,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
     pushWaiting: pushWaitingFromGame(g, null),
     reRollWaiting: reRollWaitingFromGame(g, null),
+    useInducementWaiting: useInducementWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),

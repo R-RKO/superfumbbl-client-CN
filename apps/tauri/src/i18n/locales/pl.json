@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Serwer nie zaakceptował tutaj: {label}.",
   "store.text.theTurnEndedThe": "Tura zakończona. Monit serwera nadal jest aktywny.",
   "store.text.unknownPlayerActionAction": "Nieznana akcja gracza „{action}” jest zablokowana.",
+  "store.text.useBretonnianPastriesOn": "Użyć Bretońskich Ciastek na {player}? Przy 2+ wraca do Rezerwy; przy 1 pozostaje znokautowany, a Ciastka przepadają.",
+  "store.text.useInducementOnPlayer": "Użyć: {inducement} na {player}?",
   "store.text.whichInducementDoYou": "Którego dodatku chcesz użyć?",
   "store.text.whichSpellShouldYour": "Jakie zaklęcie ma rzucić twój czarodziej?",
   "store.tick.notDeclaredThePrevious": "Nie zadeklarowano: poprzednia aktywacja nie zakończyła się na czas. Spróbuj ponownie.",

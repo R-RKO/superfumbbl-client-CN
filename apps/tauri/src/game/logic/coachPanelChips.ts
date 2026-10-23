@@ -82,6 +82,7 @@ const INDUCEMENT_CHIP_LABELS: Readonly<Record<string, string>> = {
   mortuaryAssistant: 'Mortuary Assistant', plagueDoctor: 'Plague Doctor', riotousRookies: 'Riotous Rookies',
   throwARock: 'Throw a Rock', dwarfenWisdom: 'Wisdom of the White Dwarf', infamousStaff: 'Infamous Coaching Staff',
   extraTeamTraining: 'Extra Team Training', starPlayers: 'Star Players', mercenaries: 'Mercenaries', card: 'Cards', prayers: 'Prayers',
+  bretonnianPastries: 'Bretonnian Pastries',
 };
 export function inducementChipLabel(type: string): string {
   const known = INDUCEMENT_CHIP_LABELS[type];

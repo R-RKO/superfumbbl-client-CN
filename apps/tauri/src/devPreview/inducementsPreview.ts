@@ -16,8 +16,25 @@ import {
   type Blade, type InducementPhase, type InducementRole, type PhaseOption,
 } from '../game/inducementsPhase';
 import { crestDataUrl } from '../game/teamCrests';
+import { buildInducementOptions } from '../game/inducementCatalog';
+import { purchaseOptionsFromWire } from '../game/inducementPurchase';
+import { useInducementPrompt } from '../game/useInducementPrompt';
 
-const OPTIONS: PhaseOption[] = [
+/** Bretonnian Pastries lane (10-23): a server game-options fixture that CARRIES the Pastries keys (the scratch server's
+ *  wire), projected through the real catalogue. Without it (toolbar "server: no pastries") the row is absent, as on a
+ *  server that does not know the inducement. */
+const PASTRIES_WIRE = { gameOptions: { gameOptionArray: [
+  { gameOptionId: 'inducementBretonnianPastriesCost', gameOptionValue: '15000' },
+  { gameOptionId: 'inducementBretonnianPastriesMax', gameOptionValue: '1' },
+] } };
+const PASTRIES_TEAM = { playerArray: [], roster: { apothecary: true, maxBigGuys: 1, positionArray: [], keywords: [] }, specialRules: [], assistantCoaches: 0, cheerleaders: 0 };
+function serverRows(withPastries: boolean): PhaseOption[] {
+  const { options, changedOptionKeys } = purchaseOptionsFromWire(withPastries ? PASTRIES_WIRE : { gameOptions: { gameOptionArray: [] } });
+  return buildInducementOptions(PASTRIES_TEAM, options, changedOptionKeys).filter((o) => o.key === 'bretonnianPastries');
+}
+const ICON_URL: Record<string, string> = { bretonnianPastries: new URL('../assets/resources/bretonnian_pastries.png', import.meta.url).href };
+
+const BASE_OPTIONS: PhaseOption[] = [
   { key: 'bribes', label: 'Bribe', cost: 100_000, max: 3, available: true },
   { key: 'halflingMasterChef', label: 'Halfling Master Chef', cost: 300_000, max: 1, available: true },
   { key: 'wanderingApothecaries', label: 'Wandering Apothecary', cost: 100_000, max: 2, available: true },
@@ -41,6 +58,9 @@ const OPTIONS: PhaseOption[] = [
   { key: 'merc:P3', label: 'Mercenary Catcher', cost: 145_000, max: 1, available: true },
   { key: 'merc:P4', label: 'Mercenary Blitzer', cost: 175_000, max: 2, available: true },
 ];
+
+/** The picker rows: the server-option-driven Pastries row (reactive on `state.pastries`) plus the fixture rows. */
+const currentOptions = (): PhaseOption[] => [...serverRows(state.pastries), ...BASE_OPTIONS];
 
 const STATS: Record<string, number[]> = {
   'star:M1': [5, 6, 3, 4, 11], 'star:M2': [6, 4, 3, 4, 9], 'star:M3': [5, 5, 4, 5, 10],
@@ -92,6 +112,9 @@ const state = reactive({
   roster: 'bb2025' as 'bb2025' | 'bb2016' | 'sparse',
   /** A finished leg rebuilt from the model after a rejoin, the model carrying no purchase: the neutral note. */
   lockedIn: false,
+  /** Pastries lane: the server game options carry the Pastries keys (default on), and the mocked use dialog. */
+  pastries: true,
+  useDialog: false,
 });
 
 /** Mock TEAM models: the side panels' owned-resource tiles read these roster fields through the real projection
@@ -106,12 +129,12 @@ const LONG_NAME = 'The Extraordinarily Longwinded Gentlemen of Altdorf-upon-Reik
 // Kept inside each side's cap so the readouts stay meaningful: the overdog sits
 // at 180k of 400k, and the underdog at 350k — 340k petty exhausted plus 10k drawn
 // from scum, which is exactly the petty→scum→treasury cascade to eyeball.
-const OVERDOG_PICKS = { bribes: 1, 'star:M4': 1 };
+const OVERDOG_PICKS = { bribes: 1, 'star:M4': 1, bretonnianPastries: 1 };
 const UNDERDOG_PICKS = { halflingMasterChef: 1, prayers: 1 };
 
 function pickerCards(): Record<Blade, PickerCard[]> {
   const out: Record<Blade, PickerCard[]> = { inducements: [], stars: [], mercenaries: [] };
-  for (const option of OPTIONS) {
+  for (const option of currentOptions()) {
     const blade = bladeOf(option.key);
     const taken = state.picks[option.key] ?? 0;
     out[blade].push({
@@ -119,7 +142,7 @@ function pickerCards(): Record<Blade, PickerCard[]> {
       costLabel: option.cost > 0 ? `${option.cost / 1000}k` : '—',
       countLabel: blade === 'stars' ? (taken > 0 ? 'Hired' : '') // owner 10-15: no "1 available" line on star cards
         : `${taken} of ${option.max} ${blade === 'mercenaries' ? 'hired' : 'taken'}`,
-      portrait: { url: null, glyph: blade === 'inducements' ? (GLYPH[option.key] ?? '◆') : blade === 'stars' ? '★' : '⚔' },
+      portrait: { url: ICON_URL[option.key] ?? null, glyph: blade === 'inducements' ? (GLYPH[option.key] ?? '◆') : blade === 'stars' ? '★' : '⚔' },
       stats: statChips(option.key), skills: SKILLS[option.key] ?? [], special: SPECIAL[option.key] ?? null,
       option,
     });
@@ -128,10 +151,10 @@ function pickerCards(): Record<Blade, PickerCard[]> {
 }
 
 function cardsOf(picks: Record<string, number>): SummaryCardView[] {
-  return summaryCards(picks, OPTIONS).map((c) => ({
+  return summaryCards(picks, currentOptions()).map((c) => ({
     key: c.key, name: c.name, blade: c.blade, kind: KIND_LABEL[c.blade], qty: c.qty,
     totalLabel: `${c.total / 1000}k`, showBadge: c.showBadge,
-    portrait: { url: null, glyph: c.blade === 'inducements' ? (GLYPH[c.key] ?? '◆') : c.blade === 'stars' ? '★' : '⚔' },
+    portrait: { url: ICON_URL[c.key] ?? null, glyph: c.blade === 'inducements' ? (GLYPH[c.key] ?? '◆') : c.blade === 'stars' ? '★' : '⚔' },
     skills: SKILLS[c.key] ?? [],
   }));
 }
@@ -156,7 +179,7 @@ function panelFor(role: InducementRole): PanelView {
   const live = state.phase === role;
   const picks = mine && live ? state.picks : role === 'overdog' ? OVERDOG_PICKS : UNDERDOG_PICKS;
   const confirmed = state.phase === 'done' || (role === 'overdog' && state.phase === 'underdog');
-  const spent = summaryCards(picks, OPTIONS).reduce((n, c) => n + c.total, 0);
+  const spent = summaryCards(picks, currentOptions()).reduce((n, c) => n + c.total, 0);
   // As the mount: a coach's picks reach anyone else only once that coach confirms (the reveal), and budgets are sent
   // to the dialog's addressee alone, so they exist only while the local coach holds the live dialog.
   const showCards = confirmed || (mine && live);
@@ -185,7 +208,7 @@ const canAct = () => state.phase === state.seat;
 
 installFontStackVariables();
 createApp({
-  render: () => h(InducementsPhase, {
+  render: () => [h(InducementsPhase, {
     class: 'induce-phase', // the mount's class: the host rules in inducements-preview.html key off it, as the client's do
     phase: state.phase,
     overdog: panelFor('overdog'),
@@ -194,7 +217,7 @@ createApp({
     viewerMode: state.viewer,
     canAct: canAct() && !state.preset && state.viewer === 'play',
     picks: state.picks,
-    options: canAct() ? OPTIONS : [],
+    options: canAct() ? currentOptions() : [],
     cap: state.seat === 'overdog' ? 400_000 : 390_000,
     blade: state.blade,
     cards: pickerCards(),
@@ -210,8 +233,30 @@ createApp({
     },
     onClear: () => { for (const k of Object.keys(state.picks)) delete state.picks[k]; },
     onConfirm: () => { state.phase = state.phase === 'overdog' ? 'underdog' : 'done'; },
-  }),
+  }), state.useDialog ? useDialogMock() : null],
 }).mount('#app');
+
+/** A MOCKED server `useInducement` offer (the scratch server's game 1061 shape) rendered through the real prompt builder:
+ *  nothing is sent anywhere, the buttons only close it. */
+function useDialogMock() {
+  const view = useInducementPrompt({
+    commandNr: 1061, teamId: 'home', inducementTypeArray: ['bretonnianPastries'], cards: [], playerId: 'p1',
+    authority: { role: 'player', myTeamId: 'home', decisionTeamId: 'home' },
+  }, 'Grimgor Ironhide');
+  const button = (label: string) => h('button', {
+    style: 'font:inherit;padding:6px 16px;background:#242424;color:#e6e9ef;border:2px outset #4a4a4a;cursor:pointer',
+    onClick: () => { state.useDialog = false; },
+  }, label);
+  return h('div', { style: 'position:fixed;inset:0;display:grid;place-items:center;z-index:200;background:#0008' }, [
+    h('div', { style: 'max-width:420px;padding:16px 18px;background:#121212;border:2px solid #790004;color:#e6e9ef;font-size:15px;line-height:1.35;display:grid;gap:12px' }, [
+      h('div', { style: 'display:flex;gap:12px;align-items:center' }, [
+        h('img', { src: ICON_URL.bretonnianPastries, width: 64, height: 64, alt: '' }),
+        h('div', view.prompt),
+      ]),
+      h('div', { style: 'display:flex;gap:8px;justify-content:flex-end' }, [...view.options.map((o) => button(o.label)), button(view.declineLabel)]),
+    ]),
+  ]);
+}
 
 // Harness toolbar: phase × seat switches, so both seats can be shot in every phase.
 const bar = document.getElementById('bar')!;
@@ -230,6 +275,11 @@ for (const p of ['overdog', 'underdog', 'done'] as const) {
 for (const s of ['overdog', 'underdog'] as const) {
   button(`seat: ${s}`, () => state.seat === s, () => { state.seat = s; });
 }
+button('server: pastries', () => state.pastries, () => {
+  state.pastries = !state.pastries;
+  for (const k of Object.keys(state.picks)) delete state.picks[k];
+});
+button('use dialog (mock)', () => state.useDialog, () => { state.useDialog = !state.useDialog; });
 button('preset (tournament)', () => state.preset, () => { state.preset = !state.preset; });
 button('spectator', () => state.viewer === 'spectate', () => { state.viewer = state.viewer === 'play' ? 'spectate' : 'play'; });
 button('roster: BB2016', () => state.roster === 'bb2016', () => { state.roster = state.roster === 'bb2016' ? 'bb2025' : 'bb2016'; });
@@ -242,7 +292,7 @@ button('logo: broken', () => state.logo === 'broken', () => { state.logo = state
 button('fill picks', () => Object.keys(state.picks).length > 6, () => {
   const full = Object.keys(state.picks).length > 6;
   for (const k of Object.keys(state.picks)) delete state.picks[k];
-  if (!full) for (const o of OPTIONS.slice(0, 16)) state.picks[o.key] = o.key === 'bribes' ? 3 : 1;
+  if (!full) for (const o of currentOptions().slice(0, 16)) state.picks[o.key] = o.key === 'bribes' ? 3 : 1;
 });
 // The real mount bounds the phase to the middle 84% of the pitch host; `free` drops that to inspect natural heights.
 const appHost = document.getElementById('app')!;

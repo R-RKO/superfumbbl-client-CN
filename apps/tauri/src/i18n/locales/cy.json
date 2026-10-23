@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Ni dderbyniodd y gweinydd {label} yma.",
   "store.text.theTurnEndedThe": "Daeth y tro i ben. Mae anogwr y gweinydd yno o hyd.",
   "store.text.unknownPlayerActionAction": "Mae gweithred chwaraewr anhysbys “{action}” wedi’i chloi.",
+  "store.text.useBretonnianPastriesOn": "Defnyddio Pasteiod Bretoniaidd ar {player}? Ar 2+ maen nhw’n dychwelyd i’r Eilyddion; ar 1 maen nhw’n aros yn anymwybodol a chollir y Pasteiod.",
+  "store.text.useInducementOnPlayer": "Defnyddio {inducement} ar {player}?",
   "store.text.whichInducementDoYou": "Pa gymhelliad wyt ti am ei ddefnyddio?",
   "store.text.whichSpellShouldYour": "Pa swyn ddylai dy ddewin ei fwrw?",
   "store.tick.notDeclaredThePrevious": "Heb ddatgan: ni ddaeth yr actifadu blaenorol i ben mewn pryd. Rho gynnig arall arni.",

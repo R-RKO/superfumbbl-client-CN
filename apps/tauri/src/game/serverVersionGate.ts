@@ -32,6 +32,35 @@ export const serverVersionBlock = ref<ServerVersionBlock | null>(null);
 /** The last server version announced to this client (bug reports carry it). */
 export const lastServerVersion = ref<string | null>(null);
 
+/**
+ * Bretonnian Pastries (spec-bretonnian-pastries-2026-10-23): the first FFB server release whose stock game options
+ * include the inducement (GameOptionFactory defaults cost 15000 / max 1). The server sends ONLY options a game sets
+ * explicitly (GameOptions.toJsonValue), so on a supporting server an ABSENT Pastries option means that default; on any
+ * other server it means "no such inducement". `null` = no released server supports it yet: the row then appears only
+ * when the game options carry `inducementBretonnianPastriesMax` explicitly (our test jar). Flip this to the upstream
+ * release version once christerk merges the Pastries PR.
+ */
+export const PASTRIES_MIN_SERVER_VERSION: string | null = null;
+
+/** Dotted numeric compare ("3.10.0" > "3.9.2"); a non-numeric part compares as 0. NOT semver: a pre-release or build
+ *  suffix ("3.4.0-rc1") is not ordered as semver would order it. Revisit against upstream's real version strings before
+ *  PASTRIES_MIN_SERVER_VERSION is set. */
+export function compareServerVersions(a: string, b: string): number {
+  const pa = a.trim().split('.').map((x) => Number.parseInt(x, 10) || 0);
+  const pb = b.trim().split('.').map((x) => Number.parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/** The announced server is known to carry Bretonnian Pastries as a stock inducement. */
+export function serverSupportsPastries(serverVersion: string | null | undefined, min: string | null = PASTRIES_MIN_SERVER_VERSION): boolean {
+  const v = (serverVersion ?? '').trim();
+  return min !== null && v !== '' && compareServerVersions(v, min) >= 0;
+}
+
 export function serverVersionApproved(serverVersion: string, approved: readonly string[] = APPROVED_FFB_SERVER_VERSIONS): boolean {
   const v = serverVersion.trim();
   return v !== '' && approved.includes(v);

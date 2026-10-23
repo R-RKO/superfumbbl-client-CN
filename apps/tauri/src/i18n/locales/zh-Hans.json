@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "服务器在此处不接受{label}。",
   "store.text.theTurnEndedThe": "回合已结束。服务器的提示仍在。",
   "store.text.unknownPlayerActionAction": "未知的球员行动“{action}”已被锁定。",
+  "store.text.useBretonnianPastriesOn": "对{player}使用巴托尼亚馅饼？掷出2+时回到替补区；掷出1时仍处于昏迷，馅饼也会失去。",
+  "store.text.useInducementOnPlayer": "对{player}使用{inducement}？",
   "store.text.whichInducementDoYou": "你想使用哪个激励品？",
   "store.text.whichSpellShouldYour": "你的巫师应施放哪个法术？",
   "store.tick.notDeclaredThePrevious": "未宣告：上一次激活未能及时结束。请重试。",

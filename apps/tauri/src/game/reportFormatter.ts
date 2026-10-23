@@ -1012,6 +1012,15 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const amount = Number(r.riotousAmount ?? 0);
     return `${teamName(g, r.teamId)} | Riotous Rookies: ${hiddenTag('rolls ')}${rolls} | gains ${amount} rookie${amount === 1 ? '' : 's'}`;
   },
+  // Bretonnian Pastries lane (10-23, pending upstream; server lane FINAL wire, scratch game 1061):
+  // ReportBretonnianPastriesRoll{teamId, playerId, roll, successful} (successful = roll >= 2). Once per game on a player
+  // about to be Knocked-out: on a success the player goes to the Reserves, on a natural 1 they stay Knocked-out; the
+  // Pastries are used up either way. The outcome is the server's `successful`; without it the line states only the roll.
+  bretonnianPastriesRoll: (r, g) => {
+    const success = typeof r.successful === 'boolean' ? r.successful : null;
+    const outcome = success === null ? '' : success ? ' - back to Reserves' : ' - food coma, still Knocked-out (Pastries lost)';
+    return `${teamTag(g, r.teamId)} uses Bretonnian Pastries on ${pn(g, r.playerId)}: ${hiddenTag('rolled ')}${d6(r.roll, 'roll', playerDieOwner(g, r.playerId))}${outcome}`;
+  },
   // #135 (GAP-WAVE-2): a Wizard inducement casts a spell — name WHICH (wire ReportWizardUse{teamId,
   // wizardSpell:SpecialEffect} = lightning/fireball/zap/bomb). The ZAP strike anim + (Voss) frog sprite render
   // off the model; this is the log line naming the cast. Was unwired (generic fallback).

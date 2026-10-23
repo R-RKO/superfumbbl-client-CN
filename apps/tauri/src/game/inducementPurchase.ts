@@ -1,10 +1,10 @@
-import type { InducementType } from './railRegistryKeys.generated';
 import {
   buildFixedOffers,
   integerOption,
   normalize,
   starPositionIdsForChoice,
   type Bb2025InducementType,
+  type ClientInducementType,
   type InducementPosition,
   type InducementTeam,
   type OptionValues,
@@ -23,7 +23,8 @@ export interface InducementDraft {
 }
 
 export interface InducementWireValue {
-  inducementType: InducementType;
+  /** A generated upstream key or a pending-upstream one (inducementCatalog PENDING_UPSTREAM_INDUCEMENT_TYPES). */
+  inducementType: ClientInducementType;
   value: number;
   uses: number;
 }

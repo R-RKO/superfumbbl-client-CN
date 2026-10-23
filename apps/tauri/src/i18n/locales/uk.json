@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Сервер не прийняв тут {label}.",
   "store.text.theTurnEndedThe": "Хід завершено. Підказка сервера досі активна.",
   "store.text.unknownPlayerActionAction": "Невідома дія гравця «{action}» заблокована.",
+  "store.text.useBretonnianPastriesOn": "Використати «Бретонську випічку» на {player}? На 2+ гравець повертається в резерв; на 1 лишається нокаутованим, а випічку втрачено.",
+  "store.text.useInducementOnPlayer": "Використати «{inducement}» на {player}?",
   "store.text.whichInducementDoYou": "Яке підсилення ти хочеш використати?",
   "store.text.whichSpellShouldYour": "Яке закляття має накласти твій чарівник?",
   "store.tick.notDeclaredThePrevious": "Не заявлено: попередня активація не завершилась вчасно. Спробуй ще раз.",

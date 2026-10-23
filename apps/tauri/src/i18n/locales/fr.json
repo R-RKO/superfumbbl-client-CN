@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Le serveur n’a pas accepté {label} ici.",
   "store.text.theTurnEndedThe": "Le tour est terminé. L’invite du serveur est toujours affichée.",
   "store.text.unknownPlayerActionAction": "L’action de joueur inconnue « {action} » est verrouillée.",
+  "store.text.useBretonnianPastriesOn": "Utiliser les Pâtisseries bretonniennes sur {player} ? Sur 2+, il retourne en Réserve ; sur 1, il reste K.O. et les Pâtisseries sont perdues.",
+  "store.text.useInducementOnPlayer": "Utiliser {inducement} sur {player} ?",
   "store.text.whichInducementDoYou": "Quelle prime de match veux-tu utiliser ?",
   "store.text.whichSpellShouldYour": "Quel sort ton sorcier doit-il lancer ?",
   "store.tick.notDeclaredThePrevious": "Non déclaré : l’activation précédente ne s’est pas terminée à temps. Réessaie.",

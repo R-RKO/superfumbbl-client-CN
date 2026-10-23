@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Сервер не принял здесь {label}.",
   "store.text.theTurnEndedThe": "Ход завершён. Запрос сервера всё ещё висит.",
   "store.text.unknownPlayerActionAction": "Неизвестное действие игрока «{action}» заблокировано.",
+  "store.text.useBretonnianPastriesOn": "Использовать «Бретонскую выпечку» на {player}? При 2+ игрок возвращается в запас; при 1 остаётся в нокауте, а выпечка потеряна.",
+  "store.text.useInducementOnPlayer": "Использовать «{inducement}» на {player}?",
   "store.text.whichInducementDoYou": "Какой бонус хочешь использовать?",
   "store.text.whichSpellShouldYour": "Какое заклинание должен наложить твой волшебник?",
   "store.tick.notDeclaredThePrevious": "Не заявлено: предыдущая активация не завершилась вовремя. Попробуй ещё раз.",

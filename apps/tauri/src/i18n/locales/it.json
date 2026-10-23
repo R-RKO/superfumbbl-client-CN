@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Il server non ha accettato {label} qui.",
   "store.text.theTurnEndedThe": "Il turno è terminato. La richiesta del server è ancora attiva.",
   "store.text.unknownPlayerActionAction": "L’azione sconosciuta del giocatore “{action}” è bloccata.",
+  "store.text.useBretonnianPastriesOn": "Usare i Pasticcini bretonniani su {player}? Con 2+ torna nelle Riserve; con 1 resta fuori combattimento e i Pasticcini sono persi.",
+  "store.text.useInducementOnPlayer": "Usare {inducement} su {player}?",
   "store.text.whichInducementDoYou": "Quale ingaggio vuoi usare?",
   "store.text.whichSpellShouldYour": "Quale incantesimo deve lanciare il tuo mago?",
   "store.tick.notDeclaredThePrevious": "Non dichiarato: l’attivazione precedente non è terminata in tempo. Riprova.",

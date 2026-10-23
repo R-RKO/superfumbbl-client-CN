@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Сървърът не прие {label} тук.",
   "store.text.theTurnEndedThe": "Ходът приключи. Подканата на сървъра още е налична.",
   "store.text.unknownPlayerActionAction": "Неизвестното действие на играча „{action}“ е заключено.",
+  "store.text.useBretonnianPastriesOn": "Да използваш ли Бретонски пасти за {player}? При 2+ се връща в резервите; при 1 остава нокаутиран и пастите се губят.",
+  "store.text.useInducementOnPlayer": "Да използваш ли {inducement} за {player}?",
   "store.text.whichInducementDoYou": "Кой стимул искаш да използваш?",
   "store.text.whichSpellShouldYour": "Коя магия да направи магьосникът ти?",
   "store.tick.notDeclaredThePrevious": "Не е обявено: предишното активиране не приключи навреме. Опитай пак.",

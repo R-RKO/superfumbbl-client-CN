@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "El servidor no aceptó {label} aquí.",
   "store.text.theTurnEndedThe": "El turno terminó. El aviso del servidor sigue abierto.",
   "store.text.unknownPlayerActionAction": "La acción de jugador desconocida «{action}» está bloqueada.",
+  "store.text.useBretonnianPastriesOn": "¿Usar Pasteles Bretonianos con {player}? Con 2+ vuelve a Reservas; con 1 sigue Fuera de Combate y los Pasteles se pierden.",
+  "store.text.useInducementOnPlayer": "¿Usar {inducement} con {player}?",
   "store.text.whichInducementDoYou": "¿Qué incentivo quieres usar?",
   "store.text.whichSpellShouldYour": "¿Qué hechizo debe lanzar tu mago?",
   "store.tick.notDeclaredThePrevious": "No declarado: la activación anterior no terminó a tiempo. Inténtalo de nuevo.",

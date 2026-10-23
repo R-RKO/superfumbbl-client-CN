@@ -19,20 +19,22 @@ const INDUCEMENT_TYPE_SET: ReadonlySet<string> = new Set(INDUCEMENT_TYPES);
 export interface UseInducementOffer {
   commandNr: number;
   teamId: string;
-  inducementTypeArray: InducementType[];
+  /** Every type the server offered, verbatim (wireInducementTypes): a type the client has never seen (an upstream
+   *  addition such as `bretonnianPastries`) is still offered and answered with its own wire key. */
+  inducementTypeArray: string[];
   cards: string[];
   playerId: string | null;
   authority: DecisionAuthority;
 }
 
 export type UseInducementChoice =
-  | { kind: 'inducement'; value: InducementType }
+  | { kind: 'inducement'; value: string }
   | { kind: 'card'; value: string }
   | { kind: 'decline' };
 
 export interface UseInducementCommand extends Record<string, unknown> {
   netCommandId: typeof NetCommandId.CLIENT_USE_INDUCEMENT;
-  inducementType: InducementType | null;
+  inducementType: string | null;
   playerIds: string[];
   card: string | null;
 }
@@ -46,6 +48,24 @@ export interface BribesOffer {
 
 export function isInducementType(value: string): value is InducementType {
   return INDUCEMENT_TYPE_SET.has(value);
+}
+
+/** An inducement wire key: InducementType.getName() is a camelCase identifier (`wizard`, `throwARock`). */
+const WIRE_INDUCEMENT_KEY = /^[A-Za-z][A-Za-z0-9]*$/;
+
+/**
+ * The offered types of a DialogUseInducementParameter (Java lines 81-98), kept VERBATIM (server-derived law): the
+ * client must not drop a type it has no table entry for, or an upstream addition would surface as a bare Decline.
+ * Only blank / non-identifier entries and duplicates are dropped (they could not be answered by name anyway).
+ */
+export function wireInducementTypes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const value = typeof entry === 'string' ? entry.trim() : '';
+    if (WIRE_INDUCEMENT_KEY.test(value) && !out.includes(value)) out.push(value);
+  }
+  return out;
 }
 
 /** A parking-dialog instance is identified by the command that opened it. */

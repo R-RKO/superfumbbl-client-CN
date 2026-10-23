@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Cha do ghabh am frithealaiche ri {label} an seo.",
   "store.text.theTurnEndedThe": "Thàinig a’ chuairt gu crìch. Tha brath an fhrithealaiche fhathast ann.",
   "store.text.unknownPlayerActionAction": "Tha gnìomh cluicheadair neo-aithnichte “{action}” glaiste.",
+  "store.text.useBretonnianPastriesOn": "A bheil thu airson Pastraidhean Brìtonnach a chleachdadh air {player}? Air 2+ tillidh iad dhan Chùl-stòras; air 1 fanaidh iad gun mhothachadh agus thèid na Pastraidhean a chall.",
+  "store.text.useInducementOnPlayer": "A bheil thu airson {inducement} a chleachdadh air {player}?",
   "store.text.whichInducementDoYou": "Dè am brosnachadh a tha thu airson a chleachdadh?",
   "store.text.whichSpellShouldYour": "Dè an seun a bu chòir don t-seunadair agad a thilgeil?",
   "store.tick.notDeclaredThePrevious": "Gun chur an cèill: cha tàinig an gnìomhachadh roimhe gu crìch ann an àm. Feuch a-rithist.",

@@ -17,13 +17,13 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
 import { postGameKey } from './postGameProjection';
 import { SpectatorDiceLedger } from './spectatorDiceLedger';
-import { inducementChoiceLabel } from './inducementChoiceLabel';
+import { useInducementPrompt } from './useInducementPrompt';
 import { waitingSeatRole } from './inducementsPhase';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
@@ -172,8 +172,8 @@ import {
   buildBribesCommand,
   buildUseInducementCommand,
   isInducementType,
-  useInducementChoices,
   useInducementKey,
+  wireInducementTypes,
   type BribesOffer,
   type UseInducementChoice,
   type UseInducementOffer,
@@ -1395,6 +1395,8 @@ const legacyState = reactive({
   /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach. */
   pushWaiting: null as { message: string } | null,
   reRollWaiting: null as { message: string } | null, // owner 10-07: the other coach's pass/catch reroll decision
+  /** Pastries lane 10-23: the other seats' notice while a coach answers a player-aimed `useInducement` (Bretonnian Pastries / Igor). */
+  useInducementWaiting: null as { title: string; message: string } | null,
   /** Owner 07-03: TURNOVER splash (failed action only — not TD/voluntary/drive change), raised after a real non-TD turnEnd and other anims settle. */
   turnover: null as { side: 'home' | 'away'; coach: string; teamName: string; logo: string | null; seq: number } | null,
   /** Owner 07-05: turn-START splash ("«Coach»'s turn") — voluntary ends only (turnover keeps its own; a TD transitions to kickoff). */
@@ -1508,6 +1510,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     pickMeUpWaiting: passive.pickMeUpWaiting,
     pushWaiting: passive.pushWaiting,
     reRollWaiting: passive.reRollWaiting,
+    useInducementWaiting: passive.useInducementWaiting,
     followupChoice: null,
     skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
     reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
@@ -1559,7 +1562,7 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection, chat: visibleLogLanes.chat,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -13516,6 +13519,7 @@ function resetPlayback() {
   state.kickEmBlitzTarget = null;
   pendingPushes.clear(); // B9-12 G4: don't carry pending pushes across games
   followupHandled.clear(); // M4.2: fresh game — no stale answered-prompt keys
+  useInducementAnsweredContent.clear(); // Astra r2: the duplicate-delivery memory is per game / session epoch
   apothecaryElectionController.clear(); answeredApothecaryChoiceKey = null;
   clearAnsweredDialogInstance();
   primalSavageryIntent = null;
@@ -13630,7 +13634,7 @@ function clearCinematics(hardGameBoundary = false) {
     if (pendingPregameWaitWatchdog) { cancelGameTimeout(pendingPregameWaitWatchdog); pendingPregameWaitWatchdog = null; }
   }
   state.pregameWait = null; state.selectSkill = null; state.selectWeather = null; state.selectPosition = null; state.inducementUse = null;
-  liveUseInducementOffer = null;
+  retireUseInducement();
   liveWizardSpellOffer = null; liveWizardSpell = null; liveWizardSpellAwaitingServer = false;
   state.wizardTargetPreview = null;
   state.wizardTargetConfirm = null;
@@ -13688,7 +13692,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   pendingFollowupWake = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
   armourPublishPending = 0; armourPublishGeneration++; armourPublishedWakes.clear(); // owner 10-20
@@ -13839,7 +13843,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -16709,6 +16713,80 @@ export function installSelectSkillTestHarness(
       selectSkillHandledInstanceKey = priorHandledKey;
       state.selectPosition = priorPosition;
       selectPositionHandledInstanceKey = priorPositionKey;
+      interactiveReRolls = priorInteractive;
+    },
+  };
+}
+
+/** @internal Bretonnian Pastries lane (10-23): the production useInducement offer -> Modern prompt -> clientUseInducement
+ *  path through applyFrame, for a seated coach (`seat: 'home'` answers home-team offers) or a spectator. */
+export function installUseInducementTestHarness(
+  fixture: GameJson,
+  seat: 'home' | 'spectator',
+  send: (command: Record<string, unknown>) => void,
+  opts: { interactive?: boolean } = {},
+): {
+  applyDialog(dialog: Record<string, unknown> | null, commandNr: number): void;
+  /** A recorded serverModelSync command, applied through the production applyFrame. */
+  applyCommand(cmd: Record<string, unknown>): void;
+  game(): GameJson | null;
+  prompt(): typeof state.inducementUse;
+  waiting(): typeof state.useInducementWaiting;
+  resolve(kind: 'inducement' | 'card' | 'decline', value?: string): void;
+  /** Make the transport refuse (false) or accept (true) the next sends. */
+  setSendResult(ok: boolean): void;
+  dispose(): void;
+} {
+  const priorGame = game.value;
+  const priorSession = session;
+  const priorPlay = { ...play };
+  const priorPrompt = state.inducementUse;
+  const priorWaiting = state.useInducementWaiting;
+  const priorOffer = liveUseInducementOffer;
+  const priorInteractive = interactiveReRolls;
+
+  state.inducementUse = null;
+  state.useInducementWaiting = null;
+  retireUseInducement();
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  play.active = seat !== 'spectator';
+  play.coach = seat === 'spectator' ? 'spectator' : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
+  gameStore.setInteractiveReRolls(opts.interactive ?? true);
+  let sendResult = true;
+  session = {
+    send(command: Record<string, unknown>) {
+      if (!sendResult) throw new Error('test transport refusal');
+      send(command);
+    },
+  } as unknown as GameSession;
+
+  return {
+    applyDialog(dialog, commandNr) {
+      applyFrame({
+        receivedAt: Date.now(),
+        cmd: {
+          netCommandId: 'serverModelSync', commandNr,
+          modelChangeList: { modelChangeArray: [{ modelChangeId: 'gameSetDialogParameter', modelChangeKey: null, modelChangeValue: dialog }] },
+          reportList: { reports: [] },
+        },
+      });
+    },
+    applyCommand(cmd) { applyFrame({ receivedAt: Date.now(), cmd } as Parameters<typeof applyFrame>[0]); },
+    game: () => game.value,
+    prompt: () => state.inducementUse,
+    waiting: () => state.useInducementWaiting,
+    resolve(kind, value) { gameStore.resolveUseInducement(kind, value); },
+    setSendResult(ok) { sendResult = ok; },
+    dispose() {
+      retireUseInducement();
+      session = priorSession;
+      game.value = priorGame;
+      play.active = priorPlay.active;
+      play.coach = priorPlay.coach;
+      play.autoPregame = priorPlay.autoPregame;
+      state.inducementUse = priorPrompt;
+      state.useInducementWaiting = priorWaiting;
+      liveUseInducementOffer = priorOffer;
       interactiveReRolls = priorInteractive;
     },
   };
@@ -22177,22 +22255,94 @@ function clearYesNo() {
 }
 
 let liveUseInducementOffer: UseInducementOffer | null = null;
+/**
+ * Astra r1 #2 (Pastries lane 10-23): the open `useInducement` OCCURRENCE this seat owns. Identity is the
+ * dialogParameter OBJECT (a model sync that leaves the dialog alone keeps the same object; a re-sent offer, even a
+ * byte-identical one, is a new object) and `commandNr` is the command that OPENED it: the prompt key and the
+ * followupHandled mark ride the opening command, never the latest frame, so one occurrence is answerable once.
+ * Any frame whose dialog is not this object (cleared, replaced, re-addressed to the other seat) retires it at once.
+ */
+let liveUseInducementOccurrence: { ref: object; commandNr: number } | null = null;
+/**
+ * Astra r1 #1 (latches fail open): an accepted answer awaiting the server. The frame that retires the occurrence
+ * releases it; if the same occurrence is still live when the watchdog fires, the prompt comes back (nothing is resent:
+ * the coach answers again).
+ */
+let useInducementAwaiting: { key: string; ref: object; timer: ReturnType<typeof setTimeout> } | null = null;
+const USE_INDUCEMENT_ECHO_WATCHDOG_MS = 8000;
+/**
+ * Astra r2 (duplicate delivery): the content of each useInducement occurrence this seat ANSWERED, by its key (the
+ * opening commandNr). A separately decoded copy of the same frame N carries a fresh dialog object with equal content:
+ * it is the same question, so it stays handled (no prompt, no second answer). A later commandNr is a new occurrence;
+ * different content at the same N is a new question. Cleared with followupHandled at every game / snapshot boundary
+ * (resetPlayback), so a rejoin snapshot resets the lifecycle.
+ */
+const useInducementAnsweredContent = new Map<string, string>();
+function useInducementContent(dialog: object): string {
+  try { return JSON.stringify(dialog); } catch { return ''; }
+}
+/**
+ * Astra r1 #3 / no-client-auto-answer law: a HUMAN-owned useInducement offer is always surfaced, whatever
+ * `interactiveReRolls` says. The one automated policy: a seat DECLARED automation-driven (`seatIsAutomated()`: test
+ * drivers, bot rigs, the coach brain) declines, so a rig is never parked on a prompt nobody can click. That is a seat
+ * declaration, not a client auto-answer for a coach; the Pick-Me-Up re-offer decline (1.0.100) remains the ONLY
+ * sanctioned auto-answer on a human seat. Never extend this flag to human seats.
+ */
+const AUTOMATED_SEAT_DECLINES_USE_INDUCEMENT = true;
+
+function retireUseInducement(): void {
+  if (state.inducementUse?.key.startsWith('useInducement:')) state.inducementUse = null;
+  liveUseInducementOffer = null;
+  liveUseInducementOccurrence = null;
+  if (useInducementAwaiting) { cancelGameTimeout(useInducementAwaiting.timer); useInducementAwaiting = null; }
+}
+
+function surfaceUseInducementPrompt(offer: UseInducementOffer): void {
+  const g = game.value;
+  if (!g) return;
+  const key = useInducementKey(offer.commandNr);
+  if (state.inducementUse?.key === key) return;
+  const view = useInducementPrompt(offer, offer.playerId ? playerName(g, offer.playerId) : null);
+  state.inducementUse = { key, ...view, seq: (state.inducementUse?.seq ?? 0) + 1 };
+}
 
 function answerUseInducement(choice: UseInducementChoice): void {
   const offer = liveUseInducementOffer;
-  if (!offer) return;
+  const occurrence = liveUseInducementOccurrence;
+  if (!offer || !occurrence) return;
+  if (game.value?.dialogParameter !== occurrence.ref) { retireUseInducement(); return; }
   const key = useInducementKey(offer.commandNr);
-  const dialogId = String((game.value?.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '');
-  if (dialogId !== 'useInducement' || lastAppliedCommandNr !== offer.commandNr || followupHandled.has(key)) {
-    state.inducementUse = null;
-    liveUseInducementOffer = null;
+  if (useInducementAwaiting || followupHandled.has(key)) return;
+  let command: Record<string, unknown>;
+  try {
+    command = buildUseInducementCommand(offer, choice);
+  } catch (e) {
+    console.warn('[play] useInducement answer refused:', e);
     return;
   }
-  const command = buildUseInducementCommand(offer, choice);
+  let sent = false;
+  try { sent = sendCommand(command); } catch (e) { console.error('[play] useInducement send error:', e); }
+  if (!sent) {
+    // Fail open: the offer, its prompt and its key stay as they were; the coach can answer again.
+    log('system', 'play: the inducement answer was not sent - the offer stays open');
+    return;
+  }
   followupHandled.add(key);
+  useInducementAnsweredContent.set(key, useInducementContent(occurrence.ref));
   state.inducementUse = null;
-  liveUseInducementOffer = null;
-  sendCommand(command);
+  const ref = occurrence.ref;
+  useInducementAwaiting = {
+    key, ref,
+    timer: scheduleGameTimeout(() => {
+      if (useInducementAwaiting?.key !== key) return;
+      useInducementAwaiting = null;
+      if (game.value?.dialogParameter !== ref || liveUseInducementOccurrence?.ref !== ref || !liveUseInducementOffer) return;
+      followupHandled.delete(key);
+      useInducementAnsweredContent.delete(key);
+      log('system', 'play: no server answer to the inducement choice yet - the offer is shown again');
+      surfaceUseInducementPrompt(liveUseInducementOffer);
+    }, USE_INDUCEMENT_ECHO_WATCHDOG_MS, 'connection'),
+  };
 }
 
 function clearWizardSpellElection(): void {
@@ -22716,10 +22866,10 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     state.selectPosition = null;
     selectPositionHandledInstanceKey = null;
   }
-  if (initialDialogId !== 'useInducement') {
-    if (state.inducementUse?.key.startsWith('useInducement:')) state.inducementUse = null;
-    liveUseInducementOffer = null;
-  }
+  // Astra r1 #2: the owned occurrence ends the moment the live dialog is not that object (cleared, replaced, or
+  // re-addressed to the other seat) - its prompt never waits for a click to find out. Also releases an awaited answer.
+  if (initialDialogId !== 'useInducement'
+    || (liveUseInducementOccurrence && g.dialogParameter !== liveUseInducementOccurrence.ref)) retireUseInducement();
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
   // Astra confirmlock-6: a replacement wizardSpell occurrence (the opponent's) retires the stale Zap confirmation.
   else if (state.wizardTargetConfirm?.answersInstance && !cardDialogPresent(['wizardSpell'], state.wizardTargetConfirm.answersInstance)) clearWizardSpellElection();
@@ -22895,23 +23045,32 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       }
     }
   }
-  // Handle inducement offers before field-mode gating; owner chooses exact use/decline, headless declines.
+  // Handle inducement offers before field-mode gating; the owning coach chooses use / decline (always surfaced).
   {
     const idp = g.dialogParameter as Record<string, unknown> | undefined;
     if (idp?.dialogId === 'useInducement') {
       const myId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
       const teamId = String(idp.teamId ?? myId ?? '');
       if (teamId === myId && myId) {
-        const rawTypes = Array.isArray(idp.inducementTypeArray)
-          ? (idp.inducementTypeArray as unknown[]).map(String)
-          : [];
-        const inducementTypeArray = rawTypes.filter(isInducementType);
+        // Server-derived: every offered type verbatim, including one the client has no table entry for (Pastries 10-23).
+        const inducementTypeArray = wireInducementTypes(idp.inducementTypeArray);
         const cards = Array.isArray(idp.cards) ? (idp.cards as unknown[]).map(String) : [];
         // DialogUseInducementParameter.java:81-98 carries the complete type/card/player offer.
-        // SR-269/270 parking-dialog precedent: commandNr identifies this exact open instance,
-        // so identical content in a later command remains answerable.
+        // Astra r1 #2: the occurrence is the dialog object; its key is the command that opened it (a re-sent offer is a
+        // new object, so identical content sent again remains answerable).
+        if (liveUseInducementOccurrence?.ref !== idp) {
+          retireUseInducement();
+          liveUseInducementOccurrence = { ref: idp, commandNr: lastAppliedCommandNr };
+          // Astra r2: an equal-content copy of an occurrence already answered at this commandNr (duplicate delivery)
+          // stays handled; anything else opened here is a new question.
+          const openedKey = useInducementKey(lastAppliedCommandNr);
+          if (useInducementAnsweredContent.get(openedKey) !== useInducementContent(idp)) {
+            followupHandled.delete(openedKey);
+            useInducementAnsweredContent.delete(openedKey);
+          }
+        }
         const offer: UseInducementOffer = {
-          commandNr: lastAppliedCommandNr,
+          commandNr: liveUseInducementOccurrence.commandNr,
           teamId,
           inducementTypeArray,
           cards,
@@ -22919,28 +23078,13 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           authority: { role: 'player', myTeamId: myId, decisionTeamId: teamId },
         };
         const key = useInducementKey(offer.commandNr);
-        if (followupHandled.has(key)) return;
         liveUseInducementOffer = offer;
-        if (humanReRollSurface()) {
-          const options = useInducementChoices(offer)
-            .filter((choice): choice is Exclude<UseInducementChoice, { kind: 'decline' }> => choice.kind !== 'decline')
-            .map((choice) => ({
-              kind: choice.kind,
-              value: choice.value,
-              label: choice.kind === 'card' ? choice.value : inducementChoiceLabel(choice.value),
-            }));
-          if (state.inducementUse?.key !== key) {
-            state.inducementUse = {
-              key,
-              prompt: $t('store.text.whichInducementDoYou'),
-              declineLabel: 'Decline',
-              options,
-              seq: (state.inducementUse?.seq ?? 0) + 1,
-            };
-          }
-        } else {
-          answerUseInducement({ kind: 'decline' });
+        if (followupHandled.has(key)) return; // answered; awaiting the server (the watchdog restores the prompt)
+        if (AUTOMATED_SEAT_DECLINES_USE_INDUCEMENT && seatIsAutomated()) {
+          answerUseInducement({ kind: 'decline' }); // a declared automation seat only - see the flag
+          return;
         }
+        surfaceUseInducementPrompt(offer);
         return;
       }
     }
@@ -24620,6 +24764,7 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
   state.reRollWaiting = playback.catchingUp ? null : reRollWaitingFromGame(g, myTeamId);
+  state.useInducementWaiting = playback.catchingUp ? null : useInducementWaitingFromGame(g, myTeamId);
   state.onTheBallWaiting = playback.catchingUp ? null : projectOnTheBallWaiting({
     audience: frame.audience,
     turnMode: frame.turnMode,
@@ -24660,7 +24805,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -25021,7 +25166,7 @@ function drivePregameStep() {
   // (ownership, a dialog, the ball in play, a phase change, the setting off), ABOVE every early-return branch below.
   if (state.kickConfirm && !gameStore.kickConfirmLive()) state.kickConfirm = null;
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -26242,7 +26387,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -27756,7 +27901,8 @@ export const gameStore = {
     const offer = liveUseInducementOffer;
     if (!offer) return;
     if (kind === 'inducement') {
-      if (!value || !isInducementType(value)) return;
+      // Any type the live offer carries (an unseen upstream key included); anything else was never offered.
+      if (!value || !offer.inducementTypeArray.includes(value)) return;
       answerUseInducement({ kind, value });
       return;
     }
@@ -28186,7 +28332,7 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
@@ -28564,7 +28710,7 @@ export const gameStore = {
       retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       clearSendOffWaiting();
       if (officialStatusTerminal) {
         expectingGame = false;
@@ -31268,7 +31414,7 @@ export const gameStore = {
     play.active = false;
     withdrawConnectDeclaredSeat(); // owner 10-08: the seat declaration belongs to one connection
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

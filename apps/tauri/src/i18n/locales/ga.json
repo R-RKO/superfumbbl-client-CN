@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Níor ghlac an freastalaí le {label} anseo.",
   "store.text.theTurnEndedThe": "Chríochnaigh an casadh. Tá leid an fhreastalaí fós suas.",
   "store.text.unknownPlayerActionAction": "Tá gníomh imreora anaithnid “{action}” faoi ghlas.",
+  "store.text.useBretonnianPastriesOn": "Taosráin Bhriotánacha a úsáid ar {player}? Ar 2+ filleann siad ar na hIonadaithe; ar 1 fanann siad cnagtha amach agus cailltear na Taosráin.",
+  "store.text.useInducementOnPlayer": "{inducement} a úsáid ar {player}?",
   "store.text.whichInducementDoYou": "Cén spreagadh ar mhaith leat a úsáid?",
   "store.text.whichSpellShouldYour": "Cén geas ar cheart do do dhraoi a chaitheamh?",
   "store.tick.notDeclaredThePrevious": "Níor dearbhaíodh: níor chríochnaigh an gníomhachtú roimhe seo in am. Bain triail eile as.",

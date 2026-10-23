@@ -3215,6 +3215,8 @@
   "store.text.theServerDidNot4": "Сервер овде није прихватио {label}.",
   "store.text.theTurnEndedThe": "Потез је завршен. Упит сервера је и даље отворен.",
   "store.text.unknownPlayerActionAction": "Непозната акција играча „{action}“ је закључана.",
+  "store.text.useBretonnianPastriesOn": "Употребити Бретонско пециво на {player}? На 2+ враћа се у резерве; на 1 остаје нокаутиран и пециво је изгубљено.",
+  "store.text.useInducementOnPlayer": "Употребити {inducement} на {player}?",
   "store.text.whichInducementDoYou": "Који подстицај желиш да употребиш?",
   "store.text.whichSpellShouldYour": "Коју чаролију треба да баци твој чаробњак?",
   "store.tick.notDeclaredThePrevious": "Није најављено: претходна активација није завршена на време. Покушај поново.",

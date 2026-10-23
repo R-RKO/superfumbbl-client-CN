@@ -90,6 +90,7 @@ export const LOG_ACTION_ICONS = {
   inducements: { icon: { type: 'emoji', emoji: '\u{1F6D2}' }, label: 'Inducements' },
   masterChef: { icon: { type: 'emoji', emoji: '\u{1F373}' }, label: 'Master Chef' },
   rookies: { icon: { type: 'emoji', emoji: '\u{1F423}' }, label: 'Riotous Rookies' },
+  pastries: { icon: { type: 'emoji', emoji: '\u{1F967}' }, label: 'Bretonnian Pastries' }, // Pastries lane 10-23 (pending upstream)
   hired: { icon: { type: 'emoji', emoji: '\u{1F91D}' }, label: 'Hired by both coaches' },
   fans: { icon: { type: 'emoji', emoji: '\u{1F465}' }, label: 'Fans' },
   winnings: { icon: { type: 'emoji', emoji: '\u{1F4B0}' }, label: 'Winnings' },
@@ -174,7 +175,7 @@ export const REPORT_ACTION_KIND: Readonly<Record<string, LogActionKind | null>> 
   turnEnd: 'turnEnd', weatherMageRoll: 'weather', weatherMageResult: 'weather',
   // pre / post game
   fanFactor: 'fans', fanFactorRoll: 'fans', spectators: 'fans', dedicatedFans: 'fans', winnings: 'winnings', winningsRoll: 'winnings',
-  defectingPlayers: 'defecting', penaltyShootout: 'shootout', masterChefRoll: 'masterChef', riotousRookies: 'rookies',
+  defectingPlayers: 'defecting', penaltyShootout: 'shootout', masterChefRoll: 'masterChef', riotousRookies: 'rookies', bretonnianPastriesRoll: 'pastries',
   cardsAndInducementsBought: 'inducements', inducementsBought: 'inducements', cardsBought: 'inducements',
   prayersAndInducementsBought: 'inducements', doubleHiredStarPlayer: 'hired', doubleHiredStaff: 'hired',
   wizardUse: 'wizard', cardEffectRoll: 'card', prayerRoll: 'prayer', prayerAmount: 'prayer', prayerEnd: 'prayer',

@@ -1,13 +1,25 @@
 import type { InducementType } from './railRegistryKeys.generated';
+import { lastServerVersion, serverSupportsPastries } from './serverVersionGate';
 import {
   BB2025_MERCENARY_SKILLS_BY_CATEGORY,
   type Bb2025MercenarySkillCategory,
 } from './bb2025MercenarySkills.generated';
 
 /**
+ * Inducement wire keys the client knows ahead of the generated union: each is
+ * an upstream contribution in flight (built on a parked fumbbl40k-server
+ * branch, not yet in upstream/master, so the generator cannot see it). Remove
+ * an entry once the generator emits it. `bretonnianPastries`: Spike! Journal 19
+ * (spec-bretonnian-pastries-2026-10-23).
+ */
+export const PENDING_UPSTREAM_INDUCEMENT_TYPES = ['bretonnianPastries'] as const;
+export type ClientInducementType = InducementType | (typeof PENDING_UPSTREAM_INDUCEMENT_TYPES)[number];
+
+/**
  * BB2025's inducement taxonomy is a checked subset of the generated wire-key
- * union. A rename or removal in InducementType.java therefore fails typecheck;
- * legacy/multi-rules `card` and `igor` remain outside this BB2025 surface.
+ * union (plus the pending-upstream keys above). A rename or removal in
+ * InducementType.java therefore fails typecheck; legacy/multi-rules `card` and
+ * `igor` remain outside this BB2025 surface.
  */
 export const BB2025_INDUCEMENT_TYPES = [
   'extraTeamTraining',
@@ -33,7 +45,8 @@ export const BB2025_INDUCEMENT_TYPES = [
   'josefBugman',
   'bugmansXXXXXX',
   'dwarfenWisdom',
-] as const satisfies readonly InducementType[];
+  'bretonnianPastries',
+] as const satisfies readonly ClientInducementType[];
 
 export type Bb2025InducementType = (typeof BB2025_INDUCEMENT_TYPES)[number];
 export type InducementSurface = 'fixed' | 'star-roster' | 'mercenary-roster' | 'staff-roster' | 'derived';
@@ -62,6 +75,7 @@ export const BB2025_INDUCEMENT_SURFACES: Record<Bb2025InducementType, Inducement
   josefBugman: 'fixed',
   bugmansXXXXXX: 'derived',
   dwarfenWisdom: 'derived',
+  bretonnianPastries: 'fixed',
 };
 
 export interface InducementSourceMetadata {
@@ -95,6 +109,8 @@ export const BB2025_INDUCEMENT_METADATA: Record<Bb2025InducementType, Inducement
   josefBugman: { surface: 'fixed', usages: ['BUGMAN'], effects: [] },
   bugmansXXXXXX: { surface: 'derived', usages: ['ADD_TO_KO_RECOVERY'], effects: [] },
   dwarfenWisdom: { surface: 'derived', usages: ['RESETUP_D3_PLAYERS'], effects: [] },
+  // Pending upstream (parked branch): Usage.KNOCKOUT_RESERVE, once per game.
+  bretonnianPastries: { surface: 'fixed', usages: ['KNOCKOUT_RESERVE'], effects: [] },
 };
 
 export interface FixedDefinition {
@@ -112,6 +128,20 @@ export interface FixedDefinition {
   reducedMaxKey?: string;
   reducedCost?: number;
   reducedMax?: number;
+  /** The server's own default max, used for an ABSENT max option only on a server known to carry this inducement
+   *  (`InducementServerSupport`); elsewhere an absent option falls back to `defaultMax`. */
+  supportedDefaultMax?: number;
+  supportKey?: keyof InducementServerSupport;
+}
+
+/** Which pending-upstream inducements the connected server is known to carry as stock options. */
+export interface InducementServerSupport {
+  bretonnianPastries: boolean;
+}
+
+/** The connected server's support, from the version it announced (serverVersionGate). */
+export function currentInducementServerSupport(): InducementServerSupport {
+  return { bretonnianPastries: serverSupportsPastries(lastServerVersion.value) };
 }
 
 /**
@@ -151,6 +181,13 @@ export const BB2025_FIXED_INDUCEMENTS: readonly FixedDefinition[] = [
   { type: 'biasedRef', label: 'Biased Referee', costKey: 'inducementBiasedRefCost', maxKey: 'inducementBiasedRefMax', defaultCost: 120000, defaultMax: 1, reducedRule: 'BRIBERY_AND_CORRUPTION', reducedCostKey: 'inducementBiasedRefReducedCost', reducedMaxKey: 'inducementBiasedRefReducedMax', reducedCost: 80000, reducedMax: 1 },
   // GameOptionId.java:79; GameOptionFactory.java:192 (cost), :195 (max).
   { type: 'josefBugman', label: 'Infamous Staff - Josef Bugman', costKey: 'inducementJosefBugmanCost', maxKey: 'inducementJosefBugmanMax', defaultCost: 100000, defaultMax: 1 },
+  // Pending upstream (spec-bretonnian-pastries-2026-10-23): GameOptionId INDUCEMENT_BRETONNIAN_PASTRIES_{COST,MAX},
+  // server defaults 15000 / 1. The server sends ONLY options a game sets explicitly (GameOptions.toJsonValue), so:
+  //  - an EXPLICIT option on the wire always wins (Max 0 hides the row; a positive Max shows it - our test jar);
+  //  - an ABSENT max means the server default (1) only when the server is known to carry the inducement
+  //    (serverVersionGate PASTRIES_MIN_SERVER_VERSION); on any other server (today's upstream, the live fork) it means
+  //    "no such inducement" (defaultMax 0), so no row is offered that the server would refuse.
+  { type: 'bretonnianPastries', label: 'Bretonnian Pastries', costKey: 'inducementBretonnianPastriesCost', maxKey: 'inducementBretonnianPastriesMax', defaultCost: 15000, defaultMax: 0, supportedDefaultMax: 1, supportKey: 'bretonnianPastries' },
 ];
 
 export interface InducementPosition {
@@ -223,6 +260,7 @@ export function buildFixedOffers(
   team: InducementTeam,
   options: OptionValues,
   changedOptionKeys: ReadonlySet<string> = new Set(),
+  support: InducementServerSupport = currentInducementServerSupport(),
 ): FixedOffer[] {
   const rules = new Set([...(team.specialRules ?? []), ...(team.roster.keywords ?? [])].map(normalize));
 
@@ -233,10 +271,12 @@ export function buildFixedOffers(
       reduced && definition.reducedCostKey ? definition.reducedCostKey : definition.costKey,
       reduced ? definition.reducedCost ?? definition.defaultCost : definition.defaultCost,
     );
+    const absentMax = definition.supportKey && definition.supportedDefaultMax !== undefined && support[definition.supportKey]
+      ? definition.supportedDefaultMax : definition.defaultMax;
     let max = integerOption(
       options,
       reduced && definition.reducedMaxKey ? definition.reducedMaxKey : definition.maxKey,
-      reduced ? definition.reducedMax ?? definition.defaultMax : definition.defaultMax,
+      reduced ? definition.reducedMax ?? absentMax : absentMax,
     );
     if (definition.totalMaxKey && definition.existingField) {
       const totalDefault = definition.existingField === 'assistantCoaches' ? 9 : 16;
@@ -371,9 +411,10 @@ export function buildInducementOptions(
   team: InducementTeam,
   options: OptionValues,
   changedOptionKeys: ReadonlySet<string> = new Set(),
+  support: InducementServerSupport = currentInducementServerSupport(),
 ): InducementOption[] {
   return [
-    ...buildFixedOffers(team, options, changedOptionKeys)
+    ...buildFixedOffers(team, options, changedOptionKeys, support)
       .filter((offer) => offer.available)
       .map((offer) => ({
         key: offer.type,
