@@ -479,11 +479,34 @@ fn embedded_bytes<R: Runtime>(app: &AppHandle<R>, path: &str) -> Option<Vec<u8>>
     app.asset_resolver().get(path.into()).map(|a| a.bytes)
 }
 
+/// Owner 10-24: a DEV CUT (a lettered `app-version.json`, e.g. `1.0.280a`: the fork edition built by
+/// `scripts/dev-cut.mjs`) must run the app it embeds. Dev and public installs share the identifier, so the
+/// public patch store lives in the same app-data dir and its active patch (public edition, a higher bare
+/// version) used to be served over the embedded fork app: the owner's dev build then showed no fork entry
+/// points. The page already disables the updater for dev cuts (updateCheck.ts isDevCut); this is the
+/// shell-side half.
+pub fn is_dev_cut_version(text: &str) -> bool {
+    let end = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
+    bare_version(text).is_some() && text[end..].chars().any(|c| c.is_ascii_alphabetic())
+}
+
+fn embedded_is_dev_cut<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.asset_resolver()
+        .get("/app-version.json".into())
+        .and_then(|a| serde_json::from_slice::<serde_json::Value>(&a.bytes).ok())
+        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(is_dev_cut_version))
+        .unwrap_or(false)
+}
+
 fn active_index<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<ActiveIndex>> {
     let state = app.state::<AppPatchState>();
     let mut slot = state.active.lock().ok()?;
     if slot.is_none() {
-        let loaded = store_root(app).ok().and_then(|root| load_active(&root, embedded_version(app))).map(Arc::new);
+        let loaded = if embedded_is_dev_cut(app) {
+            None
+        } else {
+            store_root(app).ok().and_then(|root| load_active(&root, embedded_version(app))).map(Arc::new)
+        };
         *slot = Some(loaded);
     }
     slot.clone().flatten()
@@ -967,5 +990,13 @@ mod tests {
             from_lib, from_file,
             "generate_handler! differs from shell-api.json: update the file's commands AND set its version to the version being built"
         );
+    }
+
+    #[test]
+    fn dev_cut_versions_are_detected_and_bare_ones_are_not() {
+        assert!(is_dev_cut_version("1.0.280a"));
+        assert!(is_dev_cut_version("1.0.243-o66ne"));
+        assert!(!is_dev_cut_version("1.0.284"));
+        assert!(!is_dev_cut_version("garbage"));
     }
 }

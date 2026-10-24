@@ -13519,6 +13519,8 @@ function resetPlayback() {
   state.kickEmBlitzTarget = null;
   pendingPushes.clear(); // B9-12 G4: don't carry pending pushes across games
   followupHandled.clear(); // M4.2: fresh game — no stale answered-prompt keys
+  useInducementReshownKeys.clear(); consumedUseInducementDialogs = new WeakSet<object>(); // g1956430: per epoch, like followupHandled
+  useInducementStallReshownKeys.clear(); cancelUseInducementStall(); useInducementNoticeDialog = null;
   useInducementAnsweredContent.clear(); // Astra r2: the duplicate-delivery memory is per game / session epoch
   apothecaryElectionController.clear(); answeredApothecaryChoiceKey = null;
   clearAnsweredDialogInstance();
@@ -16722,7 +16724,7 @@ export function installSelectSkillTestHarness(
  *  path through applyFrame, for a seated coach (`seat: 'home'` answers home-team offers) or a spectator. */
 export function installUseInducementTestHarness(
   fixture: GameJson,
-  seat: 'home' | 'spectator',
+  seat: 'home' | 'away' | 'spectator',
   send: (command: Record<string, unknown>) => void,
   opts: { interactive?: boolean } = {},
 ): {
@@ -16748,9 +16750,15 @@ export function installUseInducementTestHarness(
   state.inducementUse = null;
   state.useInducementWaiting = null;
   retireUseInducement();
+  // g1956430: each harness is a fresh epoch for the occurrence memory (fixtures reuse commandNrs across tests).
+  useInducementReshownKeys.clear(); useInducementAnsweredContent.clear(); consumedUseInducementDialogs = new WeakSet<object>();
+  useInducementStallReshownKeys.clear(); cancelUseInducementStall(); useInducementNoticeDialog = null;
+  for (const k of [...followupHandled]) if (k.startsWith('useInducement:')) followupHandled.delete(k);
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
-  play.coach = seat === 'spectator' ? 'spectator' : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
+  play.coach = seat === 'spectator' ? 'spectator' : seat === 'away'
+    ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
+    : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   gameStore.setInteractiveReRolls(opts.interactive ?? true);
   let sendResult = true;
   session = {
@@ -16779,6 +16787,7 @@ export function installUseInducementTestHarness(
     setSendResult(ok) { sendResult = ok; },
     dispose() {
       retireUseInducement();
+      cancelUseInducementStall();
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active;
@@ -22265,11 +22274,89 @@ let liveUseInducementOffer: UseInducementOffer | null = null;
 let liveUseInducementOccurrence: { ref: object; commandNr: number } | null = null;
 /**
  * Astra r1 #1 (latches fail open): an accepted answer awaiting the server. The frame that retires the occurrence
- * releases it; if the same occurrence is still live when the watchdog fires, the prompt comes back (nothing is resent:
- * the coach answers again).
+ * releases it. g1956430 (Bugman 10-24): upstream steps such as StepDwarfenWisdom consume the answer WITHOUT clearing
+ * `dialogParameter`, so an unchanged dialog object is no evidence the answer went unheard. Rule (upstream client
+ * parity: a dialog shows on the gameSetDialogParameter CHANGE, never again for the same object once answered):
+ * any processed server frame past `sentAtCommandNr` consumes the occurrence (see releaseConsumedUseInducement).
+ * Only transport-level silence (no frame at all in the window) lets the watchdog re-show the prompt - once per
+ * occurrence; nothing is ever resent by the client.
  */
-let useInducementAwaiting: { key: string; ref: object; timer: ReturnType<typeof setTimeout> } | null = null;
+let useInducementAwaiting: { key: string; ref: object; sentAtCommandNr: number; turnModeAtSend: string; timer: ReturnType<typeof setTimeout> } | null = null;
 const USE_INDUCEMENT_ECHO_WATCHDOG_MS = 8000;
+/** g1956430: an occurrence the watchdog re-showed after silence; the next processed frame past it consumes it. */
+let useInducementReshownPending: { ref: object; sinceCommandNr: number } | null = null;
+/** g1956430: occurrence keys the watchdog already re-showed once (per game / snapshot epoch, cleared with followupHandled). */
+const useInducementReshownKeys = new Set<string>();
+/**
+ * g1956430: dialog objects the server consumed (it moved on without clearing them). A consumed object is never
+ * prompted again and no longer parks the follow-up driver; a genuine re-offer is a new gameSetDialogParameter
+ * (a new object) and opens a new occurrence.
+ */
+let consumedUseInducementDialogs = new WeakSet<object>();
+function consumeUseInducement(ref: object): void {
+  consumedUseInducementDialogs.add(ref);
+  retireUseInducement();
+}
+/**
+ * g1956430 r2 (latches fail open, the other direction): the consuming frame may have been an unrelated sync already in
+ * flight when the answer went out (the server still waits on us). One-shot STALL watchdog per occurrence: if no
+ * further server frame arrives within USE_INDUCEMENT_STALL_MS of the consuming frame, the dialog is still that object
+ * and the turn mode is still the one the answer was sent in, the prompt is shown again once (nothing is resent); a
+ * later frame consumes it again. In the Bugman trace the turn mode moves on (setup -> kickoff) and frames keep coming.
+ */
+const USE_INDUCEMENT_STALL_MS = 15000;
+const useInducementStallReshownKeys = new Set<string>();
+let useInducementStall: { timer: ReturnType<typeof setTimeout> } | null = null;
+function cancelUseInducementStall(): void {
+  if (useInducementStall) { cancelGameTimeout(useInducementStall.timer); useInducementStall = null; }
+}
+function armUseInducementStall(key: string, ref: object, offer: UseInducementOffer, occurrenceCommandNr: number, turnModeAtSend: string): void {
+  cancelUseInducementStall();
+  if (useInducementStallReshownKeys.has(key)) return;
+  const consumedAtCommandNr = lastAppliedCommandNr;
+  const timer = scheduleGameTimeout(() => {
+    if (useInducementStall?.timer !== timer) return;
+    useInducementStall = null;
+    const g = game.value;
+    if (!g || !play.active || g.dialogParameter !== ref || lastAppliedCommandNr !== consumedAtCommandNr
+      || String(g.turnMode ?? '') !== turnModeAtSend || liveUseInducementOccurrence) return;
+    useInducementStallReshownKeys.add(key);
+    consumedUseInducementDialogs.delete(ref);
+    followupHandled.delete(key);
+    useInducementAnsweredContent.delete(key);
+    liveUseInducementOccurrence = { ref, commandNr: occurrenceCommandNr };
+    liveUseInducementOffer = offer;
+    useInducementReshownPending = { ref, sinceCommandNr: consumedAtCommandNr };
+    log('system', 'play: no server answer to the inducement choice yet - the offer is shown again');
+    surfaceUseInducementPrompt(offer);
+  }, USE_INDUCEMENT_STALL_MS, 'connection');
+  useInducementStall = { timer };
+}
+/** g1956430: a processed server frame past the answer (or past a re-show) consumes the unchanged occurrence. */
+function releaseConsumedUseInducement(g: GameJson): void {
+  const awaited = useInducementAwaiting;
+  if (awaited && lastAppliedCommandNr > awaited.sentAtCommandNr && g.dialogParameter === awaited.ref) {
+    const offer = liveUseInducementOffer;
+    const occurrence = liveUseInducementOccurrence;
+    consumeUseInducement(awaited.ref);
+    if (offer && occurrence) armUseInducementStall(awaited.key, awaited.ref, offer, occurrence.commandNr, awaited.turnModeAtSend);
+    return;
+  }
+  const reshown = useInducementReshownPending;
+  if (reshown && lastAppliedCommandNr > reshown.sinceCommandNr && g.dialogParameter === reshown.ref) consumeUseInducement(reshown.ref);
+}
+/**
+ * g1956430 r2 (non-owning seats): the other coach's / a spectator's "waiting for" notice follows the same consumption
+ * rule. The notice belongs to the dialog OBJECT first seen at `openedAt`; a processed frame past it with the object
+ * unchanged means the server moved on without clearing it, so the notice is released.
+ */
+let useInducementNoticeDialog: { ref: object; openedAt: number } | null = null;
+function useInducementNoticeConsumed(g: GameJson): boolean {
+  const dialog = g.dialogParameter as { dialogId?: unknown } | null | undefined;
+  if (!dialog || dialog.dialogId !== 'useInducement') { useInducementNoticeDialog = null; return false; }
+  if (useInducementNoticeDialog?.ref !== dialog) useInducementNoticeDialog = { ref: dialog, openedAt: lastAppliedCommandNr };
+  return lastAppliedCommandNr > useInducementNoticeDialog.openedAt;
+}
 /**
  * Astra r2 (duplicate delivery): the content of each useInducement occurrence this seat ANSWERED, by its key (the
  * opening commandNr). A separately decoded copy of the same frame N carries a fresh dialog object with equal content:
@@ -22294,6 +22381,7 @@ function retireUseInducement(): void {
   if (state.inducementUse?.key.startsWith('useInducement:')) state.inducementUse = null;
   liveUseInducementOffer = null;
   liveUseInducementOccurrence = null;
+  useInducementReshownPending = null;
   if (useInducementAwaiting) { cancelGameTimeout(useInducementAwaiting.timer); useInducementAwaiting = null; }
 }
 
@@ -22330,16 +22418,27 @@ function answerUseInducement(choice: UseInducementChoice): void {
   followupHandled.add(key);
   useInducementAnsweredContent.set(key, useInducementContent(occurrence.ref));
   state.inducementUse = null;
+  useInducementReshownPending = null;
+  cancelUseInducementStall();
   const ref = occurrence.ref;
+  const sentAtCommandNr = lastAppliedCommandNr;
   useInducementAwaiting = {
-    key, ref,
+    key, ref, sentAtCommandNr, turnModeAtSend: String(game.value?.turnMode ?? ''),
     timer: scheduleGameTimeout(() => {
       if (useInducementAwaiting?.key !== key) return;
       useInducementAwaiting = null;
       if (game.value?.dialogParameter !== ref || liveUseInducementOccurrence?.ref !== ref || !liveUseInducementOffer) return;
+      // Reached only when NO server frame arrived since the send (any frame would have consumed the occurrence).
+      if (useInducementReshownKeys.has(key)) {
+        // Fail open, once per occurrence: the latch releases without a second re-show; nothing is resent.
+        consumeUseInducement(ref);
+        return;
+      }
+      useInducementReshownKeys.add(key);
       followupHandled.delete(key);
       useInducementAnsweredContent.delete(key);
       log('system', 'play: no server answer to the inducement choice yet - the offer is shown again');
+      useInducementReshownPending = { ref, sinceCommandNr: sentAtCommandNr };
       surfaceUseInducementPrompt(liveUseInducementOffer);
     }, USE_INDUCEMENT_ECHO_WATCHDOG_MS, 'connection'),
   };
@@ -22870,6 +22969,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // re-addressed to the other seat) - its prompt never waits for a click to find out. Also releases an awaited answer.
   if (initialDialogId !== 'useInducement'
     || (liveUseInducementOccurrence && g.dialogParameter !== liveUseInducementOccurrence.ref)) retireUseInducement();
+  else releaseConsumedUseInducement(g);
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
   // Astra confirmlock-6: a replacement wizardSpell occurrence (the opponent's) retires the stale Zap confirmation.
   else if (state.wizardTargetConfirm?.answersInstance && !cardDialogPresent(['wizardSpell'], state.wizardTargetConfirm.answersInstance)) clearWizardSpellElection();
@@ -23048,7 +23148,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // Handle inducement offers before field-mode gating; the owning coach chooses use / decline (always surfaced).
   {
     const idp = g.dialogParameter as Record<string, unknown> | undefined;
-    if (idp?.dialogId === 'useInducement') {
+    // g1956430: a consumed occurrence (the server moved on without clearing it) is no offer: never re-prompted, and the
+    // driver falls through to the rest of the game (the kick-off).
+    if (idp?.dialogId === 'useInducement' && !consumedUseInducementDialogs.has(idp)) {
       const myId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
       const teamId = String(idp.teamId ?? myId ?? '');
       if (teamId === myId && myId) {
@@ -24764,7 +24866,7 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
   state.reRollWaiting = playback.catchingUp ? null : reRollWaitingFromGame(g, myTeamId);
-  state.useInducementWaiting = playback.catchingUp ? null : useInducementWaitingFromGame(g, myTeamId);
+  state.useInducementWaiting = playback.catchingUp || useInducementNoticeConsumed(g) ? null : useInducementWaitingFromGame(g, myTeamId);
   state.onTheBallWaiting = playback.catchingUp ? null : projectOnTheBallWaiting({
     audience: frame.audience,
     turnMode: frame.turnMode,
