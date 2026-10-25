@@ -17,6 +17,7 @@
  */
 import { shallowRef } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
+import { coachProfileStatLines, type FumbblOverallRanking } from './fumbblCoachProfile';
 
 /** Owner 10-09: the banner the waiting board is showing right now (null = none). The app-level join-progress window
  *  reads it so the match-up sits directly ABOVE that window, over its backdrop, instead of shaded behind it. */
@@ -44,7 +45,12 @@ export interface FumbblTeamInfo {
   tournamentOpponents: string[];
 }
 
-export interface CoachStatsLine { cr?: string; record?: string }
+/** One part of a stats line ("Record 21/14/17", "40 %", "CR 1627", "+3.2 WAR"), with the WAR part's tooltip. */
+export interface CoachStatItem { text: string; title?: string }
+/** Owner 10-23 / 10-25: the coach's FUMBBL title (the badge), rating and record, official joins only. `cr` / `record`
+ *  are the short forms; `recordLine` / `ratingLine` are the game-load rank bar's two detail lines, the ones the banner
+ *  draws ("Record W/D/L · win %", "CR n · ±x.x WAR"). */
+export interface CoachStatsLine { cr?: string; record?: string; title?: string; recordLine?: CoachStatItem[]; ratingLine?: CoachStatItem[] }
 
 export interface BannerSide {
   teamName: string;
@@ -211,12 +217,18 @@ export function formatBannerTv(value: number | undefined): string | undefined {
 
 /** Owner 10-23: "CR 1624" and "W-D-L" from the SAME coach profile the game-load rank bar reads (fumbblCoachProfile:
  *  cr = the coach page's Overall CR, record = the Overall W/D/L). Undefined when FUMBBL sent neither. */
-export function coachStatsLine(profile: { cr?: number; record?: { w: number; d: number; l: number } } | null | undefined): CoachStatsLine | undefined {
+export function coachStatsLine(profile: FumbblOverallRanking | null | undefined): CoachStatsLine | undefined {
   if (!profile) return undefined;
   const line: CoachStatsLine = {};
   if (profile.cr !== undefined) line.cr = `CR ${profile.cr}`;
   if (profile.record) line.record = `${profile.record.w}-${profile.record.d}-${profile.record.l}`;
-  return line.cr || line.record ? line : undefined;
+  const title = typeof profile.title === 'string' ? profile.title.trim() : '';
+  if (title) line.title = title;
+  // Owner 10-25: "Design language here should mirror the other style presentations" - the rank bar's own two lines.
+  const lines = coachProfileStatLines(profile);
+  if (lines.record.length) line.recordLine = lines.record;
+  if (lines.rating.length) line.ratingLine = lines.rating;
+  return line.cr || line.record || line.title ? line : undefined;
 }
 
 /** The banner with each side's coach stats. `profiles` is keyed by lower-cased coach name; a name not in it is still

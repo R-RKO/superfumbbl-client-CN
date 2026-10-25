@@ -1,9 +1,12 @@
 <script setup lang="ts">
 // Owner 10-06: TEAM VS TEAM splash across the top of the waiting board — crest, team name, coach and TV for each
 // side. Presentation only: the model comes from game/waitingVsBanner.ts (names at once, race/TV as data arrives).
-import { ref, watch } from 'vue';
+import { nextTick, onMounted, reactive, ref, watch } from 'vue';
+import CoachBadge from '../views/console/play/CoachBadge.vue';
+import { coachTitleSlug } from '../game/fumbblCoachProfile';
+import { settings } from '../game/settings';
 import { teamLogoUrl } from '../game/teamLogos';
-import { formatBannerTv, type BannerSide, type WaitingBannerModel } from '../game/waitingVsBanner';
+import { formatBannerTv, type BannerSide, type CoachStatItem, type WaitingBannerModel } from '../game/waitingVsBanner';
 import { $t, terms } from '../i18n';
 
 /** `inline` (owner 10-09): sits in the flow directly above the waiting box instead of across the top of the board.
@@ -43,9 +46,41 @@ function crestFailed(url: string | null): void {
   if (!url) return;
   const next = new Set(failed.value); next.add(url); failed.value = next;
 }
-/** "CR 162.3 · 10-2-3": one text element so a narrow column ellipsizes the END of the line, never the CR. */
+/** Fallback for a model without the rank bar's lines: "CR 162.3 · 10-2-3" in one element. */
 function statsText(side: BannerSide): string {
   return [side.coachStats?.cr, side.coachStats?.record].filter(Boolean).join(' · ');
+}
+/** Owner 10-25: "The badge icons that we'd developed are not present on this. Design language here should mirror the
+ *  other style presentations of this." Without a `badge` / `detail` slot the banner draws them itself, exactly as the
+ *  game-load rank bar does: the coach-title badge between the crest and the names (the text chip when no art matches
+ *  or the art fails), and the bar's two detail lines "Record W/D/L · win %" and "CR n · ±x.x WAR" under the coach. */
+const badgeFailed = reactive<Record<'mine' | 'opponent', boolean>>({ mine: false, opponent: false });
+watch(() => [props.model.mine.coachStats?.title, props.model.opponent.coachStats?.title, settings.coachBadgeStyle], () => {
+  badgeFailed.mine = false; badgeFailed.opponent = false;
+});
+/** Sol r1 P3: the badge follows the banner's EFFECTIVE scale - the `scale` prop, else an inherited / `vars` --vs-scale
+ *  read from the rendered element - so it always matches the crest beside it. */
+const root = ref<HTMLElement | null>(null);
+const cssScale = ref<number | null>(null);
+function readCssScale(): void {
+  const el = root.value;
+  if (!el || typeof getComputedStyle === 'undefined') return;
+  const v = parseFloat(getComputedStyle(el).getPropertyValue('--vs-scale'));
+  cssScale.value = Number.isFinite(v) && v > 0 ? v : null;
+}
+onMounted(readCssScale);
+watch(() => [props.scale, props.vars?.['--vs-scale']], () => { void nextTick(readCssScale); });
+/** Same precedence as scaleStyle(): a `vars` --vs-scale wins over the `scale` prop, which wins over an inherited value. */
+function effectiveScale(): number {
+  const fromVars = parseFloat(props.vars?.['--vs-scale'] ?? '');
+  if (Number.isFinite(fromVars) && fromVars > 0) return fromVars;
+  return props.scale ?? cssScale.value ?? 1;
+}
+const badgeSize = (): number => Math.round(64 * effectiveScale());
+const coachTitle = (side: BannerSide): string | undefined => side.coachStats?.title || undefined;
+const badgeArt = (side: BannerSide, slot: 'mine' | 'opponent'): boolean => !!coachTitleSlug(coachTitle(side)) && !badgeFailed[slot];
+function detailLines(side: BannerSide): CoachStatItem[][] {
+  return [side.coachStats?.recordLine, side.coachStats?.ratingLine].filter((line): line is CoachStatItem[] => !!line?.length);
 }
 function initials(name: string): string {
   const words = name.replace(/['’]/g, '').replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
@@ -55,7 +90,7 @@ function initials(name: string): string {
 </script>
 
 <template>
-  <section class="vs-banner" :class="{ inline, 'keep-words': keepWords }" :style="scaleStyle()" data-testid="waiting-vs-banner" :aria-label="$t('waitingBoard.vsBanner.matchUp')">
+  <section ref="root" class="vs-banner" :class="{ inline, 'keep-words': keepWords }" :style="scaleStyle()" data-testid="waiting-vs-banner" :aria-label="$t('waitingBoard.vsBanner.matchUp')">
     <div v-for="slot in (['mine', 'opponent'] as const)" :key="slot" class="vs-side" :class="slot" :style="sideVars?.[slot]" :data-testid="`vs-${slot}`">
       <span class="vs-crest">
         <img v-if="crest(model[slot], kit(slot))" :src="crest(model[slot], kit(slot))!"
@@ -63,10 +98,20 @@ function initials(name: string): string {
         <span v-else class="vs-initials" aria-hidden="true">{{ model[slot].unknown ? '?' : initials(model[slot].teamName) }}</span>
       </span>
       <span v-if="$slots.badge" class="vs-badge"><slot name="badge" :side="slot" /></span>
+      <span v-else-if="coachTitle(model[slot])" class="vs-badge vs-badge-default" data-testid="vs-badge">
+        <CoachBadge v-if="badgeArt(model[slot], slot)" :title="coachTitle(model[slot])!" :size="badgeSize()" @error="badgeFailed[slot] = true" />
+        <span v-else class="vs-title-chip" data-testid="vs-title-chip">{{ coachTitle(model[slot]) }}</span>
+      </span>
+      <span v-else-if="model[slot].statsPending" class="vs-badge vs-badge-default vs-badge-reserved" :style="{ width: `${badgeSize()}px` }" aria-hidden="true"></span>
       <span class="vs-text">
         <strong class="vs-team" data-testid="vs-team">{{ model[slot].teamName }}</strong>
         <span v-if="model[slot].coach" class="vs-coach" data-testid="vs-coach">{{ model[slot].coach }}</span>
-        <span v-if="model[slot].coachStats || model[slot].statsPending" class="vs-stats" data-testid="vs-stats">{{ statsText(model[slot]) }}</span>
+        <span v-if="!$slots.detail && detailLines(model[slot]).length" class="vs-meta vs-detail vs-stats vs-stats-lines" data-testid="vs-stats"><span
+          v-for="(line, l) in detailLines(model[slot])" :key="l" class="vs-stats-line"><template v-for="(item, i) in line" :key="i"><span
+          class="vs-stat" :title="item.title" :aria-label="item.title ? `${item.text}, ${item.title}` : undefined">{{ item.text }}</span><template
+          v-if="i < line.length - 1"> · </template></template></span></span>
+        <span v-else-if="!$slots.detail && (model[slot].coachStats || model[slot].statsPending)" class="vs-meta vs-detail vs-stats"
+          :class="{ 'vs-stats-pending': model[slot].statsPending }" data-testid="vs-stats">{{ statsText(model[slot]) }}</span>
         <span v-if="$slots.detail" class="vs-meta vs-detail"><slot name="detail" :side="slot" /></span>
         <span v-if="!hideMeta" class="vs-meta">
           <span v-if="model[slot].race" data-testid="vs-race">{{ terms(model[slot].race) }}</span>
@@ -87,6 +132,9 @@ function initials(name: string): string {
   background: linear-gradient(90deg, #300f0fe8 0%, rgba(12, 15, 21, 0.95) 32%, rgba(12, 15, 21, 0.95) 68%, #300f0fe8 100%);
   border: 2px solid #e03030cc; box-shadow: 0 10px 28px #000c, inset 0 0 0 1px #00000080;
   color: var(--ui-text, #f0f0f0); pointer-events: none;
+  /* Sol r2: the banner's own badge is keyed on the BAR's width (it sits in a modal, a board or a scaled panel), not the
+     viewport's - see the @container rule below. */
+  container-type: inline-size; container-name: vs-banner;
 }
 .vs-banner.inline { position: relative; top: auto; left: auto; transform: none; flex: none; }
 .vs-side { display: flex; align-items: center; gap: calc(12px * var(--vs-scale, 1)); min-width: 0; }
@@ -108,12 +156,32 @@ function initials(name: string): string {
 .vs-coach { font-size: calc(max(var(--ui-min-primary-text-size, 16px), 0.95rem) * var(--vs-type, var(--vs-scale, 1))); color: #e8918c; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vs-meta { display: flex; gap: calc(8px * var(--vs-scale, 1)); font-size: calc(max(var(--ui-min-secondary-text-size, 13px), 0.82rem) * var(--vs-type, var(--vs-scale, 1))); color: var(--ui-text-muted, #b8bcc6); }
 .vs-side.opponent .vs-meta { justify-content: flex-end; }
-/* Owner 10-23: the coach's FUMBBL rating and record under the coach name; one line, truncated, reserved while loading. */
-.vs-stats {
-  display: block; min-width: 0; min-height: 1.2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font-size: calc(max(var(--ui-min-secondary-text-size, 13px), 0.82rem) * var(--vs-type, var(--vs-scale, 1))); color: #f2d4a0; font-weight: 700;
+/* Owner 10-25 / Sol r2: with the coach badge beside the names the column is narrower. TV is one unit and wraps below
+   the race as a whole; the race wraps only at its spaces ("Shambling" / "Undead"), never mid-word, never under the TV. */
+.vs-meta:not(.vs-detail) { flex-wrap: wrap; row-gap: 0; }
+.vs-meta:not(.vs-detail) > .vs-tv { white-space: nowrap; }
+.vs-meta:not(.vs-detail) > [data-testid="vs-race"] { overflow-wrap: normal; word-break: normal; }
+/* Sol r2: a bar narrower than ~740 px leaves under ~150 px per name column once a 64 px badge sits beside the crest -
+   the banner's own badge (and its loading spacer) steps aside there, whatever the viewport. */
+@container vs-banner (max-width: 740px) {
+  .vs-badge.vs-badge-default { display: none; } /* beats the plain .vs-badge rule below */
 }
+/* Owner 10-23 / 10-25: the coach's FUMBBL record and rating under the coach name, in the rank bar's detail type (small
+   capitals, the meta row's size); two lines, each kept on one line and truncated at its end; reserved while loading. */
+.vs-stats { min-width: 0; overflow: hidden; }
+.vs-stats-lines { flex-direction: column; gap: 0; align-items: stretch; }
+.vs-stats-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vs-stat { white-space: nowrap; }
+.vs-stats-pending { display: block; min-height: 2.4em; }
+/* right-aligned, but each line spans the column so a long line is cut at its END (never its start) on the right side too */
 .vs-side.opponent .vs-stats { text-align: right; }
+/* the coach-title text chip (no badge art for the title, or the art failed): the rank bar's chip */
+.vs-title-chip {
+  padding: calc(3px * var(--vs-scale, 1)) calc(10px * var(--vs-scale, 1)); border-radius: 999px; color: #101010; background: #efc957;
+  font-family: var(--font-display); font-size: calc(0.9rem * var(--vs-type, var(--vs-scale, 1))); font-weight: 800; letter-spacing: .04em;
+  text-transform: uppercase; white-space: nowrap;
+}
+.vs-badge-reserved { height: 1px; }
 .vs-tv { font-weight: 700; color: #f2d4a0; }
 /* Owner 10-21 (rank panel slots; absent on the waiting board): the badge sits between the crest and the names, and the
    detail line under the coach is the meta row's small type in small capitals. */
@@ -141,5 +209,9 @@ function initials(name: string): string {
   .vs-mark { width: calc(44px * var(--vs-scale, 1)); height: calc(44px * var(--vs-scale, 1)); font-size: calc(1.3rem * var(--vs-type, var(--vs-scale, 1))); }
   .vs-side { gap: calc(8px * var(--vs-scale, 1)); }
   .vs-meta { flex-direction: column; gap: 0; }
+  /* Sol r1 P2: a phone-width bar has no room for a second 64 px block beside the crest - the banner's own badge (and its
+     loading spacer) steps aside so the names, record and rating keep their column; race / TV may wrap again. The rank
+     panel's slot badge is untouched (it sizes itself). */
+  .vs-badge.vs-badge-default { display: none; }
 }
 </style>
