@@ -44,10 +44,11 @@ export const COACH_TITLE_SLUGS = {
 } as const;
 export type CoachTitleSlug = typeof COACH_TITLE_SLUGS[keyof typeof COACH_TITLE_SLUGS];
 
-/** "Super Star" / " super  STAR " -> "super-star"; anything not one of FUMBBL's eight titles -> undefined. */
+/** "Super Star" / " super  STAR " / "Mega-Star" -> "super-star" / "mega-star"; anything not one of FUMBBL's eight titles -> undefined. */
 export function coachTitleSlug(title: string | undefined | null): CoachTitleSlug | undefined {
   if (typeof title !== 'string') return undefined;
-  const key = title.trim().replace(/\s+/g, ' ').toLowerCase();
+  // Owner 10-25: FUMBBL writes "Mega-Star" (hyphenated) - hyphens / underscores read as the space between the words.
+  const key = title.trim().replace(/[-_‐-―]+/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   return Object.prototype.hasOwnProperty.call(COACH_TITLE_SLUGS, key)
     ? COACH_TITLE_SLUGS[key as keyof typeof COACH_TITLE_SLUGS]
     : undefined;

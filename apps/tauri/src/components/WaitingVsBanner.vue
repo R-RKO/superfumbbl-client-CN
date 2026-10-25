@@ -108,8 +108,8 @@ function initials(name: string): string {
         <span v-if="model[slot].coach" class="vs-coach" data-testid="vs-coach">{{ model[slot].coach }}</span>
         <span v-if="!$slots.detail && detailLines(model[slot]).length" class="vs-meta vs-detail vs-stats vs-stats-lines" data-testid="vs-stats"><span
           v-for="(line, l) in detailLines(model[slot])" :key="l" class="vs-stats-line"><template v-for="(item, i) in line" :key="i"><span
-          class="vs-stat" :title="item.title" :aria-label="item.title ? `${item.text}, ${item.title}` : undefined">{{ item.text }}</span><template
-          v-if="i < line.length - 1"> · </template></template></span></span>
+          class="vs-stat" :title="item.title" :aria-label="item.title ? `${item.text}, ${item.title}` : undefined">{{ item.text }}<template
+          v-if="i < line.length - 1">&nbsp;·</template></span><template v-if="i < line.length - 1">{{ ' ' }}</template></template></span></span>
         <span v-else-if="!$slots.detail && (model[slot].coachStats || model[slot].statsPending)" class="vs-meta vs-detail vs-stats"
           :class="{ 'vs-stats-pending': model[slot].statsPending }" data-testid="vs-stats">{{ statsText(model[slot]) }}</span>
         <span v-if="$slots.detail" class="vs-meta vs-detail"><slot name="detail" :side="slot" /></span>
@@ -170,7 +170,9 @@ function initials(name: string): string {
    capitals, the meta row's size); two lines, each kept on one line and truncated at its end; reserved while loading. */
 .vs-stats { min-width: 0; overflow: hidden; }
 .vs-stats-lines { flex-direction: column; gap: 0; align-items: stretch; }
-.vs-stats-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Owner 10-25 ("WAR is truncating for this player"): a line too long for the column breaks between its parts (at a
+   " · "), never inside one and never cut off - each part ("Record 217/80/141", "+38.0 WAR") stays whole. */
+.vs-stats-line { display: block; white-space: normal; overflow-wrap: normal; }
 .vs-stat { white-space: nowrap; }
 .vs-stats-pending { display: block; min-height: 2.4em; }
 /* right-aligned, but each line spans the column so a long line is cut at its END (never its start) on the right side too */
