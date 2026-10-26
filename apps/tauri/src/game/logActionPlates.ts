@@ -177,6 +177,7 @@ export const REPORT_ACTION_KIND: Readonly<Record<string, LogActionKind | null>> 
   fanFactor: 'fans', fanFactorRoll: 'fans', spectators: 'fans', dedicatedFans: 'fans', winnings: 'winnings', winningsRoll: 'winnings',
   defectingPlayers: 'defecting', penaltyShootout: 'shootout', masterChefRoll: 'masterChef', riotousRookies: 'rookies', bretonnianPastriesRoll: 'pastries',
   cardsAndInducementsBought: 'inducements', inducementsBought: 'inducements', cardsBought: 'inducements',
+  inducement: 'inducements', // the 'inducement used' report (Igor / Wandering Apothecary / Extra Team Training ...), formatted since 1.0.292
   prayersAndInducementsBought: 'inducements', doubleHiredStarPlayer: 'hired', doubleHiredStaff: 'hired',
   wizardUse: 'wizard', cardEffectRoll: 'card', prayerRoll: 'prayer', prayerAmount: 'prayer', prayerEnd: 'prayer',
   prayerWasted: 'prayer', playerEvent: 'prayer', biasedRef: 'referee', secretWeaponBan: 'secretWeapon',

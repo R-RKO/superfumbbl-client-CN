@@ -9,6 +9,9 @@ import { prayerForRoll } from './prayerCatalog';
 import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import { FIELD_DIRECTION_ABBR, isFieldDirection } from './logDirection';
+import { tEnglish } from '../i18n';
+import { BB2025_INDUCEMENT_METADATA } from './inducementCatalog';
+import { inducementChipLabel } from './logic/coachPanelChips';
 import { isGateRerollSource, isHandoffCatch, jumpKindFor, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
 
 /**
@@ -651,6 +654,23 @@ function boughtLine(r: Report, game: GameJson | null): string {
   return `${teamName(game, r.teamId)} buys ${parts.length ? parts.join(', ') : 'nothing'}${goldPart}`;
 }
 
+/** Server `inducement` report (ReportInducement {teamId, inducementType, value}): a team used an inducement. Count
+ *  types (Extra Team Training, Wandering Apothecaries) carry the count in `value`; the regeneration inducements
+ *  (Igor, Mortuary Assistant, Plague Doctor) reroll the failed Regeneration roll. English text via tEnglish. */
+function inducementUsedLine(r: Report, game: GameJson | null): string {
+  const type = String(r.inducementType ?? '');
+  const team = teamName(game, r.teamId);
+  const count = Number(r.value);
+  const n = Number.isFinite(count) && count > 0 ? count : 1;
+  const meta = (BB2025_INDUCEMENT_METADATA as Record<string, { usages: readonly string[] } | undefined>)[type];
+  const regeneration = meta ? meta.usages.includes('REGENERATION') : false;
+  if (type === 'extraTeamTraining') return tEnglish('log.inducement.addRerolls', { team, n });
+  if (type === 'wanderingApothecaries') return tEnglish('log.inducement.addApothecaries', { team, n });
+  const inducement = inducementChipLabel(type);
+  if (regeneration || type === 'igor') return tEnglish('log.inducement.regeneration', { team, inducement });
+  return tEnglish('log.inducement.use', { team, inducement });
+}
+
 /** Cursor-owned context. Explicit contexts never read the legacy presentation lane. */
 export interface ReportLogContext {
   lastBlockDefenderId: string | null;
@@ -1009,6 +1029,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // VISUAL for the buying coach, but it only fires in interactive play — a SPECTATOR / fast-pregame viewer gets
   // nothing without this log line (Yularen: build the all-modes log, record the reveal as by-design). Wire counts
   // + gold (Report{Inducements,Cards,CardsAndInducements}Bought). BB2025 uses cardsAndInducementsBought.
+  inducement: (r, g) => inducementUsedLine(r, g),
   cardsAndInducementsBought: (r, g) => boughtLine(r, g),
   inducementsBought: (r, g) => boughtLine(r, g),
   cardsBought: (r, g) => boughtLine(r, g),
