@@ -5826,6 +5826,8 @@ async function pauseSpectatorView(): Promise<void> {
   let transitionApothecaryResult = checkpoint.durableProjection.apothecaryResult
     ? structuredClone(checkpoint.durableProjection.apothecaryResult) : null;
   let transitionInjuryOutcomes = structuredClone(checkpoint.durableProjection.injuryOutcomes);
+  /** Beefee 10-26 (g1956976): the history position whose kick-off landing marker publish() already revealed. */
+  let transitionKickRevealKey: string | null = null;
   const transport = new LiveSpectateTransport(history, {
     publish: (position, snap) => {
       const previous = spectatorPublication.position.value?.checkpoint ?? spectatorDisplayedCheckpoint;
@@ -5905,6 +5907,31 @@ async function pauseSpectatorView(): Promise<void> {
         }
       }
       spectatorPublication.publish(position, snap);
+      // Beefee 10-26 (g1956976, "No ball marker shown on Quick Snap event"): a played kickoffScatter reveals its landing
+      // marker HERE, in the synchronous publication boundary, as applyFrame does on the live path. present() runs a
+      // microtask later - after the view's post-flush setGame has already seen the ball land with no pending scatter,
+      // started the renderer's plain fly-in, and that fly-in's timer cleared the marker while the ball stayed masked.
+      transitionKickRevealKey = null;
+      if (!snap && previous && previous.cursor.sequence !== position.cursor.sequence) {
+        const played = history.eventAfter(previous.cursor);
+        const scatterReport = played && played.cursor.sequence === position.cursor.sequence
+          ? ((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [])
+            .find((report) => String(report.reportId) === 'kickoffScatter') : undefined;
+        if (played && scatterReport) {
+          try {
+            const preview = projectKickScatterPreview(scatterReport);
+            const changes = (played.command.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray;
+            state.kickTargetReveal = { square: projectKickLandingSquare(scatterReport, changes), seq: (state.kickTargetReveal?.seq ?? 0) + 1 };
+            state.kickScatterPreview = {
+              commandNr: Number(played.command.commandNr ?? position.cursor.sequence),
+              seq: (state.kickScatterPreview?.seq ?? 0) + 1,
+              direction: preview.direction, directionRoll: preview.directionRoll, distanceRoll: preview.distanceRoll,
+              unreducedEndpoint: preview.unreducedEndpoint, candidates: null,
+            };
+            transitionKickRevealKey = spectatorCursorKey(played.cursor);
+          } catch { /* malformed report: present() keeps its own handling and diagnostic */ }
+        }
+      }
       // Owner 10-10: the injury token hold on the review path. A seek / snapshot draws the model as it is; a played
       // transition arms here, in the synchronous publication boundary (the model watcher has not flushed yet).
       // Astra P2: by the SAME rule as the live applier, from the reports of the event this publication plays (its
@@ -6051,7 +6078,9 @@ async function pauseSpectatorView(): Promise<void> {
       const scatterPreview = projectile?.kickScatterPreview === undefined
         ? kickoffWeather.scatterPreview : projectile.kickScatterPreview;
       const scatterReport = reports.find((report) => String(report.reportId) === 'kickoffScatter');
-      if (scatterPreview) {
+      // Beefee 10-26: publish() already revealed this occurrence (marker + preview) - never a second seq for it.
+      const kickRevealedAtPublish = !!scatterReport && transitionKickRevealKey === spectatorCursorKey(event.cursor);
+      if (kickRevealedAtPublish) { /* revealed in the publication boundary */ } else if (scatterPreview) {
         // S47: the deviation is public before the event, so the marker is the LANDING (assigned before the preview so the view's sync preview watcher already sees it); a re-published preview with no report keeps the earlier one.
         if (scatterReport) {
           state.kickTargetReveal = { square: projectKickLandingSquare(scatterReport, (event.command.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray), seq: (state.kickTargetReveal?.seq ?? 0) + 1 };
@@ -13390,8 +13419,21 @@ function noteOnTheBallReceive(cmd: Record<string, unknown>): Pick<QueuedFrame, '
   };
 }
 
+/** Beefee 10-26: inbound spectator commands the spectator route already logged (verboseTee / game-time record). */
+const spectatorInboundTeed = new WeakSet<object>();
+/** Beefee 10-26: the spectator route's single inbound tee - the snapshot and every match command go to the wire + dev
+ *  logs, a clock sample to the (gated) game-time record; the legacy drain (enqueueSync, the queued clock push) and the
+ *  transport branch then skip them, so each frame is logged exactly once on either path. */
+function teeSpectatorInbound(cmd: Record<string, unknown>): void {
+  const packetClass = classifySpectatorPacket(cmd);
+  if (packetClass === 'snapshot' || packetClass === 'match') verboseTee('in', cmd);
+  else if (cmd.netCommandId === NetCommandId.SERVER_GAME_TIME) {
+    if (settings.wireLog && gameTimeLogGate(Date.now())) wireConnection('game-time', { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0) });
+  } else return;
+  spectatorInboundTeed.add(cmd);
+}
 function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
-  verboseTee('in', cmd); // owner 2026-07-07: tee inbound wire frames when the wire log is on
+  if (!spectatorInboundTeed.has(cmd)) verboseTee('in', cmd); // owner 2026-07-07: tee inbound wire frames when the wire log is on
   if (!game.value) return;
   // docs/on-the-ball-kickoff-pass-upstream-deep-dive.md: stamp ordered receive identity before pacing/catch-up.
   const onTheBall = noteOnTheBallReceive(cmd);
@@ -26273,7 +26315,7 @@ function handleServerPush(cmd: Record<string, unknown>) {
   }
   if (id === NetCommandId.SERVER_GAME_TIME) {
     // Mirror raw SERVER_GAME_TIME into presentation clock state; never derive timeout flags from it.
-    if (settings.wireLog && gameTimeLogGate(Date.now())) wireConnection('game-time', { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0) });
+    if (settings.wireLog && !spectatorInboundTeed.has(cmd) && gameTimeLogGate(Date.now())) wireConnection('game-time', { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0) });
     state.gameClock = { gameTime: Number(cmd.gameTime ?? 0), turnTime: Number(cmd.turnTime ?? 0), syncAt: Date.now() };
     return;
   }
@@ -28333,7 +28375,9 @@ export const gameStore = {
         // spectator snapshot - the join's AND a reconnect's replacement (the review-preserving branch below returns
         // before the switch, Astra) - is teed like the player's (store ~26974), so the log carries the state the backfill
         // continuity check compared against and the file rolls on this game id. Frames are teed by enqueueSync.
-        if (thisSession === session && cmd.netCommandId === NetCommandId.SERVER_GAME_STATE) verboseTee('in', cmd as unknown as Record<string, unknown>);
+        // Beefee 10-26 (g1956976): after Pause the transport branch below returns before enqueueSync / the clock push,
+        // so the wire + dev logs went silent for the rest of the connection. Every routed frame is teed HERE, once.
+        if (thisSession === session) teeSpectatorInbound(cmd as unknown as Record<string, unknown>);
         if (spectatorTransport) {
           const packetClass = classifySpectatorPacket(cmd as Record<string, unknown>);
           if (packetClass === 'snapshot' || packetClass === 'match' || packetClass === 'clock') {
