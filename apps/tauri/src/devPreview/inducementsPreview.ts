@@ -10,7 +10,9 @@
 import { createApp, h, reactive } from 'vue';
 import { applyTheme } from '../game/theme';
 import { installFontStackVariables } from '../game/fontStacks';
-import InducementsPhase, { type PanelView, type PickerCard, type SummaryCardView } from '../components/InducementsPhase.vue';
+import InducementsPhase, { type PanelView, type PickerCard, type Portrait, type SummaryCardView } from '../components/InducementsPhase.vue';
+import { configuredInducementSprite } from '../game/inducementPortrait';
+import { walkerPortraitFrame } from '../game/walkerPortrait';
 import {
   KIND_LABEL, bladeOf, estimateInducementBudget, ownedResources, phaseMoney, summaryCards,
   type Blade, type InducementPhase, type InducementRole, type PhaseOption,
@@ -89,6 +91,51 @@ const GLYPH: Record<string, string> = {
   weatherMage: '☁', wizard: '⚡', bloodweiserBabes: '🍺', josefBugman: '🍻',
 };
 
+/** Owner 10-26 star/mercenary portraits through the REAL resolver chain (configuredInducementSprite + walkerPortraitFrame):
+ *  stars by name (the 'stars' pseudo-race), mercenaries by the seat's roster race + position name. "Merc Catcher" has no
+ *  bundled Orc sheet on purpose: it shows the (d) iconset fallback with the mock pack, the glyph without. */
+const POSITIONS: Record<string, { positionId: string; positionName: string; urlIconSet: string }> = {
+  'star:M1': { positionId: 'M1', positionName: "Morg 'n' Thorg", urlIconSet: 'i/mock-m1.png' },
+  'star:M2': { positionId: 'M2', positionName: 'Karla Von Kill', urlIconSet: 'i/mock-m2.png' },
+  'star:M3': { positionId: 'M3', positionName: 'Zolcath the Zoat', urlIconSet: 'i/mock-m3.png' },
+  'star:M4': { positionId: 'M4', positionName: 'Akhorne the Squirrel', urlIconSet: 'i/mock-m4.png' },
+  'star:M5': { positionId: 'M5', positionName: 'Grak', urlIconSet: 'i/mock-m5.png' },
+  'star:M6': { positionId: 'M6', positionName: 'Glotl Stop', urlIconSet: 'i/mock-m6.png' },
+  'merc:P1': { positionId: 'P1', positionName: 'Lineman', urlIconSet: 'i/mock-p1.png' },
+  'merc:P2': { positionId: 'P2', positionName: 'Thrower', urlIconSet: 'i/mock-p2.png' },
+  'merc:P3': { positionId: 'P3', positionName: 'Catcher', urlIconSet: 'i/mock-p3.png' },
+  'merc:P4': { positionId: 'P4', positionName: 'Blitzer', urlIconSet: 'i/mock-p4.png' },
+};
+/** A SYNTHETIC stand-in for an installed pack's cached iconset (drawn here: grey blocks lettered "PK"). Never FUMBBL art. */
+let mockIconset: string | null = null;
+function mockPackIconset(): string {
+  if (mockIconset) return mockIconset;
+  const c = document.createElement('canvas');
+  c.width = 160; c.height = 40;
+  const ctx = c.getContext('2d')!;
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = '#8a8f98'; ctx.fillRect(i * 40 + 8, 6, 24, 30);
+    ctx.fillStyle = '#111'; ctx.font = 'bold 11px sans-serif'; ctx.fillText('PK', i * 40 + 12, 25);
+  }
+  return (mockIconset = c.toDataURL());
+}
+function playerPortrait(key: string, blade: Blade): Portrait {
+  const glyph = blade === 'stars' ? '★' : '⚔';
+  const pos = POSITIONS[key];
+  const teamId = `preview-${state.seat}`;
+  const race = TEAMS[state.seat].race;
+  const side = state.seat === 'overdog' ? 'home' : 'away';
+  return configuredInducementSprite(teamId, pos, glyph, () => undefined,
+    (url) => (state.fumbblPack && url ? mockPackIconset() : undefined),
+    {
+      bundledIsSelection: !state.slotPack,
+      resolve: (p) => walkerPortraitFrame({ teamId, positionId: String(p.positionId), positionName: String(p.positionName ?? ''), race, side }),
+    });
+}
+const portraitOf = (key: string, blade: Blade): Portrait => (blade === 'inducements'
+  ? { url: ICON_URL[key] ?? null, glyph: GLYPH[key] ?? '◆' }
+  : playerPortrait(key, blade));
+
 const STAT_KEYS = ['MA', 'ST', 'AG', 'PA', 'AV'] as const;
 const statChips = (key: string) =>
   (STATS[key] ?? []).map((v, i) => ({ k: STAT_KEYS[i] ?? '', v: i >= 2 ? `${v}+` : String(v) }));
@@ -115,6 +162,9 @@ const state = reactive({
   /** Pastries lane: the server game options carry the Pastries keys (default on), and the mocked use dialog. */
   pastries: true,
   useDialog: false,
+  /** Mock installed pack with cached iconsets (synthetic art), and that pack occupying the sprite slot. */
+  fumbblPack: false,
+  slotPack: false,
 });
 
 /** Mock TEAM models: the side panels' owned-resource tiles read these roster fields through the real projection
@@ -142,7 +192,7 @@ function pickerCards(): Record<Blade, PickerCard[]> {
       costLabel: option.cost > 0 ? `${option.cost / 1000}k` : '—',
       countLabel: blade === 'stars' ? (taken > 0 ? 'Hired' : '') // owner 10-15: no "1 available" line on star cards
         : `${taken} of ${option.max} ${blade === 'mercenaries' ? 'hired' : 'taken'}`,
-      portrait: { url: ICON_URL[option.key] ?? null, glyph: blade === 'inducements' ? (GLYPH[option.key] ?? '◆') : blade === 'stars' ? '★' : '⚔' },
+      portrait: portraitOf(option.key, blade),
       stats: statChips(option.key), skills: SKILLS[option.key] ?? [], special: SPECIAL[option.key] ?? null,
       option,
     });
@@ -154,7 +204,7 @@ function cardsOf(picks: Record<string, number>): SummaryCardView[] {
   return summaryCards(picks, currentOptions()).map((c) => ({
     key: c.key, name: c.name, blade: c.blade, kind: KIND_LABEL[c.blade], qty: c.qty,
     totalLabel: `${c.total / 1000}k`, showBadge: c.showBadge,
-    portrait: { url: ICON_URL[c.key] ?? null, glyph: c.blade === 'inducements' ? (GLYPH[c.key] ?? '◆') : c.blade === 'stars' ? '★' : '⚔' },
+    portrait: portraitOf(c.key, c.blade),
     skills: SKILLS[c.key] ?? [],
   }));
 }
@@ -279,6 +329,8 @@ button('server: pastries', () => state.pastries, () => {
   state.pastries = !state.pastries;
   for (const k of Object.keys(state.picks)) delete state.picks[k];
 });
+button('pack: iconsets (mock)', () => state.fumbblPack, () => { state.fumbblPack = !state.fumbblPack; });
+button('pack in sprite slot', () => state.slotPack, () => { state.slotPack = !state.slotPack; });
 button('use dialog (mock)', () => state.useDialog, () => { state.useDialog = !state.useDialog; });
 button('preset (tournament)', () => state.preset, () => { state.preset = !state.preset; });
 button('spectator', () => state.viewer === 'spectate', () => { state.viewer = state.viewer === 'play' ? 'spectate' : 'play'; });

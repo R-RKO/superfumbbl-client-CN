@@ -121,8 +121,9 @@ import {
   underdogCashRows, type BudgetEstimate, type BudgetEstimateInput, type PhaseMoney } from '../game/inducementsPhase';
 import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
 import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
-import { activeInducementSprite } from '../game/inducementPortrait';
-import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
+import { activeInducementSprite, localPackIconsetResolver, reprojectHeldPortraits } from '../game/inducementPortrait';
+import { walkerPortraitFrame } from '../game/walkerPortrait';
+import { resolveRuntimeFumbblAsset, selectedLocalFumbblAssetUrl } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
 import { gameDiceCoverage, teamDiceTally, teamLogo } from '../game/gameStatRows';
 import PostGamePanel from '../components/PostGamePanel.vue';
@@ -6275,11 +6276,26 @@ function inducePortrait(key: string, team: InducementCardTeam | null = induceMyT
   void inducementAssetManifestReady.value;
   void assetMods.revision;
   const teamId = String((team as { teamId?: unknown } | null)?.teamId ?? '');
+  // Owner 10-26 "Default to our star sheets, packs still win": the bundled Super FUMBBL walk sheet's idle frame sits
+  // above an installed pack's FUMBBL iconset, exactly as on the pitch (race = the hiring roster's, so a star resolves
+  // through the 'stars' pseudo-race; side = the hiring team's kit side). Loaded on demand, reactive when it lands.
+  const race = String((team as { race?: unknown } | null)?.race ?? '');
+  const side: 'home' | 'away' = team && team === gameStore.game.value?.teamAway ? 'away' : 'home';
+  // Sol r1 (asset-provenance): the iconset tier resolves only to an installed pack's LOCAL url (never a CDN url).
+  void assetMods.logoRevision;
+  const base = (team as { roster?: { baseIconPath?: string } } | null)?.roster?.baseIconPath;
   return activeInducementSprite(
     teamId,
     pos,
     glyph,
-    cachedBundledFumbblAsset,
+    localPackIconsetResolver(base, selectedLocalFumbblAssetUrl, cachedBundledFumbblAsset),
+    {
+      bundledIsSelection: !spritePackSelected.value,
+      resolve: (position) => walkerPortraitFrame({
+        teamId, positionId: String(position.positionId ?? ''), positionName: String(position.positionName ?? ''), race, side,
+      }),
+    },
+    side,
   );
 }
 
@@ -6512,15 +6528,23 @@ const presetAwayPanel = computed(() => presetPanel('away', 'underdog'));
 const induceDisplayPhase = computed<InducementPhase>(() => (
   inducementsReadOnlyReview.value || induceRevealHoldSnapshot.value ? 'done' : inducePhase.value
 ));
+/** Sol r1: a held review snapshot froze its card portraits at capture time, so a walk-sheet frame that landed after the
+ *  reveal (or a pack hot-swap) never reached it. The snapshot keeps the server identity (card keys); portraits are
+ *  re-projected live from them, against the team CAPTURED with the panel (its protocol seat): the live role mapping
+ *  is torn down with the buy/reveal state once the coin sequence starts (Sol r2). */
+function liveHeldPortraits(panel: PanelView | undefined): PanelView | undefined {
+  const g = gameStore.game.value;
+  return reprojectHeldPortraits(panel, g ? { home: g.teamHome, away: g.teamAway } : null, inducePortrait);
+}
 const induceDisplayOverdogPanel = computed(() => (
   inducementsReadOnlyReview.value
     ? presetHomePanel.value
-    : induceRevealHoldSnapshot.value?.overdog ?? induceOverdogPanel.value
+    : liveHeldPortraits(induceRevealHoldSnapshot.value?.overdog) ?? induceOverdogPanel.value
 ));
 const induceDisplayUnderdogPanel = computed(() => (
   inducementsReadOnlyReview.value
     ? presetAwayPanel.value
-    : induceRevealHoldSnapshot.value?.underdog ?? induceUnderdogPanel.value
+    : liveHeldPortraits(induceRevealHoldSnapshot.value?.underdog) ?? induceUnderdogPanel.value
 ));
 function acknowledgeInducementsReview(): void {
   if (replayInducementsOpen.value) { replayInducementsAcknowledgedCursor.value = gameStore.replay.status.cursor; return; }

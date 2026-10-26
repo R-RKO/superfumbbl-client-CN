@@ -17,6 +17,7 @@ import { reactivePlayerSpriteUrl } from './assetModUi';
 const PORTRAIT_SCALE = 2;
 const portraits = reactive(new Map<string, string | null>()); // key -> data URL (null while loading / failed)
 const inflight = new Set<string>();
+const failed = reactive(new Set<string>()); // keys whose idle frame could not be extracted (lower tiers may answer)
 
 interface SheetFrame { url: string; frame: number; rows: readonly string[]; column: number }
 
@@ -67,7 +68,7 @@ function renderIdleFrame(key: string, sheet: SheetFrame): void {
       canvas.width = size * PORTRAIT_SCALE;
       canvas.height = size * PORTRAIT_SCALE;
       const ctx = canvas.getContext('2d');
-      if (!ctx) { portraits.set(key, null); return; }
+      if (!ctx) { portraits.set(key, null); failed.add(key); return; }
       ctx.imageSmoothingEnabled = false;
       // Owner 09-09: crop to the FIGURE — the 64/72 px frame carries transparent padding around a ~53 px body, which
       // read as a small sprite floating in the card's box. Scan the frame's alpha for its opaque bounds (1 px
@@ -95,13 +96,16 @@ function renderIdleFrame(key: string, sheet: SheetFrame): void {
     } catch (error) {
       console.warn('walker portrait: frame extract failed', error);
       portraits.set(key, null);
+      failed.add(key);
     } finally {
       inflight.delete(key);
     }
   };
-  img.onerror = () => { portraits.set(key, null); inflight.delete(key); };
+  img.onerror = () => { portraits.set(key, null); failed.add(key); inflight.delete(key); };
   // owner 09-23/24: a pack sheet arrives as a blob: URL (bytes over IPC); bundled sheets keep the synchronous path.
-  if (artPackHas(sheet.url)) void artBlobUrl(sheet.url).then((src) => { img.src = src; });
+  if (artPackHas(sheet.url)) {
+    void artBlobUrl(sheet.url).then((src) => { img.src = src; }, () => { portraits.set(key, null); failed.add(key); inflight.delete(key); });
+  }
   else img.src = sheet.url;
 }
 
@@ -123,19 +127,42 @@ export function walkerPortraitSource(input: {
 export function walkerPortraitUrl(input: {
   teamId: string; positionId: string; positionName: string; race: string; side?: 'home' | 'away';
 }): string | null {
+  return walkerPortraitFrame(input)?.url ?? null;
+}
+
+/**
+ * Owner 10-26 (inducement star/mercenary cards): the same chain as walkerPortraitUrl, but it says WHICH tier answered
+ * and tells "no sheet for this position" (null) apart from "sheet exists, idle frame still rendering" (url null), so a
+ * caller can put a lower tier (an installed pack's iconset) under our art without flashing it while the frame loads.
+ * A sheet whose idle frame failed to load reports null, so the lower tiers still get their turn. Loads on demand:
+ * any position (e.g. a star neither roster carries) resolves, no renderer preload required.
+ */
+export function walkerPortraitFrame(input: {
+  teamId: string; positionId: string; positionName: string; race: string; side?: 'home' | 'away';
+}): { kind: 'sprite' | 'pack' | 'bundled'; url: string | null } | null {
   void assetMods.revision;
   const side = input.side ?? 'home';
   const sprite = reactivePlayerSpriteUrl(input.teamId, input.positionId, side, input.race);
-  if (sprite) return sprite;
+  if (sprite) return { kind: 'sprite', url: sprite };
   const pack = packWalkSheet(input.teamId, input.positionId, side, input.race);
-  const sheet: SheetFrame | undefined = pack
-    ? { url: pack.url, frame: pack.frame, rows: pack.rows, column: pack.idleColumn ?? 0 }
-    : bundledSheet(input.race, input.positionName, side);
-  if (!sheet) return null;
+  if (pack) {
+    const frame = idleFrame({ url: pack.url, frame: pack.frame, rows: pack.rows, column: pack.idleColumn ?? 0 });
+    if (frame !== undefined) return { kind: 'pack', url: frame };
+    // Sol r1: a pack sheet that failed to load falls through to our bundled sheet rather than a permanent glyph.
+  }
+  const bundled = bundledSheet(input.race, input.positionName, side);
+  if (!bundled) return null;
+  const frame = idleFrame(bundled);
+  return frame === undefined ? null : { kind: 'bundled', url: frame };
+}
+
+/** Cached idle frame for a sheet, starting its render on first ask: data URL, null while rendering, undefined = failed. */
+function idleFrame(sheet: SheetFrame): string | null | undefined {
   const key = idleFrameKey(sheet);
   if (!portraits.has(key)) { portraits.set(key, null); renderIdleFrame(key, sheet); }
+  if (failed.has(key)) return undefined;
   return portraits.get(key) ?? null;
 }
 
 /** Test seam: drop every cached frame. */
-export function resetWalkerPortraits(): void { portraits.clear(); inflight.clear(); }
+export function resetWalkerPortraits(): void { portraits.clear(); inflight.clear(); failed.clear(); }

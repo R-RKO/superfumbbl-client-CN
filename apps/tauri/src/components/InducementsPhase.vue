@@ -30,7 +30,7 @@ import { t } from '../i18n';
 
 /** A star/merc sprite resolved by the mount. Iconsets use the frame-1 sheet crop;
  *  custom assets are already-normalized standalone 64px player sprites. */
-export interface Portrait { url: string | null; glyph: string; source?: 'iconset' | 'custom' }
+export interface Portrait { url: string | null; glyph: string; source?: 'iconset' | 'custom' | 'walker' }
 
 export interface PickerCard {
   key: string;
@@ -851,6 +851,9 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
 /* Uploaded player sprites are normalized to one 64px frame, not a four-frame
    iconset sheet. Give them the same close-up treatment without sheet cropping. */
 .ind-portrait[data-source='custom'] { background-size: 125% auto; background-position: center bottom; }
+/* Owner 10-26: a walk sheet's idle frame arrives already cropped to the figure (square, feet on the floor, 2x), so it
+   fills the tile whole: no sheet crop, no extra zoom. */
+.ind-portrait[data-source='walker'] { background-size: contain; background-position: center bottom; }
 .ind-stats { display: flex; gap: 5px; }
 .ind-stat { flex: 1; background: #242424; border: 1px solid #333; border-radius: 3px; padding: 3px 0; text-align: center; }
 .ind-stat-v { font-size: max(var(--ui-min-text-size, 12px), 11px); color: #fff; }
