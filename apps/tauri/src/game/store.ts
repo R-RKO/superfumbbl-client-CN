@@ -6,6 +6,7 @@ import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWe
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
 import { apothecaryChoiceOutcomeClaim, apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, regenerationFixUpClaims, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
+import { followUpSignalWithoutDialog, pushStoppedByPinnedPlayer, standFirmStayReported } from './followupProjection';
 import { injuryPresentation, armourPresentation, skipsArmourDiceOnCasualty, type InjuryEvent } from './injuryPresentation';
 import { rerollPresentation, isFailedLonerGateReport, lonerGatedUse } from './rerollPresentation';
 export { reportedAutomaticRerollSkill } from './rerollPresentation';
@@ -3298,11 +3299,36 @@ const pendingPushes = new Map<string, { from: [number, number]; age: number }>()
 const PENDING_PUSH_MAX_AGE = 6;
 /** Owner 07-04 (followupChoice 1.1): pushed player's PRE-push square — the followupChoice dialog carries NO fields, so the vacated square comes from here. Per turn. */
 const lastPushFrom = new Map<string, [number, number]>();
-/** Live follow-up question — armed with the followupChoice dialog, resolved when it clears (attacker at vacated square = followed); `resolvingAge` tolerates the move landing a frame late. */
+/** Live follow-up question — armed with the followupChoice dialog, resolved on the first frame without it (attacker at
+ *  vacated square = followed, else stayed; owner 10-25: the server sends no other signal). */
 let pendingFollowup: {
-  attackerId: string; vacated: [number, number]; attackerFrom: [number, number];
-  mine: boolean; resolvingAge: number;
+  /** Owner 10-25 (Sol r5 P2-3): only what the server showed - `vacated` from an observed push, `attackerFrom` from the
+   *  applied frame that OPENED the question (a snapshot taken mid-question may already hold the follow move). Neither
+   *  known (a reconnect / join into the question): only a move the client SEES while the question is open (from
+   *  `seenAt`, his square when the question was armed) announces a follow; a stay is then not announced (the snapshot
+   *  may already hold the follow). Never a guessed square. */
+  attackerId: string; vacated: [number, number] | null; attackerFrom: [number, number] | null; seenAt: [number, number] | null;
+  mine: boolean;
 } | null = null;
+/** Owner 10-25 (Sol r5 P2-2): ClassicView (live play and live spectate) has no follow/stay surface - the owner's law
+ *  keeps it unedited - so nothing there may wait on (or defer a slide behind) an indicator that never renders. A Classic
+ *  FILE replay mounts SpectateView, which shows it. */
+function followCalloutShown(): boolean {
+  return settings.uiMode !== 'classic' || replay.active;
+}
+/** Owner 10-25 ("It should occur after every block that results in a push or better"): a push-or-better block whose
+ *  follow/stay has no followupChoice dialog (yet). Armed on the frame the BLOCK DEFENDER's push lands; ends when the
+ *  dialog arrives (the dialog path owns it), on a stay the server signalled without one (a used Fend's skillUse
+ *  report; Multiple Block / Vicious Vines / a pinned attacker, which upstream StepFollowup turns into a stay with no
+ *  dialog), on a forced follow (Frenzy: the attacker steps in with no dialog - owner 10-25: not announced), or when the
+ *  activation / block / team turn moves on. Waits on signals only - no frame count, no timer. */
+let pushFollowWatch: { attackerId: string; defenderId: string; vacated: [number, number] } | null = null;
+/** Owner 10-25: the attacker whose follow resolved on its coordinate frame while the followupChoice dialog was still up
+ *  (the dialog lingers a frame or two): the question is not re-armed until the dialog clears. */
+let followupResolvedWhileOpen: string | null = null;
+/** Owner 10-25 (Sol r2 P1): the block (attacker + defender) whose no-dialog stay was shown - one stay per block, whatever
+ *  else that block reports later; cleared by a fresh block roll or a new acting player. */
+let noDialogStayKey: { attackerId: string; defenderId: string } | null = null;
 
 let fanFactorTimer: ReturnType<typeof setTimeout> | null = null;
 function showFanFactor(home: FanFactorRoll, away: FanFactorRoll, g: GameJson) {
@@ -4813,27 +4839,9 @@ let armourAfterFollow: (() => void) | null = null;
 /** Owner 10-13: the history position (spectatorCursorKey) of the event whose follow/stay indicator the review already
  *  showed ahead of an injury event's armour dice; that event skips its own indicator. */
 let reviewFollowPresentedAt: string | null = null;
-/** Owner 10-13 (spectator / live armour parity): the outcome of a pending passive follow/stay as the frames already
- *  received but not yet applied (the spectator drain queue) will show it, by the live rule (the attacker reaches the
- *  vacated square = followed; a third frame past the question without that = stayed). null = not decidable from the
- *  queue (frames not received yet, or a fresh question), or not a spectator drain at all. Presentation only. */
-function followupFromQueuedFrames(pending: { attackerId: string; vacated: [number, number]; resolvingAge: number }): boolean | null {
-  if (play.active || replay.active || playback.queue.length === 0) return null;
-  let age = pending.resolvingAge;
-  for (const frame of playback.queue) {
-    if (frame.serverPush) continue;
-    const changes = ((frame.cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray) ?? [];
-    for (const change of changes) {
-      if (change.modelChangeId === 'gameSetDialogParameter' && (change.modelChangeValue as { dialogId?: unknown } | null)?.dialogId === 'followupChoice') return null;
-      if (change.modelChangeId === 'fieldModelSetPlayerCoordinate' && String(change.modelChangeKey ?? '') === pending.attackerId) {
-        const square = change.modelChangeValue as number[] | null;
-        if (Array.isArray(square) && square[0] === pending.vacated[0] && square[1] === pending.vacated[1]) return true;
-      }
-    }
-    if (++age > 2) return false;
-  }
-  return null;
-}
+/** Owner 10-25: the 10-13 queue look-ahead (followupFromQueuedFrames + its enqueue wake) is gone - it read the old
+ *  three-frame rule ahead of the drain. A follow/stay now resolves on the frame that clears its dialog, which every seat
+ *  (the spectator drain included) applies BEFORE the knockdown's armour frame, so there is nothing left to look ahead for. */
 /** Owner 10-20 (the follow/stay indicator immediately precedes the armour dice, FOLLOWUP_ARMOUR_GAP_MS): a spectator's
  *  drain holds the frames behind an indicator for its read (followStay.minReadMs); when the knockdown's armour roll is
  *  already waiting in the next few queued frames, that hold is only the gap, so the dice follow the indicator by the
@@ -4910,8 +4918,26 @@ let passiveFollowPillAfter = 0;
 /** Owner 10-14 (Astra): the indicator behind passiveFollowPillAfter has LANDED. Its gap is then honoured in full: the
  *  pill's polling cap is a fail-open for a missing indicator, never a cut of a present one's read. */
 let passiveFollowIndicatorLanded = false;
-/** Owner 10-13 (Astra): re-checks a pending passive follow/stay against the drain queue when a frame arrives. */
-let pendingFollowupWake: (() => void) | null = null;
+/** Owner 10-25 (Sol r1 P1-1): the newest indicator seq, and when the latest scheduled indicator lands (a deadline that
+ *  expires by itself - a dropped indicator cannot strand the armour dice past it). */
+let followIndicatorSeq = 0;
+let lastFollowIndicatorLandsAt = 0;
+/** Owner 10-25 (Sol r1 P2-4): the full follow/stay read a spectator's drain took at an indicator's landing because no
+ *  armour frame was queued yet. The knockdown's armour frame arriving during it shortens the hold back to the armour
+ *  gap past the landing (never below a hold that was already there): the indicator still leads the dice by the gap. */
+let followReadExtension: { landedAt: number; priorHoldUntil: number; until: number } | null = null;
+function shortenFollowReadForArmour(frame: QueuedFrame): void {
+  const ext = followReadExtension;
+  if (!ext) return;
+  if (Date.now() >= ext.until || playback.holdUntil !== ext.until || playback.catchingUp) { followReadExtension = null; return; }
+  if (!modernInjuryTiming() || !frameCarriesArmour(frame)) return;
+  followReadExtension = null;
+  const to = Math.max(ext.priorHoldUntil, ext.landedAt + presentationMs(followupArmourGapMs()));
+  if (to >= playback.holdUntil) return;
+  playback.holdUntil = to;
+  if (playback.timer) { cancelGameTimeout(playback.timer); playback.timer = null; }
+  pumpPlayback();
+}
 
 type RockImpactGate = {
   seq: number;
@@ -5976,7 +6002,7 @@ async function pauseSpectatorView(): Promise<void> {
       // Install the movement hold in this synchronous publication boundary, before
       // Vue flushes the model watcher. Clock refreshes must not repeat an outcome.
       const follow = position.durableProjection.followup.outcome;
-      if (!snap && follow?.followed && previous?.cursor.sequence !== position.cursor.sequence) {
+      if (!snap && follow?.followed && followCalloutShown() && previous?.cursor.sequence !== position.cursor.sequence) { // Sol r5 P2-2: nothing to wait behind in Classic live
         state.deferMove = { playerId: follow.attackerId, action: 'defer', seq: (state.deferMove?.seq ?? 0) + 1 };
       }
       transitionCoordinates = coordinates;
@@ -6412,19 +6438,42 @@ async function pauseSpectatorView(): Promise<void> {
         // its follow MOVE was deferred at publication: release it now (the indicator has long read)
         if (follow.followed) state.deferMove = { playerId: follow.attackerId, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 };
       }
-      if (follow && !followShownAhead) {
+      // Owner 10-25: a follow/stay now resolves on the event that clears its dialog - the event BEFORE the knockdown's
+      // armour event, which at the live edge may not even be received yet. The indicator shows here; its read and the
+      // follow slide's release run on timers, and the review moves on after the full followStay read - or, as soon as
+      // this block's armour roll is in the history a few events on, after the live armour gap only (owner 10-20: the
+      // indicator immediately precedes the dice), as the live seat's emitPassiveFollow does.
+      if (follow && !followShownAhead && followCalloutShown()) {
+        const armourFollows = () => {
+          if (!history) return false;
+          let cursor = event.cursor;
+          for (let step = 0; step < 6; step++) {
+            const next = history.eventAfter(cursor);
+            if (!next) return false;
+            const nextReports = (next.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
+            if (nextReports.some((report) => String(report.reportId) === 'injury' && Array.isArray(report.armorRoll) && report.armorRoll.length === 2)) return true;
+            if (nextReports.some((report) => String(report.reportId) === 'blockRoll')) return false; // the next block's
+            cursor = next.cursor;
+          }
+          return false;
+        };
         const releaseDelay = follow.followed ? presentationMs(FOLLOWUP_MOVE_RELEASE_MS) : 0;
-        const followed = await presentStages([
-          { delayBefore: PIPELINE_TIMINGS.followStay.afterPushMs, present: () => {
-            state.followupIndicator = { playerName: playerName(position.model, follow.attackerId), square: follow.square,
-              followed: follow.followed, seq: (state.followupIndicator?.seq ?? 0) + 1 };
-          } },
-          { delayBefore: releaseDelay, present: () => {
-            if (follow.followed) state.deferMove = { playerId: follow.attackerId, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 };
-          } },
-          { delayBefore: Math.max(0, PIPELINE_TIMINGS.followStay.holdMs - releaseDelay), present: () => { state.followupIndicator = null; } },
-        ], signal);
-        if (!followed) return;
+        if (!await presentStages([{ delayBefore: PIPELINE_TIMINGS.followStay.afterPushMs, present: () => {
+          state.followupIndicator = { playerName: playerName(position.model, follow.attackerId), square: follow.square,
+            followed: follow.followed, seq: (state.followupIndicator?.seq ?? 0) + 1 };
+        } }], signal)) return;
+        const shownSeq = state.followupIndicator?.seq;
+        const landed = Date.now();
+        scheduleGameTimeout(() => { if (state.followupIndicator?.seq === shownSeq) state.followupIndicator = null; }, PIPELINE_TIMINGS.followStay.holdMs);
+        if (follow.followed) {
+          scheduleGameTimeout(() => {
+            if (!signal.aborted) state.deferMove = { playerId: follow.attackerId, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 };
+          }, releaseDelay);
+        }
+        const gap = presentationMs(followupArmourGapMs());
+        while (Date.now() - landed < PIPELINE_TIMINGS.followStay.holdMs && !(Date.now() - landed >= gap && armourFollows())) {
+          if (!await presentStages([{ delayBefore: 25, present: () => {} }], signal)) return;
+        }
       }
       const fallCoordinates = new Map<string, [number, number] | null>([...priorCoordinates].map(([id, coordinate]) =>
         [id, coordinate ? [coordinate[0]!, coordinate[1]!] : null]));
@@ -6453,7 +6502,7 @@ async function pauseSpectatorView(): Promise<void> {
       // (the live edge): it waits for the event, at most the live backstop (FOLLOWUP_ARMOUR_BACKSTOP_MS x the factor).
       const pendingFollow = follow ? null : position.durableProjection.followup.pending;
       const armourInEvent = reports.some((report) => String(report.reportId) === 'injury' && Array.isArray(report.armorRoll) && report.armorRoll.length === 2);
-      if (pendingFollow && armourInEvent && history) {
+      if (pendingFollow && armourInEvent && history && followCalloutShown()) { // Sol r5 P2-2: never wait on an unseen callout
         const resolving = () => {
           let cursor = event.cursor;
           for (let step = 0; step < 6; step++) {
@@ -10158,7 +10207,10 @@ function applyFrameContents(frame: QueuedFrame) {
         showArmour();
       });
       if (!enqueueBehindFireball(`fireballArmour:${String((cmd as { commandNr?: unknown }).commandNr)}`, fireballArmour)) fireballArmour();
-    } else if ((pendingFollowup && (!pendingFollowup.mine || modernInjuryTiming())) || (modernInjuryTiming() && !passiveFollowIndicatorLanded && Date.now() < passiveFollowPillAfter)) {
+    } else if ((pendingFollowup && (!pendingFollowup.mine || modernInjuryTiming())) || (!passiveFollowIndicatorLanded && Date.now() < passiveFollowPillAfter)) {
+      // Owner 10-25: the resolved-but-not-landed clause covers every seat that emitted an indicator (passiveFollowPillAfter
+      // is set only by emitPassiveFollow): a follow/stay now resolves on the dialog-clear frame, ahead of the knockdown's
+      // armour frame. Classic live emits none (no surface, followCalloutShown), so its dice are never held for one.
       // Owner 10-20: also when the follow/stay is already RESOLVED but its indicator is still scheduled (emitPassiveFollow
       // waits out the push beat): the indicator leads, the dice follow FOLLOWUP_ARMOUR_GAP_MS after it - never the
       // other way round (its landing releases them; the backstop below still fails open).
@@ -10176,7 +10228,7 @@ function applyFrameContents(frame: QueuedFrame) {
       if (broken) armourGateUntil = Math.max(armourGateUntil, Date.now() + estimate + armourReadMs());
       holdPlayback(estimate + (broken ? armourReadMs() : 0));
       scheduleGameTimeout(() => releaseArmourAfterFollow(0), presentationMs(FOLLOWUP_ARMOUR_BACKSTOP_MS));
-    } else if (modernInjuryTiming() && passiveFollowIndicatorLanded && Date.now() < passiveFollowPillAfter) {
+    } else if (passiveFollowIndicatorLanded && Date.now() < passiveFollowPillAfter) { // owner 10-25 (Sol r1 P2-3): every seat that emitted one (a Classic FILE replay included)
       // Astra r2 P1-2: the indicator has landed but its 250 ms beat is still running - the dice (and the pill) wait out
       // the REST of it: indicator + beat, on every seat.
       const rest = passiveFollowPillAfter - Date.now();
@@ -10279,9 +10331,13 @@ function applyFrameContents(frame: QueuedFrame) {
     visibleBlitzProjection = reduceBlitzProjection(visibleBlitzProjection, game.value, { attackerId: visibleBlockContext.attackerId, defenderId: visibleBlockContext.defenderId });
     applyBlitzTokens();
   }
+  // Owner 10-25 (follow/stay signal): the squares vacated by a push THIS frame - a push-or-better block result arms the
+  // follow/stay watch below even when the server never offers the followupChoice dialog (Fend, Multiple Block, pinned).
+  let pushVacatedThisFrame: ReadonlyMap<string, [number, number]> = new Map();
   // B9-14/G4: push arrows — signalled by `pushback` OR a PUSH blockChoice; the MOVE may land later, so register pre-push square and fire on the actual move.
   {
     const projectedPushes = pushPresentation(pendingPushes, reports, game.value, preCoords, PENDING_PUSH_MAX_AGE);
+    pushVacatedThisFrame = projectedPushes.lastFrom;
     pendingPushes.clear();
     for (const [pid, pending] of projectedPushes.pending) pendingPushes.set(pid, pending);
     for (const [pid, from] of projectedPushes.lastFrom) lastPushFrom.set(pid, from);
@@ -10398,6 +10454,8 @@ function applyFrameContents(frame: QueuedFrame) {
       retireKickoffForTerminalState(); // S47: a concede inside a kick-off mini-turn never reaches a flight
     }
   }
+  // Owner 10-25: a team-turn boundary in this frame (the follow/stay section decides what this frame signalled first).
+  let followTurnBoundary = false;
   const conceded = !!concedeShownFor;
   const over = String(game.value.turnMode ?? '') === 'endGame' || !!(game.value as { finished?: unknown }).finished || conceded;
   const priorBoardTurnKey = visibleBoardProjection.turnKey;
@@ -10431,7 +10489,10 @@ function applyFrameContents(frame: QueuedFrame) {
       // Owner 07-04: flush unresolved pushes per turn — a dialog/turnover otherwise strands a pending entry + hanging arrow.
       pendingPushes.clear();
       lastPushFrom.clear();
-      pendingFollowup = null;
+      // Owner 10-25 ("the End Turn after a blitz stay must still show the toast"): a follow/stay question whose dialog
+      // closed in THIS frame is the server's answer - the follow/stay section below decides it before it is dropped.
+      followTurnBoundary = true;
+      if ((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId === 'followupChoice') pendingFollowup = null;
       if (state.followupChoice) state.followupChoice = null;
       if (state.pushArrows) state.pushArrows = null;
     }
@@ -11602,15 +11663,34 @@ function applyFrameContents(frame: QueuedFrame) {
       state.deferMove = { playerId: pid, action: 'defer', seq: (state.deferMove?.seq ?? 0) + 1 };
     };
     const emitPassiveFollow = (name: string, square: [number, number], followed: boolean, deferredMover: string | null) => {
-      const ind = {
-        playerName: name, square, followed,
-        seq: (state.followupIndicator?.seq ?? 0) + 1,
-      };
+      if (!followCalloutShown()) return; // Sol r5 P2-2: no surface (Classic live) - no state, no holds, no withheld dice
+      // Owner 10-25 (Sol r1 P1-1): several indicators can be in flight at once (Multiple Block: one stay per pushed
+      // victim). Each gets its own seq, and the withheld armour dice wait for the LAST of them to land.
+      followIndicatorSeq = Math.max(followIndicatorSeq, state.followupIndicator?.seq ?? 0) + 1;
+      const ind = { playerName: name, square, followed, seq: followIndicatorSeq };
+      const landsAt = Date.now() + blockPipeline.resolveDelay() + PIPELINE_TIMINGS.followStay.afterPushMs;
+      lastFollowIndicatorLandsAt = Math.max(lastFollowIndicatorLandsAt, landsAt);
       passiveFollowPillAfter = Date.now() + presentationMs(FOLLOWUP_ARMOUR_BACKSTOP_MS); passiveFollowIndicatorLanded = false; // owner 10-14
       // Owner 2026-07-06 (pacing 1): the indicator lands +500 behind the push arrow; keep subsequent frames held until it's had airtime (delay + 1400). Phase 2: the driver owns this beat's schedule + the single holdPlayback.
       blockPipeline.scheduleResolved(() => {
         state.followupIndicator = ind;
+        // a later indicator still to land (Sol r1 P1-1): the dice, the pill deadline and the drain wait for it instead
+        const lastToLand = Date.now() >= lastFollowIndicatorLandsAt - 1;
+        if (!lastToLand) {
+          if (deferredMover) scheduleGameTimeout(() => { state.deferMove = { playerId: deferredMover, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 }; }, presentationMs(FOLLOWUP_MOVE_RELEASE_MS));
+          scheduleGameTimeout(() => { if (state.followupIndicator?.seq === ind.seq) state.followupIndicator = null; }, PIPELINE_TIMINGS.followStay.holdMs);
+          return;
+        }
         passiveFollowPillAfter = Date.now() + presentationMs(followupArmourGapMs()); passiveFollowIndicatorLanded = true; // owner 10-14: as the dice would
+        // Owner 10-25: the drain was held only to the armour gap past this landing (below); a follow/stay now resolves on
+        // the dialog-clear frame, usually before its knockdown's armour frame has even been received. Decide the read NOW:
+        // an armour frame already queued follows by the gap (owner 10-20); otherwise the full read, as before.
+        if (!queuedFramesCarryArmour()) {
+          const priorHoldUntil = playback.holdUntil;
+          holdPlayback(PIPELINE_TIMINGS.followStay.minReadMs);
+          // Sol r1 P2-4: an armour frame received during this read shortens it back to the gap (enqueueSync)
+          followReadExtension = play.active || replay.active ? null : { landedAt: Date.now(), priorHoldUntil, until: playback.holdUntil };
+        }
         // Astra r4 P2-1: the spectator drain's shortcut belongs to THIS block's knockdown frame (same activation), once
         // Astra r5 P3: only while THIS block's knockdown frame is still to apply (a frame that already applied cannot use it)
         spectatorArmourShortcut = followBlockKnockdownApplied ? null : { deadline: passiveFollowPillAfter, occurrence: followBlockOccurrence };
@@ -11625,27 +11705,112 @@ function applyFrameContents(frame: QueuedFrame) {
         scheduleGameTimeout(() => {
           if (state.followupIndicator?.seq === ind.seq) state.followupIndicator = null;
         }, PIPELINE_TIMINGS.followStay.holdMs);
-      }, PIPELINE_TIMINGS.followStay.afterPushMs, queuedFramesCarryArmour() ? presentationMs(followupArmourGapMs()) : PIPELINE_TIMINGS.followStay.minReadMs);
+      }, PIPELINE_TIMINGS.followStay.afterPushMs, presentationMs(followupArmourGapMs()));
+    };
+    // Owner 10-25: the push-or-better watch (pushFollowWatch) - every signal is server-sent (followUpSignalWithoutDialog).
+    {
+      const defenderNow = String((game.value as { defenderId?: string | null }).defenderId ?? '');
+      const vacatedNow = defenderNow ? pushVacatedThisFrame.get(defenderNow) ?? null : null;
+      const freshBlock = reports.some((report) => String(report.reportId) === 'blockRoll');
+      if (pushFollowWatch && (pushFollowWatch.attackerId !== attackerId || freshBlock)) pushFollowWatch = null;
+      const armedHere = !!(attackerId && vacatedNow && dp?.dialogId !== 'followupChoice');
+      if (armedHere) {
+        pushFollowWatch = { attackerId, defenderId: defenderNow, vacated: [vacatedNow![0], vacatedNow![1]] };
+        followBlockOccurrence++; followBlockKnockdownApplied = false; spectatorArmourShortcut = null; // Astra r5 P3: a new block
+      }
+      if (freshBlock || noDialogStayKey?.attackerId !== attackerId) noDialogStayKey = null;
+      // Sol r1 P2-5 / r2: a used Stand Firm, or a rooted / chomped defender, stops the push outright (no vacated square,
+      // no dialog) - the block ends in a stay
+      if (attackerId && defenderNow && dp?.dialogId !== 'followupChoice'
+          && (standFirmStayReported(reports) || pushStoppedByPinnedPlayer(game.value, reports))) {
+        pushFollowWatch = null;
+        followBlockOccurrence++; followBlockKnockdownApplied = false; spectatorArmourShortcut = null; // Sol r2 P2: a new block
+        const stayedOn = coordOf(attackerId);
+        if (stayedOn && noDialogStayKey?.defenderId !== defenderNow) {
+          noDialogStayKey = { attackerId, defenderId: defenderNow };
+          emitPassiveFollow(playerName(game.value, attackerId), stayedOn, false, null);
+        }
+      }
+      const watch = pushFollowWatch;
+      if (watch && dp?.dialogId !== 'followupChoice') {
+        const signal = followUpSignalWithoutDialog(game.value, watch, reports, armedHere);
+        if (signal !== null) {
+          pushFollowWatch = null;
+          // a stay over the attacker's own square, on every seat (nobody on the attacking side chose it); a forced follow
+          // (signal 'forced') is not announced (owner 10-25: "We don't need to announce Frenzy forced follows").
+          const stayedOn = signal === 'stay' ? coordOf(watch.attackerId) : null;
+          if (stayedOn && noDialogStayKey?.defenderId !== watch.defenderId) {
+            noDialogStayKey = { attackerId: watch.attackerId, defenderId: watch.defenderId };
+            emitPassiveFollow(playerName(game.value, watch.attackerId), stayedOn, false, null);
+          }
+        }
+      }
+    }
+    // Owner 10-25: resolve a followupChoice question from what the server sent. followed = the attacker stands on the
+    // vacated square (his coordinate frame lands while the dialog is still up - resolved on that frame, so a follow's
+    // slide is deferred behind the callout); a stay = the first frame without the dialog.
+    /** The attacker has made the follow: onto the observed vacated square, or (that square not observed) away from the
+     *  square he stood on when the question opened - while the question is open only the follow can move him. */
+    const arrivedAt = (pending: NonNullable<typeof pendingFollowup>) => {
+      const at = coordOf(pending.attackerId);
+      if (!at) return false;
+      if (pending.vacated) return at[0] === pending.vacated[0] && at[1] === pending.vacated[1];
+      const from = pending.attackerFrom ?? pending.seenAt;
+      return !!from && (at[0] !== from[0] || at[1] !== from[1]);
+    };
+    const resolvePendingFollowup = (pending: NonNullable<typeof pendingFollowup>) => {
+      pendingFollowup = null;
+      if (state.followupChoice) state.followupChoice = null;
+      const at = coordOf(pending.attackerId);
+      const followed = arrivedAt(pending);
+      // Sol r5 P2-3: neither the push nor the question's opening was observed (a reconnect into the question) and no
+      // move was seen since - the outcome cannot be read from server data, so it is not announced.
+      if (!followed && !pending.vacated && !pending.attackerFrom) return;
+      // Owner 2026-07-05 FIX: the indicator belongs over the BLOCKER (attacker), not the blocked player. Prefer the live coordinate; fall back to the tracked squares if the token has already been cleared.
+      const square = at ?? (followed ? pending.vacated : pending.attackerFrom) ?? pending.vacated ?? pending.attackerFrom ?? pending.seenAt!;
+      const callout = followCalloutShown();
+      if (pending.mine && !modernInjuryTiming()) {
+        // Classic: my chosen follow gets a small gold flash at the arrival square (no indicator surface there)
+        if (followed) state.followupFlash = { square, seq: (state.followupFlash?.seq ?? 0) + 1 };
+      }
+      if (!callout || (pending.mine && !modernInjuryTiming())) return;
+      // Owner 2026-07-07 (queue #1) / Sol r5 P1: the attacker's arrival tweens THIS frame - on EVERY seat with the
+      // indicator (the deciding coach's too, owner 10-20 / Astra r2 P1-2) the slide is deferred behind the callout.
+      if (followed) deferFollowMove(pending.attackerId);
+      emitPassiveFollow(playerName(game.value, pending.attackerId), square, followed, followed ? pending.attackerId : null);
     };
     if (dp?.dialogId === 'followupChoice' && attackerId) {
-      // a re-fired dialog while an old question is mid-resolution (rare): the old attacker never moved — drop it and arm fresh.
-      if (pendingFollowup && pendingFollowup.resolvingAge > 0) pendingFollowup = null;
-      if (pendingFollowup?.attackerId !== attackerId) {
+      pushFollowWatch = null; // owner 10-25: the dialog owns this block's follow/stay from here
+      if (pendingFollowup && pendingFollowup.attackerId === attackerId) {
+        // the follow's coordinate frame, the dialog still up: resolve it now (deferring the slide behind the callout)
+        if (arrivedAt(pendingFollowup)) { followupResolvedWhileOpen = attackerId; resolvePendingFollowup(pendingFollowup); }
+      } else if (followupResolvedWhileOpen !== attackerId) {
         // Owner 2026-07-06 (pacing 1), restored 08-17: a follow-up decision is pending — HOLD the spectator drain
         // so the stay/follow reads BEFORE the follow move + any downstream effects apply (the indicator itself is
         // displayed on resolve, which extends the hold). holdPlayback is already a no-op in play mode.
-        holdPlayback(presentationMs(FOLLOWUP_DECISION_HOLD_MS)); // owner 09-06: live viewer beat x spectator factor; 0.75 trim removed
+        if (followCalloutShown()) holdPlayback(presentationMs(FOLLOWUP_DECISION_HOLD_MS)); // owner 09-06: live viewer beat x spectator factor; 0.75 trim removed
         const defenderId = String((game.value as { defenderId?: string | null }).defenderId ?? '');
-        const attackerFrom = coordOf(attackerId);
-        let vacated = lastPushFrom.get(defenderId) ?? null;
-        if (!vacated && attackerFrom) {
+        // Sol r5 P2-3: the question opened in THIS applied frame (not already open in a snapshot) - only then is the
+        // attacker's square the one he will follow from.
+        const openedHere = String(dialogAtFrameStart?.dialogId ?? '') !== 'followupChoice';
+        const attackerSquare = coordOf(attackerId);
+        // Sol r7: his square BEFORE this frame applied (the snapshot / last applied model) - the first frame after a
+        // reconnect may itself carry the follow move
+        const pre = preCoords.get(attackerId);
+        const preSquare: [number, number] | null = pre && pre[0] >= 0 && pre[0] < 26 && pre[1] >= 0 && pre[1] < 15 ? [pre[0], pre[1]] : attackerSquare;
+        const attackerFrom = openedHere ? preSquare : null;
+        const observedVacated = lastPushFrom.get(defenderId) ?? null;
+        // The follow-up CHIP still needs a target square to draw; an unobserved one is guessed for the chip ONLY (the
+        // answer is a plain follow / stay) - never for reading the outcome.
+        let vacated = observedVacated;
+        if (!vacated && attackerSquare) {
           // fallback: the empty square adjacent to BOTH the attacker and the defender's current square — a push always vacates such a square.
           const def = coordOf(defenderId);
           if (def) {
             outer: for (let dx = -1; dx <= 1; dx++) {
               for (let dy = -1; dy <= 1; dy++) {
                 if (!dx && !dy) continue;
-                const c: [number, number] = [attackerFrom[0] + dx, attackerFrom[1] + dy];
+                const c: [number, number] = [attackerSquare[0] + dx, attackerSquare[1] + dy];
                 if (c[0] < 0 || c[0] >= 26 || c[1] < 0 || c[1] >= 15) continue;
                 if (Math.max(Math.abs(c[0] - def[0]), Math.abs(c[1] - def[1])) !== 1) continue;
                 const occupied = game.value!.fieldModel.playerDataArray.some(
@@ -11656,75 +11821,37 @@ function applyFrameContents(frame: QueuedFrame) {
             }
           }
         }
-        if (attackerFrom && vacated) {
+        // Sol r7: the outcome is tracked whenever the attacker's square is known - independently of the chip's target
+        if (preSquare) {
           const mine = play.active && humanReRollSurface() && myPlayIds(game.value).has(attackerId);
-          pendingFollowup = { attackerId, vacated, attackerFrom, mine, resolvingAge: 0 };
+          pendingFollowup = { attackerId, vacated: observedVacated, attackerFrom, seenAt: preSquare, mine };
           followBlockOccurrence++; followBlockKnockdownApplied = false; spectatorArmourShortcut = null; // Astra r5 P3: a new block
-          if (mine) {
+          // Owner 2026-07-07 (queue #1): the follow MOVE already in this frame (a spectator that joined mid-question):
+          // defer it and show the indicator now, so the callout reads BEFORE the slide.
+          if (arrivedAt(pendingFollowup)) {
+            followupResolvedWhileOpen = attackerId;
+            resolvePendingFollowup(pendingFollowup);
+          } else if (mine && vacated && attackerSquare) {
             state.followupChoice = {
-              playerId: attackerId, square: vacated, from: attackerFrom,
+              playerId: attackerId, square: vacated, from: attackerSquare,
               seq: (state.followupChoice?.seq ?? 0) + 1,
             };
-          } else {
-            // Owner 2026-07-07 (queue #1): SPECTATOR. When the follow-up MOVE is BATCHED into this same frame, defer that move + show the indicator now, then release — so the "X follows up" callout reads BEFORE the slide instead of after it. If the move hasn't landed yet, the else-if below resolves it on the frame the attacker's arrival lands.
-            const at = coordOf(attackerId);
-            if (at && at[0] === vacated[0] && at[1] === vacated[1]) {
-              deferFollowMove(attackerId);
-              emitPassiveFollow(playerName(game.value, attackerId), vacated, true, attackerId);
-              pendingFollowup = null; // resolved this frame
-            }
           }
         }
       }
     } else if (pendingFollowup) {
-      const at = coordOf(pendingFollowup.attackerId);
-      const arrived = !!at && at[0] === pendingFollowup.vacated[0] && at[1] === pendingFollowup.vacated[1];
-      const resolvedHere = arrived || ++pendingFollowup.resolvingAge > 2;
-      // Owner 10-13 ("Let's bring Spectator and Live into the same backstop wait for armour dice ... Get the ordering
-      // to match"): a live seat applies the frames that resolve a passive follow/stay a few ms apart, so it resolves on
-      // them at once. A spectator applies them through the paced drain, which the withheld armour dice of this very
-      // frame hold - so they waited out FOLLOWUP_ARMOUR_BACKSTOP_MS and the pill beat the dice. The spectator now reads
-      // the SAME rule from the frames already received (followupFromQueuedFrames) and resolves in this frame; only when
-      // they have not arrived yet does the backstop (the same 3000 ms x the spectator factor) apply.
-      // Only while the knockdown's armour dice are WITHHELD behind this follow/stay (armourAfterFollow): that frame has
-      // already applied, so the indicator's drain read only delays the frames after it, as before.
-      const ahead = resolvedHere || !armourAfterFollow ? null : followupFromQueuedFrames(pendingFollowup);
-      const resolveFollowup = (pending: NonNullable<typeof pendingFollowup>, followed: boolean, square: [number, number]) => {
-        pendingFollowupWake = null;
-        if (pending.mine) {
-          // my chosen follow: a small gold flash at the arrival square (Classic; Astra r3 P3-5: Modern shows the
-          // follow/stay indicator below instead - one cue, not two)
-          if (followed && !modernInjuryTiming()) state.followupFlash = { square, seq: (state.followupFlash?.seq ?? 0) + 1 };
-          // Astra r2 P1-2 (owner 10-20: the indicator always leads the armour dice): the deciding coach's seat shows the
-          // same follow/stay indicator and shares its deadline (his own move is not deferred behind it).
-          if (modernInjuryTiming()) emitPassiveFollow(playerName(game.value, pending.attackerId), square, followed, null);
-        } else {
-          // Owner 2026-07-07 (queue #1): the move-next-frame path. The attacker's arrival tweens THIS frame, so when `followed` defer it behind the indicator too (same ordering as the batched path above). A stay (followed=false) has no move.
-          if (followed) deferFollowMove(pending.attackerId);
-          emitPassiveFollow(playerName(game.value, pending.attackerId), square, followed, followed ? pending.attackerId : null);
-        }
-        pendingFollowup = null;
-        if (state.followupChoice) state.followupChoice = null;
-      };
-      if (resolvedHere || ahead !== null) {
-        const followed = arrived || ahead === true;
-        // Owner 2026-07-05 FIX: the indicator belongs over the BLOCKER (attacker), not the blocked player. The attacker's LIVE square is the blocker wherever they ended up. Prefer the live coordinate; fall back to the tracked squares if the token has already been cleared.
-        const square = ahead === true ? pendingFollowup.vacated : at ?? (followed ? pendingFollowup.vacated : pendingFollowup.attackerFrom);
-        resolveFollowup(pendingFollowup, followed, square);
-      } else if (armourAfterFollow && !play.active && !replay.active) {
-        // Owner 10-13 (Astra): the resolving frame has not been received yet - it resolves on ARRIVAL (enqueue wakes
-        // this), not when the drain finally applies it behind the withheld dice. The backstop stays the last wake.
-        const pending = pendingFollowup;
-        pendingFollowupWake = () => {
-          if (pendingFollowup !== pending || !armourAfterFollow) { pendingFollowupWake = null; return; }
-          const later = followupFromQueuedFrames(pending);
-          if (later === null) return;
-          resolveFollowup(pending, later, later ? pending.vacated : coordOf(pending.attackerId) ?? pending.attackerFrom);
-        };
-      }
+      // Owner 10-25 ("We should be waiting for that signal"): upstream StepFollowup sends NO report for the choice. A
+      // follow moves the attacker onto the vacated square inside the same step that consumes the answer, BEFORE the
+      // followupChoice dialog clears (every recorded follow: the coordinate frame precedes the clear); a stay is only the
+      // dialog clearing. So the first frame without the dialog IS the answer: followed = the attacker stands on the
+      // vacated square in this applied model, else stayed. No frame counting (it waited for the coach's NEXT move after
+      // a pushed blitz stay, because the server sends nothing more until then).
+      resolvePendingFollowup(pendingFollowup);
     } else if (state.followupChoice) {
       state.followupChoice = null; // dialog resolved without a pending question
     }
+    if (dp?.dialogId !== 'followupChoice') followupResolvedWhileOpen = null;
+    if (followTurnBoundary) pushFollowWatch = null; // owner 10-25: a new team turn - no block is still resolving
   }
   // Owner 2026-07-03 r6f: apothecary cinematics from the FFB dialogs. Shown for spectators (informational) and the injured player's coach (interactive). Headless drivers skip the cinematic and auto-answer in resolvePlayFollowups so a driven game never hangs.
   {
@@ -12777,9 +12904,12 @@ function pumpPlayback() {
   // Astra r5 P3: bound to its BLOCK occurrence - a newer block, or this block's knockdown already applied, voids it.
   const shortcut = spectatorArmourShortcut;
   if (shortcut && (shortcut.occurrence !== followBlockOccurrence || followBlockKnockdownApplied)) spectatorArmourShortcut = null;
-  if (gap > 0 && modernInjuryTiming() && spectatorArmourShortcut && frameCarriesArmour(next)) {
+  // Owner 10-25: a stay signalled WITHOUT the dialog (a used Fend's report) lands a few frames ahead of its knockdown's
+  // armour frame (the fall, the Fend dialog's clear): those frames take the same deadline, so the dice still follow the
+  // indicator by the gap; the shortcut is consumed by the armour frame itself.
+  if (gap > 0 && modernInjuryTiming() && spectatorArmourShortcut && (frameCarriesArmour(next) || queuedFramesCarryArmour())) {
     gap = Math.min(gap, Math.max(0, spectatorArmourShortcut.deadline - Date.now()));
-    spectatorArmourShortcut = null;
+    if (frameCarriesArmour(next)) spectatorArmourShortcut = null;
   }
   playback.timer = scheduleGameTimeout(() => {
     playback.timer = null;
@@ -13464,7 +13594,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   }
   playback.queue.push(frame);
   if (playback.queue.length > CATCHUP_FRAMES && landingRerollHoldUntil !== 0) retireLandingRerollHoldForCatchup();
-  pendingFollowupWake?.(); // owner 10-13: the frame that resolves a pending follow/stay may just have arrived
+  shortenFollowReadForArmour(frame); // owner 10-25 (Sol r1 P2-4)
   syncMoveRollHeldBacklog(); // Astra P2-1 / R2: held from here until the whole queue has drained
   // Astra 10-09: a server prompt queued behind a movement-roll hold shortens it (queuedPromptSince) - re-evaluate now.
   if (playback.timer && moveRollHoldActive() && frameSetsDialog(frame)) {
@@ -13738,9 +13868,9 @@ function clearCinematics(hardGameBoundary = false) {
   state.onTheBallMover = null;
   state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
-  pendingFollowupWake = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
+  pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
   armourPublishPending = 0; armourPublishGeneration++; armourPublishedWakes.clear(); // owner 10-20
-  passiveFollowPillAfter = 0; passiveFollowIndicatorLanded = false; // owner 10-14
+  passiveFollowPillAfter = 0; passiveFollowIndicatorLanded = false; lastFollowIndicatorLandsAt = 0; followReadExtension = null; // owner 10-14 / 10-25
   spectatorArmourShortcut = null; followBlockKnockdownApplied = true; // Astra r4 P2-1 / r5 P3
   fallArmourPendingUntil = 0; // owner 10-20 fall beat
   reviewFollowPresentedAt = null; // owner 10-13
@@ -19854,7 +19984,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
   blockPipeline.reset();
   injuryQueue.length = 0;
   injuryPlaying = false; injuryPresentingSet.clear();
-  pendingFollowup = null;
+  pendingFollowup = null; pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null;
   armourAfterFollow = null; passiveFollowPillAfter = 0; passiveFollowIndicatorLanded = false; // owner 10-20: no indicator deadline of an earlier case
   lastPushFrom.clear();
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
@@ -19883,7 +20013,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
       clearAllGameTimeouts();
       injuryQueue.length = 0;
       injuryPlaying = false; injuryPresentingSet.clear();
-      pendingFollowup = null;
+      pendingFollowup = null; pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null;
       armourAfterFollow = null;
       lastPushFrom.clear();
       state.armorDice = priorArmour;

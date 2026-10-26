@@ -1,5 +1,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 export interface PendingPush { from: [number, number]; age: number }
+/** Upstream PlayerState.isPinned(): rooted (0x00400) or chomped (0x40000). */
+export const PINNED_STATE_BITS = 0x00400 | 0x40000;
 /** Report-plus-coordinate transition projection shared by live and historical presentation. */
 export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, reports: readonly Record<string, unknown>[],
   game: GameJson, coordinates: ReadonlyMap<string, readonly number[] | null>, maxAge = 6) {
@@ -8,6 +10,7 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
   const lastPushFrom = new Map<string, [number, number]>();
   const grabbers: string[] = [];
     const onPitch = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
+    let stoppedPush = false;
     // 1. register pushes signalled this frame (dedup by player)
     for (const report of reports) {
       const id = String(report.reportId);
@@ -21,12 +24,31 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
         }
       } else if (id === 'blockChoice') {
         const res = String(report.blockResult ?? '').toUpperCase();
-        if (res.includes('PUSH')) pid = String(report.defenderId ?? '');
+        // Owner 10-25 (follow/stay after "every block that results in a push or better"): a POW is a push too (upstream
+        // StepBlockChoice: POW / POW_PUSHBACK / PUSHBACK all go to PUSHBACK). It used to be skipped ('POW' has no PUSH),
+        // so a POW's vacated square was guessed by adjacency and drew no arrow.
+        if (res.includes('PUSH') || res === 'POW') pid = String(report.defenderId ?? '');
+      } else if (id === 'skillUse' && report.used === true && String(report.skillUse ?? '') === 'pushBackOpponent') {
+        // Owner 10-25: a Both Down converted by Juggernaut (upstream JuggernautBehaviour: ReportSkillUse PUSH_BACK_OPPONENT,
+        // BLOCK_RESULT = PUSHBACK) is a push - its blockChoice still reads BOTH_DOWN. The defender is the block's.
+        pid = String((game as { defenderId?: unknown }).defenderId ?? '');
       }
       if (!pid) continue;
+      // Owner 10-25 (Sol r2): a rooted / chomped defender cannot be pushed (upstream bb2025 TakeRootBehaviour /
+      // MonstrousMouthBehaviour clear the pushback stack) - no push to wait for, so a later move (a KO to the box) is
+      // never read as this push.
+      const state = Number(game.fieldModel.playerDataArray.find((d) => d.playerId === pid)?.playerState ?? 0);
+      if ((state & PINNED_STATE_BITS) !== 0) {
+        // Sol r3: a pushback report naming a pinned player is the push STOPPED (the whole stack cleared upstream)
+        if (id === 'pushback') stoppedPush = true;
+        continue;
+      }
       const from = preCoords.get(pid) ?? null;
       if (from && onPitch(from)) pendingPushes.set(pid, { from, age: 0 });
     }
+    // 1b. Owner 10-25 (Sol r2 / r3): a used Stand Firm (skillUse avoidPush) or a pinned player in the push clears the
+    // whole pushback stack upstream - nobody in this push moves, so nothing pending from it may arrow or vacate later.
+    if (stoppedPush || reports.some((r) => String(r.reportId) === 'skillUse' && r.used === true && String(r.skillUse ?? '') === 'avoidPush')) pendingPushes.clear();
     // 2. fire arrows for pending pushes whose player has now moved; age out/clear
     // Owner 10-22 (Astra r4): each arrow names the PUSHED player so the renderer draws both ends on his token base.
     const arrows: { from: [number, number]; to: [number, number]; playerId: string }[] = [];
@@ -45,6 +67,9 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
         // fallback declines the choice for the coach.
         lastPushFrom.set(pid, entry.from);
         pendingPushes.delete(pid); // pushed off pitch / removed
+      } else if (((game.fieldModel as { pushbackSquareArray?: unknown[] }).pushbackSquareArray ?? []).length > 0) {
+        // Owner 10-25 (Sol r4): the push is still being chosen (pushback squares on the field - a long chain push): it
+        // has not resolved, so it does not age out before the defender moves.
       } else if (++entry.age > maxAge) {
         pendingPushes.delete(pid); // aged out
       }

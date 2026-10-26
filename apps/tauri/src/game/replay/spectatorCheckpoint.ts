@@ -580,8 +580,9 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   if (!object(follow) || !keys(follow, ['attackerId', 'defenderId', 'vacated', 'pending', 'outcome'])
     || ![follow.attackerId, follow.defenderId].every(v => v === null || typeof v === 'string')
     || !(follow.vacated === null || pitchSquare(follow.vacated))) fail(17);
-  if (follow.pending !== null && (!object(follow.pending) || !keys(follow.pending, ['attackerId', 'from', 'vacated', 'resolvingAge'])
-    || typeof follow.pending.attackerId !== 'string' || !pitchSquare(follow.pending.from) || !pitchSquare(follow.pending.vacated)
+  if (follow.pending !== null && (!object(follow.pending) || !keys(follow.pending, ['attackerId', 'from', 'vacated', 'resolvingAge', 'fromObserved'])
+    || typeof follow.pending.attackerId !== 'string' || !pitchSquare(follow.pending.from)
+    || !(follow.pending.vacated === null || pitchSquare(follow.pending.vacated)) || typeof follow.pending.fromObserved !== 'boolean'
     || !Number.isInteger(follow.pending.resolvingAge) || follow.pending.resolvingAge < 0 || follow.pending.resolvingAge > 2)) fail(18);
   if (follow.outcome !== null && (!object(follow.outcome) || !keys(follow.outcome, ['attackerId', 'square', 'followed'])
     || typeof follow.outcome.attackerId !== 'string' || !pitchSquare(follow.outcome.square) || typeof follow.outcome.followed !== 'boolean')) fail(19);
