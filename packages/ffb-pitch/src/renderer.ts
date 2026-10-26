@@ -940,7 +940,8 @@ export function kickArcTweenPosition(
     y: from.y + (to.y - from.y) * easedT - Math.sin(flightT * Math.PI) * arcPx,
   };
 }
-/** Kickoff result card display duration AND the apex-hold extension it arms. Owner W9 2026-08-13: 5000 -> 2200
+/** Kickoff result card display duration (owner 10-26: it no longer holds the ball; the card plays over the flight,
+ *  and the value is still the pre-flight ARMING window a decision-dwell holdBallKickIn passes). Owner W9 2026-08-13: 5000 -> 2200
  *  (the two 5000ms holds dominated the 14230ms worst case). Owner 2026-08-17 (gate-bounce-back ruling): 2200 -> 900
  *  — the apex-hold ball-hang was the actual dominant contributor to the "bounce waits too long" report, not the
  *  post-descent settle beat (KICK_BOUNCE_DELAY_MS, left at 120). Conservative first step; further tuning on owner
@@ -948,10 +949,10 @@ export function kickArcTweenPosition(
  *  for store.ts + SpectateView.vue — SpectateView.vue:1715 and :4023 both read this same export, so the base hold
  *  and the conditional re-arm stay synchronized automatically. */
 export const KICKOFF_CINE_MS = 1800;
-// Owner 2026-07-06 (pacing 2): while the kick-off EVENT plays, the ball holds at an
-// apex this many px above the aim square, then descends to land after the event.
+// Owner 2026-07-06 (pacing 2): the kick's apex, this many px above the aim square: the fly-in arcs up to it and
+// the descent falls from it. Owner 10-26: the ball no longer HANGS there - it passes the apex and falls at once.
 const KICK_APEX_RISE = 150;
-/** Descent: held apex -> aimed square. Owner 2026-07-08 made it slow enough to read as FALLING and HITTING
+/** Descent: apex -> aimed square (continues straight on from the fly-in, owner 10-26). Owner 2026-07-08 made it slow enough to read as FALLING and HITTING
  *  (440 -> 750), 07-13 took it to 1200; owner W9 2026-08-13: 1200 -> 800 with the rest of the chain. */
 const KICK_DESCENT_MS = 800;
 // Distinct LANDING beat before the ball scatters, i.e. the wait between the kick arc's descent
@@ -967,7 +968,8 @@ const KICK_HOP_SEGMENT_MS = 100;
 const KICK_FLY_HOP_DELAY_MS = 40;
 // Tail after the final hop before the kick target and arc gate clear.
 const KICK_CLEAR_TAIL_MS = 100;
-// Refresh delay after an apex hold expires so descent is guaranteed to start.
+// Refresh delay after an UNUSED arming window expires (holdBallKickIn armed, no flight started). The fly-in's own
+// release refresh (owner 10-26) fires exactly at the apex with no delay.
 const KICK_RELEASE_REFRESH_MS = 100;
 /** #174/SR-276: the kickArc barrier's OWN fail-open ceiling -- never the normal release.
  *  Voss found the two renderer paths; Meero verified the signal split (SR-116); owner SR-276 ruled that the cap
@@ -982,7 +984,11 @@ const KICK_RELEASE_REFRESH_MS = 100;
  *  DiceRoller.rollScatterDistance(), whose DiceRoller.java:215-220 is D6 (Kick reduces it to D3). A 25% diagnostic
  *  margin makes an 8025ms cap, explicitly greater than the 6420ms longest-legit path. Normal release remains
  *  matching onAnimDone('kickDescend','__ball__'); if this fires,
- *  log it as a regression and fail OPEN exactly once. Re-derive every term when any cited tune changes. */
+ *  log it as a regression and fail OPEN exactly once. Re-derive every term when any cited tune changes.
+ *  Owner 10-26 (no apex hang): the flight itself is now KICK_FLYIN_MS + descent (no cine dwell at the apex). The
+ *  terms above are KEPT as the conservative bound: arcInFlight can stamp its clock at the start of a pre-flight
+ *  ARMING window (holdBallKickIn: up to FLYIN + one cine, re-armable once before the flight starts), so the cap
+ *  only gets more margin over the real flight; it never delays the normal release. */
 export const KICK_ARC_LONGEST_LEGIT_MS = (KICK_FLYIN_MS + KICKOFF_CINE_MS)
   + KICKOFF_CINE_MS
   + KICK_RELEASE_REFRESH_MS
@@ -6596,9 +6602,9 @@ export class PitchRenderer {
   /** Owner 2026-07-04: flush ALL transient effect/animation buffers — called on a
    *  game change so nothing from the previous game plays on the new one. */
   private lastGameId: string | null = null;
-  /** Owner 2026-07-04: hold the ball KICK-IN animation for `ms` so the kickoff-EVENT
-   *  splash plays FIRST (it was occluding the ball flight). Called by the view when a
-   *  kickoff-event cinematic starts. */
+  /** Owner 2026-07-04 (as amended 10-26): the apex-flight ARMING deadline set by holdBallKickIn. While
+   *  `now < kickInHoldUntil` the ball branch takes the fly-in-to-apex path; once the fly-in starts it is re-anchored
+   *  to the fly-in's end, so the ball never waits at the apex (owner 10-26: no hang). */
   private kickInHoldUntil = 0;
   /** #59a (owner D5): wall-clock deadline for the kick-in VISUAL (flight/descent → landing), = when the
    *  flight/descent clear setTimeout (the `clearKickTarget` timers in `animateKickIn`/`animateKickDescent`)
@@ -6629,18 +6635,41 @@ export class PitchRenderer {
   /** #141 (owner): dedup key for the ball-DIRECTION arrow (punt/swoop/place-ball/pass-deviate direction roll). */
   private ballDirectionSeqSeen = -1;
   private kickInReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Owner 10-26: the identity of the armed flight now running, from the moment its fly-in starts until THAT
+   *  flight's descent completes (its own completion timer, generation-scoped: an older kick's timer never frees a
+   *  newer kick) or a NEW aim is set (setPendingKickAim) / a kick reset. While set, holdBallKickIn is a no-op, so a
+   *  later kick-off card or decision-dwell call can neither delay the descent nor restart the fly-in mid-descent.
+   *  A new kick (re-kick / touchback mid-flight) always sets its aim first, which frees the arm for it as before. */
+  private kickArmFlight: object | null = null;
+  /** Owner 10-26 ("could we just have the ball descend without a hang?"): there is NO apex dwell any more. This
+   *  call now does ONE thing: it ARMS the apex-flight branch of refresh() (fly-in edge -> apex over the aim, then
+   *  straight on into the descent to the snapshot landing) — the branch SR-119 depends on (SpectateView's sync
+   *  kickAim watch calls this before the async kickDescend watch refreshes; without it the kickoff falls to
+   *  animateKickIn). `ms` is only the ARMING window before the flight starts (slack for a late kickDescend); the
+   *  moment the fly-in starts, refresh() re-anchors the window to the fly-in's own end (kickInFlyStart +
+   *  KICK_FLYIN_MS) and the descent begins as the ball reaches the apex. A call while a kick flight is already
+   *  running (fly-in, descent, landing beat or bounce) is a no-op: nothing may extend the flight or make the ball
+   *  wait (the kick-off event card / decision dwell callers keep calling; their cards play over the flight). */
   holdBallKickIn(ms: number): void {
-    this.kickInHoldUntil = Math.max(this.kickInHoldUntil, performance.now() + ms);
-    // Owner 2026-07-09 (game 1920486 stuck kickoff): the ball hangs at the apex during the hold
-    // and only DESCENDS inside refresh(), which is driven by model-sync frames — NOT the ticker.
-    // On a Weather Change the follow-on gust/scatter frame lands DURING the hold (consumed by the
-    // held branch), then the game pauses for the next turn → no post-hold refresh ever fires and
-    // the ball freezes in the air. Guarantee a refresh just past the hold so the descent runs.
+    if (this.kickArmFlight) return; // this aim's flight is already running: never extend it
+    const windowMs = Math.max(ms, presentationMs(KICK_FLYIN_MS));
+    this.kickInHoldUntil = Math.max(this.kickInHoldUntil, performance.now() + windowMs);
+    // Owner 2026-07-09 (game 1920486 stuck kickoff): the descent only starts inside refresh(), which is driven by
+    // model-sync frames — NOT the ticker. Guarantee a refresh just past the arming window so an armed kick whose
+    // flight never started still resolves (it then flies via animateKickIn, as before).
+    this.armKickInRelease(windowMs + presentationMs(KICK_RELEASE_REFRESH_MS));
+  }
+
+  /** The refresh that starts the descent once the armed window (or the fly-in) ends. If the ball is at the apex
+   *  when it fires (a timer can run a hair before performance.now() reaches the deadline), the window is closed
+   *  so this refresh descends rather than leaving the ball parked. */
+  private armKickInRelease(delayMs: number): void {
     this.cancelTimer(this.kickInReleaseTimer);
-    this.kickInReleaseTimer = this.scheduleTimer(
-      () => { this.kickInReleaseTimer = null; this.refresh(); },
-      ms + presentationMs(KICK_RELEASE_REFRESH_MS),
-    );
+    this.kickInReleaseTimer = this.scheduleTimer(() => {
+      this.kickInReleaseTimer = null;
+      if (this.kickApexAim) this.kickInHoldUntil = Math.min(this.kickInHoldUntil, performance.now());
+      this.refresh();
+    }, Math.max(0, delayMs));
   }
 
   /** Owner 10-14: drop the viewer's manual marks (players and squares, with their labels). Client-local only; called
@@ -6703,7 +6732,7 @@ export class PitchRenderer {
     this.lastBallSquare = null; this.lastBallOnPitch = false; this.ballEverRendered = false;
     this.clearGroundBallHold();
     this.lastBallResolved = false; // owner 2026-07-12: fresh game re-arms the kick-trail settle detector
-    this.kickApexAim = null; this.pendingKickAim = null; this.kickInHoldUntil = 0; this.kickInVisualUntil = 0; this.kickInFlyStart = null;
+    this.kickApexAim = null; this.pendingKickAim = null; this.kickInHoldUntil = 0; this.kickInVisualUntil = 0; this.kickInFlyStart = null; this.kickArmFlight = null;
     this.kickDescendSnapshot = null; this.kickDescendSeqSeen = -1; // #124: a stale kickoff-descend snapshot must not leak games
     this.kickFlightSeq = null;
     this.kickFlightPending = null;
@@ -6812,6 +6841,7 @@ export class PitchRenderer {
     this.kickApexAim = null;
     this.pendingKickAim = null;
     this.kickInHoldUntil = 0;
+    this.kickArmFlight = null;
     this.kickInVisualUntil = 0;
     this.kickInFlyStart = null;
     this.kickDescendSnapshot = null;
@@ -7653,11 +7683,17 @@ export class PitchRenderer {
         // throw-in): animate it flying in on a high arc from the far end and mark
         // where it lands.
         const aim = this.pendingKickAim ?? [ball[0], ball[1]];
+        // Owner 10-26: no apex hang. Once the armed fly-in has reached the apex, close the window so this very
+        // refresh takes the descent branch below — the ball rises and falls as one flight.
+        if (this.kickApexAim && this.kickInFlyStart != null
+          && performance.now() - this.kickInFlyStart >= presentationMs(KICK_FLYIN_MS)) {
+          this.kickInHoldUntil = Math.min(this.kickInHoldUntil, performance.now());
+        }
         if (performance.now() < this.kickInHoldUntil) {
-          // Owner 2026-07-06 (pacing 2) + 2026-07-07 (queue): a KICK-OFF EVENT is playing.
+          // Owner 2026-07-06 (pacing 2) + 2026-07-07 (queue): the armed (holdBallKickIn) kick.
           // The ball FLIES IN from beyond the kicking team's end (the half opposite the
-          // aim) on a traveling arc up to an apex over the aim, then HANGS there (visible)
-          // while the event displays; it DESCENDS on a later frame (after the event).
+          // aim) on a traveling arc up to an apex over the aim, then (owner 10-26: with NO
+          // hang) DESCENDS from the apex on the release refresh that fires as it arrives.
           // lastBallOnPitch stays false so the descent still fires. Because refresh()
           // rebuilds the ball token every frame, the flight is re-armed on the SAME clock
           // (kickInFlyStart) each held frame so it progresses smoothly across rebuilds
@@ -7670,6 +7706,11 @@ export class PitchRenderer {
           if (this.kickInFlyStart == null) {
             this.kickInFlyStart = performance.now();
             this.showKickTrail([ex, ey], [aim[0], aim[1]], true); // travel arc: edge → apex → destination
+            // Owner 10-26: the arming window ends exactly when the fly-in reaches the apex (any longer arming
+            // window - a decision dwell - is dropped), and the release refresh starts the descent right there.
+            this.kickInHoldUntil = this.kickInFlyStart + presentationMs(KICK_FLYIN_MS);
+            this.kickArmFlight = {}; // this flight's generation (released only by its own completion)
+            this.armKickInRelease(presentationMs(KICK_FLYIN_MS));
           }
           if (performance.now() - this.kickInFlyStart < presentationMs(KICK_FLYIN_MS)) {
             g.position.set(edge.x, edge.y);
@@ -7680,8 +7721,10 @@ export class PitchRenderer {
               kickAir: true,
             });
           } else {
-            g.position.set(apex.x, apex.y); // flight complete — hang at the apex
-            g.scale.set(g.scale.x * KICK_BALL_GROW); // hold at full apex size while it hangs
+            // Defensive only (a zero-length fly-in): sit at the apex for this frame; the release refresh armed at
+            // the fly-in start (already due) descends on the next pass. There is no dwell (owner 10-26).
+            g.position.set(apex.x, apex.y);
+            g.scale.set(g.scale.x * KICK_BALL_GROW);
             this.moveTweens.delete('__ball__');
           }
           g.visible = true;
@@ -7689,7 +7732,7 @@ export class PitchRenderer {
           this.kickApexAim = [aim[0], aim[1]];
           heldKickIn = true;
         } else if (this.kickApexAim) {
-          // The event is over: DESCEND from the apex to the landing (+ bounce). Lift the
+          // The fly-in reached the apex (owner 10-26: no dwell): DESCEND from the apex to the landing (+ bounce). Lift the
           // freshly-rebuilt token (placed at ground level above) back to the apex so the
           // fall starts from where the ball was hanging, then reset the flight clock.
           // #124 DD-1: descend to the SNAPSHOT scatter-landing when armed (the model ball may have raced to
@@ -14632,6 +14675,7 @@ export class PitchRenderer {
   }
   setPendingKickAim(square: [number, number]): void {
     this.pendingKickAim = square;
+    this.kickArmFlight = null; // owner 10-26: a new aim may arm its own flight (holdBallKickIn)
     // Owner 2026-07-08: FORCE the "ball is arriving from off-pitch" transition so the
     // kick FLY-IN fires. The fly-in is gated on off-pitch→on-pitch (!lastBallOnPitch +
     // null lastBallSquare). At halftime the wire nulls the ball (which resets these),
@@ -14722,8 +14766,8 @@ export class PitchRenderer {
     this.pendingKickDescendClear = false; // a fresh arm supersedes any pending deferred clear
     // Arm the kick-in state from the snapshot: aim = the scatter landing, and force the off-pitch condition
     // false→ so the refresh() kick-in block runs even though immediate-apply may have already put the ball
-    // on-pitch/caught. kickInHoldUntil (the apex dwell) is armed separately by holdBallKickIn (the kickoff
-    // event); if it's already elapsed the arc descends straight away.
+    // on-pitch/caught. kickInHoldUntil (the apex-flight ARMING window, owner 10-26: no dwell) is armed separately
+    // by holdBallKickIn (SR-119: the sync kickAim watch); the fly-in then descends as soon as it reaches the apex.
     this.pendingKickAim = [exact.landing[0], exact.landing[1]];
     this.kickOrigin = [exact.origin[0], exact.origin[1]];
     this.lastBallOnPitch = false;
@@ -14750,6 +14794,7 @@ export class PitchRenderer {
     this.kickApexAim = null;
     this.kickInFlyStart = null;
     this.kickInHoldUntil = 0;
+    this.kickArmFlight = null;
     this.kickInVisualUntil = 0;
     this.kickFlightSeq = null;
     this.kickFlightPending = null;
@@ -14928,9 +14973,9 @@ export class PitchRenderer {
     }, presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS));
   }
 
-  /** Owner 2026-07-06 (pacing 2): the ball DESCENDS from its parked apex to the aim,
-   *  then bounces (per-tile hops) to the final landing — the second half of the kick
-   *  after the kick-off event has played. Mirrors animateKickIn's bounce phase. */
+  /** Owner 2026-07-06 (pacing 2), owner 10-26 (no hang): the ball DESCENDS from the apex to the aim the moment the
+   *  fly-in reaches it, then bounces (per-tile hops) to the final landing — the second half of one continuous kick
+   *  flight; the kick-off card plays over it on its own timing. Mirrors animateKickIn's bounce phase. */
   private animateKickDescent(
     g: Container,
     landing: [number, number],
@@ -14953,11 +14998,13 @@ export class PitchRenderer {
     // Capture our seq at arm and only clear/reconcile if it's still the one we armed for (the newer descend's
     // own wall-clock timer stays the KD-4 fail-open for it). undefined seq (inert, no snapshot) → never fires.
     const mySeq = this.kickDescendSnapshot?.seq;
+    const arm = this.kickArmFlight; // the armed flight this descent finishes (null: an unarmed descent)
     this.kickFlightSeq = mySeq ?? null; // which kick this flight belongs to (kickFlightInAir)
     const flight = {}; // this flight's completion is pending from here until the callback below runs
     this.kickFlightPending = flight;
     this.scheduleTimer(() => {
       if (this.kickFlightPending === flight) this.kickFlightPending = null;
+      if (this.kickArmFlight === arm) this.kickArmFlight = null; // only THIS flight's arm (owner 10-26, Sol r1)
       this.clearKickTarget();
       // #124 KD-4/KD-2: this setTimeout is the WALL-CLOCK cap (throttle-resistant; fires late but always,
       // unlike rAF). It is the fail-open for the snapshot descend: fire the visual-complete signal so the
