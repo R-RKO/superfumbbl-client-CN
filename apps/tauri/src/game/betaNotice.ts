@@ -2,7 +2,7 @@
 // BETA_NOTICE_VERSION with new copy (it is part of the once-per-game key); set BETA_NOTICE_ENABLED false to retire it.
 
 export const BETA_NOTICE_VERSION = 1;
-export const BETA_NOTICE_ENABLED = true;
+export const BETA_NOTICE_ENABLED = false; // owner 10-26: "Go ahead and remove this splash" (retired, not deleted: re-enable with new copy + a version bump)
 export const BETA_NOTICE_TITLE = 'Beta notice';
 export const BETA_NOTICE_TEXT = 'Movement flows have been adjusted, please report any oddities immediately.';
 export const BETA_NOTICE_BUTTON = 'Acknowledge';
