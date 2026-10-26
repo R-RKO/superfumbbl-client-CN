@@ -61,7 +61,9 @@ export function isRecoverableFumbblLobbyStatus(serverStatus: unknown): boolean {
 
 /** Owner 10-17 (server-version hard stop): consulted once the server has announced its version and before any join
  *  leaves. A string refuses the join with that reason (the session emits `refused` and closes); null lets it through. */
-export type JoinGate = (version: ServerCommandVersion, join: { mode: ClientMode; gameId: number | null; coach: string | null }) => string | null;
+/** `gameName` = a join by game name; `listOnly` = the lobby's open-games list request (no seat is taken). */
+export type JoinGate = (version: ServerCommandVersion, join: { mode: ClientMode; gameId: number | null; coach: string | null; gameName?: string | null; listOnly?: boolean }) => string | null;
+type GateTarget = { gameId: number | null; gameName?: string | null; listOnly?: boolean };
 
 export interface GameSessionEvents {
   state: (state: SessionState) => void;
@@ -131,8 +133,6 @@ export class GameSession {
 
   private readonly joinGate: JoinGate | null;
   private lastVersion: ServerCommandVersion | null = null;
-  /** The gate's verdict for this version announcement (consulted once per connect; the join funnels reuse it). */
-  private gateVerdict: { checked: boolean; refusal: string | null } = { checked: false, refusal: null };
 
   constructor(connectionOptions: FfbConnectionOptions & { joinGate?: JoinGate }) {
     this.joinGate = connectionOptions.joinGate ?? null;
@@ -256,7 +256,7 @@ export class GameSession {
 
   private sendPreparedJoin(coach: string | undefined, joinTarget: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null }): void {
     // Astra 10-17: the gate speaks before the password challenge too (a refused lobby never waits on a challenge reply)
-    const refusal = this.joinRefusal(joinTarget.gameId || null);
+    const refusal = this.joinRefusal({ gameId: joinTarget.gameId || null, gameName: joinTarget.gameName });
     if (refusal) { this.refuseJoin(refusal); return; }
     if (this.passwordLobby) {
       // S44: the server checks team ownership letter for letter, so a password join may carry the account's exact
@@ -270,7 +270,7 @@ export class GameSession {
     }
     const token = this.oneTimeFumbblToken!;
     try {
-      this.sendJoinCommand(token, { ...joinTarget, joining: true });
+      this.sendJoinCommand(token, { ...joinTarget, joining: true }, true); // the gate spoke just above (sendPreparedJoin)
     } catch (error) {
       // A failed write cannot make a one-time JNLP credential safe to retry.
       this.oneTimeFumbblToken = null;
@@ -287,10 +287,13 @@ export class GameSession {
   /** Send CLIENT_JOIN with the given password (HMAC challenge response, or a FUMBBL
    *  one-time -auth token). Shared by both join paths. */
   /** Owner 10-17: the gate's verdict for the params' seat on the announced server; null before the version is known. */
-  private joinRefusal(gameId: number | null): string | null {
+  private joinRefusal(target: GateTarget): string | null {
     if (!this.joinGate || !this.lastVersion || !this.params) return null;
-    if (!this.gateVerdict.checked) this.gateVerdict = { checked: true, refusal: this.joinGate(this.lastVersion, { mode: this.params.mode, gameId, coach: this.params.coach || null }) };
-    return this.gateVerdict.refusal;
+    // Owner 10-26 (Sol r1-r3): consulted afresh before EVERY join / challenge (the gate is synchronous and cheap): the
+    // app's client version gate may have learned of a newer build since the last funnel on this socket (a list request,
+    // a team choice). A cached allow would let that seat join through.
+    const join = { mode: this.params.mode, gameId: target.gameId, coach: this.params.coach || null, ...(target.gameName ? { gameName: target.gameName } : {}), ...(target.listOnly ? { listOnly: true } : {}) };
+    return this.joinGate(this.lastVersion, join);
   }
   private lastRefusal: string | null = null;
   /** The gate's refusal that closed this session, if any (the app's close handlers read it instead of guessing). */
@@ -306,10 +309,12 @@ export class GameSession {
     teamId: string | null;
     teamName: string | null;
     joining: boolean;
-  }): void {
+  }, gateConsulted = false): void {
     const params = this.params;
     if (!params) return;
-    const refusal = this.joinRefusal(override ? override.gameId || null : Number(params.gameId) || null);
+    const refusal = gateConsulted ? null : this.joinRefusal(override
+      ? { gameId: override.gameId || null, gameName: override.gameName, listOnly: override.joining === false }
+      : { gameId: Number(params.gameId) || null, gameName: params.gameName ?? null });
     if (refusal) { this.refuseJoin(refusal); return; }
     if (override?.joining !== false) this.setState('joining');
     this.connection.send({
@@ -359,7 +364,6 @@ export class GameSession {
         // moment it learns it, or the session-timeout will drop us.
         const version = command as ServerCommandVersion;
         this.lastVersion = version;
-        this.gateVerdict = { checked: false, refusal: null };
         const properties = version.clientProperties ?? [];
         const values = version.clientPropertyValues ?? [];
         const pingIndex = properties.indexOf('client.ping.interval');
@@ -370,11 +374,11 @@ export class GameSession {
         if (this.autoJoinAfterVersion) {
           this.autoJoinAfterVersion = false;
           // owner 10-17: the gate speaks here, before a token join OR a password challenge leaves
-          const refusal = this.joinRefusal(Number(this.params?.gameId) || null);
+          const refusal = this.joinRefusal({ gameId: Number(this.params?.gameId) || null, gameName: this.params?.gameName ?? null });
           if (refusal) { this.refuseJoin(refusal); break; }
           if (this.oneTimeFumbblToken) {
             const token = this.oneTimeFumbblToken;
-            this.sendJoinCommand(token);
+            this.sendJoinCommand(token, undefined, true); // the gate spoke just above
           } else if (this.params) {
             this.setState('authenticating');
             this.connection.send({ netCommandId: NetCommandId.CLIENT_PASSWORD_CHALLENGE, coach: this.params.coach });

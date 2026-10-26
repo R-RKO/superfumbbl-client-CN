@@ -31,3 +31,18 @@ export async function updateHintAfterReport(appVersion: string): Promise<string 
   if (!version || !isNewerVersion(version, appVersion)) return null;
   return `Thanks for the report. Super FUMBBL ${version} is available (you are on ${appVersion}) and may already fix this: update from the menu when your game is over.`;
 }
+
+/**
+ * Owner 10-26 (client version gate, clientVersionGate.ts): what the regular update check last SAW as the newest
+ * published version, whether or not it is newer than this build (`updateAvailableVersion` above stays null for dev
+ * cuts and for "up to date", so it cannot tell "current" from "never checked"). `version` null = the check completed
+ * and reported up to date without naming a version. The record itself null = no check has completed yet (the gate then
+ * fails open; a check where nothing answered resets it to null). Written only by App.vue's runUpdateCheck: there is no
+ * second manifest fetch.
+ */
+export interface PublishedVersionRecord { version: string | null; /** when it was recorded (diagnostics only: a stale
+ *  "newer exists" stays true - versions only go up - and a stale "current" can only fail open) */ at: number }
+export const publishedVersion = ref<PublishedVersionRecord | null>(null);
+export function recordPublishedVersion(version: string | null, at: number = Date.now()): void {
+  publishedVersion.value = { version, at };
+}

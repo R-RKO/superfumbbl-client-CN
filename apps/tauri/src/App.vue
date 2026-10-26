@@ -48,6 +48,7 @@ import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
 import { fumbblPlayUrl, serverVersionBlock } from './game/serverVersionGate';
+import { bareAppVersion, clientVersionBlock, clientVersionBlockStillApplies } from './game/clientVersionGate';
 import { UI_FONTS } from './game/uiFonts';
 import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
 import DisplayCaps from './components/DisplayCaps.vue';
@@ -55,12 +56,13 @@ import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import BugReportModal from './components/BugReportModal.vue';
+import ClientVersionBlockModal from './components/ClientVersionBlockModal.vue';
 import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/bugReportHost';
 import { detectSecondClient, launchSecondClient, secondClientRowVisible, secondClientSupported } from './game/secondClient';
 import { onReportOwnedKey } from './game/reportModalKeys';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { newerVersion, setUpdateChecker, updateAvailableVersion, updateHintAfterReport } from './game/updateSignal';
+import { isNewerVersion, newerVersion, publishedVersion, recordPublishedVersion, setUpdateChecker, updateAvailableVersion, updateHintAfterReport } from './game/updateSignal';
 import { fetchLatestRelease, inAppUpdaterEnabled, isRequiredUpdate, MENU_RETURN_UPDATE_CHECK_DELAY_MS, parseVersion, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, stripUpdateMarkers, updateAvailable } from './game/updateCheck';
 import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
@@ -203,23 +205,45 @@ function joinOrGameInProgress(): boolean {
   if (['connecting', 'versioning', 'authenticating', 'joining', 'joined'].includes(lobby)) return true;
   return lobby === 'ready' && !fumbblLobbyListRequested.value;
 }
-async function checkForUpdate(): Promise<void> {
+/** `surfaceMidJoin` (owner 10-26): the client version gate's "Update now" after a REFUSED join - that join is dead, so
+ *  the prompt may surface although the lobby still looks mid-join. */
+async function checkForUpdate(opts: { surfaceMidJoin?: boolean; explicit?: boolean } = {}): Promise<void> {
   if (updatePrompt.value || updateProgress.value) return;
-  if (updateCheckInFlight) { await updateCheckPromise; return; } // join the running check (its result is what the caller wants)
+  if (updateCheckInFlight && !opts.explicit) { await updateCheckPromise; return; } // join the running check (its result is what the caller wants)
+  // Sol r7: the coach's own Update now (client version modal) never inherits a running background check's mid-join
+  // hold: it waits for that check, then runs its own if no prompt came of it.
+  if (updateCheckInFlight) { await updateCheckPromise; if (updatePrompt.value || updateCheckInFlight) return; }
   updateCheckInFlight = true;
-  updateCheckPromise = runUpdateCheck();
+  updateCheckPromise = runUpdateCheck(opts);
   try { await updateCheckPromise; } finally { updateCheckInFlight = false; updateCheckPromise = null; }
 }
-async function runUpdateCheck(): Promise<void> {
+/** Owner 10-26 (client version gate): what this run saw as the newest published version (recorded when it ends). */
+interface SeenPublished { ok: boolean; version: string | null }
+function seePublished(seen: SeenPublished, version: string | null | undefined): void {
+  seen.ok = true;
+  if (version) seen.version = newerVersion(seen.version, version);
+}
+async function runUpdateCheck(opts: { surfaceMidJoin?: boolean; explicit?: boolean } = {}): Promise<void> {
+  const seen: SeenPublished = { ok: false, version: null };
+  try { await runUpdateCheckBody(seen, opts); } finally {
+    // Sol r1 (fail-open law): a run where nothing answered leaves the latest version UNKNOWN - an old "newer exists"
+    // record must not keep refusing joins while the update sources are unreachable (the coach could not update anyway).
+    if (seen.ok) recordPublishedVersion(seen.version); else publishedVersion.value = null;
+  }
+}
+async function runUpdateCheckBody(seen: SeenPublished, opts: { surfaceMidJoin?: boolean; explicit?: boolean }): Promise<void> {
+  const heldBack = (): boolean => joinOrGameInProgress() && !opts.surfaceMidJoin;
   if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
     // D2: installer updates compare with the SHELL version (a patched page is ahead of its shell).
     const shellVersion = (await loadAppPatchStatus())?.shellVersion ?? appVersion;
     if (appPatchHost) {
       try {
-        const decision = decideAppPatch(await appPatchHost.check());
+        const patchCheck = await appPatchHost.check();
+        const decision = decideAppPatch(patchCheck);
+        seePublished(seen, decision.kind === 'offer' ? decision.offer.version : decision.kind === 'shell' ? decision.version : patchCheck.version);
         updateAvailableVersion.value = decision.kind === 'offer' ? decision.offer.version : decision.kind === 'shell' ? decision.version : null;
         if (decision.kind === 'offer') {
-          if (joinOrGameInProgress()) return; // never surface the prompt mid-game or mid-join (the check was awaited)
+          if (heldBack()) return; // never surface the prompt mid-game or mid-join (the check was awaited)
           pendingPatch.value = decision.offer;
           patchReady.value = decision.offer.toFetch.length === 0;
           updatePrompt.value = { version: decision.offer.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases`, inApp: true, notes: stripUpdateMarkers(decision.offer.notes), required: isRequiredUpdate(decision.offer.notes) };
@@ -233,9 +257,10 @@ async function runUpdateCheck(): Promise<void> {
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check({ timeout: 15_000 });
+      if (update) seePublished(seen, update.version);
       if (update && shellUpdateAvailable(shellVersion, update.version)) {
         updateAvailableVersion.value = newerVersion(updateAvailableVersion.value, update.version);
-        if (joinOrGameInProgress()) return;
+        if (heldBack()) return;
         pendingUpdate = update as unknown as UpdaterUpdate;
         updatePrompt.value = { version: update.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases/tag/v${update.version}`, inApp: true, notes: stripUpdateMarkers(update.body), required: isRequiredUpdate(update.body) };
       }
@@ -245,9 +270,13 @@ async function runUpdateCheck(): Promise<void> {
     }
   }
   const latest = await fetchLatestRelease((url, init) => (inTauri ? tauriFetch(url, init) : fetch(url, init)));
+  if (latest) seePublished(seen, latest.version);
   if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updateAvailableVersion.value = newerVersion(updateAvailableVersion.value, latest.version);
-  if (joinOrGameInProgress()) return;
-  if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false }; // the release-page fallback carries no notes: never required
+  if (heldBack()) return;
+  // Sol r7: a dev cut never prompts on its own, but the coach's explicit Update now (warning modal) offers the release
+  // when its bare version is behind it.
+  const explicitOffer = !!latest && !!opts.explicit && isNewerVersion(latest.version, bareAppVersion(appVersion) ?? '');
+  if (latest && (explicitOffer || updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version))) updatePrompt.value = { ...latest, inApp: false }; // the release-page fallback carries no notes: never required
 }
 async function installAppPatchNow(offer: AppPatchOffer, host: AppPatchHost): Promise<void> {
   updateError.value = '';
@@ -1011,6 +1040,76 @@ function onServerVersionBlockKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   buttons[next]!.focus();
 }
+// Owner 10-26: the client version gate (game/clientVersionGate.ts). A refused coach-seat join (public edition, older
+// than the published version) or a warning (fork / dev cut). "Update now" runs the regular update check, whose prompt
+// (download, then Restart: the app patch takes effect on restart) renders instead of this modal while it is up.
+const clientVersionModal = ref<InstanceType<typeof ClientVersionBlockModal> | null>(null);
+const clientVersionChecking = ref(false);
+const clientVersionMessage = ref<string | null>(null);
+const clientVersionBlockShown = computed(() => clientVersionBlock.value !== null && !updatePrompt.value && !serverVersionBlockShown.value);
+// Sol r5: the update prompt opened by the modal's Update now replaces it and keeps its priority: drawn above the
+// controller notice (z 270 > 260), and the notice's Tab trap yields to it. Ends when that prompt closes.
+const updateFromVersionGate = ref(false);
+watch(() => updatePrompt.value, (prompt) => { if (!prompt) updateFromVersionGate.value = false; });
+const versionGateOwnsScreen = computed(() => clientVersionBlockShown.value || (updateFromVersionGate.value && !!updatePrompt.value));
+watch(() => updateFromVersionGate.value && !!updatePrompt.value, (owns) => { if (owns) void nextTick(() => updatePromptRoot.value?.querySelector<HTMLElement>('button.primary')?.focus()); });
+function dismissClientVersionBlock(): void {
+  // Sol r4: Close on a REFUSED join returns to the lobby - the refused launch and its error are retired too (no second
+  // "couldn't join" modal underneath). A warning's Continue keeps the live join untouched.
+  // Loaded on demand: a static import of rejoinFlow here changed the mounted shell's start-up (fumbblFloat timed out).
+  if (clientVersionBlock.value?.kind === 'refuse') void import('./game/rejoinFlow').then((m) => m.dismissRejoin());
+  clientVersionBlock.value = null; clientVersionMessage.value = null;
+}
+async function updateFromClientVersionBlock(): Promise<void> {
+  const block = clientVersionBlock.value;
+  if (!block || clientVersionChecking.value) return;
+  clientVersionMessage.value = null;
+  clientVersionChecking.value = true;
+  updateFromVersionGate.value = true;
+  // Sol r6: the coach asked for the update (a warning too: the join that went is untouched - the prompt only stages,
+  // and Restart stays the coach's own choice), so the prompt may surface although a join is in flight.
+  try { await checkForUpdate({ surfaceMidJoin: true, explicit: true }); } finally { clientVersionChecking.value = false; }
+  if (!updatePrompt.value) updateFromVersionGate.value = false;
+  if (clientVersionBlock.value && !updatePrompt.value) liveSetHere(clientVersionMessage, 'value', () => t('clientVersion.noUpdateOffered'));
+}
+// Sol r1/r6: while the modal - or the update prompt its Update now opened - is up, it owns the keyboard. A key whose
+// target is outside it (body, a covered Report dialog, the pitch's window handlers in SpectateView) is swallowed in the
+// capture phase and the focus comes back into it; inside the prompt, Tab wraps among its buttons and no other handler
+// sees the key (the buttons keep their native Enter / Space activation).
+function versionGateRoot(): HTMLElement | null {
+  if (clientVersionBlockShown.value) return clientVersionModal.value?.root ?? null;
+  if (updateFromVersionGate.value && updatePrompt.value) return updatePromptRoot.value;
+  return null;
+}
+function trapClientVersionKeys(event: KeyboardEvent): void {
+  const root = versionGateRoot();
+  if (!root) return;
+  const inside = event.target instanceof Node && root.contains(event.target);
+  if (inside && clientVersionBlockShown.value) return; // the modal's own handler has it (it stops every key)
+  event.stopPropagation();
+  const buttons = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled])'));
+  if (inside) {
+    if (event.type === 'keydown' && event.key === 'Tab' && buttons.length > 0) {
+      const at = buttons.indexOf(document.activeElement as HTMLElement);
+      const next = event.shiftKey ? (at <= 0 ? buttons.length - 1 : at - 1) : (at < 0 || at === buttons.length - 1 ? 0 : at + 1);
+      event.preventDefault();
+      buttons[next]!.focus();
+    }
+    return;
+  }
+  event.preventDefault();
+  if (event.type === 'keydown') (root.querySelector<HTMLElement>('button.primary:not([disabled])') ?? buttons[0])?.focus();
+}
+watch(versionGateOwnsScreen, (shown) => {
+  if (shown) { window.addEventListener('keydown', trapClientVersionKeys, true); window.addEventListener('keyup', trapClientVersionKeys, true); }
+  else { window.removeEventListener('keydown', trapClientVersionKeys, true); window.removeEventListener('keyup', trapClientVersionKeys, true); }
+});
+onBeforeUnmount(() => { window.removeEventListener('keydown', trapClientVersionKeys, true); window.removeEventListener('keyup', trapClientVersionKeys, true); });
+// A later check that finds this build current (the patch applied live) clears the block without a restart.
+watch(publishedVersion, (record) => {
+  const block = clientVersionBlock.value;
+  if (block && !clientVersionBlockStillApplies(block, record, appVersion)) dismissClientVersionBlock();
+});
 function routeNativeJnlp(request: JnlpJoinRequest): void {
   cancelLeaveGame(); // a JNLP intake never inherits a Return-to-Menu prompt opened for the previous game
   const result = routeJnlpRequest(request, {
@@ -1081,6 +1180,7 @@ function escConsoleMenu(e: KeyboardEvent): void {
   if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || ui.setupWizardRerunOpen || guideOpen.value || credsMenuOpen.value) return;
   if (shellReportOpen.value) return; // owner 10-13: the open Report dialog owns Escape (it closes itself)
   if (serverVersionBlockShown.value) { dismissServerVersionBlock(); return; } // owner 10-17: the VISIBLE server-version stop owns Escape
+  if (clientVersionBlockShown.value) return; // owner 10-26: the client version modal owns Escape (its own keydown)
   if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
   ui.gameMenuOpen = !ui.gameMenuOpen;
 }
@@ -1485,6 +1585,7 @@ watchEffect(() => {
 });
 
 function escSettings(e: KeyboardEvent) {
+  if (versionGateOwnsScreen.value) return; // owner 10-26 (Sol r2/r7): the client version modal, or the update prompt it opened, is above
   if (e.code !== 'Escape') return;
   if (!settingsEscape()) return;
   e.preventDefault();
@@ -1832,6 +1933,7 @@ function onEndGameExit(exit: EndGameExit) {
 }
 
 function escLeaveGame(event: KeyboardEvent) {
+  if (versionGateOwnsScreen.value) return; // owner 10-26 (Sol r2/r7): the client version modal, or the update prompt it opened, is above
   if (event.code !== 'Escape' || !leaveGamePrompt.value) return;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -2015,6 +2117,7 @@ function runShellAction(id: ControlActionId, source: 'keyboard' | 'controller'):
   if (shellReportOpen.value && (id === 'gameMenu' || id === 'bladePrev' || id === 'bladeNext')) return false;
   if (updatePrompt.value?.required && !gameStore.game.value) return false; // Astra 10-17: nothing on the shell acts under a required update
   if (serverVersionBlockShown.value) return false; // Astra 10-17 r3: nor under the server-version stop (no blade change, no Settings over it)
+  if (clientVersionBlockShown.value) return false; // owner 10-26: nor under the client version modal
   if (id === 'gameMenu') {
     if (settingsEscape()) return true; // Settings (or a modal over it) is open: the same Esc step
     if (gameStore.game.value || ui.setupWizardRerunOpen) return false;
@@ -2069,6 +2172,7 @@ function onShellActionKey(event: KeyboardEvent): void {
   // Astra 10-17: a required update prompt owns the keyboard the same way the Report dialog does (no Enter / Space on a
   // Play button behind it, Tab comes back into the prompt), and FIRST: it renders above an open Report dialog (r2).
   if (updatePrompt.value?.required) { onReportOwnedKey(event, updatePromptRoot.value); return; }
+  if (versionGateOwnsScreen.value) { onReportOwnedKey(event, versionGateRoot()); return; } // owner 10-26: the client version modal (or its update prompt) renders above a Report dialog and owns the keyboard
   if (shellReportOpen.value) { onReportOwnedKey(event, shellReportModal.value?.root ?? null); return; }
   if (serverVersionBlockShown.value) { onReportOwnedKey(event, serverVersionBlockRoot.value); return; } // Astra 10-17 r3: the stop owns the keyboard
   if (gameStore.game.value || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
@@ -2169,6 +2273,7 @@ const controllerNoticeDialog = ref<HTMLElement | null>(null);
 /** Astra P3 10-10: Tab / Shift+Tab stay inside the notice (it is modal over Settings). The dialog's own keydown trap
  *  covers focus inside it; this capture listener pulls a Tab pressed with focus anywhere else back to the OK button. */
 function trapControllerNoticeTab(event: KeyboardEvent): void {
+  if (versionGateOwnsScreen.value) return; // owner 10-26 (Sol r2/r5): the client version modal, or the update prompt it opened, is above
   if (event.key !== 'Tab' || !controllerOptIn.noticeOpen.value) return;
   const dialog = controllerNoticeDialog.value;
   if (dialog && dialog.contains(document.activeElement)) return; // the dialog's own trap handles it
@@ -2439,7 +2544,7 @@ onBeforeUnmount(() => {
       <template v-else>{{ $t('app.artPackStrip.downloadingTheArtPack', { done: artPack.done, total: artPack.total, p2: formatMb(artPack.downloadedBytes), p3: formatMb(artPack.pendingBytes) }) }}</template>
     </div>
     <!-- Owner 09-23: a newer public release exists — one button opens its GitHub page. -->
-    <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" data-testid="update-prompt" @click.self="!updateProgress && dismissUpdate()">
+    <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" :class="{ 'client-version-backdrop': updateFromVersionGate }" data-testid="update-prompt" @click.self="!updateProgress && dismissUpdate()">
       <div ref="updatePromptRoot" class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
         <h3 id="update-prompt-title">{{ updatePrompt.required ? $t('app.savePrompt.superFumbblVersionIs', { version: updatePrompt.version }) : $t('app.savePrompt.superFumbblVersionIs2', { version: updatePrompt.version }) }}</h3>
         <p v-if="updatePrompt.required" class="hint">{{ $t('app.savePrompt.thisUpdateIsRequired') }}</p>
@@ -2478,6 +2583,11 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <!-- Owner 10-26: the client version gate: an outdated build takes no coach seat (public) / is warned (fork, dev cut). -->
+    <ClientVersionBlockModal v-if="clientVersionBlockShown && clientVersionBlock" ref="clientVersionModal" :block="clientVersionBlock"
+      :checking="clientVersionChecking" :message="clientVersionMessage"
+      @update="void updateFromClientVersionBlock()" @close="dismissClientVersionBlock()" @continue="dismissClientVersionBlock()" />
 
     <div v-if="leaveGamePrompt" class="modal-backdrop save-prompt-backdrop"
       :data-dialog-id="LEAVE_GAME_DIALOG_ID" @click.self="cancelLeaveGame()">

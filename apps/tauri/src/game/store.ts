@@ -68,6 +68,7 @@ import { createThrownCrowdProjection, reduceThrownCrowdProjection } from './thro
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isCrowdSquare, thrownCrowdLanding, type BloodSpotRelocation, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createGameSession } from './gameSessionFactory';
 import { lastServerVersion, serverHasBb2025WizardTargeting, serverVersionBlock } from './serverVersionGate';
+import { noteClientVersionForReplay } from './clientVersionGate';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, tentaclesRollHeld } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
 import { upstreamLinesText, upstreamLogLines, type UpstreamLogLine } from './upstreamLog';
@@ -28926,6 +28927,7 @@ export const gameStore = {
 
   async connectReplay(params: { url: string; coach: string; gameId: number; compression?: boolean; auth?: string }) {
     serverVersionBlock.value = null; // Astra 10-17 r2: a replay launch supersedes an old block (its handshake is its own, not gated)
+    noteClientVersionForReplay(); // owner 10-26: replays are never refused; an outdated build gets the non-blocking notice (and an old block clears)
     this.disconnect();
     clearLogKeepingChatForRejoin();
     chatStash = null; // a replay is another session: live chat does not wait behind it
