@@ -5,6 +5,13 @@ import {
 } from './inducementPurchase';
 
 export type WizardSpell = 'fireball' | 'zap';
+/**
+ * Which upstream WizardLogicModule the target rule follows. `legacy` = client/state/logic/mixed/WizardLogicModule
+ * (Zap: an opposing RosterPlayer; Fireball: a standing opponent in the 3x3), the rule every server up to 3.3.1 runs.
+ * `bb2025` = FFB 3.4.0 client/state/logic/bb2025/WizardLogicModule (Zap: any RosterPlayer of either team; Fireball:
+ * any player in any state in the 3x3), served by bb2025/StepWizard. Chosen by `wizardTargetRuleFor`.
+ */
+export type WizardTargetRule = 'legacy' | 'bb2025';
 export type WizardSpellChoice = { kind: 'spell'; spell: WizardSpell } | { kind: 'cancel' };
 
 export interface WizardInducementWire {
@@ -35,6 +42,8 @@ export interface WizardTargetPlayer {
   playerState: number;
   /** WizardLogicModule's Zap rule requires `instanceof RosterPlayer`. */
   rosterPlayer: boolean;
+  /** The casting coach's own player. The legacy rule never targets these; the bb2025 rule may (friendly fire). */
+  ownTeam?: boolean;
   /** Base + temporary ST facts carried by PlayerJson; Zap's server target is getStrengthWithModifiers(). */
   strength?: number;
   temporaryModifiersMap?: Record<string, unknown>;
@@ -85,39 +94,68 @@ function isStandingWizardVictim(player: WizardTargetPlayer): boolean {
   return base !== 0x03 && base !== 0x04;
 }
 
+function inFireballArea(player: WizardTargetPlayer, coordinate: readonly [number, number]): boolean {
+  return player.coordinate != null
+    && onPitch(player.coordinate)
+    && Math.abs(player.coordinate[0] - coordinate[0]) <= 1
+    && Math.abs(player.coordinate[1] - coordinate[1]) <= 1;
+}
+
+function onSquare(player: WizardTargetPlayer, coordinate: readonly [number, number]): boolean {
+  return player.coordinate?.[0] === coordinate[0] && player.coordinate[1] === coordinate[1];
+}
+
 /**
- * Exact WizardLogicModule legality port. Zap requires an opposing RosterPlayer
- * on the clicked coordinate (lines 123-127). Fireball requires a non-prone,
- * non-stunned opposing player in the radius-one neighborhood including its
- * center (lines 129-143); FieldModel.java:546-561 defines that neighborhood.
+ * Exact WizardLogicModule legality port.
+ * legacy (mixed/WizardLogicModule): Zap requires an opposing RosterPlayer on the clicked coordinate (lines 123-127).
+ * Fireball requires a non-prone, non-stunned opposing player in the radius-one neighborhood including its center
+ * (lines 129-143); FieldModel.java:546-561 defines that neighborhood. Own-team players never count.
+ * bb2025 (FFB 3.4.0 bb2025/WizardLogicModule isValidZapTarget / fireballAffectsPlayer): Zap = any RosterPlayer on the
+ * square, either team; Fireball = any player with a state in the 3x3, either team.
  */
 export function isWizardTargetLegal(
   spell: WizardSpell,
   coordinate: readonly [number, number],
-  opponentPlayers: readonly WizardTargetPlayer[],
+  players: readonly WizardTargetPlayer[],
+  rule: WizardTargetRule = 'legacy',
 ): boolean {
   if (!onPitch(coordinate)) return false;
+  const eligible = rule === 'bb2025' ? players : players.filter((player) => player.ownTeam !== true);
   if (spell === 'zap') {
-    return opponentPlayers.some((player) => player.rosterPlayer
-      && player.coordinate?.[0] === coordinate[0]
-      && player.coordinate[1] === coordinate[1]);
+    return eligible.some((player) => player.rosterPlayer && onSquare(player, coordinate));
   }
-  return opponentPlayers.some((player) => player.coordinate != null
-    && onPitch(player.coordinate)
-    && isStandingWizardVictim(player)
-    && Math.abs(player.coordinate[0] - coordinate[0]) <= 1
-    && Math.abs(player.coordinate[1] - coordinate[1]) <= 1);
+  return eligible.some((player) => inFireballArea(player, coordinate)
+    && (rule === 'bb2025' || isStandingWizardVictim(player)));
+}
+
+/**
+ * The bb2025 friendly-fire case: the spell would affect players, and every one of them is the caster's own
+ * (Zap: the player on the square; Fireball: every player in the 3x3). Owner spec 10-26: such a cast needs an explicit
+ * confirmation first. Always false under the legacy rule (it can never target only own players).
+ */
+export function wizardTargetsOnlyOwnPlayers(
+  spell: WizardSpell,
+  coordinate: readonly [number, number],
+  players: readonly WizardTargetPlayer[],
+  rule: WizardTargetRule,
+): boolean {
+  if (rule !== 'bb2025' || !onPitch(coordinate)) return false;
+  const affected = spell === 'zap'
+    ? players.filter((player) => player.rosterPlayer && onSquare(player, coordinate))
+    : players.filter((player) => inFireballArea(player, coordinate));
+  return affected.length > 0 && affected.every((player) => player.ownTeam === true);
 }
 
 /** FieldCoordinateBounds.java:103-110 enumerates FIELD with x outer/y inner. */
 export function wizardTargetSquares(
   spell: WizardSpell,
-  opponentPlayers: readonly WizardTargetPlayer[],
+  players: readonly WizardTargetPlayer[],
+  rule: WizardTargetRule = 'legacy',
 ): [number, number][] {
   const result: [number, number][] = [];
   for (let x = 0; x <= 25; x += 1) {
     for (let y = 0; y <= 14; y += 1) {
-      if (isWizardTargetLegal(spell, [x, y], opponentPlayers)) result.push([x, y]);
+      if (isWizardTargetLegal(spell, [x, y], players, rule)) result.push([x, y]);
     }
   }
   return result;
@@ -148,11 +186,13 @@ export function wizardSpellOfferFromSnapshot(snapshot: WizardSpellSnapshot): Wiz
 export function fireballPreviewSquares(
   coordinate: readonly [number, number],
   players: readonly WizardTargetPlayer[],
+  rule: WizardTargetRule = 'legacy',
 ): [number, number][] {
   if (!onPitch(coordinate)) return [];
   return players.flatMap((player): [number, number][] => {
     const square = player.coordinate;
-    if (!square || !onPitch(square) || !isStandingWizardVictim(player)) return [];
+    // bb2025/StepWizard adds every player in the 3x3 to the affected list, whatever its state.
+    if (!square || !onPitch(square) || (rule !== 'bb2025' && !isStandingWizardVictim(player))) return [];
     if (Math.abs(square[0] - coordinate[0]) > 1 || Math.abs(square[1] - coordinate[1]) > 1) return [];
     return [[square[0], square[1]]];
   });
@@ -170,7 +210,9 @@ export function buildWizardSpellCommand(
     kind: 'target';
     spell: WizardSpell;
     coordinate: readonly [number, number];
+    /** legacy: the opposing players; bb2025: every player of both teams (own ones flagged `ownTeam`). */
     opponentPlayers: readonly WizardTargetPlayer[];
+    rule?: WizardTargetRule;
   },
 ): WizardSpellCommand {
   assertDecisionAuthority(offer.authority, offer.teamId);
@@ -182,7 +224,7 @@ export function buildWizardSpellCommand(
     };
   }
   if (!offer.enabledSpells.includes(choice.spell)) throw new Error('wizard spell was not offered');
-  if (!isWizardTargetLegal(choice.spell, choice.coordinate, choice.opponentPlayers)) {
+  if (!isWizardTargetLegal(choice.spell, choice.coordinate, choice.opponentPlayers, choice.rule ?? 'legacy')) {
     throw new Error('illegal wizard target');
   }
   return {
@@ -190,4 +232,23 @@ export function buildWizardSpellCommand(
     wizardSpell: choice.spell,
     targetCoordinate: [choice.coordinate[0], choice.coordinate[1]],
   };
+}
+
+/** The rulesVersion game option, upper-cased ('' = absent). */
+function rulesVersionOption(gameOptions: unknown): string {
+  const options = (gameOptions as { gameOptionArray?: { gameOptionId?: unknown; gameOptionValue?: unknown }[] } | null | undefined)
+    ?.gameOptionArray;
+  const value = Array.isArray(options) ? options.find((option) => option?.gameOptionId === 'rulesVersion')?.gameOptionValue : undefined;
+  return String(value ?? '').trim().toUpperCase();
+}
+
+/**
+ * The target rule for this game: bb2025 only when the announced server carries the 3.4.0 bb2025 StepWizard
+ * (`serverVersionGate.serverHasBb2025WizardTargeting`, null flag = never) AND the game is BB2025. An absent rulesVersion
+ * option reads as BB2025, the server default (as tentaclesRollHeld / swoopChoiceCopy read it). Anything else = legacy.
+ */
+export function wizardTargetRuleFor(gameOptions: unknown, serverHasBb2025Targeting: boolean): WizardTargetRule {
+  if (!serverHasBb2025Targeting) return 'legacy';
+  const version = rulesVersionOption(gameOptions);
+  return version === '' || version === 'BB2025' ? 'bb2025' : 'legacy';
 }

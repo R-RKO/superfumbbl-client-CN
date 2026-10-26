@@ -17185,6 +17185,17 @@ function sendChat() {
           <img class="reroll-toast-icon" :src="gameStore.state.apothecaryFixUp.kind === 'regeneration' ? regenerationIconUrl : apothecaryIconUrl" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.apothecaryFixUp.text }}</span>
         </div>
+        <!-- Owner 10-26: the Bretonnian Pastries outcome on every seat (used: back on the bench / stays Knocked-out;
+             declined) - the reroll toast's look on its own slot, the inducement's name as its title, the player line
+             beneath. Store-timed (self-hides), server-derived (pastriesSplash.ts); the key never repeats. -->
+        <div v-if="gameStore.state.pastriesSplash" :key="'pastries-' + gameStore.state.pastriesSplash.seq"
+          class="reroll-toast pastries-toast" :data-side="gameStore.state.pastriesSplash.side" :data-outcome="gameStore.state.pastriesSplash.outcome" data-testid="pastries-splash">
+          <img v-if="induceIcon('bretonnianPastries')" class="reroll-toast-icon pastries-toast-icon" :src="induceIcon('bretonnianPastries') ?? ''" alt="" />
+          <span class="pastries-toast-lines">
+            <span class="pastries-toast-title">{{ gameStore.state.pastriesSplash.title }}</span>
+            <span class="reroll-toast-text">{{ gameStore.state.pastriesSplash.text }}</span>
+          </span>
+        </div>
 
         <!-- U5 (owner UX ruling 08-11): while a Fumblerooski election is live (ball dropped, drops on the next
              move) surface a top banner below the scoreboard so the coach knows the ball is about to fall. Driven
@@ -21523,6 +21534,23 @@ function sendChat() {
   background: linear-gradient(120deg, rgba(150, 26, 26, 0.95), rgba(70, 10, 10, 0.92));
   border-color: rgba(255, 120, 120, 0.6);
   box-shadow: 0 6px 20px #000b, 0 0 16px rgba(120, 0, 0, 0.6);
+}
+.reroll-toast.pastries-toast { top: calc(76px + 96px); padding: 6px 18px; } /* owner 10-26: below the team-captain row */
+.reroll-toast.pastries-toast[data-outcome='failed'] {
+  background: linear-gradient(120deg, rgba(150, 26, 26, 0.95), rgba(70, 10, 10, 0.92));
+  border-color: rgba(255, 120, 120, 0.6);
+  box-shadow: 0 6px 20px #000b, 0 0 16px rgba(120, 0, 0, 0.6);
+}
+.pastries-toast-icon { width: 32px; height: 32px; }
+.pastries-toast-lines { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.pastries-toast-title {
+  font-family: var(--font-display);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffd76a;
+  text-shadow: 0 2px 6px #000c;
 }
 .reroll-toast.team-captain-toast { top: calc(76px + 48px); } /* owner 10-20: one row under the reroll toast's default band */
 .reroll-toast[data-side='home'] {

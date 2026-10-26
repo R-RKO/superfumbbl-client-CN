@@ -24,7 +24,8 @@ import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, e
 import { refreshPostGameDice } from './postGameCache';
 import { postGameKey } from './postGameProjection';
 import { SpectatorDiceLedger } from './spectatorDiceLedger';
-import { useInducementPrompt } from './useInducementPrompt';
+import { inducementDisplayName, useInducementPrompt } from './useInducementPrompt';
+import { PASTRIES_INDUCEMENT, pastriesOfferOf, pastriesStep, type PastriesOffer, type PastriesOutcome, type PastriesPendingDecline } from './pastriesSplash';
 import { waitingSeatRole } from './inducementsPhase';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
@@ -66,7 +67,7 @@ import {
 import { createThrownCrowdProjection, reduceThrownCrowdProjection } from './thrownCrowdBlood';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isCrowdSquare, thrownCrowdLanding, type BloodSpotRelocation, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createGameSession } from './gameSessionFactory';
-import { serverVersionBlock } from './serverVersionGate';
+import { lastServerVersion, serverHasBb2025WizardTargeting, serverVersionBlock } from './serverVersionGate';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, tentaclesRollHeld } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
 import { upstreamLinesText, upstreamLogLines, type UpstreamLogLine } from './upstreamLog';
@@ -186,11 +187,14 @@ import {
   wizardSpellChoices,
   wizardSpellKey,
   wizardSpellOfferFromSnapshot,
+  wizardTargetRuleFor,
   wizardTargetSquares,
+  wizardTargetsOnlyOwnPlayers,
   wizardZapRequiredRoll,
   type WizardSpell,
   type WizardSpellOffer,
   type WizardTargetPlayer,
+  type WizardTargetRule,
 } from './wizardSpell';
 import {
   buildRegenerationElectionCommand,
@@ -1466,6 +1470,9 @@ const legacyState = reactive({
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
    *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
   apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned' | 'casualty' | 'failed'; kind: 'apothecary' | 'regeneration'; text: string; seq: number } | null,
+  /** Owner 10-26: the Bretonnian Pastries outcome splash on every seat - used (success / failed roll) or declined.
+   *  Server-derived (pastriesSplash.ts); the reroll toast's look on its own slot. `seq` never repeats. */
+  pastriesSplash: null as { side: 'home' | 'away'; outcome: 'success' | 'failed' | 'declined'; title: string; text: string; playerId: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
 /** Owner 10-11: the automatic (spectator / replay / review) field flip under Settings > Spectator and replay view.
@@ -1544,7 +1551,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
   'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPills', 'injuryPuff', 'injuryTokenHolds',
-  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
+  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'pastriesSplash', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
   'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
@@ -2793,6 +2800,7 @@ function clearApothecaryFixUps(): void {
   apothecaryFixUpInjuryWaitSince = null;
   apothecaryFixUpQueue = [];
   pendingApothecaryFixUps.clear();
+  clearPastriesSplash(); // owner 10-26: every reset that drops the fix-up toasts drops the Pastries splash too
   apothecaryChoicesOpen.clear();
   state.apothecaryFixUp = null;
 }
@@ -2972,6 +2980,92 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
   if (!ready.length || playback.catchingUp) return;
   for (const claim of ready) if (apothecaryFixUpQueue.length < APOTHECARY_FIX_UP_QUEUE_CAP) apothecaryFixUpQueue.push(claim);
   pumpApothecaryFixUps();
+}
+/** Owner 10-26: "Let's ensure our client displays a splash to all seats when Pastries are used or declined."
+ *  Every seat (both coaches, spectators, replays) - the outcome comes from the server alone (pastriesSplash.ts):
+ *  "<Player> is back on the bench (rolled N)" / "<Player> stays Knocked-out (rolled N)" / "<Team> declines the
+ *  Pastries", under the inducement's name. It FOLLOWS the player's KO pill (still to pop: wait; up: its 450 ms
+ *  viewer-visible floor first), bounded by a cap. Fire-and-forget: nothing reads, waits on or gates on it - the owning
+ *  coach's prompt, the answer and the next frame never wait for it (latches fail open). One line per server occurrence
+ *  (game + commandNr + player + outcome); catch-up shows nothing. */
+const PASTRIES_SPLASH_HOLD_MS = 2000; // the toast's own animation length (--p-2000)
+const PASTRIES_SPLASH_GAP_MS = 250;
+const PASTRIES_SPLASH_PILL_POLL_MS = 250;
+const PASTRIES_SPLASH_PILL_WAIT_MAX_MS = 15000;
+const PASTRIES_SPLASH_QUEUE_CAP = 4;
+let pastriesSplashQueue: (PastriesOutcome & { gameId: string })[] = [];
+let pastriesSplashTimer: ReturnType<typeof setTimeout> | null = null;
+let pastriesSplashPoll: ReturnType<typeof setTimeout> | null = null;
+let pastriesSplashWaitSince: number | null = null;
+let pastriesSplashSeq = 0;
+const pastriesSplashSeen = new Set<string>();
+/** Sol r3: a closed offer whose decline KO lands in a later frame, per presentation path (frame-bounded, never timed). */
+const pastriesPendingDecline: Record<'live' | 'review', PastriesPendingDecline | null> = { live: null, review: null };
+function clearPastriesSplash(): void {
+  pastriesPendingDecline.live = null;
+  pastriesPendingDecline.review = null;
+  if (pastriesSplashTimer) cancelGameTimeout(pastriesSplashTimer);
+  if (pastriesSplashPoll) cancelGameTimeout(pastriesSplashPoll);
+  pastriesSplashTimer = null;
+  pastriesSplashPoll = null;
+  pastriesSplashWaitSince = null;
+  pastriesSplashQueue = [];
+  state.pastriesSplash = null;
+}
+/** How long the line for `playerId` must still wait behind his KO pill (0 = show now). */
+function pastriesSplashPillWaitMs(playerId: string): number {
+  const shown = state.injuryPills.some((pill) => pill.playerId === playerId);
+  const popped = shown ? pillPoppedAt.get(playerId) : undefined;
+  if (popped === undefined) return !shown && injuryPillStillToPop(playerId) ? PASTRIES_SPLASH_PILL_POLL_MS : 0;
+  return Math.max(0, popped + presentationMs(VIEWER_VISIBLE_PILL_MS) - Date.now());
+}
+function pumpPastriesSplash(): void {
+  if (pastriesSplashTimer || pastriesSplashPoll || state.pastriesSplash) return;
+  if (playback.catchingUp) { pastriesSplashQueue = []; pastriesSplashWaitSince = null; return; }
+  const g = game.value;
+  const gameId = String((g as { gameId?: unknown } | null)?.gameId ?? 'unknown');
+  while (pastriesSplashQueue.length && pastriesSplashQueue[0]!.gameId !== gameId) pastriesSplashQueue.shift();
+  const next = pastriesSplashQueue[0];
+  if (!g || !next) { pastriesSplashWaitSince = null; return; }
+  const waitMs = pastriesSplashPillWaitMs(next.playerId);
+  if (waitMs > 0) {
+    pastriesSplashWaitSince ??= Date.now();
+    if (Date.now() - pastriesSplashWaitSince < PASTRIES_SPLASH_PILL_WAIT_MAX_MS) {
+      pastriesSplashPoll = scheduleGameTimeout(() => { pastriesSplashPoll = null; pumpPastriesSplash(); }, Math.min(waitMs, PASTRIES_SPLASH_PILL_POLL_MS));
+      return;
+    }
+    // Past the cap the line shows anyway (a use / decline is never dropped for a pill that never came).
+  }
+  pastriesSplashWaitSince = null;
+  pastriesSplashQueue.shift();
+  const side: 'home' | 'away' = String(g.teamAway?.teamId ?? '') === next.teamId ? 'away' : 'home';
+  const team = side === 'home' ? g.teamHome : g.teamAway;
+  const player = playerName(g, next.playerId) || next.playerId;
+  const teamName = String((team as { teamName?: string } | undefined)?.teamName ?? '').trim() || String((team as { coach?: string } | undefined)?.coach ?? '').trim();
+  const text = next.kind === 'success' ? $t('store.text.pastriesBackOnBench', { player, roll: next.roll ?? '?' })
+    : next.kind === 'failed' ? $t('store.text.pastriesStaysKnockedOut', { player, roll: next.roll ?? '?' })
+      : $t('store.text.pastriesDeclined', { team: teamName });
+  state.pastriesSplash = { side, outcome: next.kind, title: inducementDisplayName(PASTRIES_INDUCEMENT), text, playerId: next.playerId, seq: ++pastriesSplashSeq };
+  pastriesSplashTimer = scheduleGameTimeout(() => {
+    state.pastriesSplash = null;
+    pastriesSplashTimer = scheduleGameTimeout(() => { pastriesSplashTimer = null; pumpPastriesSplash(); }, PASTRIES_SPLASH_GAP_MS);
+  }, Math.max(450, presentationMs(PASTRIES_SPLASH_HOLD_MS)));
+}
+/** Called for every applied frame / presented review position: `before` = the open Pastries offer at frame start. */
+function surfacePastriesSplash(lane: 'live' | 'review', before: PastriesOffer | null, reports: readonly Record<string, unknown>[], g: GameJson | null, commandNr: number | null): void {
+  if (!g) { pastriesPendingDecline[lane] = null; return; }
+  const { outcomes, pending } = pastriesStep(before, pastriesPendingDecline[lane], reports, g);
+  pastriesPendingDecline[lane] = pending;
+  if (!outcomes.length) return;
+  const gameId = String((g as { gameId?: unknown }).gameId ?? 'unknown');
+  for (const outcome of outcomes) {
+    const key = `${gameId}:${commandNr ?? 'unknown'}:${outcome.playerId}:${outcome.kind}`;
+    if (pastriesSplashSeen.has(key)) continue;
+    pastriesSplashSeen.add(key);
+    if (playback.catchingUp) continue; // history: nothing starts during catch-up
+    if (pastriesSplashQueue.length < PASTRIES_SPLASH_QUEUE_CAP) pastriesSplashQueue.push({ ...outcome, gameId });
+  }
+  pumpPastriesSplash();
 }
 /** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
  *  ordinary reRoll report's splash; a failed one without fallback shows nothing new). */
@@ -5854,9 +5948,13 @@ async function pauseSpectatorView(): Promise<void> {
   let transitionInjuryOutcomes = structuredClone(checkpoint.durableProjection.injuryOutcomes);
   /** Beefee 10-26 (g1956976): the history position whose kick-off landing marker publish() already revealed. */
   let transitionKickRevealKey: string | null = null;
+  /** Owner 10-26: the Pastries offer open in the position BEFORE this transition (its closing frame may be a decline). */
+  let transitionPastriesBefore: PastriesOffer | null = null;
   const transport = new LiveSpectateTransport(history, {
     publish: (position, snap) => {
       const previous = spectatorPublication.position.value?.checkpoint ?? spectatorDisplayedCheckpoint;
+      transitionPastriesBefore = !snap && previous ? pastriesOfferOf(previous.model) : null;
+      if (snap || !previous) pastriesPendingDecline.review = null; // a seek / snapshot ends a pending decline
       const coordinates = new Map<string, readonly number[] | null>(!snap && previous
         ? previous.model.fieldModel.playerDataArray.map((player) => [player.playerId,
           player.playerCoordinate ? [player.playerCoordinate[0], player.playerCoordinate[1]] : null]) : []);
@@ -6611,6 +6709,8 @@ async function pauseSpectatorView(): Promise<void> {
       }
       // Owner 10-09: the fix-up splash is fire-and-forget - the review pipeline does not wait on it.
       surfaceApothecaryFixUps(reports, position.model, commandNr);
+      surfacePastriesSplash('review', transitionPastriesBefore, reports, position.model, commandNr); // owner 10-26: fire-and-forget too
+      transitionPastriesBefore = null;
       if (sendOffOutcome === null) {
         state.sendOffResult = null;
       } else if (sendOffOutcome) {
@@ -7046,7 +7146,7 @@ function clearCatchupTransients(): void {
   rerollStageTimers = [];
   if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
-  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); state.reRollPrompt = null; state.skillChoice = null;
+  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
     if (pregameCineQueue[i]?.kind === 'prayer') pregameCineQueue.splice(i, 1);
   }
@@ -8875,9 +8975,38 @@ const WISDOM_PCHOICE_MODE = 'wisdomOfTheWhiteDwarf';
 // Owner 10-08 ("Fix the other prompts"): the same collision applies to every choice the server can ask twice in one
 // turn (two Animal Savagery lash-outs, two Diving Tackles, two Diving Catches ...). Astra's list, all keyed per
 // dialog instance now so the second one surfaces instead of reading as already handled.
+// FFB 3.4.0 (audit 10-26, entry 20 P0): BB2025 Diving Catch now asks the catcher with the NEW mode `catch`
+// (StepCatchScatterThrowIn bb2025 askForDivingCatch: active team first, then passive). A failed catch that bounces next
+// to Diving Catch players again, or a second pass in the turn, asks `catch` again for the same seat in the same turn;
+// keyed per turn the second ask never surfaced and was never answered (wedge). Audit of every other 3.4.0 mode the
+// server can ask twice in one turn: `indomitable` (StepDoubleStrength, one per Multiple Block), `lordOfChaos`
+// (AbstractStepWithReRoll / AbstractStepMultiple, one per reroll), `illCarryYou` (StepIllCarryYou, one per carrier
+// activation) and `furiousOutburst` (StepInitFuriousOutburst, one per activation) were keyed per turn too.
 const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp', 'feed',
   'animalSavagery', 'divingTackle', 'divingCatch', 'declareDivingCatch', 'card', 'block', 'raidingParty',
-  'balefulHex', 'blackInk', 'autoGazeZoat', 'armBar', 'briberyAndCorruption']);
+  'balefulHex', 'blackInk', 'autoGazeZoat', 'armBar', 'briberyAndCorruption',
+  'catch', 'indomitable', 'lordOfChaos', 'illCarryYou', 'furiousOutburst']);
+/** @internal Pin seam: the player-choice modes keyed per server dialog instance (sorted). */
+export function dialogInstancePlayerChoiceModes(): string[] {
+  return [...DIALOG_INSTANCE_PCHOICE_MODES].sort();
+}
+/** FFB 3.4.0 entry 20 (P2): the server's per-player `descriptions` (DialogPlayerChoiceParameter, aligned with
+ *  `playerIds`) as card lines, verbatim. Blank entries (the bb2025 `catch` dialog pads non-direct catchers with " ")
+ *  carry nothing and are dropped. */
+export function playerChoiceDescriptionNotes(
+  playerIds: readonly unknown[] | null | undefined,
+  descriptions: unknown,
+  nameOf: (playerId: string) => string,
+): string[] {
+  if (!Array.isArray(playerIds) || !Array.isArray(descriptions)) return [];
+  const out: string[] = [];
+  playerIds.forEach((id, i) => {
+    const text = typeof descriptions[i] === 'string' ? (descriptions[i] as string).trim() : '';
+    if (typeof id !== 'string' || !id || !text) return;
+    out.push(`${nameOf(id) || id}: ${text}`);
+  });
+  return out;
+}
 /** Owner 10-05 (g1950390): "We should be declining future offers from the server if the user did not select them ...
  *  Only on pick me up". The players the coach LEFT OUT of a confirmed Pick-Me-Up selection, with the turn it was
  *  confirmed in. A same-turn re-offer made up only of those players is declined for them (empty clientPlayerChoice)
@@ -8912,6 +9041,7 @@ let latestDwarfenWisdomRoll: { teamId: string; roll: number } | null = null;
 const PCHOICE_HEADERS: Record<string, string> = {
   quickBite: 'Select player to take a quick bite',
   furiousOutburst: 'Select a player to stab',
+  catch: 'Select a player that should catch', // FFB 3.4.0 PlayerChoiceMode.CATCH.getDialogHeader
 };
 /** #240: successful leaps armed from the server's pre-move `actingPlayer.leaping` flag, awaiting their leapRoll confirmation. */
 const leapMovesAwaitingReport = new Set<string>();
@@ -8998,8 +9128,12 @@ function wizardOpponentPlayers(g: GameJson, myTeamId: string): WizardTargetPlaye
   const opponent = g.teamHome.teamId === myTeamId ? g.teamAway
     : g.teamAway.teamId === myTeamId ? g.teamHome : null;
   if (!opponent) return [];
+  return wizardTeamPlayers(g, opponent);
+}
+
+function wizardTeamPlayers(g: GameJson, team: GameJson['teamHome']): WizardTargetPlayer[] {
   const dataById = new Map(g.fieldModel.playerDataArray.map((data) => [data.playerId, data]));
-  return opponent.playerArray.map((player) => {
+  return team.playerArray.map((player) => {
     const data = dataById.get(player.playerId);
     const rawCoordinate = data?.playerCoordinate;
     const coordinate: readonly [number, number] | null = Array.isArray(rawCoordinate)
@@ -9016,6 +9150,23 @@ function wizardOpponentPlayers(g: GameJson, myTeamId: string): WizardTargetPlaye
       temporaryModifiersMap: player.temporaryModifiersMap,
     };
   });
+}
+
+/** FFB 3.4.0 entry 5 (P1): the wizard target rule for the live game (serverVersionGate flag + BB2025 ruleset). */
+function liveWizardTargetRule(g: GameJson): WizardTargetRule {
+  return wizardTargetRuleFor(g.gameOptions, serverHasBb2025WizardTargeting(lastServerVersion.value));
+}
+
+/** The players the target rule reads. legacy: exactly wizardOpponentPlayers (unchanged). bb2025: both teams, the
+ *  caster's own players flagged `ownTeam` (bb2025/WizardLogicModule targets either team). */
+function wizardRulePlayers(g: GameJson, myTeamId: string, rule: WizardTargetRule): WizardTargetPlayer[] {
+  if (rule === 'legacy') return wizardOpponentPlayers(g, myTeamId);
+  const mine = g.teamHome.teamId === myTeamId ? g.teamHome : g.teamAway.teamId === myTeamId ? g.teamAway : null;
+  if (!mine) return [];
+  return [
+    ...wizardOpponentPlayers(g, myTeamId),
+    ...wizardTeamPlayers(g, mine).map((player) => ({ ...player, ownTeam: true })),
+  ];
 }
 
 function wizardPitchPlayers(g: GameJson): WizardTargetPlayer[] {
@@ -9154,7 +9305,8 @@ function armServerCoordinatePicks(): void {
   if ((isTrickster || (isRaidingParty && !choosingRaidingPlayer) || isPlaceCarried || isDumpOff || isSafeHands || isWizard) && play.active && pickIsMine) {
     let squares: [number, number][];
     if (isWizard && liveWizardSpell) {
-      squares = wizardTargetSquares(liveWizardSpell, wizardOpponentPlayers(game.value, liveWizardSpellOffer!.teamId));
+      const rule = liveWizardTargetRule(game.value);
+      squares = wizardTargetSquares(liveWizardSpell, wizardRulePlayers(game.value, liveWizardSpellOffer!.teamId, rule), rule);
     } else if (isDumpOff) {
       // DumpOffLogicModule.fieldInteraction accepts every on-pitch coordinate whose PassMechanic distance from
       // the THROWER is QUICK_PASS. passRange is the char-exact bb2025 mirror; matching 'Q' also excludes 'T'.
@@ -9391,6 +9543,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // intent. Capture the occurrence that actually existed when this server frame arrived.
   const movementIntentAtFrameStart = state.movementIntent;
   const dialogAtFrameStart = game.value.dialogParameter as Record<string, unknown> | null | undefined;
+  const pastriesOfferAtFrameStart = pastriesOfferOf(game.value); // owner 10-26: the frame that closes it may be a decline
   // The choice frame normally clears the block dialog before presentation can render the selected die.
   // Preserve the passive surface that was visible immediately before this authoritative frame.
   const blockPartialAtFrameStart = state.blockPartial;
@@ -9939,6 +10092,13 @@ function applyFrameContents(frame: QueuedFrame) {
         pending = skill ? $t('store.text.subjectIsDecidingTo', { subject, skill }) : $t('store.text.subjectIsTryingTo', { subject });
         pendingPlayerId = dp.playerId;
       }
+    } else if (waiting && dp?.dialogId === 'playerChoice' && dp.playerChoiceMode === 'catch' && dp.teamId && dp.teamId !== myTid) {
+      // FFB 3.4.0 entry 20 (P2): the other seat waits on the catcher pick (upstream status "Waiting for coach to select
+      // a player that should catch"). Anchored on the first listed player (the direct catcher when that team has him).
+      const team = [gg.teamHome, gg.teamAway].find((candidate) => candidate.teamId === dp.teamId);
+      pending = $t('store.text.waitingForP0CatchChoice', { p0: team?.coach || team?.teamName || 'Opponent' });
+      const listed = (dp as { playerIds?: unknown }).playerIds;
+      pendingPlayerId = Array.isArray(listed) && typeof listed[0] === 'string' && !myIds.has(listed[0]) ? listed[0] : null;
     } else if (waiting && dp?.dialogId === 'playerChoice' && dp.teamId && dp.teamId !== myTid
         && !isPrayerPlayerChoiceMode(dp.playerChoiceMode, gg)) {
       const team = [gg.teamHome, gg.teamAway].find((candidate) => candidate.teamId === dp.teamId);
@@ -10399,6 +10559,9 @@ function applyFrameContents(frame: QueuedFrame) {
       ? Number((cmd as { commandNr?: unknown }).commandNr)
       : null,
   );
+  // Owner 10-26: the Pastries outcome splash (used / declined) - fire-and-forget, every seat.
+  surfacePastriesSplash('live', pastriesOfferAtFrameStart, reports, game.value,
+    Number.isFinite(Number((cmd as { commandNr?: unknown }).commandNr)) ? Number((cmd as { commandNr?: unknown }).commandNr) : null);
   const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
     && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
   if (!fireballInjury || !enqueueBehindFireball(`fireballInjury:${String((cmd as { commandNr?: unknown }).commandNr)}`, pumpInjuries)) pumpInjuries();
@@ -12773,7 +12936,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); } // Astra 10-20 (P2-3)
     releaseSpectatorBlockCardHold(spectatorBlockCardHold, true); // owner 10-22: catch-up never waits on a walk for the block card
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
@@ -13782,7 +13945,7 @@ function resetPlayback() {
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
   prevTimeoutEnforced = false; timeoutAutoEndArmed = false; timeoutAutoEndSentFor = null; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
-  apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); pendingApothecaryResult = null; clearApothecaryResult();
+  apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); pendingApothecaryFixUps.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
   resetEndGameSettle(); // owner 2026-07-08 (queue 1): fresh game — endGame pacing re-arms
   state.pushChoice = null; // owner 2026-07-03: drop a stale interactive push choice
@@ -13849,13 +14012,13 @@ function clearCinematics(hardGameBoundary = false) {
   clearApothecaryCardLinger();
   pendingApothecaryResult = null;
   clearApothecaryResult();
-  if (hardGameBoundary) { apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); }
+  if (hardGameBoundary) { apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); pendingApothecaryFixUps.clear(); }
   state.apothecaryAnim = null; state.crowdSurf = null; state.rockThrow = null; state.turnover = null;
   clearInjuryPills(); state.injuryPuff = null;
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
+  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
@@ -16698,7 +16861,7 @@ export function installApothecaryTestHarness(
   pendingApothecaryResult = null;
   visibleCasualtyRollProjection = createCasualtyRollProjection();
   visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
-  apothecaryAutoReturnSeen.clear();
+  apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear();
   playback.catchingUp = false;
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
@@ -16779,7 +16942,7 @@ export function installApothecaryTestHarness(
     dispose() {
       clearApothecaryResult();
       clearRerollSplash();
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue();
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash();
       injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); // owner 10-20
       state.riotousRookiesSplash = priorRiotous;
       state.turnStart = priorTurnStart;
@@ -16803,7 +16966,7 @@ export function installApothecaryTestHarness(
       state.apothecaryAutoReturn = priorAutoReturn;
       visibleCasualtyRollProjection = priorCasualtyRollProjection;
       visibleInjuryOutcomeProjection = priorOriginalOutcomes;
-      apothecaryAutoReturnSeen.clear();
+      apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear();
       for (const key of priorAutoReturnSeen) apothecaryAutoReturnSeen.add(key);
       apothecaryAutoReturnSeq = priorAutoReturnSeq;
       playback.catchingUp = priorCatchingUp;
@@ -17088,12 +17251,20 @@ export function installWizardTargetConfirmationTestHarness(
   fixture: GameJson,
   seat: 'modern' | 'classic' | 'spectator',
   send: (command: Record<string, unknown>) => void,
+  /** FFB 3.4.0 entry 5: the elected spell (default zap). */
+  options?: { spell?: WizardSpell },
 ): {
   targetSquares(): [number, number][];
   select(square: [number, number]): void;
   pending(): typeof state.wizardTargetConfirm;
   confirm(): void;
   cancel(): void;
+  yesNo(): typeof state.yesNo;
+  answerYesNo(yes: boolean): void;
+  preview(): typeof state.wizardTargetPreview;
+  /** A later applied frame through the production followups: `dialog` replaces dialogParameter (null clears it),
+   *  omitted keeps the standing object. */
+  frame(commandNr: number, dialog?: Record<string, unknown> | null): void;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -17106,6 +17277,10 @@ export function installWizardTargetConfirmationTestHarness(
   const priorPick = state.squarePick;
   const priorConfirm = state.wizardTargetConfirm;
   const priorInducement = state.inducementUse;
+  const priorYesNo = state.yesNo;
+  const priorYesNoResolver = yesNoResolver;
+  const priorPreview = state.wizardTargetPreview;
+  const spell: WizardSpell = options?.spell ?? 'zap';
 
   const commandNr = 41;
   const teamId = fixture.teamHome.teamId;
@@ -17116,15 +17291,18 @@ export function installWizardTargetConfirmationTestHarness(
   play.coach = seat === 'spectator' ? 'spectator' : String(fixture.teamHome.coach ?? 'home-coach');
   lastAppliedCommandNr = commandNr;
   liveWizardSpellOffer = {
-    commandNr, teamId, enabledSpells: ['zap'],
+    commandNr, teamId, enabledSpells: [spell],
     authority: seat === 'spectator'
       ? { role: 'spectator' }
       : { role: 'player', myTeamId: teamId, decisionTeamId: teamId },
   };
-  liveWizardSpell = 'zap';
+  liveWizardSpell = spell;
   liveWizardSpellAwaitingServer = false;
   state.squarePick = null;
   state.wizardTargetConfirm = null;
+  state.yesNo = null;
+  yesNoResolver = null;
+  state.wizardTargetPreview = null;
   state.inducementUse = {
     key: wizardSpellKey(commandNr), prompt: $t('store.text.chooseAZapTarget'), declineLabel: 'Cancel',
     options: [], seq: (priorInducement?.seq ?? 0) + 1,
@@ -17138,7 +17316,22 @@ export function installWizardTargetConfirmationTestHarness(
     pending: () => state.wizardTargetConfirm,
     confirm() { gameStore.confirmWizardTarget(); },
     cancel() { gameStore.cancelWizardTarget(); },
+    yesNo: () => state.yesNo,
+    answerYesNo(yes) { gameStore.resolveYesNo(yes); },
+    preview: () => state.wizardTargetPreview,
+    frame(nr, dialog) {
+      if (!game.value) return;
+      lastAppliedCommandNr = nr;
+      if (dialog !== undefined) {
+        game.value.dialogParameter = dialog as GameJson['dialogParameter'];
+        if (dialog === null) game.value.turnMode = 'regular';
+      }
+      resolvePlayFollowups();
+    },
     dispose() {
+      state.yesNo = priorYesNo;
+      yesNoResolver = priorYesNoResolver;
+      state.wizardTargetPreview = priorPreview;
       state.squarePick = priorPick;
       state.wizardTargetConfirm = priorConfirm;
       state.inducementUse = priorInducement;
@@ -17867,7 +18060,7 @@ export function installPlayerChoiceTestHarness(
   seat: 'player' | 'headless' | 'opponent' | 'spectator' = 'player',
 ): {
   /** Arm a FRESH playerChoice offer (a new server frame: bumps the applied commandNr). */
-  offer(mode: string, playerIds: string[], options?: { teamId?: string; minSelects?: number; maxSelects?: number; actingPlayerId?: string; awardedPlayerIds?: string[]; commandNr?: number }): void;
+  offer(mode: string, playerIds: string[], options?: { teamId?: string; minSelects?: number; maxSelects?: number; actingPlayerId?: string; awardedPlayerIds?: string[]; commandNr?: number; descriptions?: string[] }): void;
   /** The end-game reducer's state (assignTouchdown / mvp offers feed it like a live end-game frame). */
   endGame(): typeof state.endGame;
   /** Re-run the driver over the SAME standing dialog (a frame with no dialog push). */
@@ -17970,6 +18163,7 @@ export function installPlayerChoiceTestHarness(
       game.value.dialogParameter = {
         dialogId: 'playerChoice', teamId: options?.teamId ?? homeTeamId, playerChoiceMode: mode,
         playerIds: [...playerIds], minSelects: options?.minSelects ?? 0, maxSelects: options?.maxSelects ?? 1,
+        ...(options?.descriptions ? { descriptions: [...options.descriptions] } : {}),
       } as GameJson['dialogParameter'];
       lastAppliedCommandNr = options?.commandNr ?? lastAppliedCommandNr + 1;      // The end-game choices only arm through the end-game reducer's decision: feed it the frame a live server sends
       // (turnMode endGame + the dialog + any touchdown playerEvent reports) before the driver runs.
@@ -22618,6 +22812,7 @@ function answerUseInducement(choice: UseInducementChoice): void {
 
 function clearWizardSpellElection(): void {
   if (state.inducementUse?.key.startsWith('wizardSpell:')) state.inducementUse = null;
+  if (state.yesNo?.key.startsWith('wizardFriendlyFire:')) clearYesNo(); // latches fail open: the card dies with its offer
   if (state.squarePick?.kind === 'wizard') state.squarePick = null;
   state.wizardTargetPreview = null;
   state.wizardTargetConfirm = null;
@@ -23219,6 +23414,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           if (state.squarePick?.kind === 'wizard') state.squarePick = null;
           state.wizardTargetPreview = null;
           state.wizardTargetConfirm = null;
+          // Sol r1 (10-26): the friendly-fire card belongs to the offer it was asked under; a reset/replaced offer
+          // retires it with the rest of the election (latches fail open: no card left holding the input lock).
+          if (state.yesNo?.key.startsWith('wizardFriendlyFire:')) clearYesNo();
           if (enabledSpells.length === 0) {
             const inducementTypes = inducements.map((row) => row.inducementType == null
               ? '<missing>' : String(row.inducementType));
@@ -25730,7 +25928,7 @@ function drivePregameStep() {
       // Charge / High Kick catcher / Diving Tackle / …). INTERACTIVE: the 0.1 pick
       // rail in confirm mode, honouring the dialog's maxSelects/minSelects; Decline
       // sends playerIds:[] (skip). Headless keeps the decline so drives never hang.
-      const dpc = dialogParam as { playerChoiceMode?: string; playerIds?: string[]; maxSelects?: number; minSelects?: number; teamId?: string };
+      const dpc = dialogParam as { playerChoiceMode?: string; playerIds?: string[]; maxSelects?: number; minSelects?: number; teamId?: string; descriptions?: unknown };
       const pcm = String(dpc?.playerChoiceMode ?? '');
       if (isPrayerPlayerChoiceMode(pcm, g) && syncInteractivePrayerPresentation()) return;
       if (!addressedToMe) return;
@@ -25830,9 +26028,13 @@ function drivePregameStep() {
           // a range (min<max) keeps "up to N"; single → "Select a player".
           // S2: PCHOICE_HEADERS carries upstream getDialogHeader text where "Select a player" misleads
           // (quickBite offers the BITER, not a victim).
-          prompt: PCHOICE_HEADERS[pcm] ?? (max <= 1 ? `Select a player — ${modeLabel}`
+          prompt: (PCHOICE_HEADERS[pcm] ?? (max <= 1 ? `Select a player — ${modeLabel}`
             : min === max ? `Select ${max} players — ${modeLabel}`
-            : `Select up to ${max} players — ${modeLabel}`),
+            : `Select up to ${max} players — ${modeLabel}`))
+            // FFB 3.4.0 entry 20 (P2): the catch pick carries the server's own per-player text (the direct catcher's
+            // "Will be forced to catch if neither team uses Diving Catch"), shown verbatim on the card.
+            + (pcm === 'catch' ? playerChoiceDescriptionNotes(dpc?.playerIds, dpc?.descriptions, (id) => playerName(g, id))
+              .map((note) => ` — ${note}`).join('') : ''),
           eligibleIds: eligible,
           declinable: min === 0,
           confirm: true,
@@ -26810,7 +27012,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // caps stacking, so no separate throttle is needed here.
       const muteAtThisSpeed = replay.speed >= 4;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
       if (!wasCatchingUp && muteAtThisSpeed) setSoundsSuppressed(true);
       try {
         if (command.netCommandId === NetCommandId.SERVER_MODEL_SYNC) {
@@ -26874,7 +27076,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); // Astra 10-20 (P2-3)
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); // Astra 10-20 (P2-3)
       if (!wasCatchingUp) setSoundsSuppressed(true);
       try {
         commands.forEach((command, index) => {
@@ -27144,9 +27346,11 @@ export const gameStore = {
   /** Owner 2026-07-08 (case 422): answer the unified SQUARE-PICK — the user clicked an eligible
    *  crosshair square. Dispatch the wire command by `kind`, then clear the pick. New skill-based
    *  coordinate picks add a `kind` here (Sidestep is separate — it keeps its pushback resolve). */
-  resolveSquarePick(coord: [number, number]) {
+  /** `friendlyFireConfirmed`: only the wizard friendly-fire card's Yes passes it (FFB 3.4.0 entry 5). */
+  resolveSquarePick(coord: [number, number], opts?: { friendlyFireConfirmed?: boolean }) {
     const sp = state.squarePick;
     if (!sp) return;
+    const friendlyFireConfirmed = opts?.friendlyFireConfirmed === true;
     // Upstream sends only when FieldModel still has that move square; our pick is the snapshot of that array.
     // `ffb-client-logic/src/main/java/com/fumbbl/ffb/client/state/logic/bb2020/TricksterLogicModule.java:30-35`
     if (!sp.squares.some((square) => square[0] === coord[0] && square[1] === coord[1])) return;
@@ -27194,7 +27398,39 @@ export const gameStore = {
           clearWizardSpellElection();
           return;
         }
-        const opponentPlayers = wizardOpponentPlayers(game.value, offer.teamId);
+        const rule = liveWizardTargetRule(game.value);
+        const opponentPlayers = wizardRulePlayers(game.value, offer.teamId, rule);
+        if (!isWizardTargetLegal(spell, coord, opponentPlayers, rule)) return;
+        // FFB 3.4.0 entry 5 (owner spec 10-26): a square whose spell would hit ONLY the caster's own players asks
+        // first. The card sends nothing: Back leaves the crosshairs armed; Cast re-checks the live occurrence and
+        // re-enters this path (Zap then still stages its ordinary Confirm card).
+        if (!friendlyFireConfirmed && wizardTargetsOnlyOwnPlayers(spell, coord, opponentPlayers, rule)) {
+          const at: [number, number] = [coord[0], coord[1]];
+          const offerNr = offer.commandNr;
+          const ownNames = spell === 'zap'
+            ? opponentPlayers.filter((player) => player.rosterPlayer && player.coordinate?.[0] === at[0] && player.coordinate[1] === at[1])
+            : opponentPlayers.filter((player) => player.coordinate
+              && player.coordinate[0] >= 0 && player.coordinate[0] <= 25 && player.coordinate[1] >= 0 && player.coordinate[1] <= 14
+              && Math.abs(player.coordinate[0] - at[0]) <= 1 && Math.abs(player.coordinate[1] - at[1]) <= 1);
+          askYesNo({
+            key: `wizardFriendlyFire:${offerNr}:${spell}:${at[0]},${at[1]}`,
+            // answersDialog defaults to the live wizardSpell occurrence: the server clearing or replacing it retires
+            // the card and its input lock (latches fail open). The card itself sends nothing.
+            text: $t('store.text.wizardFriendlyFireConfirm', {
+              spell: spell === 'fireball' ? 'Fireball' : 'Zap',
+              players: ownNames.map((player) => playerName(game.value, player.playerId)).join(', '),
+            }),
+            yesLabel: 'Cast',
+            noLabel: 'Back',
+            onAnswer: (yes) => {
+              if (!yes) return;
+              if (liveWizardSpellOffer?.commandNr !== offerNr || liveWizardSpell !== spell) return;
+              gameStore.resolveSquarePick(at, { friendlyFireConfirmed: true });
+            },
+          });
+          return;
+        }
+        if (state.yesNo?.key.startsWith('wizardFriendlyFire:')) clearYesNo(); // another square was picked instead
         if (spell === 'zap') {
           const target = opponentPlayers.find((player) => player.rosterPlayer
             && player.coordinate?.[0] === coord[0] && player.coordinate[1] === coord[1]);
@@ -27214,6 +27450,7 @@ export const gameStore = {
           spell,
           coordinate: coord,
           opponentPlayers,
+          rule,
         });
         const sent = sendCommand(command);
         liveWizardSpellAwaitingServer = sent;
@@ -27226,7 +27463,7 @@ export const gameStore = {
         if (spell === 'fireball') {
           state.wizardTargetPreview = {
             square: [coord[0], coord[1]],
-            playerSquares: fireballPreviewSquares(coord, wizardPitchPlayers(game.value)),
+            playerSquares: fireballPreviewSquares(coord, wizardPitchPlayers(game.value), rule),
             seq: (state.wizardTargetPreview?.seq ?? 0) + 1,
           };
         }
@@ -27249,18 +27486,19 @@ export const gameStore = {
       clearWizardSpellElection();
       return;
     }
-    const opponentPlayers = wizardOpponentPlayers(game.value, offer.teamId);
+    const rule = liveWizardTargetRule(game.value);
+    const opponentPlayers = wizardRulePlayers(game.value, offer.teamId, rule);
     const targetStillPresent = opponentPlayers.some((player) => player.playerId === pending.playerId
       && player.rosterPlayer && player.coordinate?.[0] === pending.square[0]
       && player.coordinate[1] === pending.square[1]);
-    if (!targetStillPresent || !isWizardTargetLegal('zap', pending.square, opponentPlayers)) {
+    if (!targetStillPresent || !isWizardTargetLegal('zap', pending.square, opponentPlayers, rule)) {
       state.wizardTargetConfirm = null;
       armServerCoordinatePicks();
       return;
     }
     const command = buildWizardSpellCommand(offer, {
       kind: 'target', spell: 'zap', coordinate: pending.square,
-      opponentPlayers,
+      opponentPlayers, rule,
     });
     const sent = sendCommand(command);
     liveWizardSpellAwaitingServer = sent;

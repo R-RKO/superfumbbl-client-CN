@@ -42,6 +42,19 @@ export const lastServerVersion = ref<string | null>(null);
  */
 export const PASTRIES_MIN_SERVER_VERSION: string | null = null;
 
+/**
+ * FFB 3.4.0 (audit 10-26 entry 5, P1): bb2025/StepWizard + bb2025/WizardLogicModule let Zap target any player of either
+ * team and Fireball hit squares holding players in any state. Live FUMBBL (3.3.1) keeps the old rule (opponents only,
+ * Fireball needs a standing opponent). `null` = the old rule everywhere (public builds today); the staged 3.4.0 branch
+ * sets it to '3.4.0' for dev cuts. The rule also needs the game to be BB2025 (wizardSpell.wizardTargetRuleFor).
+ */
+export const WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION: string | null = null;
+let wizardTargetingMinOverride: { min: string | null } | null = null;
+/** @internal Test seam: stand in for WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION (undefined = restore the constant). */
+export function overrideWizardBb2025TargetingMinForTest(min: string | null | undefined): void {
+  wizardTargetingMinOverride = min === undefined ? null : { min };
+}
+
 /** Dotted numeric compare ("3.10.0" > "3.9.2"); a non-numeric part compares as 0. NOT semver: a pre-release or build
  *  suffix ("3.4.0-rc1") is not ordered as semver would order it. Revisit against upstream's real version strings before
  *  PASTRIES_MIN_SERVER_VERSION is set. */
@@ -84,4 +97,13 @@ export function serverVersionRefusal(
 export function fumbblPlayUrl(coach: string | null): string {
   const c = coach?.trim() ?? '';
   return c ? `https://fumbbl.com/~${encodeURIComponent(c)}` : 'https://fumbbl.com';
+}
+
+/** The announced server runs the 3.4.0 bb2025 wizard targeting rule (see WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION). */
+export function serverHasBb2025WizardTargeting(
+  serverVersion: string | null | undefined,
+  min: string | null = wizardTargetingMinOverride ? wizardTargetingMinOverride.min : WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION,
+): boolean {
+  const v = (serverVersion ?? '').trim();
+  return min !== null && v !== '' && compareServerVersions(v, min) >= 0;
 }
