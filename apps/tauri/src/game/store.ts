@@ -25,6 +25,7 @@ import { refreshPostGameDice } from './postGameCache';
 import { postGameKey } from './postGameProjection';
 import { SpectatorDiceLedger } from './spectatorDiceLedger';
 import { inducementDisplayName, useInducementPrompt } from './useInducementPrompt';
+import { freeReserveWireCoordinate } from './reserveSlot';
 import { PASTRIES_INDUCEMENT, pastriesOfferOf, pastriesStep, type PastriesOffer, type PastriesOutcome, type PastriesPendingDecline } from './pastriesSplash';
 import { waitingSeatRole } from './inducementsPhase';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
@@ -24442,18 +24443,15 @@ function placeSetup(g: GameJson, onComplete?: (outcome: SetupAdvanceOutcome) => 
 }
 
 /** /stuck answers the current dialog/phase with its exact default command instead of blindly ending turn. */
-/** Reserve placement uses the first model-free, unclaimed x=-1 slot. */
+/** Reserve placement: the first free slot 0..29 of OUR reserve box (see reserveSlot.ts; Garcangel 10-26, g1957304 cmd 51:
+ *  a slot of -1 is invisible in the Java client). The wire always carries the home-relative x=-1; the server transforms
+ *  it for the away coach. Claims within one frame are remembered until the next applied frame. */
 const pendingReserveSlots = new Set<number>();
 function freeReserveCoordinate(g: GameJson): [number, number] {
-  const occupied = new Set<number>();
-  for (const d of (g.fieldModel?.playerDataArray ?? []) as { playerCoordinate?: [number, number] | null }[]) {
-    const c = d.playerCoordinate;
-    if (Array.isArray(c) && c[0] === -1) occupied.add(c[1]);
-  }
-  for (let y = -1; y <= 15; y++) {
-    if (!occupied.has(y) && !pendingReserveSlots.has(y)) { pendingReserveSlots.add(y); return [-1, y]; }
-  }
-  return [-1, -1]; // box impossibly full — legacy fallback
+  const myTeamId = String((myPlayTeam(g) as { teamId?: unknown } | undefined)?.teamId ?? '');
+  const coord = freeReserveWireCoordinate(g, myTeamId || null, pendingReserveSlots);
+  pendingReserveSlots.add(coord[1]);
+  return coord;
 }
 
 type ForceAdvanceStepOutcome = {
