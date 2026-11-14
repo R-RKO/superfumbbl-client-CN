@@ -1,4 +1,4 @@
-﻿{
+{
   "app.artPackDownloadFailed": "素材包下载失败",
   "app.artPackStrip.artPackDownloadFailed": "素材包下载失败 — {error}",
   "app.artPackStrip.downloadingTheArtPack": "正在下载素材包… {done} / {total} 部分 · {p2} / {p3}",
@@ -2005,7 +2005,7 @@
   "pitch.blockPushBack": "推离",
   "pitch.blockStumble": "绊倒",
   "pitch.failed": "失败",
-  "pitch.injured": "受伤",
+  "pitch.injured": "伤亡球员",
   "pitch.ko": "被KO",
   "pitch.miss": "未击中",
   "pitch.outOfBounds": "出界",
@@ -2754,8 +2754,8 @@
   "settings.display.pitch.northSouthEndZones": "南北向（达阵区在上/下）",
   "settings.display.pitch.pitchOrientation": "球场方向",
   "settings.display.pitch.spectatorAndReplayView": "观战和回放视角",
-  "settings.display.pitch.stadium": "体育场",
-  "settings.display.pitch.stadium3d": "3D stadium",
+  "settings.display.pitch.stadium": "球场",
+  "settings.display.pitch.stadium3d": "3D球场",
   "settings.display.pitch.tilesetTurf": "图块集（草皮）",
   "settings.display.playerSprites.animatePlayerWalkCycles": "播放球员行走动画",
   "settings.display.playerSprites.arialHelvetica": "Arial / Helvetica",

@@ -1,8 +1,11 @@
-﻿{
+{
   "\"Blastin' Solves Everything\"": "“爆射”解决一切",
   "\"Excuse me, are you a Zoat?\"": "抱歉，你是龙蜥吗？",
   "\"I Didn't See a Thing!\"": "我什么都没看见！",
   "'Ooligan": "吵闹乌利根",
+  "\"Blastin' Solves Everything\"": "“爆射”解决一切",
+  "\"Excuse me, are you a Zoat?\"": "抱歉，你是龙蜥吗？",
+  "\"I Didn't See a Thing!\"": "我什么都没看见！",
   "(Elite)": "（精英）",
   "000": "000",
   "000 (for Dribl & Drull)": "000（滴滴答答）",
@@ -481,7 +484,6 @@
   "Juggernaut (Active)": "横冲直撞（主动）",
   "Jump Up": "快速起身",
   "Jump Up (Active)": "快速起身（主动）",
-  "KO'd": "昏迷",
   "Kaboom!": "大爆炸！",
   "Kangor": "袋鼠兽",
   "Karla von Kill": "卡拉·冯·基拉",
@@ -875,6 +877,7 @@
   "Thrall": "奴仆",
   "Thrall Lineman": "奴仆线锋",
   "Throtling": "斯洛特之仆",
+  "Throw a Rock": "投掷石块",
   "Throw Team-mate": "投掷队友",
   "Throw Team-mate (Active)": "投掷队友（主动）",
   "Throw a Rock": "投掷石块",
@@ -981,5 +984,7 @@
   "Zolcath the Zoat": "“龙蜥”佐卡斯",
   "Zombie": "僵尸",
   "Zombie Lineman": "僵尸线锋",
-  "Zzharg Madeye": "扎格·疯眼"
+  "Zzharg Madeye": "扎格·疯眼",
+  "Piling On": "趁势扑压",
+  "Piling On (Active)": "趁势扑压（主动）"
 }
