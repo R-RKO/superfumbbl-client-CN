@@ -39,6 +39,11 @@
     "size": 5512238,
     "sha256": "156561d9e5f6d35f5fe319cc95350d5c81439acdb9ad18548ebb8c89687fd61c"
   },
+  "app@04618b47935b3651": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-04618b47.zip",
+    "size": 15099737,
+    "sha256": "4bece732a342ab16564faad9146ff3a5053558a72e835eef0c7b19ed7e0fccce"
+  },
   "app@04b4626c26d04104": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-04b4626c.zip",
     "size": 4807398,
@@ -478,6 +483,11 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-45b84b7b.zip",
     "size": 13312745,
     "sha256": "6e256713e5f0d7246d856903c5a20367e36502bb95dd5f5629c9d3ce6e814a2a"
+  },
+  "app@45ddaccba4bea13c": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-45ddaccb.zip",
+    "size": 15090865,
+    "sha256": "bcd95348072d9a13bec393c293b8e613f1ad60340d9e4449c29d88be4170c4eb"
   },
   "app@467bd9a1042b79cc": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-467bd9a1.zip",
